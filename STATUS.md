@@ -58,15 +58,14 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 
 ## Known gaps
 
-- **The bundled schemas do not yet resolve to their fixtures.** `meta-kernel.tn` resolves,
-  **links** (`link/link.ts`), and matches its fixture up to three documented deferrals; `meta.tn`
-  and `core.tn` do not resolve at all, so linking never reaches them. Every remaining cause is a
-  capability a later wave delivers, and
-  `packages/tson/test/bundled-schemas-resolve.test.ts` holds each as an assertion rather than a
-  skip, so the list can only shrink:
-  - `meta`/`core` need a **compiled meta-schema reader**: `definitionMetaReader` reads a
-    data-value back into a `Top`, and `bind/` carries only the write direction today. The readers
-    are Wave 4, work package 16. `core`'s `!!meta` chain runs through `meta`, so it never starts.
+- **All three bundled schemas resolve, link, and match their fixtures up to two deferrals.**
+  `subtypes` is exact against `meta-kernel-resolved.tn` (top 17, atom 6, product 5, sum 1,
+  text_type 2, atom_specification 2, array 1).
+  `packages/tson/test/bundled-schemas-resolve.test.ts` holds each remaining difference as an
+  assertion rather than a skip, so the list can only shrink:
+  - A REQUIRED_WITH_DEFAULT atom-specification field (`spec`, `component`, the `allow_*` flags)
+    is written where the fixture omits it at its default. Whether such a field is written at its
+    default is a writer question, and the writers land in Wave 5.
   - `token_set` round-trips as an unordered unique `array` rather than as `set` — `topBinding`
     maps every host `ArrayBody` to the `array` wire name, and the aliases need a discriminating
     test on the write side and a reader on the other.
