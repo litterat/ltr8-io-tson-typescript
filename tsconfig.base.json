@@ -4,6 +4,12 @@
     "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // Resolve workspace package names to source rather than to dist/. Without
+    // this, `npm run typecheck` fails on a clean clone: the exports map points
+    // at build output that only `npm run build` produces, so typecheck would
+    // depend on build. Project references then redirect each resolved source
+    // file to its project's declaration output.
+    "customConditions": ["@ltr8/source"],
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,

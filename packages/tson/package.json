@@ -9,26 +9,31 @@
   },
   "exports": {
     ".": {
+      "@ltr8/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
     "./bind": {
+      "@ltr8/source": "./src/bind/index.ts",
       "types": "./dist/bind.d.ts",
       "import": "./dist/bind.js",
       "require": "./dist/bind.cjs"
     },
     "./tree": {
+      "@ltr8/source": "./src/tree/index.ts",
       "types": "./dist/tree.d.ts",
       "import": "./dist/tree.js",
       "require": "./dist/tree.cjs"
     },
     "./regex": {
+      "@ltr8/source": "./src/regex/index.ts",
       "types": "./dist/regex.d.ts",
       "import": "./dist/regex.js",
       "require": "./dist/regex.cjs"
     },
     "./schema": {
+      "@ltr8/source": "./src/schema/index.ts",
       "types": "./dist/schema.d.ts",
       "import": "./dist/schema.js",
       "require": "./dist/schema.cjs"
