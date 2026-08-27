@@ -25,7 +25,7 @@ export default defineConfig(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['*.js', '*.ts', '*.mjs', 'packages/*/*.ts'],
+          allowDefaultProject: ['*.js', '*.ts', '*.mjs', 'scripts/*.mjs', 'packages/*/*.ts'],
         },
         // This file is linted under the default project, which carries no Node types, so
         // import.meta.dirname types as `any` here even though it is a real Node 20.11+ API.
@@ -105,5 +105,14 @@ export default defineConfig(
   {
     files: ['**/*.config.ts', 'scripts/**'],
     ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      // Build scripts run under Node and may use its globals. The library itself may not, which
+      // is why these are granted here rather than globally.
+      globals: {
+        Buffer: 'readonly',
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
   },
 );
