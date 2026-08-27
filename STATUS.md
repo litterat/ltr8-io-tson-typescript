@@ -56,6 +56,23 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 
 ## Known gaps
 
+- **The bundled schemas do not yet resolve to their fixtures.** `meta-kernel.tn` resolves and
+  matches up to four documented deferrals; `meta.tn` and `core.tn` do not resolve at all. Every
+  cause is a capability a later wave delivers, and
+  `packages/tson/test/bundled-schemas-resolve.test.ts` holds each as an assertion rather than a
+  skip, so the list can only shrink:
+  - `subtypes` is empty everywhere — the reverse supertype index is a whole-schema pass the
+    reference builds in its linker (Wave 4, work package 15).
+  - `meta`/`core` need a **compiled meta-schema reader**: `definitionMetaReader` reads a
+    data-value back into a `Top`, and `bind/` carries only the write direction today. The readers
+    are Wave 4, work package 16. `core`'s `!!meta` chain runs through `meta`, so it never starts.
+  - `token_set` round-trips as an unordered unique `array` rather than as `set` — `topBinding`
+    maps every host `ArrayBody` to the `array` wire name, and the aliases need a discriminating
+    test on the write side and a reader on the other.
+  - Key annotations (§6's `@doc` on each declaration) are dropped. This is the evidence the
+    annotations-carrier gap below needed: it is not cosmetic, it loses documentation from the
+    resolved output.
+
 - **`writeFloat` does not spell a whole float with a fractional part.** `write()` of `12` gives
   `"12"` where the suite's canonical text and `Double#toString` both give `"12.0"`. Reading is
   unaffected and round-trips; this is a writer-side formatting gap, and the writers land in Wave 5.

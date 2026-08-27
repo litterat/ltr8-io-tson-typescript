@@ -1284,6 +1284,12 @@ function refSlot(
  * an application. **One spelling per shape, produced in one place** — a slot written two ways is
  * a slot two phases disagree about, and {@link internalName} hashes what is written, so a second
  * spelling of one reference would split one type across two entries.
+ *
+ * This is the AST-layer half of that one spelling — it operates on `ast/schema/typeref.js`'s own
+ * (unresolved) `TypeRef`, since desugaring runs before resolution. `compiler/heldBody.ts`'s own
+ * `metaRefValue` is the resolved-layer twin, over `schema/meta`'s `TypeRef` — a held composition/
+ * refinement template's fields are already resolved by the time they are held, so that function
+ * cannot reuse this one, but both spell the shape identically by construction (see its own doc).
  */
 function refValueOf(ref: TypeRef): CoreValue {
   if (ref.kind === 'simpleRef') {
@@ -1405,8 +1411,16 @@ function appendValue(out: string[], value: CoreValue): void {
   }
 }
 
-/** Length-first, so concatenation stays unambiguous whatever the text contains. */
-function appendText(out: string[], text: string): void {
+/**
+ * Length-first, so concatenation stays unambiguous whatever the text contains.
+ *
+ * Exported alongside {@link fnv1a32}/{@link canonicalNumber} so `templates.ts`'s own
+ * instantiation-name rendering (§8.2, over a template application's arguments rather than a
+ * binding record's fields) can share the same length-prefixed, numerically-aware encoding rather
+ * than growing a second one that might quietly disagree with this one about what one form's
+ * canonical text is.
+ */
+export function appendText(out: string[], text: string): void {
   out.push(`${String(text.length)}:${text}`);
 }
 
@@ -1431,7 +1445,7 @@ function appendNumberAware(out: string[], text: string, unquoted: boolean): void
  * synthetic entry name needs (see {@link internalName}'s own note on why the exact algorithm
  * otherwise doesn't matter).
  */
-function fnv1a32(text: string): number {
+export function fnv1a32(text: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
@@ -1446,7 +1460,7 @@ function fnv1a32(text: string): number {
  * A number's identity: the base-type `kind` it resolves to (`'#i'` integer, `'#f'` float, `'#s'`
  * special), and the one `text` every spelling of its magnitude reduces to.
  */
-interface CanonicalNumber {
+export interface CanonicalNumber {
   readonly kind: string;
   readonly text: string;
 }
@@ -1464,7 +1478,7 @@ interface CanonicalNumber {
  * `undefined` when `text` is not a number and identity should use the text as written — including
  * every quoted token, since §4.4 makes a quoted token never a number.
  */
-function canonicalNumber(text: string, unquoted: boolean): CanonicalNumber | undefined {
+export function canonicalNumber(text: string, unquoted: boolean): CanonicalNumber | undefined {
   if (!unquoted) {
     return undefined;
   }
