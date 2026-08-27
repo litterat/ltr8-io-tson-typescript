@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Wave branches too, not just main. Each wave is committed to a branch and gated on CI
+    # before it merges; without this the first CI signal for a wave arrives after it lands,
+    # which is exactly when it is most expensive to find out.
+    branches: [main, 'claude/**']
   pull_request:
 
 jobs:
@@ -27,6 +30,17 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Unicode tables are current
+        # The tables are generated from the host's Unicode data and checked in. A diff here means
+        # the runner's Unicode version and the committed table disagree, which would make document
+        # validity depend on where the code runs — the exact thing checking them in prevents.
+        run: |
+          npm run gen:unicode
+          git diff --exit-code -- packages/tson/src/unicode/xid.ts
 
       - name: Test
         run: npm test
