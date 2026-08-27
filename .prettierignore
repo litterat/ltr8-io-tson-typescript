@@ -1,0 +1,10 @@
+# Vendored verbatim from the reference implementation. Reformatting them would break the
+# `*-resolved.tn` fixtures, which are compared byte for byte, and would silently diverge the
+# spec snapshots from their upstream source.
+spec/
+
+.references/
+dist/
+dist-types/
+coverage/
+package-lock.json

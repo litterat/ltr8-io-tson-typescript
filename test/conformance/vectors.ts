@@ -43,9 +43,10 @@ export const SUITE_TESTS_ROOT: string = fileURLToPath(
 /**
  * Whether the shared test-suite checkout is present.
  *
- * `.references/` is gitignored and populated by `scripts/fetch-references.sh`; CI does not
- * run that script, so this is `false` there. The conformance project skips entirely rather
- * than failing when it is — see `runner.test.ts`'s top-level `describe.skipIf`.
+ * `.references/` is gitignored and populated by `scripts/fetch-references.sh`, which CI runs and
+ * a cloud session's SessionStart hook runs. It is `false` in a bare clone where neither has. The
+ * conformance project skips entirely rather than failing when it is — see `runner.test.ts`'s
+ * top-level `describe.skipIf`.
  */
 export function suiteAvailable(): boolean {
   return existsSync(SUITE_TESTS_ROOT);
