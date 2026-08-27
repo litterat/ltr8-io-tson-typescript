@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+.claude/settings.local.json
+
+# Reference checkouts fetched by scripts/fetch-references.sh
+.references/
