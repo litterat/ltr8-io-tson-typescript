@@ -1291,6 +1291,8 @@ const typeDefinitionBinding: RecordBinding<TypeDefinition> = record<TypeDefiniti
 // -------------------------------------------------------------------------------------------
 
 export {
+  tokenFormFromWire,
+  tokenFormToWire,
   unitBinding,
   rationalBinding,
   decimalBinding,

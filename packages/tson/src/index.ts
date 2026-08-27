@@ -14,5 +14,5 @@ export * from './stream/event.js';
 export * from './ast/value.js';
 export * from './annotations/index.js';
 export * from './atom/contract.js';
-export * from './reader/contracts.js';
+export * from './reader/index.js';
 export * from './value/types.js';

@@ -14,4 +14,5 @@ export * from './combinators.js';
 export * from './infer.js';
 export * from './registry.js';
 export * from './encode.js';
+export * from './decode.js';
 export * from './strictness.js';

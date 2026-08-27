@@ -304,7 +304,11 @@ ${pkg.brief}\n\n${SHARED}`,
   ),
 );
 
-const abstractReaders = foundations.find((f) => f?.key === 'abstract-readers');
+// By POSITION, not by the agent's self-reported `key`. parallel() preserves input order, and
+// FOUNDATIONS[1] is the abstract readers. Matching on a key the schema types only as `string`
+// let an agent that called itself 'wp16a-abstract-readers' read as "did not land", which
+// silently skipped all three reader families while reporting the wave complete.
+const abstractReaders = foundations[FOUNDATIONS.findIndex((f) => f.key === 'abstract-readers')];
 
 if (abstractReaders == null || abstractReaders.status === 'blocked') {
   log('Abstract readers did not land; the concrete reader families cannot start');

@@ -39,8 +39,10 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 - [x] Schema grammar — schema documents parsed into a faithful AST
 - [x] Desugaring — every sugar form lifted to a closed synthetic entry
 - [ ] Resolution — composition, refinement, constructor application, templates
-- [ ] Linking — reference validation, transitive `!!import` merge, choice disjointness
-- [ ] Identity and hashing — canonical `!!id`, `?sha256=` pinning
+- [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
+      reverse-index population, choice disjointness and `@disjoint` assertion checking
+- [x] Identity and hashing — canonical `!!id` (`link/identity.ts`), `?sha256=` pinning and content
+      hashing via `crypto.subtle` (`link/contentHash.ts`, async — the one async surface in `link/`)
 - [ ] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end
 - [ ] Compilation — a compiled, schema-validating reader
 - [ ] Diagnostics — the data- and schema-side problem model
@@ -56,13 +58,12 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 
 ## Known gaps
 
-- **The bundled schemas do not yet resolve to their fixtures.** `meta-kernel.tn` resolves and
-  matches up to four documented deferrals; `meta.tn` and `core.tn` do not resolve at all. Every
-  cause is a capability a later wave delivers, and
+- **The bundled schemas do not yet resolve to their fixtures.** `meta-kernel.tn` resolves,
+  **links** (`link/link.ts`), and matches its fixture up to three documented deferrals; `meta.tn`
+  and `core.tn` do not resolve at all, so linking never reaches them. Every remaining cause is a
+  capability a later wave delivers, and
   `packages/tson/test/bundled-schemas-resolve.test.ts` holds each as an assertion rather than a
   skip, so the list can only shrink:
-  - `subtypes` is empty everywhere — the reverse supertype index is a whole-schema pass the
-    reference builds in its linker (Wave 4, work package 15).
   - `meta`/`core` need a **compiled meta-schema reader**: `definitionMetaReader` reads a
     data-value back into a `Top`, and `bind/` carries only the write direction today. The readers
     are Wave 4, work package 16. `core`'s `!!meta` chain runs through `meta`, so it never starts.

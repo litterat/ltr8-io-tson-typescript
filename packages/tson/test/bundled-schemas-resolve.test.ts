@@ -7,10 +7,12 @@ import { parseDocument } from '../src/compiler/dataParser.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
 import { resolveSchema, type Schema } from '../src/compiler/schemaResolver.js';
-import type { DefinitionMetaReader } from '../src/compiler/resolverTypes.js';
-import { TsonNotImplementedError } from '../src/core/errors.js';
+import { linkSchema, type LinkedSchema } from '../src/link/link.js';
+import { canonicalizeIdentity } from '../src/link/identity.js';
+import type { DefinitionGetter } from '../src/compiler/resolverTypes.js';
 import { toCoreValue, toDataValue, type AtomEncoder } from '../src/bind/encode.js';
 import { topBinding, typeDefinitionBinding } from '../src/schema/bindings.js';
+import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
 import type { Annotation } from '../src/schema/meta/typedef.js';
 import type { CoreValue, DataValue, TokenValue } from '../src/ast/value.js';
 
@@ -267,31 +269,46 @@ function fixture(name: string): Map<string, FixtureEntry> {
 // -- Resolving the bundled schemas ------------------------------------------------------------
 
 /**
- * The governing meta's compiled reader: binds a constructor application's body (`!enum
- * [true false]`, `!integer_type { size: ... }`) to the `schema.meta` value it denotes.
- *
- * **No such reader exists yet.** `bind/` carries only the write direction
- * (`toDataValue`/`toCoreValue`) and `reader/` is contracts alone, so nothing turns a bound
- * `data-value` back into a `Top`. `schema/bindings.ts`'s `metaBindings` is the table such a
- * reader drives; wiring the two together is the whole of what `meta.tn` and `core.tn` wait on
- * here, and nothing else in this file changes when it lands.
- *
- * `meta-kernel.tn` alone needs none: Part 2 §1.5's deliberate circularity is closed by
- * pre-loading, and `schema/bootstrap.ts` resolves every constructor application in the kernel
- * through its own hand-written `instanceBody` switch instead.
+ * Each bundled schema's `!!meta` chain (§2.2), nearest link last. `meta-kernel` heads every chain
+ * and has none of its own -- §1.5's circularity, closed by pre-loading.
  */
-const definitionMetaReader: DefinitionMetaReader = (type) => {
-  throw new TsonNotImplementedError(
-    `no compiled reader for '!${type}': bind/ carries only the write direction, so a constructor ` +
-      'application body cannot be bound back to a schema.meta value',
-  );
+const CHAIN: Record<string, readonly string[]> = {
+  'meta-kernel': [],
+  meta: ['meta-kernel'],
+  core: ['meta-kernel', 'meta'],
 };
+
+/**
+ * `name`'s own constructor structure namespace (§3.3.1's "one hop via `!!meta`"): every schema on
+ * `name`'s own `!!meta` chain, nearest first. `Schema.entries` is deliberately local-only
+ * (`schemaResolver.ts`'s own doc: "imported entries are visible during resolution but never part
+ * of this"), so `meta.tn`'s own resolved entries alone do not carry meta-kernel's constructors
+ * (`record`/`array`/`map`/`enum`/`set`/...) even though meta.tn imports meta-kernel and reuses
+ * them constantly -- `core.tn`'s own `!record`/`!array`/`!enum` instances need this chain, not
+ * `resolved('meta').entries` alone, to find them.
+ */
+function structureNamespaceFor(name: string): DefinitionGetter {
+  const chain = [...(CHAIN[name] ?? [])].reverse().map(resolved); // nearest first
+  return (typeName) => {
+    for (const schema of chain) {
+      const found = schema.entries.get(typeName);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+}
 
 function resolveBundled(name: string, meta: Schema): Schema {
   const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
+  const metaDefinitions = structureNamespaceFor(name);
   return resolveSchema(document, {
-    definitionMetaReader,
-    metaDefinitions: (typeName) => meta.entries.get(typeName),
+    // `schema/metaReader.ts`'s reader: binds a constructor-application body (`!enum [true false]`,
+    // `!integer_type { size: ... }`) to the `schema.meta` `Top` value it denotes, via
+    // `bind/decode.ts`'s `fromDataValue` over `schema/bindings.ts`'s `metaBindings`. Governed by
+    // the same structure namespace as `metaDefinitions` below, for §5.6's positional form and
+    // `REQUIRED_DEFAULT`/`REQUIRED_FIXED` field defaulting -- see that module's own top comment.
+    definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
+    metaDefinitions,
     // §5.6's chained atom refinement merges on the wire record; `resolverTypes.ts` states that a
     // caller which can see both `compiler/` and `bind/` -- a test, or the eventual front door --
     // closes over `toCoreValue` and passes it in, which is what keeps `compiler/` free of `bind/`.
@@ -302,30 +319,40 @@ function resolveBundled(name: string, meta: Schema): Schema {
   });
 }
 
+const cache = new Map<string, LinkedSchema>();
+
 /**
- * Each bundled schema's `!!meta` chain (§2.2), nearest link last. `meta-kernel` heads every chain
- * and has none of its own -- §1.5's circularity, closed by pre-loading.
+ * The bundled schema `name`, resolved against its own governing chain **and linked**
+ * (`link/link.ts`'s own `linkSchema`) -- the whole-schema pass that populates `subtypes` (Wave 4
+ * work package 15) and merges every `!!import`'s namespace into `entries` (§2.2.3), which is why
+ * `differences` below compares only the entries `LinkedSchema.origins` attributes to `name`
+ * itself: `meta.tn` imports meta-kernel.tn, so its own *linked* `entries` legitimately also
+ * carries meta-kernel's, and `meta-resolved.tn`'s fixture -- 31 entries, not meta-kernel's 57 on
+ * top -- is what `meta.tn` alone contributes.
  */
-const CHAIN: Record<string, readonly string[]> = {
-  'meta-kernel': [],
-  meta: ['meta-kernel'],
-  core: ['meta-kernel', 'meta'],
-};
-
-const cache = new Map<string, Schema>();
-
-/** The bundled schema `name`, resolved against its own governing chain. */
-function resolved(name: string): Schema {
+function resolved(name: string): LinkedSchema {
   const already = cache.get(name);
   if (already !== undefined) return already;
   const chain = CHAIN[name] ?? [];
   const last = chain.at(-1);
-  const schema =
-    last === undefined
+  const governingMeta = last === undefined ? undefined : resolved(last);
+  const unlinked =
+    governingMeta === undefined
       ? bootstrapMetaKernel(source('meta-kernel.tn'))
-      : resolveBundled(name, resolved(last));
-  cache.set(name, schema);
-  return schema;
+      : resolveBundled(name, governingMeta);
+  const linked = linkSchema(unlinked, {
+    ...(governingMeta === undefined
+      ? {}
+      : {
+          structureNamespace: governingMeta.entries,
+          resolveImport: () => ({
+            entries: governingMeta.entries,
+            originOf: () => governingMeta.id,
+          }),
+        }),
+  });
+  cache.set(name, linked);
+  return linked;
 }
 
 // -- The comparison ---------------------------------------------------------------------------
@@ -384,14 +411,24 @@ function differences(name: string): string[] {
     }
   }
 
-  let schema: Schema;
+  let schema: LinkedSchema;
   try {
     schema = resolved(name);
   } catch (e: unknown) {
     return [`${name}.tn does not resolve at all: ${(e as Error).message}`];
   }
 
-  const ours = new Map([...schema.entries].map(([key, value]) => [canonicalName(key), value]));
+  // `schema.entries` is the whole merged closure (§2.2.3); the fixture describes `name` itself,
+  // so only entries `origins` attributes to this schema's own id belong in the comparison -- see
+  // `resolved`'s own doc. `linkSchema` records a *local* entry's origin canonicalised
+  // (`link/identity.ts`'s own `canonicalizeIdentity`, §2.2.1), so the comparison canonicalises
+  // `schema.id` the same way rather than comparing against its raw, pinned `!!id` form.
+  const selfId = canonicalizeIdentity(schema.id);
+  const ours = new Map(
+    [...schema.entries]
+      .filter(([key]) => schema.origins.get(key) === selfId)
+      .map(([key, value]) => [canonicalName(key), value]),
+  );
   const out: string[] = [];
 
   for (const key of expected.keys()) {
@@ -452,16 +489,12 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
   // Every entry is a wave-ordering consequence, not a defect the resolver could fix on its own:
   const DEFERRED: readonly { readonly pattern: RegExp; readonly reason: string }[] = [
     {
-      pattern: /\.subtypes$/,
+      pattern:
+        /^(uri|regex|email|ipv4|ipv6|cidr4|cidr6|mac)\.body\.v\.spec$|^complex\.body\.v\.component$|^float(32|64)\.body\.v\.allow_(nan|infinity|subnormal|negative_zero)$/,
       reason:
-        'the reverse supertype index is a whole-schema pass the reference builds in its linker, ' +
-        'which is Wave 4 work package 15 — definitionResolver.ts documents the deferral',
-    },
-    {
-      pattern: /^(uri|regex)\.body\.v\.spec$/,
-      reason:
-        'an atom specification`s `spec` is emitted where the fixture omits it at its default; ' +
-        'whether a REQUIRED_WITH_DEFAULT field is written at default is a writer question (Wave 5)',
+        'an atom specification`s REQUIRED_WITH_DEFAULT field (`spec`, `component`, the four ' +
+        '`allow_*` flags) is emitted where the fixture omits it at its default; whether such a ' +
+        'field is written at default is a writer question (Wave 5)',
     },
     {
       pattern: /^token_set\.body\.(!|v\.(unordered|unique_items))$/,
@@ -471,38 +504,44 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         'the readers that fix the other half of it are Wave 4',
     },
     {
-      pattern: / <key annotations>$/,
+      // No `\[\d+\]` anchor: a key-annotations mismatch shows up two ways depending on whether
+      // the fixture and our own (annotation-value-less) list happen to share a length -- as the
+      // bare `<key annotations>` path (a length mismatch, `report`'s non-recursive leaf case,
+      // e.g. an empty list on our side) or as `<key annotations>[N]` (equal lengths, each element
+      // then compared and found to carry no value on our side). Both are this one gap.
+      pattern: / <key annotations>(\[\d+\])?$/,
       reason:
         'key annotations (§6, the `@doc` on each declaration) are dropped because `annotations` ' +
         'is bound as an ordinary wire field rather than a record`s annotations carrier — the ' +
-        'frozen-artefact mismatch STATUS.md records, and this is the evidence it needed',
+        'frozen-artefact mismatch STATUS.md records, and this is the evidence it needed. ' +
+        'resolveBundled also supplies no annotationValueReader, so every key annotation resolves ' +
+        'name-only regardless -- the reader that reads one back is the same Wave 5 writer/reader ' +
+        'work the value-carrier gap needs.',
     },
   ];
 
-  it('meta-kernel.tn resolves to its fixture, up to documented deferrals', () => {
-    const unexpected = differences('meta-kernel').filter(
-      (d) => !DEFERRED.some((k) => k.pattern.test(d.split('\n')[0]?.trim() ?? '')),
-    );
-    expect(
-      unexpected,
-      `meta-kernel.tn vs meta-kernel-resolved.tn, beyond the documented deferrals:\n\n  ${unexpected.join('\n  ')}\n`,
-    ).toEqual([]);
-  });
-
-  it.each([['meta'], ['core']])(
-    '%s.tn does not resolve yet: it needs a compiled meta-schema reader (Wave 4)',
+  it.each([['meta-kernel'], ['meta'], ['core']])(
+    '%s.tn resolves to its fixture, up to documented deferrals',
     (name) => {
-      // Held as an assertion rather than a skip, so the day the reader lands this test fails and
-      // says so. `definitionMetaReader` reads a data-value back into a `Top` through the
-      // meta-schema; `bind/` currently carries only the write direction, and the readers are
-      // Wave 4 work package 16. meta stops at its first declaration and core never starts,
-      // because core's `!!meta` chain runs through meta.
-      const found = differences(name);
-      // Exactly one difference, and it is the reader gap — not a silent skip, and not a vague
-      // "something went wrong". The day work package 16 lands, this assertion fails and says so.
-      expect(found).toHaveLength(1);
-      expect(found[0]).toContain('compiled meta-schema reader');
-      expect(found[0]).toContain('bind/ carries only the write direction');
+      const unexpected = differences(name).filter(
+        (d) => !DEFERRED.some((k) => k.pattern.test(d.split('\n')[0]?.trim() ?? '')),
+      );
+      expect(
+        unexpected,
+        `${name}.tn vs ${name}-resolved.tn, beyond the documented deferrals:\n\n  ${unexpected.join('\n  ')}\n`,
+      ).toEqual([]);
     },
   );
+
+  it('populates subtypes for meta-kernel.tn exactly as the fixture records (Wave 4 work package 15)', () => {
+    const entries = resolved('meta-kernel').entries;
+    const subtypeCount = (name: string): number => entries.get(name)?.subtypes.length ?? -1;
+    expect(subtypeCount('top')).toBe(17);
+    expect(subtypeCount('atom')).toBe(6);
+    expect(subtypeCount('product')).toBe(5);
+    expect(subtypeCount('sum')).toBe(1);
+    expect(subtypeCount('text_type')).toBe(2);
+    expect(subtypeCount('atom_specification')).toBe(2);
+    expect(subtypeCount('array')).toBe(1);
+  });
 });
