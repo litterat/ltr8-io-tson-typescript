@@ -297,6 +297,7 @@ Accessors NEVER throw. A failed lookup returns a MissingNode carrying the RFC 69
 Implement exactly these signatures — record, tuple, array, map, variant, bridge, lazy, field and optional in combinators.ts; registry and chain in registry.ts. Carry each TSDoc block onto the implementation:
 
 \`\`\`ts
+/** Build a {@link RecordBinding} from explicit fields -- see {@link field}/{@link optional} to build each one. */
 function record<T>(options: RecordOptions<T>): RecordBinding<T>;
 
 /**
@@ -308,8 +309,10 @@ function tuple<const E extends readonly BindingRef<unknown>[]>(
   elements: E,
 ): TupleBinding<{ readonly [I in keyof E]: Infer<E[I]> }>;
 
+/** Build an {@link ArrayBinding}. */
 function array<T, E>(options: ArrayOptions<T, E>): ArrayBinding<T>;
 
+/** Build a {@link MapBinding}. */
 function map<T, K, V>(options: MapOptions<T, K, V>): MapBinding<T>;
 
 /**
@@ -325,6 +328,7 @@ function variant<const M extends Shape>(
   discriminant?: PropertyKey,
 ): VariantBinding<InferShape<M>[keyof M]>;
 
+/** Build a {@link BridgeBinding} converting between a host type \`T\` and a wire-shaped \`D\` bound by \`wire\`. */
 function bridge<T, D>(
   wire: BindingRef<D>,
   toWire: (value: T) => D,
@@ -402,6 +406,7 @@ function optional<Host, K extends keyof Host & string>(
   binding: BindingRef<NonNullable<Host[K]>>,
 ): FieldSlot<NonNullable<Host[K]>>;
 
+/** Build a {@link BindingRegistry} from a fixed table of bindings keyed by schema type name. */
 function registry(
   bindings: Readonly<Record<string, Binding<unknown>>>,
   options?: { readonly profile?: string },

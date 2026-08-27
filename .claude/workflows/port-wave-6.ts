@@ -145,6 +145,13 @@ URL at read time. Three requirements, none of them optional:
   the permitted root is the entire attack, and a check on the pre-resolution path misses it.
 - Neither source may be reachable by default from a browser build.
 
+Every refusal throws TsonSchemaFetchError(schemaId, reason, message), where reason is the closed
+SchemaFetchReason vocabulary already in core/errors.ts: 'not-permitted' | 'not-found' |
+'transport' | 'timeout' | 'too-large'. The split that matters is whose mistake it was — an
+allow-list refusal is 'not-permitted' and no retry helps, where 'transport' and 'timeout' mean the
+request was allowed and did not arrive. A caller mapping these onto status codes cannot recover
+that from a flattened message, so do not fold the reason into the prose.
+
 Read the Java's source handling, then read .references/ltr8-io-tson-java/CONFORMANCE.md on the
 network atom parsers — it records where the reference is deliberately stricter than the JDK, and
 the reasoning there applies to this layer too.

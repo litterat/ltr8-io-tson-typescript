@@ -1,3 +1,4 @@
+import type { Diagnostic } from './diagnostic.js';
 import { formatPosition, type Position } from './position.js';
 
 /**
@@ -136,9 +137,35 @@ export class TsonAtomValidationError extends TsonAtomTypeError {
   override readonly name = 'TsonAtomValidationError';
 }
 
-/** A read failed against the schema in scope, under a fail-fast diagnostics receiver. */
+/**
+ * A read failed against the schema in scope, under a fail-fast diagnostics receiver.
+ *
+ * Carries the whole {@link Diagnostic} rather than flattening it into a message. A caller that
+ * catches this needs the code, the RFC 6901 path and the position to act on it — a server mapping
+ * read failures onto responses, a form highlighting the field that was wrong — and none of that is
+ * recoverable from prose once it has been flattened.
+ *
+ * `message` comes from the diagnostic, and {@link toString} appends the data position when the
+ * diagnostic locates one, so a stack trace says where without the catcher having to.
+ */
 export class TsonReadError extends TsonError {
   override readonly name: string = 'TsonReadError';
+
+  /** The diagnostic that failed the read. */
+  readonly diagnostic: Diagnostic;
+
+  constructor(diagnostic: Diagnostic, options?: { cause?: unknown }) {
+    super(diagnostic.message, options);
+    this.diagnostic = diagnostic;
+  }
+
+  override toString(): string {
+    const at =
+      this.diagnostic.dataPosition === undefined
+        ? ''
+        : ` at ${formatPosition(this.diagnostic.dataPosition)}`;
+    return `${this.name}: ${this.message}${at}`;
+  }
 }
 
 /** A value could not be written: it does not match the binding it was emitted through. */
@@ -173,15 +200,47 @@ export class TsonSchemaValidationError extends TsonError {
   override readonly name = 'TsonSchemaValidationError';
 }
 
+/**
+ * Why a schema fetch failed.
+ *
+ * The classification is the part worth acting on, and it is closed rather than free text because
+ * a caller has to branch on it: a server mapping schema failures onto status codes needs the
+ * split and cannot recover it from a flattened message.
+ *
+ * The line that matters is whose mistake it was. `not-permitted` means the reference names
+ * something this deployment will not load and no retry will ever help — a host outside the
+ * allow-list, a scheme that is not enabled. `transport` and `timeout` say the opposite: the
+ * request was allowed and did not arrive, so retrying is reasonable.
+ */
+export type SchemaFetchReason =
+  /** The reference names something this deployment will not load. Retrying cannot help. */
+  | 'not-permitted'
+  /** The source was reachable and had no such schema. */
+  | 'not-found'
+  /** The request failed in transit. */
+  | 'transport'
+  /** The request did not complete within the configured budget. */
+  | 'timeout'
+  /** The response exceeded the configured size cap, enforced while streaming. */
+  | 'too-large';
+
 /** A schema reference could not be fetched, or was refused by the source's own policy. */
 export class TsonSchemaFetchError extends TsonError {
   override readonly name = 'TsonSchemaFetchError';
   /** The schema id that could not be resolved. */
   readonly schemaId: string;
+  /** Why it could not be resolved — see {@link SchemaFetchReason}. */
+  readonly reason: SchemaFetchReason;
 
-  constructor(schemaId: string, message: string, options?: { cause?: unknown }) {
+  constructor(
+    schemaId: string,
+    reason: SchemaFetchReason,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
     super(message, options);
     this.schemaId = schemaId;
+    this.reason = reason;
   }
 }
 

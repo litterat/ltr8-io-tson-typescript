@@ -456,7 +456,14 @@ export interface BindingRegistry {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Combinators -- signatures only; implemented by a later work package.
+// The combinator functions -- record, tuple, array, map, variant, bridge, lazy, field, optional,
+// registry, chain -- are NOT declared here, and must not be. This module is types only and emits
+// no JavaScript, so declaring them here as `declare function` published a bind subpath whose .d.ts
+// promised eleven values over an empty module. They live in bind/combinators.ts and
+// bind/registry.ts; bind/index.ts re-exports this module alongside them, so the {@link} references
+// throughout this file resolve across the package once those exist.
+//
+// What stays here is what those implementations take as parameters: the options interfaces below.
 // ---------------------------------------------------------------------------------------------
 
 /**
@@ -484,16 +491,12 @@ export interface RecordOptions<T> {
   construct(slots: readonly unknown[]): T;
 }
 
-/** Build a {@link RecordBinding} from explicit fields -- see {@link field}/{@link optional} to build each one. */
-
 /** {@link array}'s parameter shape -- everything {@link ArrayBinding} needs beyond its own `kind`. */
 export interface ArrayOptions<T, E> {
   readonly element: BindingRef<E>;
   construct(values: readonly E[]): T;
   read(host: T): Iterable<E>;
 }
-
-/** Build an {@link ArrayBinding}. */
 
 /** {@link map}'s parameter shape -- everything {@link MapBinding} needs beyond its own `kind`. */
 export interface MapOptions<T, K, V> {
@@ -502,9 +505,3 @@ export interface MapOptions<T, K, V> {
   construct(entries: readonly (readonly [K, V])[]): T;
   read(host: T): Iterable<readonly [K, V]>;
 }
-
-/** Build a {@link MapBinding}. */
-
-/** Build a {@link BridgeBinding} converting between a host type `T` and a wire-shaped `D` bound by `wire`. */
-
-/** Build a {@link BindingRegistry} from a fixed table of bindings keyed by schema type name. */
