@@ -133,6 +133,12 @@ packages/tson/src/link/.
 Port the linking half of .references/ltr8-io-tson-java/tson-compiler/ and the identity code
 beside it. Four things:
 
+0. **Populate \`subtypes\`.** Wave 3's fixture gate is red on this: every entry that has subtypes in
+   spec/m/meta-kernel-resolved.tn has an empty list here. It is the reverse index over the whole
+   resolved schema, which is why definitionResolver.ts deferred it to you rather than computing it
+   per declaration — the reference builds it in TsonSchemaLinker. Verify against the fixture:
+   \`top\` should carry 17 subtypes, \`atom\` 6, \`product\` 5, \`sum\` 1, \`text_type\` 2,
+   \`atom_specification\` 2, \`array\` 1.
 1. Reference validation — every type reference resolves, with a diagnostic naming the reference
    and its location when it does not.
 2. Transitive !!import merge, including the diamond case where two imports reach the same schema.
@@ -162,7 +168,16 @@ on top of whatever shape you establish.
 ReadContext carries the schema, the diagnostics receiver and the position. Memory stays
 proportional to nesting depth: nothing here may materialise a whole document to read part of it.
 
-State the exported shape precisely in your report. Three agents build on it immediately.`,
+State the exported shape precisely in your report. Three agents build on it immediately.
+
+**You also own the gap that blocks Wave 3's gate.** \`compiler/resolverTypes.ts\` declares
+\`DefinitionMetaReader\` — \`(type: string, value: DataValue) => Top\` — and nothing implements it, so
+\`meta.tn\` and \`core.tn\` do not resolve at all: they stop at the first constructor application with
+"no compiled reader for '!enum': bind/ carries only the write direction". Provide the read
+direction, so a data-value can be bound back into a \`schema/meta\` value through a Binding.
+packages/tson/test/bundled-schemas-resolve.test.ts asserts today that meta and core fail for
+exactly that reason; when you land this it will fail, and updating it to assert the real
+comparison is part of your work package.`,
   },
 ];
 
