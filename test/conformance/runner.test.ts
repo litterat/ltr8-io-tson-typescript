@@ -5,21 +5,15 @@ import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonLexError,
-  TsonNotImplementedError,
   TsonParseError,
   TsonUnsupportedDocumentError,
 } from '../../packages/tson/src/core/errors.js';
 import { spliceSchemaDirectives } from './bundled-ids.js';
-import {
-  type Category,
-  type Encoding,
-  type ExpectedBaseValue,
-  type ExpectedDocument,
-  type ExpectedToken,
-  type ExpectedVocabularyValue,
-  type Sidecar,
-  parseSidecar,
-} from './sidecar.js';
+import { lexTokens } from './lexer.js';
+import { parseDocument } from './parser.js';
+import { resolveBaseValue } from './resolver.js';
+import { readVocabularyValue } from './vocabulary.js';
+import { type Category, type Encoding, type Sidecar, parseSidecar } from './sidecar.js';
 import {
   SUITE_TESTS_ROOT,
   type Layer,
@@ -30,15 +24,15 @@ import {
 
 /**
  * Runs every vector in the sibling `ltr8-io-tson-test-suite` repo (see its own README for the
- * vector/sidecar format) against this implementation's real lexer, parser, base type
- * resolver, and built-in type vocabulary.
+ * vector/sidecar format) against this implementation's real lexer ({@link lexTokens}, backed by
+ * `lexer/lexer.ts`), real Tier 3 parser ({@link parseDocument}, backed by `compiler/dataParser.ts`),
+ * real base type resolver ({@link resolveBaseValue}, backed by `base/baseTypeResolver.ts`), and
+ * real built-in type vocabulary ({@link readVocabularyValue}, backed by `atom/`) -- each a thin
+ * per-layer bridge in its own sibling module, converting between this implementation's own types
+ * and the suite's host-representation-neutral `Expected*` shapes (`sidecar.ts`).
  *
- * Nothing past the frozen contract layer (`packages/tson/src/core`, `io`, `ast`, `lexer/token.ts`,
- * `stream/event.ts`) exists yet, so every check below currently fails at one of two points:
- * {@link parseSidecar} throwing on the sidecar itself (dogfooding a parser that doesn't exist),
- * or — once that lands — the per-layer stand-in functions at the bottom of this file throwing
- * {@link TsonNotImplementedError} in its place. That is the correct state for this harness:
- * written now, expected to fail until the lexer and its siblings land (see `PORT-PLAN.md` §A5).
+ * {@link parseSidecar} is likewise real (dogfooding: every sidecar is itself parsed with this
+ * implementation's own Tier 3 parser, per `PORT-PLAN.md` §A5).
  *
  * The whole project is skipped, not failed, when `.references/` is absent (mirrors the Java
  * reference implementation's own `Assumptions.assumeTrue` behaviour), so CI without the
@@ -65,10 +59,12 @@ type LayerCheck = (vector: Vector, subject: Uint8Array, sidecar: Sidecar) => voi
 function describeLayer(layer: Layer, check: LayerCheck): void {
   describe(layer, () => {
     for (const vector of discoverVectors(layer)) {
-      // Best-effort: once `parseSidecar` is real, an `encoding: utf-16`/`utf-32` vector is
-      // skipped rather than run. Today `parseSidecar` always throws, so this never resolves
-      // to a skip -- every vector falls through to `it`, which is the correct current state
-      // (report as failing, not as skipped; `invalid-utf8` must never be skipped either way).
+      // Rule: skip, don't fail, an `encoding: utf-16`/`utf-32` vector -- those are an
+      // implementation gap (§9.1 permits the encodings; nothing here reads them), never a
+      // conformance failure. `invalid-utf8` is not skipped either way: it must be fed to the
+      // real lexer and rejected there. `bestEffortEncoding` re-parses the sidecar in isolation
+      // (swallowing any failure) purely to decide registration; the real, unguarded parse
+      // happens inside the registered `it` below.
       const encoding = bestEffortEncoding(vector);
       const skip = encoding === 'utf-16' || encoding === 'utf-32';
       const register = skip ? it.skip : it;
@@ -200,35 +196,4 @@ function checkVocabularyVector(vector: Vector, subject: Uint8Array, sidecar: Sid
     default:
       throw new Error(`${vector.name}: unknown vocabulary-layer outcome '${sidecar.outcome}'`);
   }
-}
-
-// ── Stand-ins for the not-yet-written Part 1 implementation ─────────────
-//
-// Everything below throws `TsonNotImplementedError`, unconditionally, because no Lexer,
-// DataParser, BaseTypeResolver, or built-in type vocabulary exists in `packages/tson` yet
-// (Wave 1 of `PORT-PLAN.md`). Each is replaced by a real call into `@ltr8/tson` as its work
-// package lands; nothing else in this file needs to change when that happens.
-
-function lexTokens(subject: Uint8Array): readonly ExpectedToken[] {
-  throw new TsonNotImplementedError(
-    `no Lexer implementation exists yet (${String(subject.length)} subject bytes)`,
-  );
-}
-
-function parseDocument(subject: Uint8Array): ExpectedDocument {
-  throw new TsonNotImplementedError(
-    `no DataParser implementation exists yet (${String(subject.length)} subject bytes)`,
-  );
-}
-
-function resolveBaseValue(subject: Uint8Array): ExpectedBaseValue {
-  throw new TsonNotImplementedError(
-    `no BaseTypeResolver implementation exists yet (${String(subject.length)} subject bytes)`,
-  );
-}
-
-function readVocabularyValue(subject: Uint8Array, typeRef: string): ExpectedVocabularyValue {
-  throw new TsonNotImplementedError(
-    `no built-in type vocabulary implementation exists yet (type-ref '${typeRef}', ${String(subject.length)} subject bytes)`,
-  );
 }

@@ -1,4 +1,6 @@
-import { TsonNotImplementedError } from '../../packages/tson/src/core/errors.js';
+import { parseDocument } from '../../packages/tson/src/compiler/dataParser.js';
+import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
+import type { DataValue, ScopedValue } from '../../packages/tson/src/ast/value.js';
 
 /** The suite's four §8.1 error categories, asserted on an `outcome: error` vector. */
 export type Category = 'lexer' | 'parser' | 'resolver' | 'validation';
@@ -177,21 +179,357 @@ export interface Sidecar {
 /**
  * Parses a sidecar's raw bytes into a typed {@link Sidecar}.
  *
- * **This is the one seam in the conformance harness that dogfoods our own parser, and our
- * own parser does not exist yet.** The suite's README requires an implementation to parse
- * its sidecars with its own lexer/parser rather than a shortcut — a sidecar is itself TSON,
- * deliberately, to exercise the very thing under test. Until Part 1 (the lexer, structural
- * parser, and base type resolver) lands, this function throws {@link TsonNotImplementedError}
- * unconditionally, which is why every conformance vector currently reports as failing rather
- * than skipped.
+ * **This is the one seam in the conformance harness that dogfoods our own parser** — the
+ * suite's README requires an implementation to parse its sidecars with its own lexer/parser
+ * rather than a shortcut, since a sidecar is itself TSON, deliberately, to exercise the very
+ * thing under test. This runs the real Tier 3 parser ({@link parseDocument}) over `raw` and
+ * then *reduces* the resulting generic {@link DataValue} tree into a typed {@link Sidecar} by
+ * looking up each expected field by name — the sidecar's own record field names (`type-ref`,
+ * `base-value`, `schema-ref`, …) are exactly this module's field names, kebab-cased. This is
+ * reduction, not a second parser: no TSON syntax (tokens, escapes, brace disambiguation) is
+ * reinterpreted here, only the meaning of a tree the real parser already built.
  *
- * This seam is replaced by a real call into the Part 1 parser as that work package lands.
- * **Do not reimplement sidecar parsing independently here** (e.g. with a hand-rolled regex or
- * ad hoc scanner) — that would be exactly the second, divergent parser the suite's own README
- * warns dogfooding is meant to avoid.
+ * A sidecar the real parser cannot read at all (malformed TSON) throws from
+ * {@link parseDocument} itself, surfacing as a genuine parser failure rather than a silently
+ * wrong `Sidecar`. A sidecar that parses but does not match the expected sidecar shape
+ * (missing field, wrong core-value kind) throws a descriptive `Error` from the helpers below.
  */
-export function parseSidecar(_raw: Uint8Array): Sidecar {
-  throw new TsonNotImplementedError(
-    'sidecar parsing requires the real TSON lexer/parser (Part 1), which is not implemented yet',
-  );
+export function parseSidecar(raw: Uint8Array): Sidecar {
+  const { document } = runSync(parseDocument(fromBytes(raw)));
+  const fields = recordFields(document.root, 'sidecar body');
+
+  const spec = requiredText(fields, 'spec', 'sidecar');
+  const description = requiredText(fields, 'description', 'sidecar');
+  const outcome = requiredText(fields, 'outcome', 'sidecar') as Outcome;
+  const category = optionalText(fields, 'category') as Category | undefined;
+  const encoding = optionalText(fields, 'encoding') as Encoding | undefined;
+  const meta = optionalText(fields, 'meta');
+
+  const importField = fields.get('import');
+  const importNames =
+    importField === undefined
+      ? undefined
+      : arrayElements(importField, 'import').map((el) => tokenText(el.value, 'import entry'));
+
+  const tokensField = fields.get('tokens');
+  const tokens =
+    tokensField === undefined
+      ? undefined
+      : arrayElements(tokensField, 'tokens').map((el) => toExpectedToken(el.value));
+
+  const documentField = fields.get('document');
+  const expectedDocument =
+    documentField === undefined ? undefined : toExpectedDocument(documentField);
+
+  const baseValueField = fields.get('base-value');
+  const baseValue = baseValueField === undefined ? undefined : toExpectedBaseValue(baseValueField);
+
+  const typeRef = optionalText(fields, 'type-ref');
+
+  const valueField = fields.get('value');
+  const value = valueField === undefined ? undefined : toExpectedVocabularyValue(valueField);
+
+  return {
+    spec,
+    description,
+    outcome,
+    ...(category !== undefined ? { category } : {}),
+    ...(encoding !== undefined ? { encoding } : {}),
+    ...(meta !== undefined ? { meta } : {}),
+    ...(importNames !== undefined ? { import: importNames } : {}),
+    ...(tokens !== undefined ? { tokens } : {}),
+    ...(expectedDocument !== undefined ? { document: expectedDocument } : {}),
+    ...(baseValue !== undefined ? { baseValue } : {}),
+    ...(typeRef !== undefined ? { typeRef } : {}),
+    ...(value !== undefined ? { value } : {}),
+  };
+}
+
+// ── Reduction helpers: generic DataValue -> named field lookup ──────────────────────────────
+//
+// The sidecar body is itself an ordinary, untyped TSON record tree (Wave 2's schema binding
+// for `schemas/*-sidecar.tn` doesn't exist yet, and isn't what this work package ports —
+// per CLAUDE.md, dogfooding means running our own lexer/parser/structural-parser over the
+// bytes, not schema-validating against them). These helpers walk that generic tree by field
+// name to recover the meaning a sidecar author encoded in it.
+
+/** The record fields of `dv`'s core-value, keyed by field name, `!!schema` directives dropped. */
+function recordFields(dv: DataValue, what: string): Map<string, DataValue> {
+  const core = dv.coreValue;
+  if (core.kind !== 'record') {
+    throw new Error(`expected a record for ${what}, got core-value kind '${core.kind}'`);
+  }
+  const map = new Map<string, DataValue>();
+  for (const field of core.fields) {
+    map.set(field.name, field.value.value);
+  }
+  return map;
+}
+
+/** The elements of `dv`'s core-value, which must be an array. */
+function arrayElements(dv: DataValue, what: string): readonly ScopedValue[] {
+  const core = dv.coreValue;
+  if (core.kind !== 'array') {
+    throw new Error(`expected an array for ${what}, got core-value kind '${core.kind}'`);
+  }
+  return core.elements;
+}
+
+/** `dv`'s decoded token text — quoted or unquoted, form is not distinguished here. */
+function tokenText(dv: DataValue, what: string): string {
+  const core = dv.coreValue;
+  if (core.kind !== 'token') {
+    throw new Error(`expected a token for ${what}, got core-value kind '${core.kind}'`);
+  }
+  return core.text;
+}
+
+/** Whether `dv`'s core-value is the absent sentinel `_`. */
+function isAbsent(dv: DataValue): boolean {
+  return dv.coreValue.kind === 'absent';
+}
+
+function requireField(fields: Map<string, DataValue>, name: string, context: string): DataValue {
+  const dv = fields.get(name);
+  if (dv === undefined) {
+    throw new Error(`${context}: missing required field '${name}'`);
+  }
+  return dv;
+}
+
+function requiredText(fields: Map<string, DataValue>, name: string, context: string): string {
+  return tokenText(requireField(fields, name, context), `${context}.${name}`);
+}
+
+/** `fields.get(name)`'s token text, or `undefined` when the field is missing or `_`. */
+function optionalText(fields: Map<string, DataValue>, name: string): string | undefined {
+  const dv = fields.get(name);
+  if (dv === undefined || isAbsent(dv)) return undefined;
+  return tokenText(dv, name);
+}
+
+function boolText(dv: DataValue, what: string): boolean {
+  const t = tokenText(dv, what);
+  if (t === 'true') return true;
+  if (t === 'false') return false;
+  throw new Error(`expected the bare token 'true' or 'false' for ${what}, got '${t}'`);
+}
+
+// ── Parser-layer: ExpectedDocument ───────────────────────────────────────────────────────────
+
+function toExpectedToken(dv: DataValue): ExpectedToken {
+  const fields = recordFields(dv, 'lexer token');
+  return {
+    kind: requiredText(fields, 'kind', 'lexer token') as ExpectedToken['kind'],
+    text: requiredText(fields, 'text', 'lexer token'),
+  };
+}
+
+function toExpectedDocument(dv: DataValue): ExpectedDocument {
+  const fields = recordFields(dv, 'document');
+  const id = optionalText(fields, 'id');
+  const schema = optionalText(fields, 'schema');
+  const root = toExpectedDataValue(requireField(fields, 'root', 'document'));
+  return {
+    ...(id !== undefined ? { id } : {}),
+    ...(schema !== undefined ? { schema } : {}),
+    root,
+  };
+}
+
+function toExpectedDataValue(dv: DataValue): ExpectedDataValue {
+  const fields = recordFields(dv, 'data-value');
+  const annotations = arrayElements(
+    requireField(fields, 'annotations', 'data-value'),
+    'annotations',
+  ).map((el) => toExpectedAnnotation(el.value));
+  const typeRef = optionalText(fields, 'type-ref');
+  const core = toExpectedCoreValue(requireField(fields, 'core', 'data-value'));
+  return {
+    annotations,
+    ...(typeRef !== undefined ? { typeRef } : {}),
+    core,
+  };
+}
+
+function toExpectedAnnotation(dv: DataValue): ExpectedAnnotation {
+  const fields = recordFields(dv, 'annotation');
+  const name = requiredText(fields, 'name', 'annotation');
+  const valueField = requireField(fields, 'value', 'annotation');
+  const value = isAbsent(valueField) ? undefined : toExpectedDataValue(valueField);
+  return {
+    name,
+    ...(value !== undefined ? { value } : {}),
+  };
+}
+
+function toExpectedScopedValue(dv: DataValue): ExpectedScopedValue {
+  const fields = recordFields(dv, 'scoped-value');
+  const schemaRef = optionalText(fields, 'schema-ref');
+  const value = toExpectedDataValue(requireField(fields, 'value', 'scoped-value'));
+  return {
+    ...(schemaRef !== undefined ? { schemaRef } : {}),
+    value,
+  };
+}
+
+function toExpectedRecordField(dv: DataValue): ExpectedRecordField {
+  const fields = recordFields(dv, 'record field');
+  return {
+    name: requiredText(fields, 'name', 'record field'),
+    value: toExpectedScopedValue(requireField(fields, 'value', 'record field')),
+  };
+}
+
+function toExpectedMapEntry(dv: DataValue): ExpectedMapEntry {
+  const fields = recordFields(dv, 'map entry');
+  return {
+    key: toExpectedDataValue(requireField(fields, 'key', 'map entry')),
+    value: toExpectedScopedValue(requireField(fields, 'value', 'map entry')),
+  };
+}
+
+function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
+  const fields = recordFields(dv, 'core-value');
+  const kind = requiredText(fields, 'kind', 'core-value');
+  switch (kind) {
+    case 'token':
+      return {
+        kind: 'token',
+        form: requiredText(fields, 'form', 'core-value') as TokenForm,
+        text: requiredText(fields, 'text', 'core-value'),
+      };
+    case 'absent':
+      return { kind: 'absent' };
+    case 'empty-brace':
+      return { kind: 'empty-brace' };
+    case 'record':
+      return {
+        kind: 'record',
+        fields: arrayElements(requireField(fields, 'fields', 'core-value'), 'fields').map((el) =>
+          toExpectedRecordField(el.value),
+        ),
+      };
+    case 'map':
+      return {
+        kind: 'map',
+        entries: arrayElements(requireField(fields, 'entries', 'core-value'), 'entries').map((el) =>
+          toExpectedMapEntry(el.value),
+        ),
+      };
+    case 'array':
+      return {
+        kind: 'array',
+        elements: arrayElements(requireField(fields, 'elements', 'core-value'), 'elements').map(
+          (el) => toExpectedScopedValue(el.value),
+        ),
+      };
+    default:
+      throw new Error(`unknown core-value kind '${kind}'`);
+  }
+}
+
+// ── Resolver-layer: ExpectedBaseValue ────────────────────────────────────────────────────────
+
+function toExpectedBaseValue(dv: DataValue): ExpectedBaseValue {
+  const fields = recordFields(dv, 'base-value');
+  const kind = requiredText(fields, 'kind', 'base-value');
+  switch (kind) {
+    case 'null':
+      return { kind: 'null' };
+    case 'boolean':
+      return {
+        kind: 'boolean',
+        value: boolText(requireField(fields, 'value', 'base-value'), 'base-value.value'),
+      };
+    case 'string':
+      return { kind: 'string', text: requiredText(fields, 'text', 'base-value') };
+    case 'number':
+      return {
+        kind: 'number',
+        form: toExpectedNumberForm(requireField(fields, 'form', 'base-value')),
+      };
+    default:
+      throw new Error(`unknown base-value kind '${kind}'`);
+  }
+}
+
+function toExpectedNumberForm(dv: DataValue): ExpectedNumberForm {
+  const fields = recordFields(dv, 'number-form');
+  const shape = requiredText(fields, 'shape', 'number-form');
+  const sign = optionalText(fields, 'sign') as NumberSign | undefined;
+  switch (shape) {
+    case 'integer':
+      return {
+        shape: 'integer',
+        ...(sign !== undefined ? { sign } : {}),
+        digits: requiredText(fields, 'digits', 'number-form'),
+      };
+    case 'based-integer':
+      return {
+        shape: 'based-integer',
+        ...(sign !== undefined ? { sign } : {}),
+        radix: requiredText(fields, 'radix', 'number-form') as BasedIntegerRadix,
+        digits: requiredText(fields, 'digits', 'number-form'),
+      };
+    case 'float': {
+      const integerPart = optionalText(fields, 'integer-part');
+      const fractionDigits = optionalText(fields, 'fraction-digits');
+      const exponentField = fields.get('exponent');
+      const exponent =
+        exponentField === undefined || isAbsent(exponentField)
+          ? undefined
+          : toExponent(exponentField);
+      return {
+        shape: 'float',
+        ...(sign !== undefined ? { sign } : {}),
+        ...(integerPart !== undefined ? { integerPart } : {}),
+        ...(fractionDigits !== undefined ? { fractionDigits } : {}),
+        ...(exponent !== undefined ? { exponent } : {}),
+      };
+    }
+    case 'special-value':
+      return {
+        shape: 'special-value',
+        ...(sign !== undefined ? { sign } : {}),
+        kind: requiredText(fields, 'kind', 'number-form') as 'nan' | 'infinity',
+      };
+    default:
+      throw new Error(`unknown number-form shape '${shape}'`);
+  }
+}
+
+function toExponent(dv: DataValue): { readonly sign?: NumberSign; readonly digits: string } {
+  const fields = recordFields(dv, 'exponent');
+  const sign = optionalText(fields, 'sign') as NumberSign | undefined;
+  return {
+    ...(sign !== undefined ? { sign } : {}),
+    digits: requiredText(fields, 'digits', 'exponent'),
+  };
+}
+
+// ── Vocabulary-layer: ExpectedVocabularyValue ────────────────────────────────────────────────
+
+function toExpectedVocabularyValue(dv: DataValue): ExpectedVocabularyValue {
+  const core = dv.coreValue;
+  if (core.kind === 'token') {
+    return core.text;
+  }
+  if (core.kind === 'record') {
+    const fields = new Map<string, DataValue>();
+    for (const field of core.fields) fields.set(field.name, field.value.value);
+    if (fields.has('real') && fields.has('imaginary')) {
+      return {
+        real: requiredText(fields, 'real', 'vocabulary value'),
+        imaginary: requiredText(fields, 'imaginary', 'vocabulary value'),
+      };
+    }
+    if (fields.has('period') && fields.has('clock')) {
+      return {
+        period: requiredText(fields, 'period', 'vocabulary value'),
+        clock: requiredText(fields, 'clock', 'vocabulary value'),
+      };
+    }
+  }
+  throw new Error(`unrecognized vocabulary value shape: core-value kind '${core.kind}'`);
 }

@@ -9,20 +9,20 @@ working draft: https://tson.io/raw/2026/33/tson-part2-schema.md
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
 suite at https://github.com/litterat/ltr8-io-tson-test-suite — 146 vectors.
 
-**Conformance: 0 / 146 vectors passing.**
+**Conformance: 146 / 146 vectors passing.**
 
-The count cannot move until Wave 2. The runner parses each vector's sidecar with this
-implementation's own parser — the shared suite expects an implementation to dogfood — and the data
-parser lands in Wave 2, so every vector currently fails on that one unimplemented call rather than
-on anything it is meant to test. The number that moves before then is the **discovered** count,
-which must stay 146.
+18 lexer, 25 parser, 14 resolver, 89 vocabulary. Sidecars are parsed with this implementation's
+own parser, as the shared suite expects. Subjects are fed as raw bytes — verified directly for the
+eight vectors carrying deliberately malformed UTF-8, which reach the lexer unmodified and are
+rejected by it rather than by a decoder. No vector in the current suite declares `utf-16` or
+`utf-32`, so nothing is skipped.
 
 ## Part 1 — data format (Class 1)
 
 - [x] Lexer — UTF-8 decoding, code-point addressing, NFC checking, malformed-sequence rejection
 - [x] Unicode tables — `XID_Start`/`XID_Continue`/`Nd`, `Pattern_White_Space`
 - [x] Event stream — the Tier 2 pull source
-- [ ] Data parser — the Tier 3 AST
+- [x] Data parser — the Tier 3 AST
 - [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer)
 - [x] Number grammar — hand-written, one function per ABNF rule
 - [x] Integer types — `int8`–`int256`, `uint8`–`uint256`, `positive_integer` and siblings
@@ -36,8 +36,8 @@ which must stay 146.
 
 ## Part 2 — type system and schema (Class 2)
 
-- [ ] Schema grammar — schema documents parsed into a faithful AST
-- [ ] Desugaring — every sugar form lifted to a closed synthetic entry
+- [x] Schema grammar — schema documents parsed into a faithful AST
+- [x] Desugaring — every sugar form lifted to a closed synthetic entry
 - [ ] Resolution — composition, refinement, constructor application, templates
 - [ ] Linking — reference validation, transitive `!!import` merge, choice disjointness
 - [ ] Identity and hashing — canonical `!!id`, `?sha256=` pinning
@@ -54,11 +54,16 @@ which must stay 146.
 - [ ] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `hash`, `init-example`
 - [ ] Dual ESM/CJS publish, browser bundle
 
-## Wave 1 — landed, not yet measured
+## Known gaps
 
-Everything ticked above is implemented and covered by unit tests written from the spec, but none
-of it has been measured against the shared vectors yet, for the reason above. Treat the ticks as
-"built and unit-tested", not as "conformant" — Wave 2's gate is what turns that into evidence.
+- **`writeFloat` does not spell a whole float with a fractional part.** `write()` of `12` gives
+  `"12"` where the suite's canonical text and `Double#toString` both give `"12.0"`. Reading is
+  unaffected and round-trips; this is a writer-side formatting gap, and the writers land in Wave 5.
+- **`annotations` is bound as an ordinary wire field, not as a record's annotations carrier.**
+  `bind/binding.ts` types `annotationsCarrier` against `annotations/index.ts`'s
+  `Annotations` (`{ values }`), while `schema/meta` carries its own stand-in
+  (`readonly Annotation[]`); the two do not meet. Wave 3's fixture comparison against
+  `spec/m/*-resolved.tn` is what will show whether this changes the resolved output.
 
 ## Scaffold
 

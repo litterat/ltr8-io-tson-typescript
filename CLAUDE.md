@@ -135,6 +135,22 @@ in conversation rather than silently picking. Two known divergences from the Jav
   on a host with a different Unicode version is a **behavioural change** and belongs in its own
   commit.
 
+- **An atom-refinement body is data, not a `record-def`** — a divergence from §12.1's literal
+  ABNF, taken deliberately. The grammar says
+  `atom-refinement = "!" type-name ws "^" ws record-def`, and §12.1's own prose reinforces it:
+  "No production of this grammar uses the full `data-value`: an atom-refinement body is a braced
+  `record-def`." But `record-def` reduces to `field-def`, whose value is either a `type-ref` or a
+  `field-modifier` — and `field-modifier` is `("~" / "=") (token / absent)`, "never a compound
+  value". Under that reading `min: 1` is invalid and `size: { bits: 8  signed: true }` doubly so.
+
+  That second form is `spec/m/core.tn` line 105, a **live bundled schema the reference
+  implementation resolves**, so the spec's grammar rejects the spec's own schema. The reference
+  parses a data `core-value` here (`new AtomRefinement(target, new DataValue(List.of(),
+Optional.empty(), parseCoreValue()))`), and this port follows it: `AtomRefinement.bindings` is a
+  `DataValue`. The consequence is that the ABNF's `~`/`=` modifiers have no meaning in a
+  refinement body, and this port rejects them. **Worth reporting upstream** — either the
+  production should name `core-value`, or `core.tn` and §5.5's worked example are wrong.
+
 - Every built-in atom is parsed here from scratch, since JS has no host `UUID`, `InetAddress`,
   `LocalDate` or `BigDecimal` to delegate to. `.references/ltr8-io-tson-java/CONFORMANCE.md` records
   where the Java is deliberately stricter than the JDK; read it before writing any atom parser, since

@@ -1,9 +1,9 @@
 import type { Annotation, DataValue, TokenValue } from '../value.js';
-import type { RecordDef } from './typedef.js';
+
 import type { TypeRef } from './typeref.js';
 
 /**
- * `record-entry = field-def / group-def` (Part 2 §12.1) — one entry inside a {@link RecordDef}'s
+ * `record-entry = field-def / group-def` (Part 2 §12.1) — one entry inside a `RecordDef`'s
  * braces. Discriminated on `kind` via its two members' own `kind` fields.
  */
 export type RecordEntry = FieldDef | GroupDef;
@@ -203,10 +203,14 @@ export interface Instance {
  * constraint values (both semantic-layer checks, not enforced here); this establishes IS-A
  * with `target`, unlike {@link Instance}.
  *
- * `bindings` is typed as a {@link RecordDef} rather than a general data value: §12.1 fixes the
- * atom-refinement payload to `record-def` — tighter than the constructor-application payload's
- * `core-value` (§5.5–§5.6) — because a refinement body is always braced constraint bindings,
- * never a positional form.
+ * `bindings` is a {@link DataValue}, not a `RecordDef`, and the difference is not
+ * cosmetic. A refinement body is braced constraint bindings, but the *values* bound are ordinary
+ * data — including nested records. `RecordDef` is a schema production whose members are type
+ * definitions, so it cannot represent `{ size: { bits: 8  signed: true } }`, which is
+ * `spec/m/core.tn` line 105 and the shape §5.5's own worked example uses. Typed as a
+ * `RecordDef`, the bundled `core.tn` does not parse at all. The reference implementation carries
+ * it the same way: `AtomRefinement(String target, DataValue bindings)`, built from
+ * `parseCoreValue()`.
  *
  * No parameter list — a parameterized atom refinement is not a grammar production (§5.10): a
  * refinement of an atom instance has no parameter slot to route through.
@@ -214,5 +218,5 @@ export interface Instance {
 export interface AtomRefinement {
   readonly kind: 'atomRefinement';
   readonly target: string;
-  readonly bindings: RecordDef;
+  readonly bindings: DataValue;
 }
