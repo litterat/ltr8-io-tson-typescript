@@ -10,7 +10,7 @@ zero runtime dependencies, built against TSON spec 2026 Revision 33.
 Two public sibling repos define the target:
 
 - **Spec** — `spec/tson-part1-data.md` (data format) and `spec/tson-part2-schema.md` (type system +
-  schema) in the Java repo, plus the three *live* bundled schemas `spec/m/{meta-kernel,meta,core}.tn` and
+  schema) in the Java repo, plus the three _live_ bundled schemas `spec/m/{meta-kernel,meta,core}.tn` and
   their `*-resolved.tn` resolver-output fixtures.
 - **Conformance suite** — `github.com/litterat/ltr8-io-tson-test-suite`, 146 language-agnostic vectors
   under `tests/{lexer,parser,resolver,vocabulary}/{valid,invalid}/`. No manifest — discovery is by
@@ -24,20 +24,20 @@ tooling, reference-fetch, conformance harness and phase gates must exist and be 
 
 ## Decisions taken
 
-| Decision | Choice |
-|---|---|
-| Packages | npm workspace: `@ltr8/tson` (library, four subpath entries) + `@ltr8/tson-cli`. `@ltr8/tson` is unclaimed; bare `tson` is taken. |
-| Runtime | Node 24+ **and** modern browsers; dual ESM+CJS via `tsup`; **zero runtime dependencies** |
-| Fidelity | **Idiomatic TypeScript rewrite** — same behaviour and conformance, restructured around discriminated unions and plain functions |
-| Scope | Everything except Java-only bits. `tson-annotation` (Java APT) is dropped; `tson-bind`'s 6.3k LOC of reflection collapses to ~1.2k of authored descriptors |
-| Tooling | Vitest, tsup, ESLint flat config + Prettier, `tsc --noEmit` |
-| Atom host types | Own zero-dep immutable value types **plus** a feature-detected `Temporal` adapter (Node 24 has no global `Temporal`) |
-| Bundled `.tn` | Copy the Java repo's `spec/m/*.tn` verbatim, digests and all, so the `*-resolved.tn` fixtures apply unchanged |
-| References | Cloned at setup from the two public repos into a gitignored `.references/`, Java pinned to `fb93c89` |
-| Public API | Flat tree-shakable functions primary (`parse`, `readTree`, `validate`, `write`), plus `createTson(config)` as a config-bound convenience |
-| Docs | `CLAUDE.md` + `STATUS.md` only |
-| Delivery | Manager commits each green phase directly to `main` |
-| Gate | `tsc --noEmit` + `eslint` + `vitest` + the conformance vectors that phase should newly turn green, plus manager diff review |
+| Decision        | Choice                                                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Packages        | npm workspace: `@ltr8/tson` (library, four subpath entries) + `@ltr8/tson-cli`. `@ltr8/tson` is unclaimed; bare `tson` is taken.                           |
+| Runtime         | Node 24+ **and** modern browsers; dual ESM+CJS via `tsup`; **zero runtime dependencies**                                                                   |
+| Fidelity        | **Idiomatic TypeScript rewrite** — same behaviour and conformance, restructured around discriminated unions and plain functions                            |
+| Scope           | Everything except Java-only bits. `tson-annotation` (Java APT) is dropped; `tson-bind`'s 6.3k LOC of reflection collapses to ~1.2k of authored descriptors |
+| Tooling         | Vitest, tsup, ESLint flat config + Prettier, `tsc --noEmit`                                                                                                |
+| Atom host types | Own zero-dep immutable value types **plus** a feature-detected `Temporal` adapter (Node 24 has no global `Temporal`)                                       |
+| Bundled `.tn`   | Copy the Java repo's `spec/m/*.tn` verbatim, digests and all, so the `*-resolved.tn` fixtures apply unchanged                                              |
+| References      | Cloned at setup from the two public repos into a gitignored `.references/`, Java pinned to `fb93c89`                                                       |
+| Public API      | Flat tree-shakable functions primary (`parse`, `readTree`, `validate`, `write`), plus `createTson(config)` as a config-bound convenience                   |
+| Docs            | `CLAUDE.md` + `STATUS.md` only                                                                                                                             |
+| Delivery        | Manager commits each green phase directly to `main`                                                                                                        |
+| Gate            | `tsc --noEmit` + `eslint` + `vitest` + the conformance vectors that phase should newly turn green, plus manager diff review                                |
 
 ## Three architectural decisions that shape the scaffold
 
@@ -45,9 +45,9 @@ These are settled now because they cannot be retrofitted once parallel work star
 
 **1. Suspension is in the contract, not bolted on later.** Streaming is non-negotiable (the Java lexer
 reads from an `InputStream`; memory is proportional to nesting depth). Rather than write the grammar twice
-for sync and async, the whole read stack is *suspendable-but-sync-shaped*: `type Task<T> =
+for sync and async, the whole read stack is _suspendable-but-sync-shaped_: `type Task<T> =
 Generator<typeof NEED_INPUT, T, void>`, every starving function is `function*`, every call to one is
-`yield*`, and two ~10-line drivers (`runSync`, `runAsync`) sit at the top. The suspended state *is* the
+`yield*`, and two ~10-line drivers (`runSync`, `runAsync`) sit at the top. The suspended state _is_ the
 delegation chain — one generator frame per open container, which is exactly the bound the Java frame stack
 gives. **Every generator-returning signature in `ReadContext`, `EventSource`, `TypeReader` and the lexer
 must be declared `Task<…>` in the contract layer** — retrofitting suspension later means touching every
@@ -59,8 +59,8 @@ descriptor is simply authored rather than derived: `Binding<T>` is a discriminat
 output type driving `Infer<>`, `MethodHandle` becomes a closure, `Memoized` becomes `lazy()` closing the
 one declaration-order cycle, and `@Profile` disappears entirely (a second shape is a second value).
 Decorators + `reflect-metadata` are rejected — a runtime dependency that also degrades to `Object` for
-every union, tuple and optional, i.e. every case TSON needs. Schema-to-TS codegen is kept as an *optional
-dev-time generator that emits combinators*, never as the runtime mechanism, because schemas are fetched by
+every union, tuple and optional, i.e. every case TSON needs. Schema-to-TS codegen is kept as an _optional
+dev-time generator that emits combinators_, never as the runtime mechanism, because schemas are fetched by
 URL and hash-pinned at read time.
 
 **3. The compiler→bind circularity is broken.** Java's `DefinitionResolver` holds a `TsonObjectWriter`
@@ -101,8 +101,8 @@ ltr8-io-tson-typescript/
 ```
 
 Single library package, not a 7-package monorepo: npm gives neither JPMS's enforced encapsulation nor a
-reason to version 7 things in lockstep, and the property that actually matters — *don't ship the schema
-compiler to a browser reading Class 1 data* — comes from tree-shaking and subpath entries.
+reason to version 7 things in lockstep, and the property that actually matters — _don't ship the schema
+compiler to a browser reading Class 1 data_ — comes from tree-shaking and subpath entries.
 
 ```jsonc
 // packages/tson/package.json
@@ -121,23 +121,23 @@ compiler to a browser reading Class 1 data* — comes from tree-shaking and subp
 Written **in this session**, types and enums only, no implementations. This is what makes twelve agents
 able to run in parallel afterwards with no cross-talk.
 
-| File | Contents | ~LOC |
-|---|---|---|
-| `src/core/position.ts` | `Position { line; column; offset }` — 1-based line, **code-point** column, 0-based **UTF-8 byte** offset | 30 |
-| `src/core/errors.ts` | `TsonError` base + `TsonLexError`, `TsonParseError`, `TsonReadError`, `TsonWriteError`, `TsonBindMismatchError`, `TsonMissingBindingError`, `TsonUnsupportedDocumentError`, `TsonContentHashMismatchError`, `TsonSchemaValidationError`, `TsonSchemaFetchError` | 120 |
-| `src/core/diagnostic.ts` | `Diagnostic`, closed `DiagnosticCode` union, `SchemaLocation`, `DiagnosticsReceiver` (`throwing()` / `collector()`) | 180 |
-| `src/io/bytes.ts` | `ByteInput { ensure(); read(); ended }`, `NEED_INPUT`, **`Task<T>`**, `runSync`/`runAsync` signatures | 60 |
-| `src/lexer/token.ts` | `TokenType` union (9 kinds + EOF), `Token`, adjacency helpers | 90 |
-| `src/ast/value.ts` | `Document`, `DataValue`, `CoreValue` union, `RecordValue`, `MapValue`, `ArrayValue`, `ScopedValue`, `TokenValue`, `TokenForm`, `Annotation`, `AbsentValue`, `EmptyBrace` | 90 |
-| `src/ast/schema/*.ts` | Part 2 grammar AST: `SchemaDocument`, `Declaration`, `TypeDef`, the `TypeRef` union, `TypeArg`, `FieldDef`, `GroupDef`, `ConstructionDef`, `Instance`, `SizeSpec`, `RemovalSet` | 260 |
-| `src/stream/event.ts` | the 17-member `TsonEvent` union, `EventSource` (**`Task`-returning**) | 130 |
-| `src/annotations/index.ts` | `Annotation`, `Annotations`, `Annotated<T>`, `AnnotatedMap<K,V>` | 200 |
-| `src/bind/binding.ts` | the `Binding<T>` union, `FieldSlot`, `LazyBinding`/`BindingRef`, `Infer<>`, `BindingRegistry` | 220 |
-| `src/schema/meta/*.ts` | the ~54 resolved-schema value types (`TypeDefinition`, `Top`, `Data`, `Reference`, the bodies, one constraint interface per built-in atom) | 700 |
-| `src/tree/nodes.ts` | `Value` union + `RecordNode`/`MapNode`/`ArrayNode`/`TupleNode`/`AtomNode`/`AbsentNode`/`MissingNode` | 120 |
-| `src/reader/contracts.ts` | `TypeReader<T>` (**`read(ctx): Task<T>`**), `ReadContext`, `ValueReaderFactory` + registries | 140 |
-| `src/atom/contract.ts` | `AtomType<T>`, atom error shapes | 60 |
-| `src/value/types.ts` | host atom value **interfaces**: `TsonDecimal`, `Rational`, `Complex`, `PlainDate`/`PlainTime`/`PlainDateTime`, `TsonDuration`, `Ipv4Address`/`Ipv6Address`/`Cidr`, `Uuid`, `MacAddress` | 150 |
+| File                       | Contents                                                                                                                                                                                                                                                        | ~LOC |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `src/core/position.ts`     | `Position { line; column; offset }` — 1-based line, **code-point** column, 0-based **UTF-8 byte** offset                                                                                                                                                        | 30   |
+| `src/core/errors.ts`       | `TsonError` base + `TsonLexError`, `TsonParseError`, `TsonReadError`, `TsonWriteError`, `TsonBindMismatchError`, `TsonMissingBindingError`, `TsonUnsupportedDocumentError`, `TsonContentHashMismatchError`, `TsonSchemaValidationError`, `TsonSchemaFetchError` | 120  |
+| `src/core/diagnostic.ts`   | `Diagnostic`, closed `DiagnosticCode` union, `SchemaLocation`, `DiagnosticsReceiver` (`throwing()` / `collector()`)                                                                                                                                             | 180  |
+| `src/io/bytes.ts`          | `ByteInput { ensure(); read(); ended }`, `NEED_INPUT`, **`Task<T>`**, `runSync`/`runAsync` signatures                                                                                                                                                           | 60   |
+| `src/lexer/token.ts`       | `TokenType` union (9 kinds + EOF), `Token`, adjacency helpers                                                                                                                                                                                                   | 90   |
+| `src/ast/value.ts`         | `Document`, `DataValue`, `CoreValue` union, `RecordValue`, `MapValue`, `ArrayValue`, `ScopedValue`, `TokenValue`, `TokenForm`, `Annotation`, `AbsentValue`, `EmptyBrace`                                                                                        | 90   |
+| `src/ast/schema/*.ts`      | Part 2 grammar AST: `SchemaDocument`, `Declaration`, `TypeDef`, the `TypeRef` union, `TypeArg`, `FieldDef`, `GroupDef`, `ConstructionDef`, `Instance`, `SizeSpec`, `RemovalSet`                                                                                 | 260  |
+| `src/stream/event.ts`      | the 17-member `TsonEvent` union, `EventSource` (**`Task`-returning**)                                                                                                                                                                                           | 130  |
+| `src/annotations/index.ts` | `Annotation`, `Annotations`, `Annotated<T>`, `AnnotatedMap<K,V>`                                                                                                                                                                                                | 200  |
+| `src/bind/binding.ts`      | the `Binding<T>` union, `FieldSlot`, `LazyBinding`/`BindingRef`, `Infer<>`, `BindingRegistry`                                                                                                                                                                   | 220  |
+| `src/schema/meta/*.ts`     | the ~54 resolved-schema value types (`TypeDefinition`, `Top`, `Data`, `Reference`, the bodies, one constraint interface per built-in atom)                                                                                                                      | 700  |
+| `src/tree/nodes.ts`        | `Value` union + `RecordNode`/`MapNode`/`ArrayNode`/`TupleNode`/`AtomNode`/`AbsentNode`/`MissingNode`                                                                                                                                                            | 120  |
+| `src/reader/contracts.ts`  | `TypeReader<T>` (**`read(ctx): Task<T>`**), `ReadContext`, `ValueReaderFactory` + registries                                                                                                                                                                    | 140  |
+| `src/atom/contract.ts`     | `AtomType<T>`, atom error shapes                                                                                                                                                                                                                                | 60   |
+| `src/value/types.ts`       | host atom value **interfaces**: `TsonDecimal`, `Rational`, `Complex`, `PlainDate`/`PlainTime`/`PlainDateTime`, `TsonDuration`, `Ipv4Address`/`Ipv6Address`/`Cidr`, `Uuid`, `MacAddress`                                                                         | 150  |
 
 **≈ 2,550 LOC of declarations.** Two rules stated in `CLAUDE.md` for whoever touches it: every
 generator-returning signature is `Task<…>` from the start; `schema/meta` types are transcribed from the
@@ -174,7 +174,7 @@ NFC uses `String.prototype.normalize` (ECMA-262, present in small-icu Node and e
 guard: a token whose maximum code point is `< 0x0300` cannot contain a combining mark and is NFC by
 construction, so the allocating call stays off the path every ASCII identifier takes.
 
-This makes the TS port *stricter than Java*, which uses `Character.isUnicodeIdentifierStart/Part` as a
+This makes the TS port _stricter than Java_, which uses `Character.isUnicodeIdentifierStart/Part` as a
 documented approximation of XID. The two will disagree on a small set of code points (notably `$`). That
 is a finding to file back to the Java repo and worth a new vector in the shared suite.
 
@@ -200,7 +200,7 @@ code-point addressed — never index a JS string by UTF-16 unit; TSDoc states cu
 change history; `STATUS.md` is the only checklist and git history is the log; plus the three traps
 inherited from the Java repo's own list (identity-keyed desugar map → `WeakMap` + `toBe`; the
 atom-refinement merge on the wire record; `requireDocumentEnd`, where a lazy generator stream that merely
-*stops* silently accepts trailing content).
+_stops_ silently accepts trailing content).
 
 ## Part B — `ORCHESTRATION.md`: the cloud one-shot
 
@@ -215,17 +215,17 @@ Gate: `tsc --noEmit` clean.
 
 **Wave 1 — twelve agents in parallel** (~9,000 LOC, no cross-talk):
 
-| WP | Ports | Produces | ~LOC |
-|---|---|---|---|
-| 1 unicode | `Lexer` predicates | `unicode/xid.ts` (gen), `nfc.ts`, `whitespace.ts` | 350 |
-| 2 byte input | `Lexer.nextByte/fillBytes` | `io/{bytes,utf8,drivers,streams}.ts` | 350 |
-| 3 lexer | `lexer/Lexer.java` (900) | `lexer/lexer.ts` — decodes UTF-8 itself; **byte offset counted, not derived** (a length re-derived from the decoded value is only right while input is well-formed); BOM dropped without counting; rejects bad lead/continuation/truncated/overlong/surrogate/>U+10FFFF, never U+FFFD | 1000 |
-| 4 numbers | `base/*` (787) | `base/{numberScanner,numberGrammar,baseTypeResolver,numberNarrowing}.ts` — one function per ABNF rule, **no RegExp** | 800 |
-| 5 event stream | `TsonDataStream` (812) | `stream/dataStream.ts` — frame stack, ≤2 token lookahead | 850 |
-| 8a–d atoms | `atom/` (2400, 33 parsers) | `atom/{numeric,temporal,network,text}/` — four agents. **Each reads the Java `CONFORMANCE.md` first**: `!uuid` needs RFC 9562 8-4-4-4-12; base64 needs padding; date/time reject ISO extended years; duration needs uppercase designators, no sign; `!ipv4`/`!ipv6` parse RFC 3986/4291 themselves — the JDK leniency there is an SSRF-bypass class, and JS has no host parser to lean on at all | 2650 |
-| 9 regex | `tson-regex` (1447) | `regex/` — I-Regexp parser, Thompson NFA / Pike VM (linear, ReDoS-safe), product-NFA disjointness. Imports nothing outside itself | 1400 |
-| 10 tree | `tson-tree` (628) | `tree/{nodes,accessors}.ts` — RFC 6901 pointers, `MissingNode` carrying the failed pointer | 600 |
-| 11 bind runtime | `tson-bind` model + `tson-annotation` (2000 of 6313 survive) | `bind/{combinators,infer,registry,encode,strictness}.ts` | 1200 |
+| WP              | Ports                                                        | Produces                                                                                                                                                                                                                                                                                                                                                                                         | ~LOC |
+| --------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- |
+| 1 unicode       | `Lexer` predicates                                           | `unicode/xid.ts` (gen), `nfc.ts`, `whitespace.ts`                                                                                                                                                                                                                                                                                                                                                | 350  |
+| 2 byte input    | `Lexer.nextByte/fillBytes`                                   | `io/{bytes,utf8,drivers,streams}.ts`                                                                                                                                                                                                                                                                                                                                                             | 350  |
+| 3 lexer         | `lexer/Lexer.java` (900)                                     | `lexer/lexer.ts` — decodes UTF-8 itself; **byte offset counted, not derived** (a length re-derived from the decoded value is only right while input is well-formed); BOM dropped without counting; rejects bad lead/continuation/truncated/overlong/surrogate/>U+10FFFF, never U+FFFD                                                                                                            | 1000 |
+| 4 numbers       | `base/*` (787)                                               | `base/{numberScanner,numberGrammar,baseTypeResolver,numberNarrowing}.ts` — one function per ABNF rule, **no RegExp**                                                                                                                                                                                                                                                                             | 800  |
+| 5 event stream  | `TsonDataStream` (812)                                       | `stream/dataStream.ts` — frame stack, ≤2 token lookahead                                                                                                                                                                                                                                                                                                                                         | 850  |
+| 8a–d atoms      | `atom/` (2400, 33 parsers)                                   | `atom/{numeric,temporal,network,text}/` — four agents. **Each reads the Java `CONFORMANCE.md` first**: `!uuid` needs RFC 9562 8-4-4-4-12; base64 needs padding; date/time reject ISO extended years; duration needs uppercase designators, no sign; `!ipv4`/`!ipv6` parse RFC 3986/4291 themselves — the JDK leniency there is an SSRF-bypass class, and JS has no host parser to lean on at all | 2650 |
+| 9 regex         | `tson-regex` (1447)                                          | `regex/` — I-Regexp parser, Thompson NFA / Pike VM (linear, ReDoS-safe), product-NFA disjointness. Imports nothing outside itself                                                                                                                                                                                                                                                                | 1400 |
+| 10 tree         | `tson-tree` (628)                                            | `tree/{nodes,accessors}.ts` — RFC 6901 pointers, `MissingNode` carrying the failed pointer                                                                                                                                                                                                                                                                                                       | 600  |
+| 11 bind runtime | `tson-bind` model + `tson-annotation` (2000 of 6313 survive) | `bind/{combinators,infer,registry,encode,strictness}.ts`                                                                                                                                                                                                                                                                                                                                         | 1200 |
 
 **Wave 2** — 6 data parser (350), 7 schema grammar parser (900), 12 `schema.meta` bindings (900),
 13 desugarer (1250), 21 conformance harness (400).
@@ -251,7 +251,7 @@ fault**).
 `README.md`, `STATUS.md`, allocation harness, `publint` + `arethetypeswrong`, CI green.
 
 **Total ≈ 32,000 LOC** against 41.7k Java — the delta being `DefaultRecordBinder`'s 1158 LOC of
-reflection, the three component finders' 820, `mapper/`'s 814 (a JS array *is* the array form), the
+reflection, the three component finders' 820, `mapper/`'s 814 (a JS array _is_ the array form), the
 `Memoized`/in-flight machinery, and Java records' boilerplate.
 
 ## Verification
@@ -270,7 +270,7 @@ npm run build                          # tsup ESM+CJS+dts, both packages — MUS
 ```
 
 **146 discovered / 146 failing is the correct scaffold outcome** — it proves the harness pairs every
-vector before any implementation exists. *0 discovered* means `.references/` or the walker is wrong and
+vector before any implementation exists. _0 discovered_ means `.references/` or the walker is wrong and
 must be fixed before Wave 1. A `gen:unicode` diff means the checked-in table and the host Unicode version
 disagree — resolve before Wave 1, since WP-1 and WP-3 both depend on it.
 

@@ -1,0 +1,193 @@
+import { TsonInternalError } from '../core/errors.js';
+
+/**
+ * Yielded by a {@link Task} that has run out of input and needs the driver to supply more.
+ *
+ * A unique symbol rather than a sentinel value so it can never collide with a legitimate
+ * result, and so `yield*` delegation stays type-safe all the way down the stack.
+ */
+export const NEED_INPUT: unique symbol = Symbol('tson.need-input');
+
+/**
+ * A suspendable computation over the byte stream.
+ *
+ * The whole read stack — lexer, event stream, parser, readers — is written in
+ * *suspendable-but-sync-shaped* style: any function that can starve is declared `function*`
+ * returning a `Task`, and every call to one is `yield*`. Two drivers sit at the top:
+ * {@link runSync} for input that is already complete, {@link runAsync} for input that arrives
+ * in chunks.
+ *
+ * This exists so the grammar is written **once**. A reference implementation that spelled its
+ * parser twice — once sync, once async — would have two things to keep conformant, and the
+ * pair would drift.
+ *
+ * Two consequences worth stating:
+ *
+ * - **Memory stays proportional to nesting depth.** The suspended state *is* the `yield*`
+ *   delegation chain, one generator frame per open container — the same bound an explicit
+ *   frame stack gives.
+ * - **In sync mode nothing ever suspends.** A complete input reports `ended` from
+ *   construction, so `ensure()` failing means genuine EOF, which is an ordinary parse path
+ *   rather than a suspension.
+ */
+export type Task<T> = Generator<typeof NEED_INPUT, T, void>;
+
+/**
+ * A pull cursor over bytes.
+ *
+ * Deliberately byte-at-a-time at the interface while implementations hold a chunk and an
+ * index: the lexer decodes UTF-8 itself and must see individual bytes to reject a malformed
+ * sequence at the right offset, but paying a function call per byte against a buffered
+ * implementation costs nothing meaningful.
+ */
+export interface ByteInput {
+  /** True when at least one more byte is available right now, without suspending. */
+  ensure(): boolean;
+  /** The next byte, 0..255. Only valid when {@link ensure} has just returned `true`. */
+  read(): number;
+  /** True once no further chunks will ever arrive. */
+  readonly ended: boolean;
+}
+
+/** A {@link ByteInput} over a complete buffer. Never suspends. */
+export function fromBytes(bytes: Uint8Array): ByteInput {
+  let index = 0;
+  return {
+    ensure: () => index < bytes.length,
+    read(): number {
+      const byte = bytes[index];
+      if (byte === undefined) {
+        throw new TsonInternalError('read() called without a preceding successful ensure()');
+      }
+      index += 1;
+      return byte;
+    },
+    get ended(): boolean {
+      return true;
+    },
+  };
+}
+
+/**
+ * A {@link ByteInput} over a complete string, encoded as UTF-8.
+ *
+ * Note this cannot reproduce a malformed-UTF-8 error: a JS string has already been decoded,
+ * so a document that tests the lexer's UTF-8 rejection must be fed through {@link fromBytes}
+ * as raw bytes. The conformance suite relies on that distinction.
+ */
+export function fromString(text: string): ByteInput {
+  return fromBytes(new TextEncoder().encode(text));
+}
+
+/** A {@link ByteInput} fed chunk by chunk, for use with {@link runAsync}. */
+export interface ChunkInput extends ByteInput {
+  /** Append a chunk. */
+  push(chunk: Uint8Array): void;
+  /** Declare that no further chunks will arrive. */
+  end(): void;
+  /**
+   * Wait for the next chunk to arrive, or for the stream to end.
+   *
+   * Resolves as soon as either happens; a driver calls this when a task yields
+   * {@link NEED_INPUT}.
+   */
+  pump(): Promise<void>;
+}
+
+/** Create a {@link ChunkInput} driven by an async source. */
+export function chunkInput(): ChunkInput {
+  const queue: Uint8Array[] = [];
+  let current: Uint8Array | undefined;
+  let index = 0;
+  let finished = false;
+  let waiters: (() => void)[] = [];
+
+  const wake = (): void => {
+    const pending = waiters;
+    waiters = [];
+    for (const w of pending) w();
+  };
+
+  const advance = (): boolean => {
+    while (current === undefined || index >= current.length) {
+      const next = queue.shift();
+      if (next === undefined) return false;
+      current = next;
+      index = 0;
+    }
+    return true;
+  };
+
+  return {
+    ensure: advance,
+    read(): number {
+      const byte = current?.[index];
+      if (byte === undefined) {
+        throw new TsonInternalError('read() called without a preceding successful ensure()');
+      }
+      index += 1;
+      return byte;
+    },
+    get ended(): boolean {
+      return finished && queue.length === 0 && (current === undefined || index >= current.length);
+    },
+    push(chunk: Uint8Array): void {
+      if (chunk.length > 0) queue.push(chunk);
+      wake();
+    },
+    end(): void {
+      finished = true;
+      wake();
+    },
+    async pump(): Promise<void> {
+      if (finished || queue.length > 0) return;
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    },
+  };
+}
+
+/**
+ * Run a {@link Task} to completion over input that is already complete.
+ *
+ * The throw is an internal-invariant guard, not an error path any document can reach: a
+ * complete {@link ByteInput} reports `ended` from construction, so a task over one starves
+ * into ordinary EOF handling rather than suspending.
+ */
+export function runSync<T>(task: Task<T>): T {
+  const step = task.next();
+  if (!step.done) {
+    throw new TsonInternalError('a task suspended on input that was already complete');
+  }
+  return step.value;
+}
+
+/** Run a {@link Task} to completion, pumping the input each time it suspends. */
+export async function runAsync<T>(task: Task<T>, input: ChunkInput): Promise<T> {
+  let step = task.next();
+  while (!step.done) {
+    await input.pump();
+    step = task.next();
+  }
+  return step.value;
+}
+
+/** Feed an async byte source into a {@link ChunkInput}, then run a task over it. */
+export async function runOver<T>(
+  source: AsyncIterable<Uint8Array>,
+  makeTask: (input: ByteInput) => Task<T>,
+): Promise<T> {
+  const input = chunkInput();
+  const task = makeTask(input);
+  const pumping = (async (): Promise<void> => {
+    try {
+      for await (const chunk of source) input.push(chunk);
+    } finally {
+      input.end();
+    }
+  })();
+  try {
+    return await runAsync(task, input);
+  } finally {
+    await pumping;
+  }
+}

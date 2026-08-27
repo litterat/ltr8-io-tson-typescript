@@ -1,0 +1,126 @@
+import type { Position } from './position.js';
+
+/**
+ * The closed set of problems a read can report (§8.1).
+ *
+ * Closed on purpose: a consumer switching on a code must be able to see every case, and a
+ * new code is an API change rather than a new string appearing in a message.
+ */
+export type DiagnosticCode =
+  /** A required field was absent from the data. */
+  | 'FIELD_REQUIRED'
+  /** A field the schema fixes carried a different value. */
+  | 'FIELD_FIXED'
+  /** The value's shape does not match the type in scope. */
+  | 'TYPE_MISMATCH'
+  /** A tuple or template application has the wrong number of elements or arguments. */
+  | 'WRONG_ARITY'
+  /** A `!type` annotation names a type the schema in scope does not declare. */
+  | 'UNKNOWN_TYPE_REF'
+  /** A built-in atom's declared constraint was violated. */
+  | 'ATOM_CONSTRAINT_VIOLATION'
+  /** The data carried a field the type does not declare. */
+  | 'UNRECOGNIZED_FIELD'
+  /** Two entries of one map share a key (§2.6). */
+  | 'DUPLICATE_MAP_KEY'
+  /** Two fields of one record share a name (§2.5). */
+  | 'DUPLICATE_FIELD'
+  /** The governing schema itself is invalid, unreachable, or failed to resolve. */
+  | 'SCHEMA_ERROR'
+  /** A type reference does not resolve within the linked schema. */
+  | 'UNKNOWN_TYPE'
+  /** A validation rule not covered by a more specific code. */
+  | 'VALIDATION_ERROR'
+  /** A construct this implementation has not built yet — a library gap, not bad input. */
+  | 'NOT_IMPLEMENTED'
+  /** A schema type and its registered binding disagree about the type's fields. */
+  | 'BIND_MISMATCH';
+
+/**
+ * Where in a schema a problem was found: the schema's canonical id, a JSON Pointer into it,
+ * and the position of the construct within that schema's own source.
+ *
+ * Accumulated as a read descends, and rendered lazily. Both halves matter: `pointer` is
+ * `undefined` rather than `''` when the location is the schema root, because `''` is itself a
+ * valid RFC 6901 pointer meaning exactly that.
+ */
+export interface SchemaLocation {
+  /** The schema's canonical `!!id`. */
+  readonly schemaId: string;
+  /** RFC 6901 pointer into the schema, or `undefined` at its root. */
+  readonly pointer?: string;
+  /** Position within the schema document's own source. */
+  readonly position?: Position;
+}
+
+/**
+ * One problem found while reading, resolving, or validating.
+ *
+ * The shape follows JSON Schema 2020-12 §12's output unit: where in the *data* (`path`), where
+ * in the *schema* (`schemaId` + `schemaPointer`), and what was wrong. One record serves both
+ * data-side and schema-side problems so a caller has a single thing to render.
+ *
+ * `path` is `undefined` rather than `''` at the document root, for the same reason
+ * {@link SchemaLocation.pointer} is.
+ */
+export interface Diagnostic {
+  readonly code: DiagnosticCode;
+  readonly message: string;
+  /** RFC 6901 pointer into the data document, or `undefined` at its root. */
+  readonly path?: string;
+  /** Canonical id of the schema in scope, when one is. */
+  readonly schemaId?: string;
+  /** RFC 6901 pointer into that schema, or `undefined` at its root. */
+  readonly schemaPointer?: string;
+  /** What the schema required, when the problem can state it. */
+  readonly expected?: string;
+  /** What the data carried, when the problem can state it. */
+  readonly actual?: string;
+  /** Position within the data document. */
+  readonly dataPosition?: Position;
+  /** Position within the schema document. */
+  readonly schemaPosition?: Position;
+}
+
+/**
+ * Where diagnostics go.
+ *
+ * The read stack holds no error policy of its own — it reports here and keeps going, and the
+ * receiver decides whether that is fatal. A fail-fast reader and a collecting validator are
+ * the same read with different receivers, which is what lets `validate()` reuse the reader
+ * wholesale instead of re-deriving anything.
+ */
+export interface DiagnosticsReceiver {
+  report(diagnostic: Diagnostic): void;
+}
+
+/**
+ * A receiver that throws on the first diagnostic.
+ *
+ * The default for a plain read, where a caller wants a value or an exception rather than a
+ * list of problems.
+ */
+export function throwing(makeError: (d: Diagnostic) => Error): DiagnosticsReceiver {
+  return {
+    report(diagnostic: Diagnostic): void {
+      throw makeError(diagnostic);
+    },
+  };
+}
+
+/** A receiver that accumulates diagnostics, letting the read continue past each problem. */
+export interface DiagnosticsCollector extends DiagnosticsReceiver {
+  /** Everything reported so far, in report order. */
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/** Create a {@link DiagnosticsCollector}. */
+export function collector(): DiagnosticsCollector {
+  const diagnostics: Diagnostic[] = [];
+  return {
+    diagnostics,
+    report(diagnostic: Diagnostic): void {
+      diagnostics.push(diagnostic);
+    },
+  };
+}
