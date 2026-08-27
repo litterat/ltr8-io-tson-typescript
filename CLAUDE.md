@@ -31,6 +31,13 @@ port is written against:
 Both are required before the conformance project will run. A SessionStart hook fetches them
 automatically in cloud sessions; run the script yourself locally.
 
+`spec/` holds the same spec snapshots and bundled schemas, **vendored verbatim** from that pinned
+commit and committed here. `.references/` is gitignored and absent from a bare clone, but the three
+bundled schemas are loaded at runtime and every `§` citation in the source refers to the spec text,
+so both have to be readable without network access. They are copies: do not edit them, and move the
+pin and re-copy together. `spec/PROVENANCE.md` records where they came from and
+`vendored-spec.test.ts` fails if they drift.
+
 ## Hard constraints
 
 - **Zero runtime dependencies** in `@ltr8/tson`. Dev dependencies are fine; a runtime one is not.

@@ -74,8 +74,9 @@ npm run build
 `.references/` is gitignored and required for the conformance project, which skips with a message
 rather than failing when it is absent.
 
-See [CLAUDE.md](CLAUDE.md) for the design constraints and conventions, and
-[PORT-PLAN.md](PORT-PLAN.md) for how the port is organised.
+See [CLAUDE.md](CLAUDE.md) for the design constraints and conventions,
+[PORT-PLAN.md](PORT-PLAN.md) for how the port is organised, and
+[ORCHESTRATION.md](ORCHESTRATION.md) for how it is executed.
 
 ## Related
 

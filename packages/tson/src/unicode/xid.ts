@@ -134,17 +134,56 @@ const DECIMAL_DIGIT = /* @__PURE__ */ decodeTable(
   'MAmmDAmGAQnGAQmcAwl2CXYJdgl2CXYJdgl2CXYJdglgCXYJRgmWAglGCcYOCSYJrAIJgAEJpgEJBgm2AQlWCYYBCQYJxpMCCaYFCSYJxgEJFglWCZYDCZamAQmGCwmGEQkGCZwGCYABCTwJkAEJlgIJ1gIJdgn2AglmCQYTTAmmAwlmCZYFCVYJ9gEJRgmmAwnWgwEJphIJVgmGAQmWBAn2vgEJ1BUxwBIJpgMJ9gMJ9wEJ1QYJliUJ',
 );
 
+const ASCII_LIMIT = 0x80;
+const ASCII_XID_START = 1;
+const ASCII_XID_CONTINUE = 2;
+const ASCII_ND = 4;
+
+/**
+ * Membership for the ASCII range as a bitmask per code point.
+ *
+ * Almost every identifier in almost every document is ASCII, and this is the lexer's hottest
+ * loop. Built from the tables above rather than written out, so it cannot drift from them.
+ */
+const ASCII = /* @__PURE__ */ (() => {
+  const flags = new Uint8Array(ASCII_LIMIT);
+  for (let cp = 0; cp < ASCII_LIMIT; cp++) {
+    let mask = 0;
+    if (contains(XID_START, cp)) mask |= ASCII_XID_START;
+    if (contains(XID_CONTINUE, cp)) mask |= ASCII_XID_CONTINUE;
+    if (contains(DECIMAL_DIGIT, cp)) mask |= ASCII_ND;
+    flags[cp] = mask;
+  }
+  return flags;
+})();
+
+function asciiHas(codePoint: number, flag: number): boolean {
+  return ((ASCII[codePoint] ?? 0) & flag) !== 0;
+}
+
 /** Whether `codePoint` may start an identifier (UAX #31 `XID_Start`). */
 export function isXidStart(codePoint: number): boolean {
-  return contains(XID_START, codePoint);
+  return codePoint < ASCII_LIMIT
+    ? asciiHas(codePoint, ASCII_XID_START)
+    : contains(XID_START, codePoint);
 }
 
 /** Whether `codePoint` may continue an identifier (UAX #31 `XID_Continue`). */
 export function isXidContinue(codePoint: number): boolean {
-  return contains(XID_CONTINUE, codePoint);
+  return codePoint < ASCII_LIMIT
+    ? asciiHas(codePoint, ASCII_XID_CONTINUE)
+    : contains(XID_CONTINUE, codePoint);
 }
 
-/** Whether `codePoint` is a decimal digit (general category `Nd`). */
-export function isDecimalDigit(codePoint: number): boolean {
-  return contains(DECIMAL_DIGIT, codePoint);
+/**
+ * Whether `codePoint` is in general category `Nd`, decimal number.
+ *
+ * This is the Unicode category, not the ASCII digits: §7.5's unquoted-token profile admits any
+ * `Nd` as an identifier start. The number grammar's digits are ASCII-only and are matched there
+ * by code, not by this table.
+ */
+export function isNd(codePoint: number): boolean {
+  return codePoint < ASCII_LIMIT
+    ? asciiHas(codePoint, ASCII_ND)
+    : contains(DECIMAL_DIGIT, codePoint);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UNICODE_VERSION, isDecimalDigit, isXidContinue, isXidStart } from '../src/unicode/xid.js';
+import { UNICODE_VERSION, isNd, isXidContinue, isXidStart } from '../src/unicode/xid.js';
 
 /**
  * The host's Unicode version, when it can be determined. `process.versions.unicode` is a Node
@@ -41,7 +41,7 @@ describe('generated Unicode tables', () => {
     for (let cp = 0x30; cp <= 0x39; cp++) {
       expect(isXidStart(cp)).toBe(false);
       expect(isXidContinue(cp)).toBe(true);
-      expect(isDecimalDigit(cp)).toBe(true);
+      expect(isNd(cp)).toBe(true);
     }
   });
 
@@ -96,15 +96,15 @@ describe('generated Unicode tables', () => {
   it('rejects code points beyond the Unicode range and below zero', () => {
     expect(isXidStart(MAX_CODE_POINT + 1)).toBe(false);
     expect(isXidContinue(MAX_CODE_POINT + 1)).toBe(false);
-    expect(isDecimalDigit(-1)).toBe(false);
+    expect(isNd(-1)).toBe(false);
   });
 
   it('reports non-digit numerics as digits only when they are Nd', () => {
     // U+2160 ROMAN NUMERAL ONE is Nl, not Nd: it is a letter-like number, and the number
     // grammar must not treat it as a digit.
-    expect(isDecimalDigit(0x2160)).toBe(false);
+    expect(isNd(0x2160)).toBe(false);
     // U+0660 ARABIC-INDIC DIGIT ZERO is Nd.
-    expect(isDecimalDigit(0x0660)).toBe(true);
+    expect(isNd(0x0660)).toBe(true);
   });
 });
 
@@ -122,7 +122,7 @@ describeIfHostMatches(`exhaustive cross-check against host Unicode ${UNICODE_VER
     const mismatches: number[] = [];
     for (let cp = 0; cp <= MAX_CODE_POINT; cp++) {
       if (isSurrogate(cp)) continue;
-      if (isDecimalDigit(cp) !== nd.test(String.fromCodePoint(cp))) mismatches.push(cp);
+      if (isNd(cp) !== nd.test(String.fromCodePoint(cp))) mismatches.push(cp);
     }
     expect(mismatches).toEqual([]);
   });
@@ -191,7 +191,7 @@ describeIfHostMatches(`exhaustive cross-check against host Unicode ${UNICODE_VER
     const violations: number[] = [];
     for (let cp = 0; cp <= MAX_CODE_POINT; cp++) {
       if (isSurrogate(cp)) continue;
-      if (isDecimalDigit(cp) && !isXidContinue(cp)) violations.push(cp);
+      if (isNd(cp) && !isXidContinue(cp)) violations.push(cp);
     }
     expect(violations).toEqual([]);
   });

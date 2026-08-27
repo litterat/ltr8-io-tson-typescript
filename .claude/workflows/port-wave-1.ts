@@ -18,19 +18,34 @@ const PACKAGES = [
   {
     key: 'unicode',
     loc: 350,
-    brief: `Work package 1 (unicode). Produce packages/tson/src/unicode/: xid.ts (GENERATED), nfc.ts, whitespace.ts, and scripts/gen-unicode-tables.mjs.
+    brief: `Work package 1 (unicode). Produce packages/tson/src/unicode/nfc.ts and
+packages/tson/src/unicode/whitespace.ts, and wire them into an index.
 
-The generator walks 0..0x10FFFF skipping surrogates, tests /^\\p{XID_Start}$/u, /^\\p{XID_Continue}$/u and /^\\p{Nd}$/u, coalesces to ranges, delta-varint encodes, base64-wraps, and records process.versions.unicode as UNICODE_VERSION. Check the table in, do not compute it at import — generation takes ~90ms.
+ALREADY DONE — do not regenerate, do not edit, do not rename:
+  - scripts/gen-unicode-tables.mjs
+  - packages/tson/src/unicode/xid.ts, which exports UNICODE_VERSION, isXidStart, isXidContinue
+    and isNd, with an ASCII bitmask fast path and binary search above it.
+  - packages/tson/test/unicode.test.ts, which cross-checks the whole code space against the
+    host's property data when the host's Unicode version matches the table's.
+Import from xid.ts; it is part of your frozen surface. If you believe it is wrong, stop and say
+so rather than editing it.
 
-Do NOT use the host regex at runtime. Three reasons, state them in the file's TSDoc: per-code-point testing would need String.fromCodePoint in the lexer's hottest loop; the property set would become the host engine's Unicode version, so two runtimes could disagree about whether a document is valid, which is wrong for a format whose identity can be a hash of its bytes; and §7.5 asks an implementation to document the Unicode version it supports, which a table pins and a host regex cannot.
+NFC: use String.prototype.normalize (ECMA-262, not Intl, so present in small-icu Node and every
+browser) behind a guard — a token whose maximum code point is < 0x0300 cannot contain a combining
+mark and is NFC by construction. Keep the allocating call off the path every ASCII identifier
+takes. Expose both a predicate (is this text already NFC) and the check the lexer needs, and be
+explicit in the TSDoc about which one allocates.
 
-Export isXidStart, isXidContinue, isNd with an ASCII fast path and binary search above it. The unquoted-token profile is §7.5's: start = XID_Start | Nd; continue = XID_Continue | '-' | '+' | '.'.
+Pattern_White_Space stays a hardcoded 11-code-point check; it is frozen by UAX #31 and will not
+gain members. Do not derive it from a table.
 
-NFC: use String.prototype.normalize (ECMA-262, not Intl, so present in small-icu Node and every browser) behind a guard — a token whose maximum code point is < 0x0300 cannot contain a combining mark and is NFC by construction. Keep the allocating call off the path every ASCII identifier takes.
+The unquoted-token profile is §7.5's, and belongs here rather than in the lexer:
+start = XID_Start | Nd; continue = XID_Continue | '-' | '+' | '.'.
 
-Pattern_White_Space stays a hardcoded 11-code-point check; it is frozen.
-
-Write a test that regenerates the table in-process and asserts byte equality, warning rather than failing when process.versions.unicode differs from UNICODE_VERSION. Note in your report that this port is STRICTER than the Java, which approximates XID with Character.isUnicodeIdentifierStart/Part — the two disagree on a small set of code points including '$'. That is a spec-feedback finding.`,
+Note in your report that this port is STRICTER than the Java, which approximates XID with
+Character.isUnicodeIdentifierStart/Part — the two disagree on a small set of code points
+including '$', which the Java admits and real XID tables reject. That is a spec-feedback finding
+and packages/tson/test/unicode.test.ts already pins the '$' behaviour.`,
   },
   {
     key: 'byte-input',
