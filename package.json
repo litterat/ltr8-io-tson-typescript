@@ -19,6 +19,7 @@
     "test:watch": "vitest",
     "build": "npm run build --workspace @ltr8/tson && npm run build --workspace @ltr8/tson-cli",
     "gen:unicode": "node scripts/gen-unicode-tables.mjs",
+    "check:unicode": "node scripts/check-unicode-tables.mjs",
     "refs": "./scripts/fetch-references.sh"
   },
   "devDependencies": {

@@ -10,6 +10,116 @@ export const meta = {
   ],
 };
 
+// The porter charter, carried in the script rather than looked up as a registered agent
+// type. `.claude/agents/tson-porter.md` is only visible to a session that started AFTER it
+// was committed, so a session that pulled it mid-run gets 'agent type not found' — which is
+// how Wave 0's first run lost four of five agents. The charter travels with the wave script,
+// which is the unit of review anyway, and `model: 'sonnet'` carries what the frontmatter said.
+const PORTER = `You port one work package of TSON from the Java reference implementation to idiomatic TypeScript.
+
+# Before writing anything
+
+Read, in this order:
+
+1. \`CLAUDE.md\` — the hard constraints and conventions. They are not negotiable and they are not
+   suggestions.
+2. \`PORT-PLAN.md\` — find your work package in the Part B wave tables. It names the Java sources you
+   port, the TypeScript you produce, and what you may assume exists.
+3. The spec sections your package implements:
+   \`.references/ltr8-io-tson-java/spec/tson-part1-data.md\` and \`tson-part2-schema.md\`.
+4. The Java sources named for your package, including their Javadoc. The Javadoc carries invariants
+   and deliberate divergences that the code alone does not show.
+5. The contract-layer types you import. They are frozen. If one is genuinely wrong, say so and stop —
+   do not edit it, because other packages are building against it concurrently.
+
+# How to port
+
+**Idiomatic TypeScript, not transliterated Java.** Discriminated unions over class hierarchies, plain
+functions over singleton objects, closures over \`MethodHandle\`. Same behaviour, same conformance,
+different shape. A class-for-class translation is a failed port.
+
+**Behaviour comes from the spec and the vectors, not from the Java's convenience.** Where the Java
+leans on a JDK type this port has no equivalent for, read
+\`.references/ltr8-io-tson-java/CONFORMANCE.md\` — it records where the reference is deliberately
+stricter than the JDK, and those checks are the required behaviour.
+
+**Never weaken a signature.** Anything that can starve for input returns \`Task<T>\` and is called with
+\`yield*\`. Do not "simplify" one to a plain return type; it breaks every caller above it and the
+suspension cannot be reintroduced locally.
+
+**No regex in the grammar.** The number grammar is hand-written, one function per ABNF rule. The
+reference states this explicitly for the benefit of ports.
+
+**Zero runtime dependencies.** Not one, for any reason.
+
+# Tests
+
+Write tests from the **spec**, not by translating the Java tests. Read the Java tests to learn what
+edge cases exist and what they assert, then write TypeScript tests that state those cases against the
+spec section that requires them. Cite the section in the test name.
+
+Run the shared vectors:
+
+\`\`\`bash
+npm run test:conformance
+\`\`\`
+
+**Your wave's brief says what the suite should do at your point in the port, and it governs.** In
+early waves nothing can pass — \`test/conformance/sidecar.ts\` parses sidecars with this
+implementation's own parser, so until the data parser lands every vector fails on the same throw.
+There the thing to check is that the DISCOVERED count is still 146; a drop means the harness broke.
+
+Do not modify the harness in \`test/conformance/\` to make a vector pass. If a vector looks wrong,
+report it — it may be a genuine spec-feedback finding.
+
+# Definition of done
+
+These always, no exceptions:
+
+\`\`\`bash
+npm run typecheck          # clean
+npm run lint               # clean, including the import/no-restricted-paths zones
+npm run format:check       # clean
+npm test                   # your unit tests pass
+\`\`\`
+
+Plus whatever your wave's brief states about \`npm run test:conformance\`. Nothing that was green
+may go red, in any wave.
+
+If a lint zone rule fires, fix the import, not the rule. The zones replace the reference
+implementation's module system and carry real design weight.
+
+# Report back
+
+- Files created or changed.
+- Which conformance vectors moved from failing to passing, by name.
+- Every place the spec was ambiguous, underspecified, internally inconsistent, or plain wrong, with
+  the interpretation you chose and why. Do not silently pick a reading — a resolved ambiguity is
+  invisible again three sessions later unless it is written down.
+- Anything you could not finish, stated plainly.`;
+
+/**
+ * Agents that error resolve to `null`, so a wave whose agents all died looks exactly like a wave
+ * that ran cleanly and found nothing. Wave 0's first run reported "0 findings" while four of its
+ * five agents had failed to start at all, and the run was reported as completed. Filtering nulls
+ * away silently is what made that possible, so every stage counts them instead.
+ */
+function requireAgents(results, expected, what) {
+  const ok = results.filter((r) => r !== null);
+  const lost = expected - ok.length;
+  if (lost > 0) {
+    log(
+      `WARNING: ${String(lost)} of ${String(expected)} ${what} agents returned nothing. Their results are MISSING, not empty — do not read this wave as complete.`,
+    );
+  }
+  if (ok.length === 0) {
+    throw new Error(
+      `every ${what} agent failed; aborting rather than reporting an empty result as success`,
+    );
+  }
+  return ok;
+}
+
 // Wave 1 work packages, from PORT-PLAN.md Part B. Every one of these depends only on the frozen
 // contract layer, so they share no context and can run in any order. The cloud VM has 4 vCPUs, so
 // the runtime caps concurrency at 2 regardless of how many are listed here — the list is the unit
@@ -56,7 +166,9 @@ Port the UTF-8 decoding half of .references/ltr8-io-tson-java/tson-compiler/src/
 
 io/streams.ts adapts a web ReadableStream and a Node Readable into the ChunkInput that io/bytes.ts already defines, behind conditional exports so neither platform's types leak into the other.
 
-Also provide a hand-written UTF-8 encoder so fromString does not depend on the ambient TextEncoder declaration in src/globals.d.ts, and delete that declaration once nothing needs it.`,
+Also provide a hand-written UTF-8 encoder in io/utf8.ts and repoint fromString at it.
+
+io/bytes.ts is frozen EXCEPT for the single expression in fromString's body (currently a call to new TextEncoder().encode(text) wrapped in fromBytes), which is yours to change to call your own encoder. Make that edit and delete src/globals.d.ts in the same change. Nothing else in io/bytes.ts may change. test/conformance/runner.test.ts also uses TextEncoder but compiles under test/tsconfig.json, which sets types: ["node"], so deleting globals.d.ts does not affect it.`,
   },
   {
     key: 'lexer',
@@ -75,7 +187,7 @@ Non-negotiable, and the reason this package is one agent's whole job:
 - At most 2 code points of lookahead, per §7.2's six lookahead rules.
 - Build token text through a code-point buffer, chunked, so String.fromCodePoint(...spread) never blows the stack on a long token.
 
-Turns green: the lexer/valid and lexer/invalid conformance vectors, including the eight encoding: invalid-utf8 ones.`,
+Unblocks (these go green in Wave 2, not this wave): the lexer/valid and lexer/invalid conformance vectors, including the eight encoding: invalid-utf8 ones.`,
   },
   {
     key: 'numbers',
@@ -88,7 +200,7 @@ Port .references/ltr8-io-tson-java/tson-compiler/src/main/java/io/ltr8/tson/comp
 
 This layer runs on already-lexed token text, so it is ordinary synchronous code — no Task, no generators.
 
-Turns green: the resolver/valid conformance vectors.`,
+Unblocks (these go green in Wave 2, not this wave): the resolver/valid conformance vectors.`,
   },
   {
     key: 'event-stream',
@@ -112,7 +224,7 @@ READ .references/ltr8-io-tson-java/CONFORMANCE.md FIRST. JavaScript has no BigDe
 
 Compare by information content, not text: the suite asserts numeric equality, and a rational may legitimately be asserted in reduced form.
 
-Turns green: the numeric half of vocabulary/valid and vocabulary/invalid.`,
+Unblocks (these go green in Wave 2, not this wave): the numeric half of vocabulary/valid and vocabulary/invalid.`,
   },
   {
     key: 'atoms-temporal',
@@ -125,7 +237,7 @@ READ .references/ltr8-io-tson-java/CONFORMANCE.md FIRST — every one of these i
 
 Do not use Date. Produce the PlainDate/PlainTime/PlainDateTime/TsonDuration value types declared in src/value/types.ts; duration is asserted by the suite as { period, clock }.
 
-Turns green: the temporal vocabulary vectors.`,
+Unblocks (these go green in Wave 2, not this wave): the temporal vocabulary vectors.`,
   },
   {
     key: 'atoms-network',
@@ -140,7 +252,7 @@ READ .references/ltr8-io-tson-java/CONFORMANCE.md FIRST — this is the package 
 - !uuid requires RFC 9562's canonical 8-4-4-4-12 grouping.
 - !cidr4/!cidr6 validate a network but hand back the AUTHORED TEXT so a round trip is exact. Follow §5.5's split exactly: not CIDR-shaped is a parse error, a prefix outside the family range or an address with nonzero host bits is a validation error.
 
-Turns green: the network and identifier vocabulary vectors.`,
+Unblocks (these go green in Wave 2, not this wave): the network and identifier vocabulary vectors.`,
   },
   {
     key: 'regex',
@@ -151,7 +263,7 @@ Port .references/ltr8-io-tson-java/tson-regex/ (1447 lines) — an RFC 9485 I-Re
 
 Thompson NFA with a Pike VM — LINEAR TIME, no backtracking, so it is ReDoS-safe by construction. That property is the point; do not substitute the host RegExp. Also port the product-NFA emptiness check that decides whether two patterns share any string, which §5.4's choice disjointness needs.
 
-Unicode categories for \\p{...}: use the generated tables from src/unicode/ rather than the host regex, for the same version-pinning reason.`,
+Unicode categories for \\p{...}: use packages/tson/src/regex/categories.ts. It is GENERATED and checked in, it lives inside the regex leaf so the zone stands, and it exports CATEGORY_NAMES, isCategoryName and isInCategory covering all 36 categories RFC 9485 admits. Do not import src/unicode/ — the first eslint zone makes regex/ a leaf and xid.ts carries identifier tables only, no general-category data. Do not fall back to the host RegExp for \\p{...}; that is the version-pinning problem this file exists to solve. Reject an unrecognised category name at PARSE time with a position, using isCategoryName.`,
   },
   {
     key: 'tree',
@@ -165,7 +277,129 @@ Accessors NEVER throw. A failed lookup returns a MissingNode carrying the RFC 69
   {
     key: 'bind-runtime',
     loc: 1200,
-    brief: `Work package 11 (bind runtime). Produce packages/tson/src/bind/: combinators.ts, infer.ts, registry.ts, encode.ts, strictness.ts, index.ts. bind/binding.ts is FROZEN — the Binding union, FieldSlot, Infer and BindingRegistry already exist there; implement the signatures it declares.
+    brief: `Work package 11 (bind runtime). Produce packages/tson/src/bind/: combinators.ts, infer.ts, registry.ts, encode.ts, strictness.ts, index.ts. bind/binding.ts is FROZEN — the Binding union, FieldSlot, Infer, BindingRegistry, RecordOptions, ArrayOptions, MapOptions, Shape and InferShape already exist there. It declares TYPES ONLY and exports no runtime value, deliberately: it previously carried these eleven combinators as \`export declare function\`, which emitted no JavaScript and left the published @ltr8/tson/bind subpath with a .d.ts promising eleven values over an empty module. Do not put them back there.
+
+Implement exactly these signatures — record, tuple, array, map, variant, bridge, lazy, field and optional in combinators.ts; registry and chain in registry.ts. Carry each TSDoc block onto the implementation:
+
+\`\`\`ts
+function record<T>(options: RecordOptions<T>): RecordBinding<T>;
+
+/**
+ * Build a {@link TupleBinding} from a positional literal of element bindings, inferring the tuple's
+ * host type via a \`const\` type parameter -- \`tuple([intBinding, textBinding])\` infers
+ * \`TupleBinding<readonly [number, string]>\` with no \`as const\` needed.
+ */
+function tuple<const E extends readonly BindingRef<unknown>[]>(
+  elements: E,
+): TupleBinding<{ readonly [I in keyof E]: Infer<E[I]> }>;
+
+function array<T, E>(options: ArrayOptions<T, E>): ArrayBinding<T>;
+
+function map<T, K, V>(options: MapOptions<T, K, V>): MapBinding<T>;
+
+/**
+ * Build a {@link VariantBinding} from a shape literal of members keyed by wire type name, inferring
+ * the host union type via a \`const\` type parameter. Pass \`discriminant\` for a shared tag property;
+ * omit it to fall back to each member's own \`test\` (built alongside its binding by a caller that
+ * needs one -- this signature only fixes the member shape's keys, not per-member recognition, which
+ * a later work package's implementation composes from the shape and any per-member options passed
+ * alongside it).
+ */
+function variant<const M extends Shape>(
+  members: M,
+  discriminant?: PropertyKey,
+): VariantBinding<InferShape<M>[keyof M]>;
+
+function bridge<T, D>(
+  wire: BindingRef<D>,
+  toWire: (value: T) => D,
+  fromWire: (wire: D) => T,
+): BridgeBinding<T, D>;
+
+/**
+ * Defer a binding until first use, closing a declaration-order cycle -- see {@link LazyBinding}'s
+ * own doc for what this ports and why it is the only survivor of Java's cycle machinery.
+ *
+ * ### The ergonomics cliff
+ *
+ * A self-referential binding cannot be written as a single flat \`const\`, because TypeScript must
+ * finish inferring an expression's type before that expression can refer to the variable it is
+ * being assigned to:
+ *
+ * \`\`\`ts
+ * // Does NOT typecheck:
+ * const nodeBinding = record({
+ *   fields: [
+ *     field<Node, 'value'>(0, 'value', 'value', valueBinding),
+ *     field<Node, 'next'>(1, 'next', 'next', lazy(() => nodeBinding)),
+ *   ],
+ *   construct: ([value, next]) => ({ value, next }) as Node,
+ * });
+ * // error TS7022: 'nodeBinding' implicitly has type 'any' because it is referenced
+ * // directly or indirectly in its own initializer.
+ * \`\`\`
+ *
+ * The fix is to give the binding an explicit type -- an interface plus a \`: Binding<X>\` (or
+ * \`: RecordBinding<X>\`, etc.) annotation on the \`const\` -- *before* the initializer runs, so the
+ * reference inside \`lazy(() => nodeBinding)\` resolves against a type already fully known rather
+ * than one still being inferred:
+ *
+ * \`\`\`ts
+ * interface NodeBinding extends RecordBinding<Node> {}
+ *
+ * const nodeBinding: NodeBinding = record({
+ *   fields: [
+ *     field<Node, 'value'>(0, 'value', 'value', valueBinding),
+ *     field<Node, 'next'>(1, 'next', 'next', lazy((): Binding<Node> => nodeBinding)),
+ *   ],
+ *   construct: ([value, next]) => ({ value, next }) as Node,
+ * });
+ * \`\`\`
+ *
+ * This is the one authoring cost of deleting Java's reflection-driven cycle detection: Java
+ * discovered the cycle at runtime, from a class graph that already fully existed; here the author
+ * states it, once, at the one declaration that closes it.
+ */
+function lazy<T>(resolve: () => Binding<T>): LazyBinding<T>;
+
+/**
+ * Build a required {@link FieldSlot} reading/writing host property \`key\` directly -- \`wireName\` is
+ * matched against the wire data (after any rename), \`key\` is the host property, and \`index\` is the
+ * construction slot {@link RecordBinding.construct} expects this value at.
+ */
+function field<Host, K extends keyof Host & string>(
+  index: number,
+  wireName: string,
+  key: K,
+  binding: BindingRef<Host[K]>,
+): FieldSlot<Host[K]>;
+
+/**
+ * {@link field}'s optional counterpart: \`required\` is \`false\`, and presence is derived from
+ * \`host[key]\` being non-\`null\`/non-\`undefined\` -- the host-side analogue of \`DataClassField\`'s own
+ * note that an optional field's accessor proxies through the host's own \`Optional\`/nullable slot
+ * rather than this descriptor layer inventing a second notion of absence.
+ */
+function optional<Host, K extends keyof Host & string>(
+  index: number,
+  wireName: string,
+  key: K,
+  binding: BindingRef<NonNullable<Host[K]>>,
+): FieldSlot<NonNullable<Host[K]>>;
+
+function registry(
+  bindings: Readonly<Record<string, Binding<unknown>>>,
+  options?: { readonly profile?: string },
+): BindingRegistry;
+
+/**
+ * Compose several registries into one that tries each in turn, first match wins -- the port of
+ * \`DefaultDataNameBinder\` trying each of its configured packages in order.
+ */
+function chain(...registries: readonly BindingRegistry[]): BindingRegistry;
+\`\`\`
+
+bind/index.ts then re-exports binding.js alongside your implementation modules, with no name collision because binding.ts no longer declares them.
 
 This replaces .references/ltr8-io-tson-java/tson-bind/ (6313 lines). Do NOT translate it. The Java is a descriptor factory built on reflection; here the descriptor is authored, which deletes DefaultRecordBinder's 1158 lines of MethodHandle machinery, the three component finders, the mapper package, and the whole in-flight cycle-detection apparatus. lazy() is the only survivor of the cycle machinery, and it closes exactly the one edge Memoized defers.
 
@@ -249,18 +483,29 @@ const results = await pipeline(
   PACKAGES,
   (pkg) =>
     agent(
-      `${pkg.brief}
+      `${PORTER}
+
+---
+
+${pkg.brief}
 
 Read CLAUDE.md first — its hard constraints are not suggestions. The contract layer under
 packages/tson/src/{core,io,lexer/token,stream/event,ast,schema/meta,bind/binding,tree/nodes,value,reader,atom/contract}.ts
 is FROZEN: import from it, never edit it. If one of those types is genuinely wrong, stop and say so.
 
-Definition of done, all four: npm run typecheck, npm run lint, npm test, npm run test:conformance.
-Do not modify test/conformance/ to make a vector pass.`,
+Definition of done: npm run typecheck, npm run lint, npm run format:check, npm test.
+
+npm run test:conformance CANNOT pass in this wave and you are not expected to make it pass.
+test/conformance/sidecar.ts's parseSidecar throws unconditionally until Wave 2 lands the data
+parser, and the runner parses a sidecar before it looks at the subject, so all 146 vectors fail on
+that single throw regardless of what you write. Run it anyway to confirm you have not made things
+worse — the DISCOVERED count must stay 146 — then return vectorsGreen: [] and name the vectors
+your package unblocks in notes. Do not implement sidecar parsing and do not modify
+test/conformance/; that is work package 21's job in Wave 2.`,
       {
         label: `port:${pkg.key}`,
         phase: 'Port',
-        agentType: 'tson-porter',
+        model: 'sonnet',
         schema: PORT_RESULT,
       },
     ),
@@ -280,7 +525,9 @@ Check, in this order:
 3. Is there a RegExp anywhere in src/base/, or a host-regex Unicode property test at runtime?
 4. Did it introduce a runtime dependency? Check the package.json diff.
 5. Does it materialise a whole document anywhere, rather than streaming?
-6. Run the gates yourself. Do the claimed green vectors actually pass, and did anything regress?
+6. Run typecheck, lint, format:check and the unit tests yourself. Then run the conformance suite
+   and confirm the DISCOVERED count is still 146 — no vector can pass in this wave, but a drop in
+   the discovered count means the harness was broken, which is blocking.
 
 Report only problems you can point at a file and line for.`,
       { label: `verify:${pkg.key}`, phase: 'Verify', schema: VERDICT },

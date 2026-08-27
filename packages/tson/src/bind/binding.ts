@@ -485,16 +485,6 @@ export interface RecordOptions<T> {
 }
 
 /** Build a {@link RecordBinding} from explicit fields -- see {@link field}/{@link optional} to build each one. */
-export declare function record<T>(options: RecordOptions<T>): RecordBinding<T>;
-
-/**
- * Build a {@link TupleBinding} from a positional literal of element bindings, inferring the tuple's
- * host type via a `const` type parameter -- `tuple([intBinding, textBinding])` infers
- * `TupleBinding<readonly [number, string]>` with no `as const` needed.
- */
-export declare function tuple<const E extends readonly BindingRef<unknown>[]>(
-  elements: E,
-): TupleBinding<{ readonly [I in keyof E]: Infer<E[I]> }>;
 
 /** {@link array}'s parameter shape -- everything {@link ArrayBinding} needs beyond its own `kind`. */
 export interface ArrayOptions<T, E> {
@@ -504,7 +494,6 @@ export interface ArrayOptions<T, E> {
 }
 
 /** Build an {@link ArrayBinding}. */
-export declare function array<T, E>(options: ArrayOptions<T, E>): ArrayBinding<T>;
 
 /** {@link map}'s parameter shape -- everything {@link MapBinding} needs beyond its own `kind`. */
 export interface MapOptions<T, K, V> {
@@ -515,107 +504,7 @@ export interface MapOptions<T, K, V> {
 }
 
 /** Build a {@link MapBinding}. */
-export declare function map<T, K, V>(options: MapOptions<T, K, V>): MapBinding<T>;
-
-/**
- * Build a {@link VariantBinding} from a shape literal of members keyed by wire type name, inferring
- * the host union type via a `const` type parameter. Pass `discriminant` for a shared tag property;
- * omit it to fall back to each member's own `test` (built alongside its binding by a caller that
- * needs one -- this signature only fixes the member shape's keys, not per-member recognition, which
- * a later work package's implementation composes from the shape and any per-member options passed
- * alongside it).
- */
-export declare function variant<const M extends Shape>(
-  members: M,
-  discriminant?: PropertyKey,
-): VariantBinding<InferShape<M>[keyof M]>;
 
 /** Build a {@link BridgeBinding} converting between a host type `T` and a wire-shaped `D` bound by `wire`. */
-export declare function bridge<T, D>(
-  wire: BindingRef<D>,
-  toWire: (value: T) => D,
-  fromWire: (wire: D) => T,
-): BridgeBinding<T, D>;
-
-/**
- * Defer a binding until first use, closing a declaration-order cycle -- see {@link LazyBinding}'s
- * own doc for what this ports and why it is the only survivor of Java's cycle machinery.
- *
- * ### The ergonomics cliff
- *
- * A self-referential binding cannot be written as a single flat `const`, because TypeScript must
- * finish inferring an expression's type before that expression can refer to the variable it is
- * being assigned to:
- *
- * ```ts
- * // Does NOT typecheck:
- * const nodeBinding = record({
- *   fields: [
- *     field<Node, 'value'>(0, 'value', 'value', valueBinding),
- *     field<Node, 'next'>(1, 'next', 'next', lazy(() => nodeBinding)),
- *   ],
- *   construct: ([value, next]) => ({ value, next }) as Node,
- * });
- * // error TS7022: 'nodeBinding' implicitly has type 'any' because it is referenced
- * // directly or indirectly in its own initializer.
- * ```
- *
- * The fix is to give the binding an explicit type -- an interface plus a `: Binding<X>` (or
- * `: RecordBinding<X>`, etc.) annotation on the `const` -- *before* the initializer runs, so the
- * reference inside `lazy(() => nodeBinding)` resolves against a type already fully known rather
- * than one still being inferred:
- *
- * ```ts
- * interface NodeBinding extends RecordBinding<Node> {}
- *
- * const nodeBinding: NodeBinding = record({
- *   fields: [
- *     field<Node, 'value'>(0, 'value', 'value', valueBinding),
- *     field<Node, 'next'>(1, 'next', 'next', lazy((): Binding<Node> => nodeBinding)),
- *   ],
- *   construct: ([value, next]) => ({ value, next }) as Node,
- * });
- * ```
- *
- * This is the one authoring cost of deleting Java's reflection-driven cycle detection: Java
- * discovered the cycle at runtime, from a class graph that already fully existed; here the author
- * states it, once, at the one declaration that closes it.
- */
-export declare function lazy<T>(resolve: () => Binding<T>): LazyBinding<T>;
-
-/**
- * Build a required {@link FieldSlot} reading/writing host property `key` directly -- `wireName` is
- * matched against the wire data (after any rename), `key` is the host property, and `index` is the
- * construction slot {@link RecordBinding.construct} expects this value at.
- */
-export declare function field<Host, K extends keyof Host & string>(
-  index: number,
-  wireName: string,
-  key: K,
-  binding: BindingRef<Host[K]>,
-): FieldSlot<Host[K]>;
-
-/**
- * {@link field}'s optional counterpart: `required` is `false`, and presence is derived from
- * `host[key]` being non-`null`/non-`undefined` -- the host-side analogue of `DataClassField`'s own
- * note that an optional field's accessor proxies through the host's own `Optional`/nullable slot
- * rather than this descriptor layer inventing a second notion of absence.
- */
-export declare function optional<Host, K extends keyof Host & string>(
-  index: number,
-  wireName: string,
-  key: K,
-  binding: BindingRef<NonNullable<Host[K]>>,
-): FieldSlot<NonNullable<Host[K]>>;
 
 /** Build a {@link BindingRegistry} from a fixed table of bindings keyed by schema type name. */
-export declare function registry(
-  bindings: Readonly<Record<string, Binding<unknown>>>,
-  options?: { readonly profile?: string },
-): BindingRegistry;
-
-/**
- * Compose several registries into one that tries each in turn, first match wins -- the port of
- * `DefaultDataNameBinder` trying each of its configured packages in order.
- */
-export declare function chain(...registries: readonly BindingRegistry[]): BindingRegistry;

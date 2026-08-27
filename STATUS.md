@@ -56,4 +56,5 @@ suite at https://github.com/litterat/ltr8-io-tson-test-suite — 146 vectors.
 - [x] Reference fetch — pinned Java source and the vector suite
 - [x] Vendored `spec/` — the two spec parts and the six bundled schemas, byte for byte
 - [x] Unicode tables — `XID_Start` / `XID_Continue` / `Nd`, generated and checked in
+- [x] I-Regexp general categories — all 36 of RFC 9485's, generated into the `regex/` leaf
 - [x] Orchestration — `ORCHESTRATION.md` and the eight wave scripts under `.claude/workflows/`

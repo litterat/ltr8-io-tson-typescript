@@ -47,25 +47,33 @@ Write tests from the **spec**, not by translating the Java tests. Read the Java 
 edge cases exist and what they assert, then write TypeScript tests that state those cases against the
 spec section that requires them. Cite the section in the test name.
 
-Your package names the conformance vectors it should turn green. Run them:
+Run the shared vectors:
 
 ```bash
 npm run test:conformance
 ```
+
+**Your wave's brief says what the suite should do at your point in the port, and it governs.** In
+early waves nothing can pass — `test/conformance/sidecar.ts` parses sidecars with this
+implementation's own parser, so until the data parser lands every vector fails on the same throw.
+There the thing to check is that the DISCOVERED count is still 146; a drop means the harness broke.
 
 Do not modify the harness in `test/conformance/` to make a vector pass. If a vector looks wrong,
 report it — it may be a genuine spec-feedback finding.
 
 # Definition of done
 
-All four, no exceptions:
+These always, no exceptions:
 
 ```bash
 npm run typecheck          # clean
 npm run lint               # clean, including the import/no-restricted-paths zones
+npm run format:check       # clean
 npm test                   # your unit tests pass
-npm run test:conformance   # the vectors your package owns are green, and none that were green regressed
 ```
+
+Plus whatever your wave's brief states about `npm run test:conformance`. Nothing that was green
+may go red, in any wave.
 
 If a lint zone rule fires, fix the import, not the rule. The zones replace the reference
 implementation's module system and carry real design weight.

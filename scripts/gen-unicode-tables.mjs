@@ -1,25 +1,31 @@
 #!/usr/bin/env node
 /**
- * Generates `packages/tson/src/unicode/xid.ts`.
+ * Generates the two checked-in Unicode tables:
  *
- * The lexer decides identifier boundaries from real `XID_Start` / `XID_Continue` tables rather
- * than from the host's `\p{...}` regex support. That is deliberate: a TSON document's identity
- * can be a hash of its bytes, so two runtimes must never disagree about whether a document is
- * well-formed. Node 22 and Node 24 in the same container already ship different Unicode
- * versions; asking the host at runtime would make validity a property of the host.
+ *   packages/tson/src/unicode/xid.ts        identifier tables, for the lexer (§7.5)
+ *   packages/tson/src/regex/categories.ts   general categories, for I-Regexp \p{...} (RFC 9485)
  *
- * The tables are therefore derived once, here, from whichever Unicode version this Node build
- * carries, and checked in. `UNICODE_VERSION` in the output records which one, so a mismatch is
- * visible rather than silent.
+ * Both are derived from whichever Unicode version this Node build carries and checked in, rather
+ * than consulted from the host at runtime. That is deliberate: a TSON document's identity can be a
+ * hash of its bytes, so two runtimes must never disagree about whether a document is well-formed.
+ * Node 22 and Node 24 in the same container already ship different Unicode versions; asking the
+ * host would make validity a property of the host. Each file records UNICODE_VERSION so a mismatch
+ * is visible rather than silent.
+ *
+ * They are two files, with two copies of the same small decoder, because eslint's first zone makes
+ * src/regex/ a leaf that may import nothing outside itself — the I-Regexp engine names no TSON
+ * type. Duplicating ~40 generated lines is the price of that isolation, and the generator is what
+ * keeps the two copies identical.
  *
  * Encoding: each property is a sorted list of inclusive code-point ranges, delta-varint encoded
  * (gap from the previous range's end, then the range's own width) and base64-wrapped. Deltas are
  * small, so most ranges cost two bytes.
  *
- * Run with `npm run gen:unicode`. Output must be a no-op diff on a matching Unicode version.
+ * Run with `npm run gen:unicode`. Output must be a no-op diff on a matching Unicode version; CI
+ * checks exactly that.
  */
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import prettier from 'prettier';
@@ -27,23 +33,30 @@ import prettier from 'prettier';
 const MAX_CODE_POINT = 0x10ffff;
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT_PATH = join(REPO_ROOT, 'packages/tson/src/unicode/xid.ts');
+const XID_PATH = join(REPO_ROOT, 'packages/tson/src/unicode/xid.ts');
+const CATEGORIES_PATH = join(REPO_ROOT, 'packages/tson/src/regex/categories.ts');
+
+const unicodeVersion = process.versions.unicode;
+
+/* ------------------------------------------------------------------ range collection ------ */
 
 /**
- * Collects the inclusive ranges of code points matching a single Unicode property escape.
+ * Collects the inclusive ranges of code points matching a single property escape.
  *
- * @param {string} property - a property name valid inside `\p{...}`
+ * Lone surrogates are skipped throughout: they are not scalar values and cannot appear in
+ * well-formed text, so including them would split a run in two over a gap no document can
+ * contain anyway.
+ *
+ * @param {string} escape - the body of a `\p{...}`, e.g. `ID_Start` or `General_Category=Lu`
  * @returns {Array<[number, number]>} sorted, coalesced, inclusive ranges
  */
-function collectRanges(property) {
-  const test = new RegExp(`^\\p{${property}}$`, 'u');
+function collectRanges(escape) {
+  const test = new RegExp(`^\\p{${escape}}$`, 'u');
   /** @type {Array<[number, number]>} */
   const ranges = [];
   let start = -1;
 
   for (let cp = 0; cp <= MAX_CODE_POINT; cp++) {
-    // Lone surrogates are not scalar values and cannot appear in well-formed text. Skipping
-    // them keeps a run from being split in two by a gap no document can contain anyway.
     if (cp >= 0xd800 && cp <= 0xdfff) continue;
 
     const matches = test.test(String.fromCodePoint(cp));
@@ -59,9 +72,9 @@ function collectRanges(property) {
   return ranges;
 }
 
+/* --------------------------------------------------------------------------- encoding ------ */
+
 /**
- * Appends an unsigned LEB128 varint.
- *
  * @param {number[]} out
  * @param {number} value
  */
@@ -75,8 +88,6 @@ function pushVarint(out, value) {
 }
 
 /**
- * Delta-varint encodes ranges into bytes.
- *
  * @param {Array<[number, number]>} ranges
  * @returns {Uint8Array}
  */
@@ -126,38 +137,32 @@ function decodeRanges(bytes) {
 }
 
 /**
- * @param {Array<[number, number]>} a
- * @param {Array<[number, number]>} b
- * @returns {boolean}
+ * Encodes ranges, verifying the round trip.
+ *
+ * @param {string} label
+ * @param {Array<[number, number]>} ranges
  */
-function rangesEqual(a, b) {
-  return a.length === b.length && a.every((r, i) => r[0] === b[i][0] && r[1] === b[i][1]);
+function encodeVerified(label, ranges) {
+  const bytes = encodeRanges(ranges);
+  const back = decodeRanges(bytes);
+  const same =
+    back.length === ranges.length &&
+    back.every((r, i) => r[0] === ranges[i][0] && r[1] === ranges[i][1]);
+  if (!same) throw new Error(`${label}: encode/decode round trip disagreed`);
+  return { base64: Buffer.from(bytes).toString('base64'), byteLength: bytes.length };
 }
 
-const PROPERTIES = [
-  {
-    property: 'ID_Start',
-    constant: 'XID_START',
-    // `\p{XID_Start}` is not a valid property escape in ECMAScript; `ID_Start` is. They differ
-    // only in code points excluded from XID because NFKC-normalising them breaks identifier
-    // stability. The exclusion set is empty for ID_Start in current Unicode, but assert rather
-    // than assume — see verifyXidDelta below.
-    xid: 'XID_Start',
-  },
-  { property: 'ID_Continue', constant: 'XID_CONTINUE', xid: 'XID_Continue' },
-  { property: 'Nd', constant: 'DECIMAL_DIGIT', xid: null },
-];
+/* ------------------------------------------------------------------------ XID closure ------ */
 
 /**
- * ECMAScript exposes `ID_Start` and `ID_Continue` but not their XID variants, so the XID sets
- * are derived here rather than assumed to coincide with the ID ones.
+ * ECMAScript exposes `ID_Start` and `ID_Continue` but not their XID variants, so the XID sets are
+ * derived here rather than assumed to coincide with the ID ones.
  *
  * XID_Start and XID_Continue are the NFKC-closed subsets of ID_Start and ID_Continue (UAX #31,
- * D1/D2). The two closure conditions are **not** the same, and using the start rule for both is
- * a silent way to produce a table that is merely a copy of the other:
+ * D1/D2). The two closure conditions are **not** the same, and using the start rule for both is a
+ * silent way to produce a table that is merely a copy of the other:
  *
- * - `XID_Start`: NFKC(x) is non-empty, its first character is `ID_Start`, and the rest are
- *   `ID_Continue`.
+ * - `XID_Start`: NFKC(x) is non-empty, its first character is `ID_Start`, the rest `ID_Continue`.
  * - `XID_Continue`: NFKC(x) is non-empty and *every* character is `ID_Continue`. The weaker
  *   condition is the point — a digit expands to a digit, which continues an identifier without
  *   being able to start one.
@@ -217,65 +222,19 @@ function subtract(ranges, exclusions) {
   return out;
 }
 
-const started = Date.now();
+/* ------------------------------------------------------------------- emitted runtime ------ */
 
-const tables = PROPERTIES.map(({ property, constant, xid }) => {
-  let ranges = collectRanges(property);
-  let excludedCount = 0;
-
-  if (xid !== null) {
-    const exclusions = xidExclusions(property);
-    excludedCount = exclusions.length;
-    ranges = subtract(ranges, exclusions);
-  }
-
-  const bytes = encodeRanges(ranges);
-  if (!rangesEqual(decodeRanges(bytes), ranges)) {
-    throw new Error(`${constant}: encode/decode round trip disagreed`);
-  }
-
-  return {
-    constant,
-    label: xid ?? property,
-    ranges,
-    excludedCount,
-    base64: Buffer.from(bytes).toString('base64'),
-    byteLength: bytes.length,
-  };
-});
-
-const unicodeVersion = process.versions.unicode;
-
-const source = `/**
- * Unicode character property tables, generated from Unicode ${unicodeVersion}.
- *
- * GENERATED FILE — do not edit by hand. Regenerate with \`npm run gen:unicode\`.
- *
- * These tables exist so identifier validity is a property of the document, not of the host.
- * A TSON document's identity can be a hash of its bytes (§8.3), so two runtimes disagreeing
- * about whether an identifier is well-formed would make the same bytes valid in one place and
- * invalid in another. Consulting the host's \`\\p{XID_Start}\` at runtime would do exactly that:
- * Node builds of the same age already ship different Unicode versions.
- *
- * {@link UNICODE_VERSION} records the version these tables were derived from. A build whose host
- * disagrees is still correct — the tables, not the host, are authoritative — but the difference
- * is worth knowing about, which is why the constant is exported rather than hidden.
- *
- * Each table is a sorted list of inclusive code-point ranges, delta-varint encoded and
- * base64-wrapped, decoded once at module load into a flat \`Uint32Array\` of \`[start, end]\`
- * pairs. Lookup is a binary search over that array.
+/**
+ * The decoder every generated table file carries. Emitted into each rather than shared, because
+ * src/regex/ may import nothing outside itself.
  */
-
-/** The Unicode version {@link isXidStart}, {@link isXidContinue} and {@link isDecimalDigit} describe. */
-export const UNICODE_VERSION = '${unicodeVersion}';
-
-const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const RUNTIME_HELPERS = `const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 /**
  * Decodes a base64 string to bytes without \`atob\` or \`Buffer\`.
  *
- * The package declares no ambient host globals beyond \`TextEncoder\`, and this runs in both Node
- * and browsers, so the decode is spelled out rather than delegated.
+ * The package declares no ambient host globals beyond what it already needs, and this runs in both
+ * Node and browsers, so the decode is spelled out rather than delegated.
  */
 function fromBase64(text: string): Uint8Array {
   const lookup = new Int16Array(128).fill(-1);
@@ -283,12 +242,12 @@ function fromBase64(text: string): Uint8Array {
     lookup[BASE64_ALPHABET.charCodeAt(i)] = i;
   }
 
-  let padding = 0;
-  while (padding < 2 && text.charCodeAt(text.length - 1 - padding) === 0x3d /* '=' */) padding++;
-
   // A character outside the alphabet reads as -1, which is also what an out-of-range index
   // yields here. Padding is the only such character these tables contain.
   const sextet = (index: number): number => lookup[text.charCodeAt(index)] ?? -1;
+
+  let padding = 0;
+  while (padding < 2 && text.charCodeAt(text.length - 1 - padding) === 0x3d /* '=' */) padding++;
 
   const bytes = new Uint8Array((text.length >> 2) * 3 - padding);
   let out = 0;
@@ -305,18 +264,16 @@ function fromBase64(text: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Expands a delta-varint encoded table into a flat array of inclusive \`[start, end]\` pairs.
- */
+/** Expands a delta-varint encoded table into a flat array of inclusive \`[start, end]\` pairs. */
 function decodeTable(encoded: string): Uint32Array {
   const bytes = fromBase64(encoded);
   const bounds: number[] = [];
   let i = 0;
   let previousEnd = -1;
 
-  // Reads one unsigned LEB128 varint, advancing \`i\`. Running off the end of a well-formed
-  // table is impossible; treating it as a terminator rather than asserting keeps the decode
-  // total, so a truncated table yields a short table instead of a crash at module load.
+  // Running off the end of a well-formed table is impossible; treating it as a terminator rather
+  // than asserting keeps the decode total, so a truncated table yields a short table instead of a
+  // crash at module load.
   const readVarint = (): number => {
     let result = 0;
     let shift = 0;
@@ -332,9 +289,8 @@ function decodeTable(encoded: string): Uint32Array {
   while (i < bytes.length) {
     const gap = readVarint();
     const width = readVarint();
-
-    const start = previousEnd + 1 + (gap >>> 0);
-    const end = start + (width >>> 0);
+    const start = previousEnd + 1 + gap;
+    const end = start + width;
     bounds.push(start, end);
     previousEnd = end;
   }
@@ -342,9 +298,7 @@ function decodeTable(encoded: string): Uint32Array {
   return Uint32Array.from(bounds);
 }
 
-/**
- * Binary search over a flat \`[start, end, start, end, ...]\` array of inclusive ranges.
- */
+/** Binary search over a flat \`[start, end, start, end, ...]\` array of inclusive ranges. */
 function contains(table: Uint32Array, codePoint: number): boolean {
   let low = 0;
   let high = (table.length >> 1) - 1;
@@ -365,18 +319,65 @@ function contains(table: Uint32Array, codePoint: number): boolean {
     }
   }
   return false;
+}`;
+
+/**
+ * @param {{constant: string, label: string, ranges: Array<[number, number]>, base64: string, byteLength: number}} table
+ */
+function emitTable(table) {
+  return `/** ${table.label}: ${String(table.ranges.length)} ranges, ${String(table.byteLength)} bytes encoded. */
+const ${table.constant} = /* @__PURE__ */ decodeTable(
+  '${table.base64}',
+);`;
 }
 
-${tables
-  .map(
-    (
-      t,
-    ) => `/** ${t.label}: ${String(t.ranges.length)} ranges, ${String(t.byteLength)} bytes encoded. */
-const ${t.constant} = /* @__PURE__ */ decodeTable(
-  '${t.base64}',
-);`,
-  )
-  .join('\n\n')}
+/* ------------------------------------------------------------------------ xid.ts ---------- */
+
+const XID_PROPERTIES = [
+  { escape: 'ID_Start', constant: 'XID_START', label: 'XID_Start', closure: 'ID_Start' },
+  {
+    escape: 'ID_Continue',
+    constant: 'XID_CONTINUE',
+    label: 'XID_Continue',
+    closure: 'ID_Continue',
+  },
+  { escape: 'Nd', constant: 'DECIMAL_DIGIT', label: 'Nd', closure: null },
+];
+
+function buildXid() {
+  const tables = XID_PROPERTIES.map(({ escape, constant, label, closure }) => {
+    let ranges = collectRanges(escape);
+    let excludedCount = 0;
+    if (closure !== null) {
+      const exclusions = xidExclusions(closure);
+      excludedCount = exclusions.length;
+      ranges = subtract(ranges, exclusions);
+    }
+    const { base64, byteLength } = encodeVerified(label, ranges);
+    return { constant, label, ranges, base64, byteLength, excludedCount };
+  });
+
+  const source = `/**
+ * Unicode identifier tables, generated from Unicode ${unicodeVersion}.
+ *
+ * GENERATED FILE — do not edit by hand. Regenerate with \`npm run gen:unicode\`.
+ *
+ * These exist so identifier validity is a property of the document, not of the host. A TSON
+ * document's identity can be a hash of its bytes, so two runtimes disagreeing about whether an
+ * identifier is well-formed would make the same bytes valid in one place and invalid in another.
+ * Consulting the host's \`\\p{XID_Start}\` at runtime would do exactly that.
+ *
+ * {@link UNICODE_VERSION} records the version these tables were derived from. A build whose host
+ * disagrees is still correct — the tables, not the host, are authoritative — but the difference is
+ * worth knowing about, which is why the constant is exported rather than hidden.
+ */
+
+/** The Unicode version {@link isXidStart}, {@link isXidContinue} and {@link isNd} describe. */
+export const UNICODE_VERSION = '${unicodeVersion}';
+
+${RUNTIME_HELPERS}
+
+${tables.map(emitTable).join('\n\n')}
 
 const ASCII_LIMIT = 0x80;
 const ASCII_XID_START = 1;
@@ -386,8 +387,8 @@ const ASCII_ND = 4;
 /**
  * Membership for the ASCII range as a bitmask per code point.
  *
- * Almost every identifier in almost every document is ASCII, and this is the lexer's hottest
- * loop. Built from the tables above rather than written out, so it cannot drift from them.
+ * Almost every identifier in almost every document is ASCII, and this is the lexer's hottest loop.
+ * Built from the tables above rather than written out, so it cannot drift from them.
  */
 const ASCII = /* @__PURE__ */ (() => {
   const flags = new Uint8Array(ASCII_LIMIT);
@@ -431,18 +432,169 @@ export function isNd(codePoint: number): boolean {
 }
 `;
 
-const formatted = await prettier.format(source, {
-  ...(await prettier.resolveConfig(OUT_PATH)),
-  filepath: OUT_PATH,
-});
+  return { source, tables };
+}
 
-writeFileSync(OUT_PATH, formatted);
+/* --------------------------------------------------------------- regex/categories.ts ------ */
 
-const elapsed = Date.now() - started;
-for (const t of tables) {
+// The 36 general categories an I-Regexp \p{...} escape admits, per RFC 9485 and the reference
+// implementation's RegexCategory. Only the 29 two-letter categories are stored: each one-letter
+// category is exactly the union of its members, verified against the host before emitting, so
+// deriving them costs one extra lookup and removes 2,320 ranges that could otherwise disagree
+// with the parts they are made of.
+const CATEGORY_GROUPS = {
+  L: ['Lu', 'Ll', 'Lt', 'Lm', 'Lo'],
+  M: ['Mn', 'Mc', 'Me'],
+  N: ['Nd', 'Nl', 'No'],
+  P: ['Pc', 'Pd', 'Ps', 'Pe', 'Pi', 'Pf', 'Po'],
+  Z: ['Zs', 'Zl', 'Zp'],
+  S: ['Sm', 'Sc', 'Sk', 'So'],
+  C: ['Cc', 'Cf', 'Cn', 'Co'],
+};
+
+function buildCategories() {
+  const leaves = Object.values(CATEGORY_GROUPS).flat();
+
+  /** @type {Map<string, Array<[number, number]>>} */
+  const leafRanges = new Map();
+  for (const cat of leaves) {
+    leafRanges.set(cat, collectRanges(`General_Category=${cat}`));
+  }
+
+  // Verify the union property rather than assuming it: if a future Unicode version ever broke it,
+  // deriving the one-letter categories would silently return wrong answers.
+  for (const [sup, members] of Object.entries(CATEGORY_GROUPS)) {
+    const supTest = new RegExp(`^\\p{General_Category=${sup}}$`, 'u');
+    const memberTests = members.map((m) => new RegExp(`^\\p{General_Category=${m}}$`, 'u'));
+    for (let cp = 0; cp <= MAX_CODE_POINT; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ch = String.fromCodePoint(cp);
+      if (supTest.test(ch) !== memberTests.some((t) => t.test(ch))) {
+        throw new Error(
+          `${sup} is not the union of ${members.join('/')} at U+${cp.toString(16).toUpperCase()}`,
+        );
+      }
+    }
+  }
+
+  const tables = leaves.map((cat) => {
+    const ranges = /** @type {Array<[number, number]>} */ (leafRanges.get(cat));
+    const { base64, byteLength } = encodeVerified(cat, ranges);
+    return { constant: `GC_${cat.toUpperCase()}`, label: cat, ranges, base64, byteLength };
+  });
+
+  const source = `/**
+ * Unicode general-category tables for I-Regexp \`\\p{...}\` and \`\\P{...}\`, generated from
+ * Unicode ${unicodeVersion}.
+ *
+ * GENERATED FILE — do not edit by hand. Regenerate with \`npm run gen:unicode\`.
+ *
+ * This file lives inside \`regex/\` rather than beside the identifier tables in \`unicode/\` because
+ * the I-Regexp engine is a leaf: it names no TSON type and imports nothing outside itself, which
+ * is what lets it be used and tested on its own. The decoder below is therefore a second copy of
+ * the one in \`unicode/xid.ts\`; the generator emits both and is what keeps them identical.
+ *
+ * Only the 29 two-letter categories are stored. Each one-letter category is exactly the union of
+ * its members — verified against the host at generation time, not assumed — so \`\\p{L}\` is
+ * answered by asking the five letter categories rather than by a 677-range table that could
+ * disagree with the parts it is made of.
+ */
+
+/** The Unicode version these tables were derived from. */
+export const UNICODE_VERSION = '${unicodeVersion}';
+
+${RUNTIME_HELPERS}
+
+${tables.map(emitTable).join('\n\n')}
+
+/** The two-letter general categories, each backed by its own table. */
+const LEAF_TABLES: Readonly<Record<string, Uint32Array>> = {
+${leaves.map((c) => `  ${c}: GC_${c.toUpperCase()},`).join('\n')}
+};
+
+/** The one-letter categories, each the union of its members. */
+const GROUPS: Readonly<Record<string, readonly string[]>> = {
+${Object.entries(CATEGORY_GROUPS)
+  .map(([sup, members]) => `  ${sup}: [${members.map((m) => `'${m}'`).join(', ')}],`)
+  .join('\n')}
+};
+
+/**
+ * Every category name an I-Regexp \`\\p{...}\` escape may name, in the reference implementation's
+ * order. A parser should reject anything outside this set rather than treating it as unmatched.
+ */
+export const CATEGORY_NAMES: readonly string[] = [
+${Object.entries(CATEGORY_GROUPS)
+  .map(([sup, members]) => `  '${sup}', ${members.map((m) => `'${m}'`).join(', ')},`)
+  .join('\n')}
+];
+
+const CATEGORY_NAME_SET = /* @__PURE__ */ new Set(CATEGORY_NAMES);
+
+/** Whether \`name\` is a general category this engine recognises. */
+export function isCategoryName(name: string): boolean {
+  return CATEGORY_NAME_SET.has(name);
+}
+
+/**
+ * Whether \`codePoint\` is in general category \`name\`.
+ *
+ * Returns \`false\` for a name this engine does not recognise; callers that need to reject an
+ * unknown category as a syntax error should check {@link isCategoryName} while parsing, where
+ * there is a position to report it at.
+ */
+export function isInCategory(name: string, codePoint: number): boolean {
+  const leaf = LEAF_TABLES[name];
+  if (leaf !== undefined) return contains(leaf, codePoint);
+
+  const members = GROUPS[name];
+  if (members === undefined) return false;
+
+  for (const member of members) {
+    const table = LEAF_TABLES[member];
+    if (table !== undefined && contains(table, codePoint)) return true;
+  }
+  return false;
+}
+`;
+
+  return { source, tables };
+}
+
+/* ------------------------------------------------------------------------------ main ------ */
+
+const started = Date.now();
+
+/**
+ * @param {string} path
+ * @param {string} source
+ */
+async function write(path, source) {
+  mkdirSync(dirname(path), { recursive: true });
+  const formatted = await prettier.format(source, {
+    ...(await prettier.resolveConfig(path)),
+    filepath: path,
+  });
+  writeFileSync(path, formatted);
+}
+
+const xid = buildXid();
+await write(XID_PATH, xid.source);
+
+const categories = buildCategories();
+await write(CATEGORIES_PATH, categories.source);
+
+console.log('unicode/xid.ts');
+for (const t of xid.tables) {
   const note = t.excludedCount > 0 ? `, ${String(t.excludedCount)} excluded by XID` : '';
   console.log(
-    `${t.label.padEnd(13)} ${String(t.ranges.length).padStart(4)} ranges  ${String(t.byteLength).padStart(5)} bytes${note}`,
+    `  ${t.label.padEnd(13)} ${String(t.ranges.length).padStart(4)} ranges  ${String(t.byteLength).padStart(5)} bytes${note}`,
   );
 }
-console.log(`\nUnicode ${unicodeVersion} -> ${OUT_PATH} (${String(elapsed)} ms)`);
+
+const categoryRanges = categories.tables.reduce((n, t) => n + t.ranges.length, 0);
+const categoryBytes = categories.tables.reduce((n, t) => n + t.byteLength, 0);
+console.log(
+  `regex/categories.ts\n  ${String(categories.tables.length)} categories  ${String(categoryRanges)} ranges  ${String(categoryBytes)} bytes  (7 one-letter categories derived)`,
+);
+console.log(`\nUnicode ${unicodeVersion} (${String(Date.now() - started)} ms)`);

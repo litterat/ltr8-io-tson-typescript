@@ -11,6 +11,116 @@ export const meta = {
   ],
 };
 
+// The porter charter, carried in the script rather than looked up as a registered agent
+// type. `.claude/agents/tson-porter.md` is only visible to a session that started AFTER it
+// was committed, so a session that pulled it mid-run gets 'agent type not found' — which is
+// how Wave 0's first run lost four of five agents. The charter travels with the wave script,
+// which is the unit of review anyway, and `model: 'sonnet'` carries what the frontmatter said.
+const PORTER = `You port one work package of TSON from the Java reference implementation to idiomatic TypeScript.
+
+# Before writing anything
+
+Read, in this order:
+
+1. \`CLAUDE.md\` — the hard constraints and conventions. They are not negotiable and they are not
+   suggestions.
+2. \`PORT-PLAN.md\` — find your work package in the Part B wave tables. It names the Java sources you
+   port, the TypeScript you produce, and what you may assume exists.
+3. The spec sections your package implements:
+   \`.references/ltr8-io-tson-java/spec/tson-part1-data.md\` and \`tson-part2-schema.md\`.
+4. The Java sources named for your package, including their Javadoc. The Javadoc carries invariants
+   and deliberate divergences that the code alone does not show.
+5. The contract-layer types you import. They are frozen. If one is genuinely wrong, say so and stop —
+   do not edit it, because other packages are building against it concurrently.
+
+# How to port
+
+**Idiomatic TypeScript, not transliterated Java.** Discriminated unions over class hierarchies, plain
+functions over singleton objects, closures over \`MethodHandle\`. Same behaviour, same conformance,
+different shape. A class-for-class translation is a failed port.
+
+**Behaviour comes from the spec and the vectors, not from the Java's convenience.** Where the Java
+leans on a JDK type this port has no equivalent for, read
+\`.references/ltr8-io-tson-java/CONFORMANCE.md\` — it records where the reference is deliberately
+stricter than the JDK, and those checks are the required behaviour.
+
+**Never weaken a signature.** Anything that can starve for input returns \`Task<T>\` and is called with
+\`yield*\`. Do not "simplify" one to a plain return type; it breaks every caller above it and the
+suspension cannot be reintroduced locally.
+
+**No regex in the grammar.** The number grammar is hand-written, one function per ABNF rule. The
+reference states this explicitly for the benefit of ports.
+
+**Zero runtime dependencies.** Not one, for any reason.
+
+# Tests
+
+Write tests from the **spec**, not by translating the Java tests. Read the Java tests to learn what
+edge cases exist and what they assert, then write TypeScript tests that state those cases against the
+spec section that requires them. Cite the section in the test name.
+
+Run the shared vectors:
+
+\`\`\`bash
+npm run test:conformance
+\`\`\`
+
+**Your wave's brief says what the suite should do at your point in the port, and it governs.** In
+early waves nothing can pass — \`test/conformance/sidecar.ts\` parses sidecars with this
+implementation's own parser, so until the data parser lands every vector fails on the same throw.
+There the thing to check is that the DISCOVERED count is still 146; a drop means the harness broke.
+
+Do not modify the harness in \`test/conformance/\` to make a vector pass. If a vector looks wrong,
+report it — it may be a genuine spec-feedback finding.
+
+# Definition of done
+
+These always, no exceptions:
+
+\`\`\`bash
+npm run typecheck          # clean
+npm run lint               # clean, including the import/no-restricted-paths zones
+npm run format:check       # clean
+npm test                   # your unit tests pass
+\`\`\`
+
+Plus whatever your wave's brief states about \`npm run test:conformance\`. Nothing that was green
+may go red, in any wave.
+
+If a lint zone rule fires, fix the import, not the rule. The zones replace the reference
+implementation's module system and carry real design weight.
+
+# Report back
+
+- Files created or changed.
+- Which conformance vectors moved from failing to passing, by name.
+- Every place the spec was ambiguous, underspecified, internally inconsistent, or plain wrong, with
+  the interpretation you chose and why. Do not silently pick a reading — a resolved ambiguity is
+  invisible again three sessions later unless it is written down.
+- Anything you could not finish, stated plainly.`;
+
+/**
+ * Agents that error resolve to `null`, so a wave whose agents all died looks exactly like a wave
+ * that ran cleanly and found nothing. Wave 0's first run reported "0 findings" while four of its
+ * five agents had failed to start at all, and the run was reported as completed. Filtering nulls
+ * away silently is what made that possible, so every stage counts them instead.
+ */
+function requireAgents(results, expected, what) {
+  const ok = results.filter((r) => r !== null);
+  const lost = expected - ok.length;
+  if (lost > 0) {
+    log(
+      `WARNING: ${String(lost)} of ${String(expected)} ${what} agents returned nothing. Their results are MISSING, not empty — do not read this wave as complete.`,
+    );
+  }
+  if (ok.length === 0) {
+    throw new Error(
+      `every ${what} agent failed; aborting rather than reporting an empty result as success`,
+    );
+  }
+  return ok;
+}
+
 // Wave 3 is the first wave with ordering that is not an artefact of convenience. The definition
 // resolver produces the structure the other two consume, so it is a genuine barrier — 14b and 14c
 // cannot start on a guess about its output shape. Once it lands, 14b and 14c are independent of
@@ -138,7 +248,11 @@ log('Wave 3: definition resolver, then templates and schema resolution together'
 // A genuine barrier. 14b and 14c both consume 14a's output shape; starting them on an assumption
 // about it would mean rewriting whichever one guessed wrong.
 const definitions = await agent(
-  `${DEFINITION_RESOLVER}
+  `${PORTER}
+
+---
+
+${DEFINITION_RESOLVER}
 
 Read CLAUDE.md and ORCHESTRATION.md first. The contract layer is FROZEN. Waves 1 and 2 are done —
 the lexer, parsers, desugarer, bind runtime and schema.meta bindings all exist and are yours to
@@ -152,7 +266,7 @@ npm run test:conformance — and no conformance vector that was green may go red
   {
     label: 'port:definition-resolver',
     phase: 'Definitions',
-    agentType: 'tson-porter',
+    model: 'sonnet',
     schema: PORT_RESULT,
     effort: 'high',
   },
@@ -167,7 +281,11 @@ const resolved = await parallel(
   PARALLEL_PACKAGES.map(
     (pkg) => () =>
       agent(
-        `${pkg.brief}
+        `${PORTER}
+
+---
+
+${pkg.brief}
 
 Read CLAUDE.md first. The contract layer is FROZEN.
 
@@ -183,7 +301,7 @@ npm run test:conformance — and no vector that was green may go red.`,
         {
           label: `port:${pkg.key}`,
           phase: 'Resolve',
-          agentType: 'tson-porter',
+          model: 'sonnet',
           schema: PORT_RESULT,
         },
       ),

@@ -1,24 +1,19 @@
 /**
- * Unicode character property tables, generated from Unicode 16.0.
+ * Unicode identifier tables, generated from Unicode 16.0.
  *
  * GENERATED FILE — do not edit by hand. Regenerate with `npm run gen:unicode`.
  *
- * These tables exist so identifier validity is a property of the document, not of the host.
- * A TSON document's identity can be a hash of its bytes (§8.3), so two runtimes disagreeing
- * about whether an identifier is well-formed would make the same bytes valid in one place and
- * invalid in another. Consulting the host's `\p{XID_Start}` at runtime would do exactly that:
- * Node builds of the same age already ship different Unicode versions.
+ * These exist so identifier validity is a property of the document, not of the host. A TSON
+ * document's identity can be a hash of its bytes, so two runtimes disagreeing about whether an
+ * identifier is well-formed would make the same bytes valid in one place and invalid in another.
+ * Consulting the host's `\p{XID_Start}` at runtime would do exactly that.
  *
  * {@link UNICODE_VERSION} records the version these tables were derived from. A build whose host
- * disagrees is still correct — the tables, not the host, are authoritative — but the difference
- * is worth knowing about, which is why the constant is exported rather than hidden.
- *
- * Each table is a sorted list of inclusive code-point ranges, delta-varint encoded and
- * base64-wrapped, decoded once at module load into a flat `Uint32Array` of `[start, end]`
- * pairs. Lookup is a binary search over that array.
+ * disagrees is still correct — the tables, not the host, are authoritative — but the difference is
+ * worth knowing about, which is why the constant is exported rather than hidden.
  */
 
-/** The Unicode version {@link isXidStart}, {@link isXidContinue} and {@link isDecimalDigit} describe. */
+/** The Unicode version {@link isXidStart}, {@link isXidContinue} and {@link isNd} describe. */
 export const UNICODE_VERSION = '16.0';
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -26,8 +21,8 @@ const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 /**
  * Decodes a base64 string to bytes without `atob` or `Buffer`.
  *
- * The package declares no ambient host globals beyond `TextEncoder`, and this runs in both Node
- * and browsers, so the decode is spelled out rather than delegated.
+ * The package declares no ambient host globals beyond what it already needs, and this runs in both
+ * Node and browsers, so the decode is spelled out rather than delegated.
  */
 function fromBase64(text: string): Uint8Array {
   const lookup = new Int16Array(128).fill(-1);
@@ -35,12 +30,12 @@ function fromBase64(text: string): Uint8Array {
     lookup[BASE64_ALPHABET.charCodeAt(i)] = i;
   }
 
-  let padding = 0;
-  while (padding < 2 && text.charCodeAt(text.length - 1 - padding) === 0x3d /* '=' */) padding++;
-
   // A character outside the alphabet reads as -1, which is also what an out-of-range index
   // yields here. Padding is the only such character these tables contain.
   const sextet = (index: number): number => lookup[text.charCodeAt(index)] ?? -1;
+
+  let padding = 0;
+  while (padding < 2 && text.charCodeAt(text.length - 1 - padding) === 0x3d /* '=' */) padding++;
 
   const bytes = new Uint8Array((text.length >> 2) * 3 - padding);
   let out = 0;
@@ -57,18 +52,16 @@ function fromBase64(text: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Expands a delta-varint encoded table into a flat array of inclusive `[start, end]` pairs.
- */
+/** Expands a delta-varint encoded table into a flat array of inclusive `[start, end]` pairs. */
 function decodeTable(encoded: string): Uint32Array {
   const bytes = fromBase64(encoded);
   const bounds: number[] = [];
   let i = 0;
   let previousEnd = -1;
 
-  // Reads one unsigned LEB128 varint, advancing `i`. Running off the end of a well-formed
-  // table is impossible; treating it as a terminator rather than asserting keeps the decode
-  // total, so a truncated table yields a short table instead of a crash at module load.
+  // Running off the end of a well-formed table is impossible; treating it as a terminator rather
+  // than asserting keeps the decode total, so a truncated table yields a short table instead of a
+  // crash at module load.
   const readVarint = (): number => {
     let result = 0;
     let shift = 0;
@@ -84,9 +77,8 @@ function decodeTable(encoded: string): Uint32Array {
   while (i < bytes.length) {
     const gap = readVarint();
     const width = readVarint();
-
-    const start = previousEnd + 1 + (gap >>> 0);
-    const end = start + (width >>> 0);
+    const start = previousEnd + 1 + gap;
+    const end = start + width;
     bounds.push(start, end);
     previousEnd = end;
   }
@@ -94,9 +86,7 @@ function decodeTable(encoded: string): Uint32Array {
   return Uint32Array.from(bounds);
 }
 
-/**
- * Binary search over a flat `[start, end, start, end, ...]` array of inclusive ranges.
- */
+/** Binary search over a flat `[start, end, start, end, ...]` array of inclusive ranges. */
 function contains(table: Uint32Array, codePoint: number): boolean {
   let low = 0;
   let high = (table.length >> 1) - 1;
@@ -142,8 +132,8 @@ const ASCII_ND = 4;
 /**
  * Membership for the ASCII range as a bitmask per code point.
  *
- * Almost every identifier in almost every document is ASCII, and this is the lexer's hottest
- * loop. Built from the tables above rather than written out, so it cannot drift from them.
+ * Almost every identifier in almost every document is ASCII, and this is the lexer's hottest loop.
+ * Built from the tables above rather than written out, so it cannot drift from them.
  */
 const ASCII = /* @__PURE__ */ (() => {
   const flags = new Uint8Array(ASCII_LIMIT);

@@ -34,13 +34,12 @@ jobs:
       - name: Format
         run: npm run format:check
 
-      - name: Unicode tables are current
-        # The tables are generated from the host's Unicode data and checked in. A diff here means
-        # the runner's Unicode version and the committed table disagree, which would make document
-        # validity depend on where the code runs — the exact thing checking them in prevents.
-        run: |
-          npm run gen:unicode
-          git diff --exit-code -- packages/tson/src/unicode/xid.ts
+      - name: Unicode tables
+        # Verifies the committed tables without letting the runner decide what they contain.
+        # Regenerating and demanding a clean diff would reintroduce the host dependence the
+        # tables exist to remove: GitHub's Node 24 carries Unicode 17.0 while other Node 24
+        # builds carry 16.0, so node-version: 24 pins the runtime but not the character data.
+        run: npm run check:unicode
 
       - name: Test
         run: npm test
