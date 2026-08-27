@@ -5,3 +5,4 @@
  * compiler into their bundle.
  */
 export * from './nodes.js';
+export * from './accessors.js';

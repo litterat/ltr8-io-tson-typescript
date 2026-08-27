@@ -74,12 +74,30 @@ describe('generated Unicode tables', () => {
     }
   });
 
-  it('rejects the dollar sign, where the reference implementation accepts it', () => {
-    // Documented divergence. `$` is Sc, not ID_Start, so real XID tables reject it. The Java
-    // uses Character.isUnicodeIdentifierStart, which is a documented approximation of XID and
-    // admits `$`. This port is the stricter of the two.
+  it('rejects the dollar sign, as the reference implementation also does', () => {
+    // Not a divergence, despite being an obvious candidate for one: `$` is Sc, so real XID tables
+    // reject it AND `Character.isUnicodeIdentifierStart(0x24)` is false. Verified by running the
+    // JDK predicate directly rather than assuming.
     expect(isXidStart(0x24)).toBe(false);
     expect(isXidContinue(0x24)).toBe(false);
+  });
+
+  it('rejects the identifier-ignorable characters the reference implementation admits', () => {
+    // This is where the two really diverge. Character.isUnicodeIdentifierPart returns true for
+    // every identifier-ignorable code point, so the Java accepts all of these inside an unquoted
+    // token. Real XID tables do not. U+FEFF is the case worth reporting upstream: §7.1 says a
+    // byte-order mark is not a character of the token at all.
+    for (const cp of [0x00ad, 0x2060, 0xfeff, 0x0000, 0x0008, 0x007f]) {
+      expect(isXidStart(cp), `U+${cp.toString(16).toUpperCase()} start`).toBe(false);
+      expect(isXidContinue(cp), `U+${cp.toString(16).toUpperCase()} continue`).toBe(false);
+    }
+  });
+
+  it('has ZWNJ and ZWJ in XID_Continue, which is why §7.1 must subtract them', () => {
+    // From Unicode 16 these are XID_Continue, so the unquoted-token profile cannot be built from
+    // the property alone. See unicode/token-profile.ts, which removes them.
+    expect(isXidContinue(0x200c)).toBe(true);
+    expect(isXidContinue(0x200d)).toBe(true);
   });
 
   it('accepts underscore as a continue but not a start', () => {

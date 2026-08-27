@@ -1,4 +1,5 @@
 import { TsonInternalError } from '../core/errors.js';
+import { encodeUtf8 } from './utf8.js';
 
 /**
  * Yielded by a {@link Task} that has run out of input and needs the driver to supply more.
@@ -76,7 +77,7 @@ export function fromBytes(bytes: Uint8Array): ByteInput {
  * as raw bytes. The conformance suite relies on that distinction.
  */
 export function fromString(text: string): ByteInput {
-  return fromBytes(new TextEncoder().encode(text));
+  return fromBytes(encodeUtf8(text));
 }
 
 /** A {@link ByteInput} fed chunk by chunk, for use with {@link runAsync}. */

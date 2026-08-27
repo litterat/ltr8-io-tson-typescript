@@ -117,7 +117,9 @@ authors need to see.
 Two divergences from the reference implementation are already known and deliberate:
 
 - Identifier characters use real `XID_Start`/`XID_Continue` tables where the Java approximates
-  them with `Character.isUnicodeIdentifier*`. This port is stricter; `$` is the visible case.
+  them with `Character.isUnicodeIdentifier*`. This port is stricter, but not on `$` — the Java
+  rejects that too. It is stricter on the identifier-ignorable characters (U+200C, U+200D, U+00AD,
+  U+2060, U+FEFF, and the non-whitespace ISO controls), which `isUnicodeIdentifierPart` admits.
 - Every built-in atom is parsed from scratch, since JS has no host `UUID`, `InetAddress`,
   `LocalDate` or `BigDecimal`. `.references/ltr8-io-tson-java/CONFORMANCE.md` records where the
   Java is deliberately stricter than the JDK, and those checks are the required behaviour.
