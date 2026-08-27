@@ -211,7 +211,14 @@ Port .references/ltr8-io-tson-java/tson-compiler/src/main/java/io/ltr8/tson/comp
 
 next() and peek() return Task<TsonEvent> and delegate to the lexer with yield*. The frame stack is what keeps memory proportional to nesting depth.
 
-Header handling: the document header is a fixed directive sequence needing at most two directives of lookahead and no backtracking. If the token past an optional !!id is !!meta, this is a schema document — a Class 1 path must raise TsonUnsupportedDocumentError rather than mis-parsing it.`,
+Header handling: the document header is a fixed directive sequence needing at most two directives of lookahead and no backtracking. If the token past an optional !!id is !!meta, this is a schema document — a Class 1 path must raise TsonUnsupportedDocumentError rather than mis-parsing it.
+
+TsonParseError now carries optional expected/actual alongside message and position:
+new TsonParseError(message, position, { expected, actual }). Java's TsonDataStream.java:371 uses
+exactly that four-argument form ("expected " + construct + ", found " + describe(peekToken())), so
+port it with the pair populated rather than folding both into the message. Where a throw states a
+RULE rather than a substitution — an adjacency violation, a trailing separator — omit both; the
+pair is all-or-nothing and no throw site invents one to fill the other.`,
   },
   {
     key: 'atoms-numeric',
@@ -223,6 +230,8 @@ Port IntegerParser, FloatParser, DecimalParser, RationalParser, ComplexParser, B
 READ .references/ltr8-io-tson-java/CONFORMANCE.md FIRST. JavaScript has no BigDecimal, so TsonDecimal (bigint unscaled value plus exponent, declared in src/value/types.ts) is yours to implement exactly. base64 and base64url REQUIRE padding. Integer families: int8..int32 to number, int64..int256 to bigint — exceeding 2^53 silently in a number is the trap this mapping exists to prevent.
 
 Compare by information content, not text: the suite asserts numeric equality, and a rational may legitimately be asserted in reduced form.
+
+Both error classes now REQUIRE a structured \`expected\` fragment as their third constructor argument — TsonAtomParseError(typeRef, message, expected) and TsonAtomValidationError(typeRef, message, expected). It is the machine-readable half of the failure and reaches Diagnostic.expected verbatim, so draw it from the closed six-shape vocabulary documented on AtomType.read() in atom/contract.ts: ordering bound, membership, length, pattern, grammar (parse failures only), prohibition. Each is a FRAGMENT, never a sentence — a renderer composes "expected <= 100, found 99999" around it. Do not supply actual; that is the token's own text and the reader adds it.
 
 Unblocks (these go green in Wave 2, not this wave): the numeric half of vocabulary/valid and vocabulary/invalid.`,
   },
@@ -236,6 +245,8 @@ Port DateParser, TimeParser, DateTimeParser, DurationParser and IsoDuration.
 READ .references/ltr8-io-tson-java/CONFORMANCE.md FIRST — every one of these is deliberately stricter than the JDK, and JavaScript gives you nothing to delegate to anyway: !date/!datetime/!time REJECT ISO 8601's extended-year form (a leading sign, or more than four digits), because RFC 3339's full-date grammar requires exactly four digits and no sign. !duration requires uppercase designators and no leading sign.
 
 Do not use Date. Produce the PlainDate/PlainTime/PlainDateTime/TsonDuration value types declared in src/value/types.ts; duration is asserted by the suite as { period, clock }.
+
+Both atom error classes REQUIRE a structured \`expected\` fragment as their third constructor argument, drawn from the closed six-shape vocabulary documented on AtomType.read() in atom/contract.ts. Do not supply actual; the reader adds it from the token text.
 
 Unblocks (these go green in Wave 2, not this wave): the temporal vocabulary vectors.`,
   },
@@ -252,6 +263,8 @@ READ .references/ltr8-io-tson-java/CONFORMANCE.md FIRST — this is the package 
 - !uuid requires RFC 9562's canonical 8-4-4-4-12 grouping.
 - !cidr4/!cidr6 validate a network but hand back the AUTHORED TEXT so a round trip is exact. Follow §5.5's split exactly: not CIDR-shaped is a parse error, a prefix outside the family range or an address with nonzero host bits is a validation error.
 
+Both atom error classes REQUIRE a structured \`expected\` fragment as their third constructor argument, drawn from the closed six-shape vocabulary documented on AtomType.read() in atom/contract.ts. Do not supply actual; the reader adds it from the token text.
+
 Unblocks (these go green in Wave 2, not this wave): the network and identifier vocabulary vectors.`,
   },
   {
@@ -263,7 +276,9 @@ Port .references/ltr8-io-tson-java/tson-regex/ (1447 lines) — an RFC 9485 I-Re
 
 Thompson NFA with a Pike VM — LINEAR TIME, no backtracking, so it is ReDoS-safe by construction. That property is the point; do not substitute the host RegExp. Also port the product-NFA emptiness check that decides whether two patterns share any string, which §5.4's choice disjointness needs.
 
-Unicode categories for \\p{...}: use packages/tson/src/regex/categories.ts. It is GENERATED and checked in, it lives inside the regex leaf so the zone stands, and it exports CATEGORY_NAMES, isCategoryName and isInCategory covering all 36 categories RFC 9485 admits. Do not import src/unicode/ — the first eslint zone makes regex/ a leaf and xid.ts carries identifier tables only, no general-category data. Do not fall back to the host RegExp for \\p{...}; that is the version-pinning problem this file exists to solve. Reject an unrecognised category name at PARSE time with a position, using isCategoryName.`,
+Unicode categories for \\p{...}: use packages/tson/src/regex/categories.ts. It is GENERATED and checked in, it lives inside the regex leaf so the zone stands, and it exports CATEGORY_NAMES, isCategoryName and isInCategory covering all 36 categories RFC 9485 admits. Do not import src/unicode/ — the first eslint zone makes regex/ a leaf and xid.ts carries identifier tables only, no general-category data. Do not fall back to the host RegExp for \\p{...}; that is the version-pinning problem this file exists to solve. Reject an unrecognised category name at PARSE time with a position, using isCategoryName.
+
+Throw packages/tson/src/regex/errors.ts's TsonRegexSyntaxError, which already exists and carries (message, pattern, position) with position in CODE POINTS. It extends Error, not TsonError, because this zone forbids reaching core/ — that is deliberate and documented in the file; do not "fix" it back and do not add a second error type. regex/index.ts already re-exports it alongside categories.ts.`,
   },
   {
     key: 'tree',

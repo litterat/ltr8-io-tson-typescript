@@ -62,9 +62,26 @@ export interface AtomType<T> {
   /**
    * Parse `token` into this atom's own canonical host value.
    *
-   * @throws {@link TsonAtomParseError} when `token` is not shaped like this type at all.
+   * Both errors require an `expected` fragment alongside the prose message. It is the
+   * machine-readable half of the failure and reaches {@link Diagnostic.expected} verbatim, so it
+   * is drawn from one closed vocabulary of six shapes — each a fragment, never a sentence, since
+   * a renderer composes `expected <= 100, found 99999` around it:
+   *
+   * - **ordering bound** — `>= 1`, `<= 100`, `>= -128 and <= 127`. Operator form, not prose.
+   * - **membership** — `one of (PENDING, SHIPPED, DELIVERED)`.
+   * - **length** — `exactly 4 characters`, `at least 2 bytes`.
+   * - **pattern** — `matching <i-regexp>`, unquoted and unescaped.
+   * - **grammar** — parse failures only: `an RFC 3339 date-time`, `a base64 encoding`.
+   * - **prohibition** — `not NaN`, `a finite value`.
+   *
+   * Do not supply `actual`: it is the token's own text, and the reader adds it. An atom that
+   * repeated it there would be guessing at how the token was framed.
+   *
+   * @throws {@link TsonAtomParseError} when `token` is not shaped like this type at all. Its
+   *   `expected` is a **grammar** fragment.
    * @throws {@link TsonAtomValidationError} when `token` is shaped correctly but its value falls
-   *   outside a constraint this atom's own instance declares.
+   *   outside a constraint this atom's own instance declares. Its `expected` is one of the other
+   *   five shapes.
    */
   read(token: AtomToken): T;
 

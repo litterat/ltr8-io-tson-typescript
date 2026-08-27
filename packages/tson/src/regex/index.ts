@@ -10,4 +10,5 @@
  * no backtracking, so it is ReDoS-safe by construction — plus the product-NFA emptiness check that
  * decides whether two patterns share any string, which §5.4's choice disjointness needs.
  */
-export {};
+export * from './errors.js';
+export * from './categories.js';

@@ -47,9 +47,32 @@ export class TsonLexError extends TsonPositionedError {
 
 /**
  * A structural error: the tokens are well-formed but do not spell a valid document (§7.4).
+ *
+ * `expected` and `actual` are the machine-readable half of the same failure — the division of
+ * labour {@link TsonAtomTypeError} makes for value errors, made here for structural ones. §8.1
+ * asks a processor to include expected-versus-found information for token and structural
+ * mismatches, and {@link Diagnostic} carries both fields through unchanged.
+ *
+ * The pair is all-or-nothing and both are optional, because a throw site that states a *rule*
+ * rather than a substitution — an adjacency violation, a trailing separator — has no substitution
+ * to name. No throw site invents one to fill the other.
  */
 export class TsonParseError extends TsonPositionedError {
   override readonly name = 'TsonParseError';
+  /** The construct admissible where the parse failed. */
+  readonly expected?: string;
+  /** What was written there instead. */
+  readonly actual?: string;
+
+  constructor(
+    message: string,
+    position: Position,
+    options?: { expected?: string; actual?: string; cause?: unknown },
+  ) {
+    super(message, position, options);
+    if (options?.expected !== undefined) this.expected = options.expected;
+    if (options?.actual !== undefined) this.actual = options.actual;
+  }
 }
 
 /**
@@ -63,6 +86,40 @@ export class TsonUnsupportedDocumentError extends TsonPositionedError {
 }
 
 /**
+ * An atom rejected a token, either for its shape or for its value (§5).
+ *
+ * `expected` is the machine-readable half, and is the reason this type carries two strings
+ * rather than one: `message` is prose for a human, `expected` is a fragment a renderer composes
+ * into `expected <= 100, found 99999`. It reaches {@link Diagnostic.expected} verbatim, while
+ * `actual` is supplied by the reader from the token's own text rather than by the throw site.
+ *
+ * Every throw site draws its `expected` from one closed vocabulary of six shapes, each a
+ * fragment and never a sentence:
+ *
+ * - **ordering bound** — `>= 1`, `<= 100`, `>= -128 and <= 127`. Operator form, not prose.
+ * - **membership** — `one of (PENDING, SHIPPED, DELIVERED)`.
+ * - **length** — `exactly 4 characters`, `at least 2 bytes`.
+ * - **pattern** — `matching <i-regexp>`, unquoted and unescaped.
+ * - **grammar** — parse failures only: `an RFC 3339 date-time`, `a base64 encoding`.
+ * - **prohibition** — `not NaN`, `a finite value`.
+ *
+ * `expected` is required rather than optional on purpose. The vocabulary only holds if every
+ * throw site supplies one, and an optional field is the one thirty-three parsers would skip.
+ */
+export abstract class TsonAtomTypeError extends TsonError {
+  /** The type name that rejected the token, e.g. `base64`. */
+  readonly typeRef: string;
+  /** The violated constraint, standing alone — one of the six shapes above. */
+  readonly expected: string;
+
+  constructor(typeRef: string, message: string, expected: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.typeRef = typeRef;
+    this.expected = expected;
+  }
+}
+
+/**
  * A token that is not a valid member of its declared built-in type (§5).
  *
  * The distinction from {@link TsonAtomValidationError} is the spec's, not a nicety: a token
@@ -70,26 +127,13 @@ export class TsonUnsupportedDocumentError extends TsonPositionedError {
  * value outside a declared bound is a *validation* failure. The conformance suite asserts
  * these categories separately.
  */
-export class TsonAtomParseError extends TsonError {
+export class TsonAtomParseError extends TsonAtomTypeError {
   override readonly name = 'TsonAtomParseError';
-  /** The type name that rejected the token, e.g. `base64`. */
-  readonly typeRef: string;
-
-  constructor(typeRef: string, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.typeRef = typeRef;
-  }
 }
 
 /** A correctly-shaped atom whose value falls outside a constraint the schema declares (§5). */
-export class TsonAtomValidationError extends TsonError {
+export class TsonAtomValidationError extends TsonAtomTypeError {
   override readonly name = 'TsonAtomValidationError';
-  readonly typeRef: string;
-
-  constructor(typeRef: string, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.typeRef = typeRef;
-  }
 }
 
 /** A read failed against the schema in scope, under a fail-fast diagnostics receiver. */
@@ -159,11 +203,6 @@ export class TsonContentHashMismatchError extends TsonError {
     this.expected = expected;
     this.actual = actual;
   }
-}
-
-/** An I-Regexp pattern (RFC 9485) is not syntactically valid. */
-export class TsonRegexSyntaxError extends TsonError {
-  override readonly name = 'TsonRegexSyntaxError';
 }
 
 /**
