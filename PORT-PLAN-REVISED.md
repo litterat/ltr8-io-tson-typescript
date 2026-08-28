@@ -104,13 +104,13 @@ memory behaviour, packaging, or whether a function does what its own doc comment
 > **Correction.** Name the _classes_ of test each wave must add, not just the vectors it turns
 > green. Five classes, and each wave's gate says which of them apply:
 >
-> | Class                      | Asks                                                                                  |
-> | -------------------------- | ------------------------------------------------------------------------------------- |
-> | **Conformance**            | does the grammar match the shared suite?                                              |
-> | **API contract**           | does each public function do what its own documentation claims?                       |
-> | **Adversarial / resource** | depth, size, pathological input, unbounded producers — reached through the public API |
-> | **Fixture**                | does resolved output match the reference's published output?                          |
-> | **Packaging**              | does the built, published artifact resolve and run for a consumer?                    |
+> | Class                      | Asks                                                                                                    |
+> | -------------------------- | ------------------------------------------------------------------------------------------------------- |
+> | **Conformance**            | does the grammar match the shared suite?                                                                |
+> | **API contract**           | does each public function do what its own documentation claims?                                         |
+> | **Adversarial / resource** | depth, size, pathological input, unbounded producers — reached through the public API                   |
+> | **Fixture**                | does resolved output match the reference's published output?                                            |
+> | **Packaging**              | does the built artifact resolve **and run** for a consumer, installed rather than from the source tree? |
 
 ### 2.3 Documented contracts were never audited against the code
 
@@ -332,21 +332,31 @@ The project must skip cleanly, with a message, when the suite is not checked out
 The original plan had one gate, repeated. Replace it with a ladder that grows: each wave runs
 everything below it plus its own new class of check.
 
-| Rung | Check                                                                                                                 | From wave                      |
-| ---- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| 0    | typecheck, lint, format                                                                                               | scaffold                       |
-| 1    | unit tests                                                                                                            | 1                              |
-| 2    | conformance vectors — count green, and **never let the discovered count drop**                                        | 1                              |
-| 3    | build succeeds                                                                                                        | 1                              |
-| 4    | **packaging validation** — the built artifact resolves for a consumer, from every entry point and every module system | 1                              |
-| 5    | **end-to-end through the public API** — one real document, one real schema                                            | first wave with an entry point |
-| 6    | **adversarial / resource** — depth, size, pathological input, all through the public API                              | first wave with an entry point |
-| 7    | **fixture comparison** against the reference's published resolved output                                              | first wave that resolves       |
-| 8    | **doc-claim audit**                                                                                                   | every wave                     |
+| Rung | Check                                                                                                                             | From wave                      |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| 0    | typecheck, lint, format                                                                                                           | scaffold                       |
+| 1    | unit tests                                                                                                                        | 1                              |
+| 2    | conformance vectors — count green, and **never let the discovered count drop**                                                    | 1                              |
+| 3    | build succeeds                                                                                                                    | 1                              |
+| 4    | **packaging validation** — pack, install into a throwaway project, then both _import the library_ and _run the binary_ from there | 1                              |
+| 5    | **end-to-end through the public API** — one real document, one real schema                                                        | first wave with an entry point |
+| 6    | **adversarial / resource** — depth, size, pathological input, all through the public API                                          | first wave with an entry point |
+| 7    | **fixture comparison** against the reference's published resolved output                                                          | first wave that resolves       |
+| 8    | **doc-claim audit**                                                                                                               | every wave                     |
 
 Rungs 4, 5, 6 and 8 are the ones this port lacked, and they are precisely where its escaped defects
-were found. Rung 4 costs about ten lines of configuration; it would have caught a broken published
-type surface that shipped through seven waves.
+were found. Rung 4 caught a broken published type surface that had shipped through seven waves — and
+then, once it was extended from _resolving_ the artifact to _running_ it, caught something worse.
+
+> **Run the binary from an install, not from the source tree.** A `bin` is installed as a symlink,
+> and the platform reports the path as invoked while the module reports its resolved one. This
+> port's command-line tool compared the two to decide whether it was the program being run, so
+> through the symlink it decided it was not: `main` never ran, nothing printed, and every command
+> exited **0** — `validate` included, where a script reading the exit code concludes the input was
+> fine. Every test called `main(argv)` in process, and the one manual smoke test invoked the built
+> file _by its own path_, which is the single invocation where the comparison holds. Nothing in the
+> repository could see it. It was found by installing the tarballs into a scratch project and typing
+> the command.
 
 Two rules about the gate itself:
 
@@ -663,18 +673,21 @@ contract layer is frozen.
 3. **Land a public facade by wave 4**, even as a stub, so there is something for those rungs to test.
 4. **Add the five missing work packages** in §4.2: resource limits, backpressure, embedded standard
    library, public identity and hashing, document classification.
-5. **Walk the specification's non-grammar sections** and give each an owner or a written decision.
+5. **Run the shipped binary from a real install in CI**, through its `bin` symlink, asserting
+   output and every exit code. A command-line tool tested only by calling its `main` in process
+   is untested exactly where it is used.
+6. **Walk the specification's non-grammar sections** and give each an owner or a written decision.
    Security considerations and resource limits do not attract attention on their own.
-6. **Budget a third of the run for hardening** and gate it on findings, not on completion.
-7. **Verify every regression test by reverting the fix**, and say so in the commit.
-8. **Read exit codes, never output.**
-9. **Reproduce every review finding before acting on it**, and discard findings without
-   reproductions.
-10. **Count agents in every fan-out**; never let silence read as success.
-11. **Resolve tests to source from day one**, and run the whole ladder on a clean checkout early
+7. **Budget a third of the run for hardening** and gate it on findings, not on completion.
+8. **Verify every regression test by reverting the fix**, and say so in the commit.
+9. **Read exit codes, never output.**
+10. **Reproduce every review finding before acting on it**, and discard findings without
+    reproductions.
+11. **Count agents in every fan-out**; never let silence read as success.
+12. **Resolve tests to source from day one**, and run the whole ladder on a clean checkout early
     enough that a stale-build dependence cannot hide.
-12. **Prove the layering rule fails** on a deliberate violation before trusting it.
-13. **Choose the fixture comparison level deliberately** and write down which it is; prefer written
+13. **Prove the layering rule fails** on a deliberate violation before trusting it.
+14. **Choose the fixture comparison level deliberately** and write down which it is; prefer written
     form, and hold every difference as an allowlisted assertion rather than a skip.
-14. **State which tiers are recursive and which are iterative** in the conventions file, before any
+15. **State which tiers are recursive and which are iterative** in the conventions file, before any
     of them are written — and bound the recursive ones the day they land, not in the sweep.

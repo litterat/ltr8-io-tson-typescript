@@ -12,6 +12,9 @@
  * parsing library buys nothing here, and `@ltr8/tson`'s own "zero runtime dependencies" ethos
  * extends to this sibling package even though nothing forces it to.
  */
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { UsageError, EXIT } from './exit.js';
 import { describeError } from './problem.js';
 import {
@@ -296,8 +299,33 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-/* node:coverage disable -- process wiring only, exercised by every other test through `main()` directly */
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+/**
+ * Whether this module is the program being run, rather than a module something imported.
+ *
+ * **Both sides are resolved to a real path, and that is the whole point.** `npm` installs a `bin`
+ * as a symlink (`node_modules/.bin/tson` -> `../@ltr8/tson-cli/dist/cli.js`), and node sets
+ * `process.argv[1]` to the path *as invoked* -- the symlink -- while `import.meta.url` is always
+ * the resolved target. Comparing them directly is therefore false for every installed invocation,
+ * which made the published CLI a silent no-op: `main` never ran, nothing was printed, and the
+ * process exited 0. Exiting 0 without checking anything is the worst failure a validator has, since
+ * a script reading `$?` concludes the input was fine.
+ *
+ * The guard has to stay -- `test/cli.test.ts` imports {@link main} from this module and would
+ * otherwise run it against vitest's own argv on import -- so it is the comparison that is fixed.
+ */
+function runningAsProgram(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) return false;
+  try {
+    return realpathSync(invoked) === fileURLToPath(import.meta.url);
+  } catch {
+    // argv[1] names something unresolvable: not this file, whatever it is.
+    return false;
+  }
+}
+
+/* node:coverage disable -- process wiring; `scripts/smoke-cli.sh` drives it through a real install */
+if (runningAsProgram()) {
   main(process.argv.slice(2))
     .then((code) => {
       process.exitCode = code;

@@ -70,3 +70,12 @@ jobs:
         # `main` or `types`, so there is no entry point for a consumer to import and nothing for
         # attw to resolve. publint checks what that package actually publishes -- its `bin`.
         run: npm run check:package
+
+      - name: Smoke test the published CLI
+        # The one check that runs the binary the way a consumer gets it: packed, installed, and
+        # invoked through `node_modules/.bin/tson`, which npm creates as a symlink. Every unit test
+        # calls `main(argv)` in-process, and running `dist/cli.js` by its own path is the single
+        # invocation where `process.argv[1]` matches the resolved `import.meta.url` -- so nothing
+        # here could see that through the symlink it does not, and the installed CLI was a silent
+        # no-op that exited 0 for every command, `validate` included.
+        run: npm run smoke:cli
