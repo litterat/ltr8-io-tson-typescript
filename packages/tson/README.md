@@ -42,6 +42,35 @@ Take only what you need; importing `parse` does not pull in the schema compiler.
 | `@ltr8/tson/stdlib`   | the bundled `meta-kernel` / `meta` / `core` schemas, embedded                                               |
 | `@ltr8/tson/source`   | schema fetching over HTTPS and from disk — **Node only**, and deliberately unreachable from a browser build |
 
+## What a browser bundle costs
+
+`sideEffects: false` plus one entry point per separable slice, so a bundler keeps only what you
+reach. Measured with esbuild against the published tarball — minified, then gzipped:
+
+| You import                                                         | minified | gzipped   |
+| ------------------------------------------------------------------ | -------- | --------- |
+| `classifyDocument` — is this data or schema?                       | 69 KB    | **22 KB** |
+| `parse` — the parse tree, no schema                                | 80 KB    | **25 KB** |
+| `readTree` / `validate`, schemaless (base syntax + built-in types) | 89 KB    | **28 KB** |
+| `parseRegex` from `@ltr8/tson/regex`, standalone                   | 24 KB    | **11 KB** |
+| `standardLibrary()` — compile a schema and validate against it     | 268 KB   | **80 KB** |
+| everything, every entry point                                      | 530 KB   | 160 KB    |
+
+Two things dominate a schema-governed bundle and are worth knowing before you try to trim it. The
+compiler is about a third of it, and is what schema-governed validation _is_. The built-in atom
+parsers are another ~14%: they are reached through a registry keyed by type name, so a bundler
+cannot tell that your schema only uses three of the thirty-three, and none of them can be shaken out.
+
+If you only need **syntax and structure diagnostics** — malformed documents, unknown built-in
+types — the schemaless row is the whole cost, and you never load the compiler at all.
+
+`@ltr8/tson/stdlib` adds ~14 KB gzipped for the three bundled schemas as embedded text. Dropping it
+means fetching them at runtime instead, which is a `SchemaSource` and a network round trip rather
+than a saving.
+
+`@ltr8/tson/source` is deliberately unreachable from a browser build: its `exports` entry offers only
+the `node` condition, so a bundler cannot resolve it even by accident.
+
 ## Conformance
 
 146 / 146 vectors of the shared, language-agnostic

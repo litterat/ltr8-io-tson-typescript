@@ -30,6 +30,7 @@
     "node": ">=24"
   },
   "exports": {
+    "./package.json": "./package.json",
     ".": {
       "@ltr8/source": "./src/index.ts",
       "import": {
