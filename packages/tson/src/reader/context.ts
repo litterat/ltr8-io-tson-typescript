@@ -23,7 +23,14 @@ import type {
   DiagnosticsReceiver,
   SchemaLocation,
 } from '../core/diagnostic.js';
-import { TsonInternalError } from '../core/errors.js';
+import { TsonInternalError, TsonReadError } from '../core/errors.js';
+import {
+  DEFAULT_MAX_NESTING_DEPTH,
+  maxNestingDepthOf,
+  nestingLimitExpectation,
+  nestingLimitMessage,
+  type NestingLimitOptions,
+} from '../core/limits.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
 import type { ReadContext } from './contracts.js';
 
@@ -52,6 +59,14 @@ interface PathStep {
   readonly name: string | undefined;
   readonly index: number;
   readonly schemaToo: boolean;
+  /**
+   * How many levels of *data* nesting are open at this step -- the length of the chain built by
+   * {@link ReadContext.field}/{@link ReadContext.index}, which are the two scopings that mean
+   * "descend into a value". The schema-side scopings (`schemaField`, `inRecord`,
+   * `underDeclaration`) carry it through unchanged: they move within a schema, not into a
+   * document.
+   */
+  readonly depth: number;
 }
 
 /**
@@ -84,6 +99,8 @@ interface Cursor {
   readonly rewound: TsonEvent[];
   /** Where `next()` records what it consumes while a lookahead is running, else `undefined`. */
   recording: TsonEvent[] | undefined;
+  /** §9.1's nesting bound for this read, checked by {@link ReadContext.field}/{@link ReadContext.index}. */
+  readonly maxNestingDepth: number;
 }
 
 /**
@@ -129,6 +146,49 @@ function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | 
 // ---------------------------------------------------------------------------------------------
 // The context itself
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * The depth one level below `tail`, refusing a document that nests past this read's limit (§9.1).
+ *
+ * Thrown rather than reported, even under a collecting receiver -- `reader/schemaless/tree.ts`
+ * states the reasoning and it holds identically here: a nesting bound is a resource limit, not a
+ * finding about one value, and everything below the point it fires is unreachable, so there is
+ * nothing further to collect.
+ *
+ * This is the only bound the *compiled* reader stack has. Without it a recursive schema type
+ * (`node => { children: [node] }`) reading a deeply nested document exhausted the host call stack
+ * and escaped `readTree`/`validate` as an uncaught `RangeError` -- the same failure the schemaless
+ * reader was bounded against, on the path a schema-governed read actually takes.
+ */
+function descend(cursor: Cursor, tail: PathStep | undefined): number {
+  const depth = (tail?.depth ?? 0) + 1;
+  if (depth > cursor.maxNestingDepth) {
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message: nestingLimitMessage(cursor.maxNestingDepth),
+      expected: nestingLimitExpectation(cursor.maxNestingDepth),
+      actual: 'deeper',
+      ...(cursor.position === undefined ? {} : { dataPosition: cursor.position }),
+    });
+  }
+  return depth;
+}
+
+/**
+ * This read's nesting bound (§9.1), for a reader that descends without going through
+ * {@link ReadContext.field}/{@link ReadContext.index} and so must count for itself.
+ *
+ * The structural annotation readers are the case: an annotation's value is a data value in its
+ * own right, so `@a:@a:@a:...` recurses once per annotation with no path step to scope it. They
+ * read the limit here rather than hard-coding the default, so a caller's configured limit governs
+ * every descent in a read and not only the ones with a path step attached.
+ *
+ * Falls back to the default for a context this module did not create -- there is no other
+ * implementation, so this is unreachable rather than a supported case.
+ */
+export function nestingLimitOf(ctx: ReadContext): number {
+  return cursorOf.get(ctx)?.maxNestingDepth ?? DEFAULT_MAX_NESTING_DEPTH;
+}
 
 function makeContext(
   cursor: Cursor,
@@ -183,7 +243,7 @@ function makeContext(
     field(name: string): ReadContext {
       return makeContext(
         cursor,
-        { parent: tail, name, index: -1, schemaToo: false },
+        { parent: tail, name, index: -1, schemaToo: false, depth: descend(cursor, tail) },
         schemaAnchor,
         positionOverride,
       );
@@ -192,7 +252,13 @@ function makeContext(
     index(i: number): ReadContext {
       return makeContext(
         cursor,
-        { parent: tail, name: undefined, index: i, schemaToo: false },
+        {
+          parent: tail,
+          name: undefined,
+          index: i,
+          schemaToo: false,
+          depth: descend(cursor, tail),
+        },
         schemaAnchor,
         positionOverride,
       );
@@ -201,7 +267,14 @@ function makeContext(
     schemaField(name: string): ReadContext {
       return makeContext(
         cursor,
-        { parent: tail, name, index: -1, schemaToo: schemaAnchor !== undefined },
+        {
+          parent: tail,
+          name,
+          index: -1,
+          schemaToo: schemaAnchor !== undefined,
+          // A schema-side scoping moves within a schema, not into a document: same depth.
+          depth: tail?.depth ?? 0,
+        },
         schemaAnchor,
         positionOverride,
       );
@@ -265,7 +338,11 @@ function makeContext(
  * `TsonReadContext.of`. See `contracts.ts`'s own doc on {@link createReadContext}: this performs
  * no document-level framing.
  */
-export function createReadContext(events: EventSource, receiver: DiagnosticsReceiver): ReadContext {
+export function createReadContext(
+  events: EventSource,
+  receiver: DiagnosticsReceiver,
+  options?: NestingLimitOptions,
+): ReadContext {
   const cursor: Cursor = {
     events,
     receiver,
@@ -273,6 +350,7 @@ export function createReadContext(events: EventSource, receiver: DiagnosticsRece
     reported: 0,
     rewound: [],
     recording: undefined,
+    maxNestingDepth: maxNestingDepthOf(options),
   };
   return makeContext(cursor, undefined, undefined, undefined);
 }

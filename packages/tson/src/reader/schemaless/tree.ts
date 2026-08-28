@@ -51,7 +51,12 @@
  * treatment).
  */
 import { TsonAtomTypeError, TsonInternalError, TsonReadError } from '../../core/errors.js';
-import { MAX_NESTING_DEPTH } from '../../compiler/dataParser.js';
+import {
+  maxNestingDepthOf,
+  nestingLimitExpectation,
+  nestingLimitMessage,
+  type NestingLimitOptions,
+} from '../../core/limits.js';
 import type { Task } from '../../io/bytes.js';
 import type { TokenEvent, TsonEvent } from '../../stream/event.js';
 import type { AtomType } from '../../atom/contract.js';
@@ -74,7 +79,7 @@ import type { ReadContext, TypeReader } from '../contracts.js';
 import { lookupBuiltinAtom } from './vocabulary.js';
 import { reportAtomViolation, reportNotScalar, reportUnknownTypeRef } from './typeRefCheck.js';
 
-export interface SchemalessTreeReaderOptions {
+export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
   /**
    * Keeps a type-ref naming no built-in type on the node without reporting it -- §5.1's
    * uninterpreted marker, carried all the way to the tree. For reading the wire form of a
@@ -94,8 +99,9 @@ export interface SchemalessTreeReaderOptions {
  */
 export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}): TypeReader<Value> {
   const preserve = options.preserveUnknownTypeRefs ?? false;
+  const limit = maxNestingDepthOf(options);
   return {
-    read: (ctx: ReadContext): Task<Value> => readNode(ctx, preserve),
+    read: (ctx: ReadContext): Task<Value> => readNode(ctx, preserve, limit, 0),
   };
 }
 
@@ -106,7 +112,7 @@ export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}):
 // to hand back an `Annotations` directly rather than a bare `readonly Annotation[]`.
 // ---------------------------------------------------------------------------------------------
 
-function* readStructuralAnnotations(ctx: ReadContext): Task<Annotations> {
+function* readStructuralAnnotations(ctx: ReadContext, limit: number, depth = 0): Task<Annotations> {
   const first = yield* ctx.peek();
   if (first.kind !== 'annotation-start') {
     return EMPTY_ANNOTATIONS;
@@ -119,7 +125,10 @@ function* readStructuralAnnotations(ctx: ReadContext): Task<Annotations> {
     let value: DataValue | undefined;
     const afterStart = yield* ctx.peek();
     if (afterStart.kind !== 'annotation-end') {
-      value = yield* readStructuralDataValue(ctx);
+      // One level deeper: an annotation's value is a data value, so `@a:@a:@a:...` is a real
+      // descent even though it opens no brace or bracket, and it is the one this stack has no
+      // path step to count (§9.1). Unbounded, it exhausted the host stack out of `readTree`.
+      value = yield* readStructuralDataValue(ctx, limit, depth + 1);
     }
     yield* ctx.next(); // annotation-end
     values.push(value === undefined ? { name: start.name } : { name: start.name, value });
@@ -127,15 +136,24 @@ function* readStructuralAnnotations(ctx: ReadContext): Task<Annotations> {
   return { values };
 }
 
-function* readStructuralDataValue(ctx: ReadContext): Task<DataValue> {
-  const annotations = yield* readStructuralAnnotations(ctx);
+function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): Task<DataValue> {
+  if (depth >= limit) {
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message: nestingLimitMessage(limit),
+      path: ctx.path(),
+      expected: nestingLimitExpectation(limit),
+      actual: 'deeper',
+    });
+  }
+  const annotations = yield* readStructuralAnnotations(ctx, limit, depth);
   let typeRef: string | undefined;
   const peeked = yield* ctx.peek();
   if (peeked.kind === 'type-ref') {
     yield* ctx.next();
     typeRef = peeked.name;
   }
-  const coreValue = yield* readStructuralCoreValue(ctx);
+  const coreValue = yield* readStructuralCoreValue(ctx, limit, depth);
   return {
     annotations: annotations.values,
     ...(typeRef !== undefined ? { typeRef } : {}),
@@ -143,18 +161,22 @@ function* readStructuralDataValue(ctx: ReadContext): Task<DataValue> {
   };
 }
 
-function* readStructuralScopedValue(ctx: ReadContext): Task<ScopedValue> {
+function* readStructuralScopedValue(
+  ctx: ReadContext,
+  limit: number,
+  depth: number,
+): Task<ScopedValue> {
   const peeked = yield* ctx.peek();
   let schemaRef: string | undefined;
   if (peeked.kind === 'schema-ref') {
     yield* ctx.next();
     schemaRef = peeked.uri;
   }
-  const value = yield* readStructuralDataValue(ctx);
+  const value = yield* readStructuralDataValue(ctx, limit, depth);
   return { ...(schemaRef !== undefined ? { schemaRef } : {}), value };
 }
 
-function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
+function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number): Task<CoreValue> {
   const e = yield* ctx.next();
   switch (e.kind) {
     case 'record-start': {
@@ -164,7 +186,7 @@ function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
         if (fieldName.kind !== 'field-name') {
           throw new TsonInternalError(`expected field-name, got '${fieldName.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx);
+        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
         fields.push({ name: fieldName.name, value });
       }
       yield* ctx.next(); // record-end
@@ -173,12 +195,12 @@ function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
     case 'map-start': {
       const entries: AstMapEntry[] = [];
       while ((yield* ctx.peek()).kind !== 'map-end') {
-        const key = yield* readStructuralDataValue(ctx);
+        const key = yield* readStructuralDataValue(ctx, limit, depth + 1);
         const arrow = yield* ctx.next();
         if (arrow.kind !== 'map-arrow') {
           throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx);
+        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
         entries.push({ key, value });
       }
       yield* ctx.next(); // map-end
@@ -187,7 +209,7 @@ function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
     case 'array-start': {
       const elements: ScopedValue[] = [];
       while ((yield* ctx.peek()).kind !== 'array-end') {
-        elements.push(yield* readStructuralScopedValue(ctx));
+        elements.push(yield* readStructuralScopedValue(ctx, limit, depth + 1));
       }
       yield* ctx.next(); // array-end
       return { kind: 'array', elements };
@@ -254,8 +276,8 @@ function checkTypeRef(
 // ---------------------------------------------------------------------------------------------
 
 /** Reads one data-value: its leading annotations and optional type-ref (§2.3), then its core-value. */
-function* readNode(ctx: ReadContext, preserve: boolean, depth = 0): Task<Value> {
-  if (depth >= MAX_NESTING_DEPTH) {
+function* readNode(ctx: ReadContext, preserve: boolean, limit: number, depth: number): Task<Value> {
+  if (depth >= limit) {
     // Thrown, not reported-and-recovered, even under a collecting receiver. A nesting bound is a
     // resource limit rather than a finding about one value: everything below this point is
     // unreachable, so there is nothing further to collect. Recovering by skipping would also
@@ -263,23 +285,23 @@ function* readNode(ctx: ReadContext, preserve: boolean, depth = 0): Task<Value> 
     // overflows the stack while discarding what the guard just refused to read.
     throw new TsonReadError({
       code: 'TYPE_MISMATCH',
-      message: `document nests deeper than ${String(MAX_NESTING_DEPTH)} levels (\u00a79.1)`,
+      message: nestingLimitMessage(limit),
       path: ctx.path(),
-      expected: `at most ${String(MAX_NESTING_DEPTH)} levels of nesting`,
+      expected: nestingLimitExpectation(limit),
       actual: 'deeper',
     });
   }
-  const annotations = yield* readStructuralAnnotations(ctx);
+  const annotations = yield* readStructuralAnnotations(ctx, limit);
   const typeRefName = yield* readTypeRefName(ctx);
   const peeked = yield* ctx.peek();
   const match = checkTypeRef(ctx, typeRefName, peeked, preserve);
   switch (peeked.kind) {
     case 'record-start':
-      return yield* readRecord(ctx, typeRefName, annotations, preserve, depth);
+      return yield* readRecord(ctx, typeRefName, annotations, preserve, limit, depth);
     case 'map-start':
-      return yield* readMap(ctx, typeRefName, annotations, preserve, depth);
+      return yield* readMap(ctx, typeRefName, annotations, preserve, limit, depth);
     case 'array-start':
-      return yield* readArray(ctx, typeRefName, annotations, preserve, depth);
+      return yield* readArray(ctx, typeRefName, annotations, preserve, limit, depth);
     case 'empty-brace':
       yield* ctx.next();
       return recordNode(new Map(), typeRefName, annotations);
@@ -304,6 +326,7 @@ function* readRecord(
   typeRefName: string | undefined,
   annotations: Annotations,
   preserve: boolean,
+  limit: number,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // record-start
@@ -330,7 +353,7 @@ function* readRecord(
           `'${fieldNameEvent.name}' stated again`,
         );
     }
-    const value = yield* readNode(ctx.field(fieldNameEvent.name), preserve, depth + 1);
+    const value = yield* readNode(ctx.field(fieldNameEvent.name), preserve, limit, depth + 1);
     fields.set(fieldNameEvent.name, value);
   }
   yield* ctx.next(); // record-end
@@ -342,6 +365,7 @@ function* readArray(
   typeRefName: string | undefined,
   annotations: Annotations,
   preserve: boolean,
+  limit: number,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // array-start
@@ -352,7 +376,7 @@ function* readArray(
     if (next.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    elements.push(yield* readNode(ctx.index(elements.length), preserve, depth + 1));
+    elements.push(yield* readNode(ctx.index(elements.length), preserve, limit, depth + 1));
   }
   yield* ctx.next(); // array-end
   return arrayNode(elements, typeRefName, annotations);
@@ -369,6 +393,7 @@ function* readMap(
   typeRefName: string | undefined,
   annotations: Annotations,
   preserve: boolean,
+  limit: number,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // map-start
@@ -383,7 +408,7 @@ function* readMap(
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
-    const key = yield* readNode(ctx, preserve, depth + 1);
+    const key = yield* readNode(ctx, preserve, limit, depth + 1);
     const identity = keyIdentity(key);
     const digest = identityDigest(identity);
     const bucket = seen.get(digest);
@@ -408,7 +433,7 @@ function* readMap(
     if (beforeValue.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    const value = yield* readNode(ctx.field(keySegment(key)), preserve, depth + 1);
+    const value = yield* readNode(ctx.field(keySegment(key)), preserve, limit, depth + 1);
     entries.push({ key, value });
   }
   yield* ctx.next(); // map-end

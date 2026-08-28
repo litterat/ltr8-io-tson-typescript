@@ -22,6 +22,7 @@
 export * from './core/position.js';
 export * from './core/errors.js';
 export * from './core/diagnostic.js';
+export * from './core/limits.js';
 export * from './io/bytes.js';
 export * from './lexer/token.js';
 export * from './stream/event.js';

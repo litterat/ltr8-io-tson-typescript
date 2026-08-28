@@ -42,9 +42,9 @@ export function* captureAnnotations(ctx: ReadContext): Task<Annotations> {
       yield* ctx.next();
       values.push({ name: start.name });
     } else {
-      const value = yield* parseDataValue(ctx, () => {
-        // No position tracking wanted for an annotation value read this way.
-      });
+      // No options: no position tracking is wanted for an annotation value read this way, and
+      // the default nesting bound applies (§9.1).
+      const value = yield* parseDataValue(ctx);
       const end = yield* ctx.next();
       if (end.kind !== 'annotation-end') {
         throw new Error(`expected the end of annotation '@${start.name}', found '${end.kind}'`);

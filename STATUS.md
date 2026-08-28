@@ -105,13 +105,19 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 ## Known gaps
 
 - **The read stack costs a host call frame per nesting level, and is bounded rather than
-  iterative.** §9.1 asks an implementation to bound nesting, and `MAX_NESTING_DEPTH` (512) does —
-  `parse` raises a `TsonParseError` with a position, `readTree`/`validate` a `TsonReadError`.
-  Before the bound the limit was the host's own call stack, reached around depth 750 and reported
-  as an uncaught `RangeError` out of the public API. The Tier 2 event stream has no such limit
-  (its explicit frame stack walks a million levels); making Tier 3 and the tree readers iterative
-  too is the proper fix, and the bound is what keeps the failure honest until then. The limit is
-  a constant, where §9.1 asks for a configurable one.
+  iterative.** §9.1's bound is `maxNestingDepth`, configurable per call (`parse`, `readTree`,
+  `validate`, `parseSchemaDocument`) or once on an instance (`createTson({ maxNestingDepth })`),
+  defaulting to 512. Lowering it is free; raising it is bounded by the host's own call stack —
+  around 750 levels for the Tier 3 parser — because the recursion is still real. Making Tier 3,
+  the schema grammar and the tree readers iterative the way the Tier 2 event stream already is
+  (its explicit frame stack walks a million levels) is the proper fix, and the bound is what keeps
+  the failure honest until then. Five distinct paths past the bound have been closed, each of
+  which reached a public entry point as an uncaught `RangeError`: a schema document's annotation
+  value, its nested array types and its nested choice types (all three inside
+  `resolveSchema`/`compile`, which matters most since a schema is routinely fetched from
+  elsewhere); a self-recursive schema type read through the compiled reader stack, which had no
+  bound at all; and an annotation chain (`@a:@a:@a:…`), which is a real descent with no brace or
+  bracket for a structural counter to see.
 
 - **`node10` type resolution fails for every subpath**, that resolver predating `exports`. The
   package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer on

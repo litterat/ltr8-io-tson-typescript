@@ -35,6 +35,7 @@ import { TsonInternalError, TsonNotImplementedError, TsonReadError } from '../co
 import type { Diagnostic, DiagnosticsReceiver, SchemaLocation } from '../core/diagnostic.js';
 import { collector, throwing } from '../core/diagnostic.js';
 import type { ByteInput } from '../io/bytes.js';
+import type { NestingLimitOptions } from '../core/limits.js';
 import { createDataStream } from '../stream/dataStream.js';
 import { createReadContext } from '../reader/context.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
@@ -281,9 +282,10 @@ export function* readValue(
   rootName: string,
   input: ByteInput,
   receiver: DiagnosticsReceiver,
+  options?: NestingLimitOptions,
 ): Task<Value> {
   const events = createDataStream(input);
-  const ctx = createReadContext(events, receiver);
+  const ctx = createReadContext(events, receiver, options);
   const start = yield* ctx.next();
   if (start.kind !== 'document-start') {
     throw new TsonInternalError(

@@ -16,6 +16,7 @@
 import type { Task } from '../io/bytes.js';
 import type { Position } from '../core/position.js';
 import type { DiagnosticCode, DiagnosticsReceiver, SchemaLocation } from '../core/diagnostic.js';
+import type { NestingLimitOptions } from '../core/limits.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -142,6 +143,7 @@ export interface ReadContext {
 export declare function createReadContext(
   events: EventSource,
   receiver: DiagnosticsReceiver,
+  options?: NestingLimitOptions,
 ): ReadContext;
 
 /**

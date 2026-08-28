@@ -52,6 +52,7 @@
  * `resolveImport` finds each one already registered and never needs to suspend.
  */
 import { TsonSchemaFetchError, TsonSchemaValidationError } from './core/errors.js';
+import type { NestingLimitOptions } from './core/limits.js';
 import { canonicalizeIdentity } from './link/identity.js';
 import { verifyContentHash } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
@@ -82,7 +83,7 @@ export interface SchemaSource {
 }
 
 /** Configures a {@link Tson}. Every field is optional; an empty `{}` builds an instance with no schema source and an empty registry. */
-export interface Config {
+export interface Config extends NestingLimitOptions {
   /**
    * Fetches a schema document beyond what this instance already has registered -- consulted only
    * by {@link Tson.preload}/{@link Tson.fetch}, never automatically during {@link
@@ -91,6 +92,19 @@ export interface Config {
    * throw {@link TsonSchemaFetchError} with reason `'not-permitted'` naming the missing source.
    */
   readonly schemaSource?: SchemaSource;
+}
+
+/**
+ * The nesting bound (§9.1) this instance applies to everything it does -- every schema it
+ * resolves, and every document it reads.
+ *
+ * Stated once on the instance rather than per call, because the whole reason to hold a `Tson` is
+ * to say a policy once. A schema is the more important half: it is routinely fetched from
+ * somewhere else, and a deeply nested annotation value or type expression in one used to exhaust
+ * the host call stack inside `resolveSchema` before this bound existed.
+ */
+function limitOf(config: Config): NestingLimitOptions {
+  return config.maxNestingDepth === undefined ? {} : { maxNestingDepth: config.maxNestingDepth };
 }
 
 function requireRegistered(
@@ -120,8 +134,9 @@ function importedFrom(schema: LinkedSchema): ImportedSchema {
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
   bytes: Uint8Array,
+  limit: NestingLimitOptions,
 ): LinkedSchema {
-  const document = runSync(parseSchemaDocument(fromBytes(bytes)));
+  const document = runSync(parseSchemaDocument(fromBytes(bytes), limit));
   const id = document.id;
   if (id === undefined) {
     throw new TsonSchemaValidationError(
@@ -171,8 +186,8 @@ export interface Tson {
    */
   preload(references: readonly string[]): Promise<void>;
 
-  parse(source: Uint8Array): ParsedDocument;
-  parse(source: AsyncByteSource): Promise<ParsedDocument>;
+  parse(source: Uint8Array, options?: NestingLimitOptions): ParsedDocument;
+  parse(source: AsyncByteSource, options?: NestingLimitOptions): Promise<ParsedDocument>;
   readTree(source: Uint8Array, options?: ReadTreeOptions): Value;
   readTree(source: AsyncByteSource, options?: ReadTreeOptions): Promise<Value>;
   validate(source: Uint8Array, options?: ReadTreeOptions): ValidationResult;
@@ -183,6 +198,7 @@ export interface Tson {
 /** Builds a {@link Tson}: an empty schema registry, and the flat front door bound onto one instance. See this module's own top note for the standard-library bootstrap sequence a schema-governed read needs before it. */
 export function createTson(config: Config = {}): Tson {
   const schemas = new Map<string, LinkedSchema>();
+  const limit = limitOf(config);
 
   function register(schema: LinkedSchema): void {
     schemas.set(canonicalizeIdentity(schema.id), schema);
@@ -190,7 +206,7 @@ export function createTson(config: Config = {}): Tson {
 
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {
     const bytes = typeof source === 'string' ? encodeUtf8(source) : source;
-    const linked = resolveAgainstRegistry(schemas, bytes);
+    const linked = resolveAgainstRegistry(schemas, bytes, limit);
     register(linked);
     return linked;
   }
@@ -214,7 +230,7 @@ export function createTson(config: Config = {}): Tson {
       }
       const bytes = await fetchReference(reference);
       await verifyContentHash(bytes, reference);
-      const linked = resolveAgainstRegistry(schemas, bytes);
+      const linked = resolveAgainstRegistry(schemas, bytes, limit);
       const declared = canonicalizeIdentity(linked.id);
       if (declared !== canonical) {
         throw new TsonSchemaValidationError(
@@ -234,9 +250,15 @@ export function createTson(config: Config = {}): Tson {
     compile: compileCore,
     fetch: fetchReference,
     preload,
-    parse,
-    readTree,
-    validate,
+    // Bound to this instance's limit rather than passed through bare, so `tson.parse(bytes)` and
+    // `tson.readTree(bytes)` obey the policy the instance was configured with. A caller's own
+    // per-call options still win: they are spread after the instance's.
+    parse: ((source: never, options?: NestingLimitOptions) =>
+      parse(source, { ...limit, ...options })) as Tson['parse'],
+    readTree: ((source: never, options?: ReadTreeOptions) =>
+      readTree(source, { ...limit, ...options })) as Tson['readTree'],
+    validate: ((source: never, options?: ReadTreeOptions) =>
+      validate(source, { ...limit, ...options })) as Tson['validate'],
     write,
   };
 }

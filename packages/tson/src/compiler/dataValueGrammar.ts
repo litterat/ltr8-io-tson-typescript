@@ -39,6 +39,7 @@ import {
   expectFieldNameToken,
   isAlwaysMapStart,
   isBareTokenType,
+  nested,
   parseError,
   parseNamedDirective,
   peekDirectiveName,
@@ -56,7 +57,13 @@ export function* parseAnnotationList(state: CursorState): Task<Annotation[]> {
   return annotations;
 }
 
-/** `"@" unquoted-token [ ":" data-value ]` (§3.1). */
+/**
+ * `"@" unquoted-token [ ":" data-value ]` (§3.1).
+ *
+ * Bounded (§9.1) even though an annotation is not structural nesting: its value is a data value in
+ * its own right, so `@a:@a:@a:...` re-enters this production once per annotation with no braces or
+ * brackets for {@link parseCoreValue}'s own guard to count.
+ */
 export function* parseAnnotation(state: CursorState): Task<Annotation> {
   const at = yield* advance(state);
   const name = yield* peekToken(state);
@@ -74,7 +81,7 @@ export function* parseAnnotation(state: CursorState): Task<Annotation> {
   const afterName = yield* peekToken(state);
   if (afterName.type === 'colon' && adjacentTo(name, afterName)) {
     yield* advance(state); // ':'
-    const value = yield* parseDataValue(state);
+    const value = yield* nested(state, afterName, () => parseDataValue(state));
     return { name: name.text, value };
   }
 
@@ -172,12 +179,17 @@ function isStructuralDelimiter(type: string): boolean {
 export function* parseCoreValue(state: CursorState): Task<CoreValue> {
   const t = yield* peekToken(state);
   switch (t.type) {
+    // The two cases that can re-enter this production, and therefore the only two that need
+    // bounding (§9.1) -- everything else below consumes one token and returns. A schema document
+    // reaches here through an annotation value or a constructor-application payload, and a
+    // deeply nested one used to exhaust the host call stack inside `resolveSchema`/`compile`.
     case 'lbrace':
-      return yield* parseBraceValue(state);
-    case 'lbracket': {
-      yield* advance(state);
-      return yield* parseArrayTail(state);
-    }
+      return yield* nested(state, t, () => parseBraceValue(state));
+    case 'lbracket':
+      return yield* nested(state, t, function* (): Task<CoreValue> {
+        yield* advance(state);
+        return yield* parseArrayTail(state);
+      });
     case 'absent-token':
       yield* advance(state);
       return { kind: 'absent' } satisfies AbsentValue;

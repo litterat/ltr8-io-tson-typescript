@@ -189,6 +189,21 @@ npx @ltr8/tson-cli hash person.tn        # prints the canonical content hash (§
 `meta-kernel`/`meta.tn`/`core.tn`, so they work offline with no `SchemaSource` configured. Exit codes: `0` valid, `1`
 invalid input, `2` usage error, `70` library gap or internal fault.
 
+### Resource limits
+
+§9.1 asks an implementation to bound nesting depth, and every recursive layer here costs a host
+call frame per level. `maxNestingDepth` (default 512) is that bound, per call or once per instance:
+
+```ts
+parse(bytes, { maxNestingDepth: 64 });
+readTree(bytes, { schema, root: 'order', maxNestingDepth: 64 });
+createTson({ maxNestingDepth: 64 }); // applies to every schema it resolves and document it reads
+```
+
+A document past the limit is refused with a typed error and a position, never a host
+`RangeError`. Lowering it is free; raising it is bounded by the host's own stack, since the
+recursion is real — see [STATUS.md](STATUS.md).
+
 ## What is and isn't implemented
 
 Both spec parts are implemented and the shared conformance suite passes in full — see

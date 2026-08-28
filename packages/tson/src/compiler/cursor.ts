@@ -16,6 +16,12 @@
  */
 
 import { TsonInternalError, TsonParseError } from '../core/errors.js';
+import {
+  maxNestingDepthOf,
+  nestingLimitExpectation,
+  nestingLimitMessage,
+  type NestingLimitOptions,
+} from '../core/limits.js';
 import { START, type Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
@@ -32,16 +38,59 @@ export interface CursorState {
   pending: Token | undefined;
   /** End position of the most recently consumed token. */
   lastEnd: Position;
+  /**
+   * How many levels of nesting are currently open, maintained by {@link nested}.
+   *
+   * Mutable state on the cursor rather than a parameter threaded through thirty-five mutually
+   * recursive productions. That is safe here for a reason worth stating, because the general rule
+   * in this codebase is the opposite: a `CursorState` belongs to exactly one `parseSchemaDocument`
+   * call, and one parse is a single generator chain that suspends and resumes as a unit. Two
+   * parses never share a cursor, so two suspended `Task`s can never interleave on this counter.
+   */
+  depth: number;
+  /** The limit {@link depth} is checked against (§9.1). */
+  readonly maxNestingDepth: number;
 }
 
 /** Creates a {@link CursorState} over `input`. Nothing is read until driven. */
-export function createCursor(input: ByteInput): CursorState {
+export function createCursor(input: ByteInput, options?: NestingLimitOptions): CursorState {
   return {
     lexer: createLexer(input),
     current: undefined,
     pending: undefined,
     lastEnd: START,
+    depth: 0,
+    maxNestingDepth: maxNestingDepthOf(options),
   };
+}
+
+/**
+ * Runs `body` one level deeper, refusing a document that nests past the cursor's limit (§9.1).
+ *
+ * Wrapped around each production that can re-enter itself -- `parseTypeRef` in the schema grammar
+ * and `parseCoreValue` in the data-value grammar -- which between them sit on every cycle in
+ * either grammar, so guarding those two bounds both. Without it a deeply nested annotation value
+ * or type expression in a *schema document* exhausts the host call stack and escapes
+ * `resolveSchema`/`compile` as an uncaught `RangeError`, which matters more than the data-side
+ * case it mirrors: a schema is routinely fetched from somewhere else.
+ *
+ * The decrement is in a `finally` so a throw from deeper in the grammar cannot leave the counter
+ * raised. The parse is over at that point, but a counter that only ever climbs is the kind of
+ * thing that becomes wrong later.
+ */
+export function* nested<T>(state: CursorState, at: Token, body: () => Task<T>): Task<T> {
+  if (state.depth >= state.maxNestingDepth) {
+    throw new TsonParseError(nestingLimitMessage(state.maxNestingDepth), at.start, {
+      expected: nestingLimitExpectation(state.maxNestingDepth),
+      actual: 'deeper',
+    });
+  }
+  state.depth += 1;
+  try {
+    return yield* body();
+  } finally {
+    state.depth -= 1;
+  }
 }
 
 function* fetchToken(state: CursorState): Task<Token> {

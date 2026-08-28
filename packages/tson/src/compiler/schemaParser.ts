@@ -78,12 +78,14 @@ import {
   expectFieldNameToken,
   mismatch,
   parseError,
+  nested,
   parseNamedDirective,
   peekDirectiveName,
   peekSecond,
   peekToken,
   tokenFormOf,
 } from './cursor.js';
+import type { NestingLimitOptions } from '../core/limits.js';
 import { parseAnnotationList, parseCoreValue } from './dataValueGrammar.js';
 
 /**
@@ -92,8 +94,11 @@ import { parseAnnotationList, parseCoreValue } from './dataValueGrammar.js';
  * generator-returning entry point in this stack, drive the returned {@link Task} with `runSync`
  * (complete input) or `runAsync` (chunked input), per `io/bytes.ts`.
  */
-export function* parseSchemaDocument(input: ByteInput): Task<SchemaDocument> {
-  const state = createCursor(input);
+export function* parseSchemaDocument(
+  input: ByteInput,
+  options?: NestingLimitOptions,
+): Task<SchemaDocument> {
+  const state = createCursor(input, options);
   return yield* parseDocumentBody(state);
 }
 
@@ -569,14 +574,19 @@ function* parseGroupMember(state: CursorState): Task<GroupMember> {
  * one-line fix an author cannot guess from a token-level complaint.
  */
 function* parseTypeRef(state: CursorState): Task<TypeRef> {
+  // Every cycle in this grammar passes through here: a choice's variants, a bracket's element
+  // types, a map's key and value, and a generic's type arguments all come back to `parseTypeRef`.
+  // One guard at this point therefore bounds the whole type-expression grammar (§9.1), where
+  // guarding each of those separately would have to be got right four times over.
+  const here = yield* peekToken(state);
   if (yield* check(state, 'lparen')) {
-    return yield* parseChoiceRef(state);
+    return yield* nested(state, here, () => parseChoiceRef(state));
   }
   if (yield* check(state, 'lbracket')) {
-    return yield* parseBracket(state);
+    return yield* nested(state, here, () => parseBracket(state));
   }
   if (yield* check(state, 'lbrace')) {
-    return yield* parseMap(state);
+    return yield* nested(state, here, () => parseMap(state));
   }
   if (yield* check(state, 'bang')) {
     const here = yield* peekToken(state);

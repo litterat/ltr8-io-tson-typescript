@@ -66,11 +66,12 @@ import type {
   TupleBinding,
   VariantBinding,
 } from '../bind/binding.js';
-import { TsonAtomTypeError, TsonInternalError } from '../core/errors.js';
+import { TsonAtomTypeError, TsonInternalError, TsonReadError } from '../core/errors.js';
+import { nestingLimitExpectation, nestingLimitMessage } from '../core/limits.js';
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
 import type { TsonEvent } from '../stream/event.js';
-import { lookingAhead } from './context.js';
+import { lookingAhead, nestingLimitOf } from './context.js';
 import type { ReadContext, TypeReader } from './contracts.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -297,7 +298,11 @@ function describeEvent(e: TsonEvent): string {
 // the only case this layer can ever be in, so it is the only case implemented.
 // ---------------------------------------------------------------------------------------------
 
-function* readStructuralAnnotations(ctx: ReadContext): Task<readonly Annotation[]> {
+function* readStructuralAnnotations(
+  ctx: ReadContext,
+  limit: number,
+  depth = 0,
+): Task<readonly Annotation[]> {
   const out: Annotation[] = [];
   for (;;) {
     const peeked = yield* ctx.peek();
@@ -306,37 +311,53 @@ function* readStructuralAnnotations(ctx: ReadContext): Task<readonly Annotation[
     let value: DataValue | undefined;
     const afterStart = yield* ctx.peek();
     if (afterStart.kind !== 'annotation-end') {
-      value = yield* readStructuralDataValue(ctx);
+      // One level deeper: an annotation's value is a data value, so `@a:@a:@a:...` is a real
+      // descent even though it opens no brace or bracket, and it is the one this stack has no
+      // path step to count (§9.1). Unbounded, it exhausted the host stack out of `readTree`.
+      value = yield* readStructuralDataValue(ctx, limit, depth + 1);
     }
     yield* ctx.next(); // annotation-end
     out.push({ name: peeked.name, ...(value !== undefined ? { value } : {}) });
   }
 }
 
-function* readStructuralDataValue(ctx: ReadContext): Task<DataValue> {
-  const annotations = yield* readStructuralAnnotations(ctx);
+function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): Task<DataValue> {
+  if (depth >= limit) {
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message: nestingLimitMessage(limit),
+      path: ctx.path(),
+      expected: nestingLimitExpectation(limit),
+      actual: 'deeper',
+    });
+  }
+  const annotations = yield* readStructuralAnnotations(ctx, limit, depth);
   let typeRef: string | undefined;
   const peeked = yield* ctx.peek();
   if (peeked.kind === 'type-ref') {
     yield* ctx.next();
     typeRef = peeked.name;
   }
-  const coreValue = yield* readStructuralCoreValue(ctx);
+  const coreValue = yield* readStructuralCoreValue(ctx, limit, depth);
   return { annotations, ...(typeRef !== undefined ? { typeRef } : {}), coreValue };
 }
 
-function* readStructuralScopedValue(ctx: ReadContext): Task<ScopedValue> {
+function* readStructuralScopedValue(
+  ctx: ReadContext,
+  limit: number,
+  depth: number,
+): Task<ScopedValue> {
   const peeked = yield* ctx.peek();
   let schemaRef: string | undefined;
   if (peeked.kind === 'schema-ref') {
     yield* ctx.next();
     schemaRef = peeked.uri;
   }
-  const value = yield* readStructuralDataValue(ctx);
+  const value = yield* readStructuralDataValue(ctx, limit, depth);
   return { ...(schemaRef !== undefined ? { schemaRef } : {}), value };
 }
 
-function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
+function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number): Task<CoreValue> {
   const e = yield* ctx.next();
   switch (e.kind) {
     case 'record-start': {
@@ -346,7 +367,7 @@ function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
         if (fieldName.kind !== 'field-name') {
           throw new TsonInternalError(`expected field-name, got '${fieldName.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx);
+        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
         fields.push({ name: fieldName.name, value });
       }
       yield* ctx.next(); // record-end
@@ -355,12 +376,12 @@ function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
     case 'map-start': {
       const entries: MapEntry[] = [];
       while ((yield* ctx.peek()).kind !== 'map-end') {
-        const key = yield* readStructuralDataValue(ctx);
+        const key = yield* readStructuralDataValue(ctx, limit, depth + 1);
         const arrow = yield* ctx.next();
         if (arrow.kind !== 'map-arrow') {
           throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx);
+        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
         entries.push({ key, value });
       }
       yield* ctx.next(); // map-end
@@ -369,7 +390,7 @@ function* readStructuralCoreValue(ctx: ReadContext): Task<CoreValue> {
     case 'array-start': {
       const elements: ScopedValue[] = [];
       while ((yield* ctx.peek()).kind !== 'array-end') {
-        elements.push(yield* readStructuralScopedValue(ctx));
+        elements.push(yield* readStructuralScopedValue(ctx, limit, depth + 1));
       }
       yield* ctx.next(); // array-end
       return { kind: 'array', elements };
@@ -438,7 +459,7 @@ function* readRecord<T>(
   // an annotationsCarrier -- see FieldSlot.unbound's own doc.
   let annotations: Annotations = EMPTY_ANNOTATIONS;
   if (binding.annotationsCarrier !== undefined) {
-    const values = yield* readStructuralAnnotations(ctx);
+    const values = yield* readStructuralAnnotations(ctx, nestingLimitOf(ctx));
     annotations = values.length === 0 ? EMPTY_ANNOTATIONS : { values };
   } else {
     yield* skipAnnotations(ctx);
@@ -844,7 +865,7 @@ function* readAnnotated<T>(
   ctx: ReadContext,
   readAtom: AtomReader,
 ): Task<T> {
-  const values = yield* readStructuralAnnotations(ctx);
+  const values = yield* readStructuralAnnotations(ctx, nestingLimitOf(ctx));
   const annotations: Annotations = values.length === 0 ? EMPTY_ANNOTATIONS : { values };
   const inner = yield* readBound(binding.value, ctx, readAtom);
   return binding.construct(inner, annotations);

@@ -8,6 +8,7 @@
  * queryable value tree instead reaches for `readTree`/`validate`.
  */
 import type { ByteInput, Task } from '../io/bytes.js';
+import type { NestingLimitOptions } from '../core/limits.js';
 import { parseDocument, type ParsedDocument } from '../compiler/dataParser.js';
 import {
   type AsyncByteSource,
@@ -18,9 +19,8 @@ import {
 
 export type { ParsedDocument } from '../compiler/dataParser.js';
 
-function parseTask(input: ByteInput): Task<ParsedDocument> {
-  return parseDocument(input);
-}
+/** What a caller may configure about {@link parse}: §9.1's nesting bound, and nothing else. */
+export type ParseSourceOptions = NestingLimitOptions;
 
 /**
  * Parses `source` into a {@link ParsedDocument} -- `document` is the parse-preserving AST (§2,
@@ -31,11 +31,18 @@ function parseTask(input: ByteInput): Task<ParsedDocument> {
  * rather than after buffering the whole document (`CLAUDE.md`: "memory is proportional to
  * nesting depth").
  */
-export function parse(source: Uint8Array): ParsedDocument;
-export function parse(source: AsyncByteSource): Promise<ParsedDocument>;
-export function parse(source: ByteSource): ParsedDocument | Promise<ParsedDocument> {
+export function parse(source: Uint8Array, options?: ParseSourceOptions): ParsedDocument;
+export function parse(
+  source: AsyncByteSource,
+  options?: ParseSourceOptions,
+): Promise<ParsedDocument>;
+export function parse(
+  source: ByteSource,
+  options?: ParseSourceOptions,
+): ParsedDocument | Promise<ParsedDocument> {
+  const task = (input: ByteInput): Task<ParsedDocument> => parseDocument(input, options);
   if (source instanceof Uint8Array) {
-    return runOverBytes(source, parseTask);
+    return runOverBytes(source, task);
   }
-  return runOverAsyncSource(source, parseTask);
+  return runOverAsyncSource(source, task);
 }

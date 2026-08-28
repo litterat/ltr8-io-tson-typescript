@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { parse, readTree, validate } from '../src/index.js';
-import { MAX_NESTING_DEPTH } from '../src/compiler/dataParser.js';
-import { TsonParseError, TsonReadError } from '../src/core/errors.js';
+import { createTson, parse, readTree, validate } from '../src/index.js';
+import {
+  DEFAULT_MAX_NESTING_DEPTH as MAX_NESTING_DEPTH,
+  maxNestingDepthOf,
+} from '../src/core/limits.js';
+import { TsonParseError, TsonReadError, TsonSchemaValidationError } from '../src/core/errors.js';
+import { compile } from '../src/compiler/compile.js';
+import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import { createDataStream } from '../src/stream/dataStream.js';
-import { fromBytes, runSync, type Task } from '../src/io/bytes.js';
+import { fromBytes, fromString, runSync, type Task } from '../src/io/bytes.js';
+import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 /**
  * §9.1 names deeply nested structures a denial-of-service vector and asks an implementation to
@@ -78,5 +84,153 @@ describe('the public read entry points bound nesting depth (§9.1)', () => {
       })(),
     );
     expect(counted).toBeGreaterThan(100_000);
+  });
+});
+
+describe('the limit is configurable (§9.1 asks for a bound, not for this number)', () => {
+  it('parse honours a lower limit', () => {
+    expect(() => parse(nested(20), { maxNestingDepth: 20 })).not.toThrow();
+    expect(() => parse(nested(21), { maxNestingDepth: 20 })).toThrow(TsonParseError);
+  });
+
+  it('names the configured limit in the message, not the default', () => {
+    try {
+      parse(nested(21), { maxNestingDepth: 20 });
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect((error as TsonParseError).message).toContain('20 levels');
+      expect((error as TsonParseError).expected).toBe('at most 20 levels of nesting');
+    }
+  });
+
+  it.each([
+    ['readTree', readTree as (b: Uint8Array, o: { maxNestingDepth: number }) => unknown],
+    ['validate', validate as (b: Uint8Array, o: { maxNestingDepth: number }) => unknown],
+  ])('%s honours a lower limit', (_name, read) => {
+    expect(() => read(nested(20), { maxNestingDepth: 20 })).not.toThrow();
+    expect(() => read(nested(21), { maxNestingDepth: 20 })).toThrow(TsonReadError);
+  });
+
+  it('honours a higher one, so a document past the default can be read deliberately', () => {
+    // Raising is bounded by the host's own call stack, which this tier still costs a frame per
+    // level against -- see `core/limits.ts`. 520 is past the default and far below any host's
+    // limit, which is the range a raise is actually useful in.
+    expect(() => parse(nested(520))).toThrow(TsonParseError);
+    expect(() => parse(nested(520), { maxNestingDepth: 600 })).not.toThrow();
+    expect(() => readTree(nested(520), { maxNestingDepth: 600 })).not.toThrow();
+  });
+
+  it('is stated once on a Tson instance and applies to everything it does', () => {
+    const tson = createTson({ maxNestingDepth: 20 });
+    expect(() => tson.parse(nested(21))).toThrow(TsonParseError);
+    expect(() => tson.readTree(nested(21))).toThrow(TsonReadError);
+    expect(() => tson.parse(nested(20))).not.toThrow();
+  });
+
+  it('refuses a limit that is not a positive integer, rather than silently taking it', () => {
+    // A limit of 0 would refuse every document including an empty one, and a negative or
+    // fractional one is a configuration mistake that would otherwise surface as a document being
+    // rejected for a reason having nothing to do with the document.
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => maxNestingDepthOf({ maxNestingDepth: bad })).toThrow(TsonSchemaValidationError);
+    }
+    expect(maxNestingDepthOf()).toBe(MAX_NESTING_DEPTH);
+    expect(maxNestingDepthOf({})).toBe(MAX_NESTING_DEPTH);
+    expect(maxNestingDepthOf({ maxNestingDepth: 1 })).toBe(1);
+  });
+});
+
+describe('a schema document is bounded too, on every path into it', () => {
+  // Worse than the data-side case, because a schema is routinely fetched from somewhere else:
+  // each of these used to exhaust the host call stack inside `resolveSchema`/`compile` and escape
+  // as an uncaught RangeError.
+  const HEADER = '!!id:"test://deep.tn"\n!!meta:"https://tson.io/2026/33/m/meta.tn"\n';
+
+  const VECTORS: readonly (readonly [string, (n: number) => string])[] = [
+    [
+      'an annotation value',
+      (n) => `${HEADER}@x:${'['.repeat(n)}${']'.repeat(n)}\n{ t => { f: text } }\n`,
+    ],
+    ['a nested array type', (n) => `${HEADER}{ t => ${'['.repeat(n)}text${']'.repeat(n)} }\n`],
+    [
+      'a nested choice type',
+      (n) => `${HEADER}{ t => ${'('.repeat(n)}text|text${')'.repeat(n)} }\n`,
+    ],
+  ];
+
+  it.each(VECTORS)('%s is refused rather than overflowing the stack', (_name, make) => {
+    let thrown: unknown;
+    try {
+      runSync(parseSchemaDocument(fromString(make(50_000))));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TsonParseError);
+    expect((thrown as TsonParseError).message).toContain('nests deeper');
+  });
+
+  it.each(VECTORS)('%s honours a configured limit', (_name, make) => {
+    expect(() =>
+      runSync(parseSchemaDocument(fromString(make(30)), { maxNestingDepth: 20 })),
+    ).toThrow(TsonParseError);
+  });
+});
+
+describe('a recursive schema-governed read is bounded (the compiled reader stack)', () => {
+  // The bound the compiled readers had none of: `readNode` in the schemaless reader was guarded,
+  // but a `CompiledSchema` recursing through `ctx.field`/`ctx.index` was not, so a self-recursive
+  // schema type reading a deep document overflowed the host stack and escaped `readTree`.
+  const compiled = compile(
+    resolveUserSchema(`!!id:"test://recursive.tn"
+!!meta:"https://tson.io/2026/33/m/meta.tn"
+!!import:"https://tson.io/2026/33/m/core.tn"
+{
+  node => { children: [node] }
+}
+`),
+  );
+
+  function tree(depth: number): Uint8Array {
+    return new TextEncoder().encode(
+      `${'{ children: [ '.repeat(depth)}{ children: [] }${' ] }'.repeat(depth)}`,
+    );
+  }
+
+  it('reads a document within the limit', () => {
+    expect(() => readTree(tree(50), { schema: compiled, root: 'node' })).not.toThrow();
+  });
+
+  it('refuses a hostile one without a host error', () => {
+    let thrown: unknown;
+    try {
+      readTree(tree(5000), { schema: compiled, root: 'node' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TsonReadError);
+    expect(thrown).not.toBeInstanceOf(RangeError);
+  });
+
+  it('honours a configured limit', () => {
+    expect(() =>
+      readTree(tree(30), { schema: compiled, root: 'node', maxNestingDepth: 20 }),
+    ).toThrow(TsonReadError);
+  });
+});
+
+describe('an annotation chain does not reset the depth counter', () => {
+  it('counts an annotation value as nesting, like any other data value', () => {
+    // `parseDataValue` used to call `parseAnnotation` without the current depth, so every
+    // annotation started the count again -- and a document alternating annotations with arrays
+    // walked straight past the bound into the host stack limit.
+    const doc = new TextEncoder().encode(`${'@a:['.repeat(20_000)}1${']'.repeat(20_000)}`);
+    let thrown: unknown;
+    try {
+      parse(doc);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown).not.toBeInstanceOf(RangeError);
   });
 });

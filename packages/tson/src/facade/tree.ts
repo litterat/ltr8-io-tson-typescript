@@ -49,6 +49,7 @@ import {
   schemalessTreeReader,
   type SchemalessTreeReaderOptions,
 } from '../reader/schemaless/index.js';
+import type { NestingLimitOptions } from '../core/limits.js';
 import type { CompiledSchema, ValidationResult } from '../compiler/compile.js';
 import { missingNode, type Value } from '../tree/nodes.js';
 import {
@@ -61,7 +62,7 @@ import {
 export type { CompiledSchema, ValidationResult } from '../compiler/compile.js';
 
 /** Reads `rootName` from a {@link CompiledSchema} already built (`compile()`, `@ltr8/tson/schema`'s resolve/link pipeline, or `createTson`'s own `compile`). */
-export interface SchemaGovernedReadOptions {
+export interface SchemaGovernedReadOptions extends NestingLimitOptions {
   readonly schema: CompiledSchema;
   readonly root: string;
 }
@@ -77,11 +78,12 @@ function pickReader(options: ReadTreeOptions | undefined): TypeReader<Value> {
   if (options?.schema !== undefined) {
     return options.schema.reader(options.root);
   }
-  return schemalessTreeReader(
-    options?.preserveUnknownTypeRefs === undefined
+  return schemalessTreeReader({
+    ...(options?.preserveUnknownTypeRefs === undefined
       ? {}
-      : { preserveUnknownTypeRefs: options.preserveUnknownTypeRefs },
-  );
+      : { preserveUnknownTypeRefs: options.preserveUnknownTypeRefs }),
+    ...(options?.maxNestingDepth === undefined ? {} : { maxNestingDepth: options.maxNestingDepth }),
+  });
 }
 
 /**
@@ -132,9 +134,12 @@ function* readDocumentValue(
   reader: TypeReader<Value>,
   input: ByteInput,
   receiver: DiagnosticsReceiver,
+  options: ReadTreeOptions | undefined,
 ): Task<Value> {
   const events = createDataStream(input);
-  const ctx: ReadContext = createReadContext(events, receiver);
+  // The schemaless reader carries the bound itself; the compiled one gets it here, since a
+  // `CompiledSchema` is built long before the read that uses it and cannot know the limit.
+  const ctx: ReadContext = createReadContext(events, receiver, options);
   const start = yield* ctx.next();
   if (start.kind !== 'document-start') {
     throw new TsonInternalError(
@@ -187,9 +192,10 @@ function* readWholeDocument(
   reader: TypeReader<Value>,
   input: ByteInput,
   receiver: DiagnosticsReceiver,
+  options: ReadTreeOptions | undefined,
 ): Task<Value> {
   try {
-    return yield* readDocumentValue(reader, input, receiver);
+    return yield* readDocumentValue(reader, input, receiver, options);
   } catch (error) {
     if (isBaseSyntaxError(error)) {
       reportCaused(
@@ -212,7 +218,7 @@ function readTreeTask(
   receiver: DiagnosticsReceiver,
 ): (input: ByteInput) => Task<Value> {
   const reader = pickReader(options);
-  return (input: ByteInput): Task<Value> => readWholeDocument(reader, input, receiver);
+  return (input: ByteInput): Task<Value> => readWholeDocument(reader, input, receiver, options);
 }
 
 /**
