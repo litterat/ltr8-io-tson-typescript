@@ -818,19 +818,55 @@ function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomRea
 // Variant (§3.2's !type-ref dispatch)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Whether reading `ref` begins by consuming the value's *own* leading annotation run -- true only
+ * for {@link AnnotatedBinding}, which is the one binding that keeps those annotations rather than
+ * discarding them as framing, and for a {@link BridgeBinding} wrapping one.
+ *
+ * An annotated binding nested deeper (a record field's own binding, say) does not count: it reads
+ * that field's annotations, not this value's.
+ */
+function keepsLeadingAnnotations(ref: BindingRef<unknown>): boolean {
+  const resolved = resolveRef(ref);
+  if (resolved.kind === 'annotated') return true;
+  if (resolved.kind === 'bridge') return keepsLeadingAnnotations(resolved.wire);
+  return false;
+}
+
 function* readVariant<T>(
   binding: VariantBinding<T>,
   ctx: ReadContext,
   readAtom: AtomReader,
 ): Task<T> {
-  // Looked ahead, never consumed here: whichever member's own reader runs next must see the whole
-  // data-value -- its annotations, its type-ref, its core-value -- exactly as it would if nothing
-  // had dispatched to it first (`binding.ts`'s own doc on read direction).
-  const typeRefName = yield* lookingAhead(ctx, function* (aheadCtx): Task<string | undefined> {
-    yield* skipAnnotations(aheadCtx);
-    const peeked = yield* aheadCtx.peek();
-    return peeked.kind === 'type-ref' ? peeked.name : undefined;
-  });
+  // §3.2's dispatch has to reach the `!type-ref`, which sits behind a run of annotations of any
+  // length (`data-value = *annotation [type-ref] core-value`).
+  //
+  // **Consumed outright when no member would keep them.** Every reader except `readAnnotated`
+  // treats a value's leading annotations as framing and discards them, so for a variant whose
+  // members all do that, skipping the run here and never replaying it is indistinguishable from
+  // skipping it one call later -- and it means the run is walked once, with nothing retained.
+  // Replaying costs a buffer that grows with the annotation run rather than with nesting depth,
+  // which is exactly the shape `CLAUDE.md` says this stack does not have.
+  //
+  // **Looked ahead and rewound only when a member really would keep them**, because there the
+  // member's own reader must see the whole data-value exactly as it would if nothing had
+  // dispatched to it first (`binding.ts`'s own doc on read direction).
+  const replay = binding.members.some((member) => keepsLeadingAnnotations(member.binding));
+  let typeRefName: string | undefined;
+  if (replay) {
+    typeRefName = yield* lookingAhead(ctx, function* (aheadCtx): Task<string | undefined> {
+      yield* skipAnnotations(aheadCtx);
+      const peeked = yield* aheadCtx.peek();
+      return peeked.kind === 'type-ref' ? peeked.name : undefined;
+    });
+  } else {
+    yield* skipAnnotations(ctx);
+    const peeked = yield* ctx.peek();
+    typeRefName = peeked.kind === 'type-ref' ? peeked.name : undefined;
+  }
+  // What is left of the value on the error paths below: the whole data-value when the annotations
+  // were rewound, the core-value alone when they were consumed.
+  const skipRest = replay ? skipDataValue : skipRemainingValue;
   const names = binding.members.map((m) => m.wireName).join('/');
   if (typeRefName === undefined) {
     ctx.report(
@@ -839,7 +875,7 @@ function* readVariant<T>(
       `a !type-ref naming one of (${names})`,
       '(none)',
     );
-    yield* skipDataValue(ctx);
+    yield* skipRest(ctx);
     return abandonedValue() as T;
   }
   const member = binding.members.find((m) => m.wireName === typeRefName);
@@ -850,10 +886,16 @@ function* readVariant<T>(
       `one of (${names})`,
       `!${typeRefName}`,
     );
-    yield* skipDataValue(ctx);
+    yield* skipRest(ctx);
     return abandonedValue() as T;
   }
   return (yield* readBound(member.binding, ctx, readAtom)) as T;
+}
+
+/** `[type-ref] core-value` -- what a data-value is once its annotations have already been consumed. */
+function* skipRemainingValue(ctx: ReadContext): Task<void> {
+  yield* skipTypeRef(ctx);
+  yield* skipCoreValue(ctx);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -173,12 +173,22 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   resolved-output writer that cannot name the applied constructor is a §8.1 conformance gap in
   both implementations, and the reference's own fixture test is structurally unable to see it.
 
-- **A variant's dispatch lookahead buffers a value's whole annotation run.** `readVariant` skips
-  annotations inside `lookingAhead` to find the `!type-ref`, so the events it rewinds grow with
-  the annotation count rather than with nesting depth. The rewind itself is now linear and no
-  longer overflows the stack, but the buffering is a real departure from CLAUDE.md's
-  "memory is proportional to nesting depth" and wants the annotations captured rather than
-  skipped-and-replayed. Wave 7's memory sweep is where this gets measured.
+- **Tree mode's variant dispatch still buffers a value's whole annotation run.** §3.2's
+  `!type-ref` sits behind a run of annotations of any length, so a dispatch has to reach past it,
+  and looking ahead means buffering what it read to rewind — events that grow with the annotation
+  count rather than with nesting depth, which is a departure from CLAUDE.md's "memory is
+  proportional to nesting depth".
+
+  **Bind mode no longer does.** Every binding except `annotated` treats a value's leading
+  annotations as framing and discards them, so where no member of a variant would keep them,
+  `reader/bind.ts` consumes the run outright instead of looking ahead over it — indistinguishable
+  from consuming it one call later, and nothing is retained. It still rewinds when a member really
+  would keep them.
+
+  Tree mode (`compiler/choiceReader.ts`) has no such case: every `tree/nodes.ts` node carries its
+  own `annotations`, so the variant's reader must see the run intact. Closing it there means a
+  `TypeReader` that can be handed annotations already read — a change to the compiled reader
+  contract, not to that file.
 
 - **`annotations` is bound as an ordinary wire field, not as a record's annotations carrier.**
   `bind/binding.ts` types `annotationsCarrier` against `annotations/index.ts`'s

@@ -11,6 +11,14 @@
  * *rule* itself (look ahead past annotations for the type-ref, never consume, delegate the whole
  * value unconsumed) has nothing schema- or binding-specific in it, so it is restated here rather
  * than factored out across a boundary this package cannot cross.
+ *
+ * **The lookahead always rewinds here, where bind mode can sometimes skip that.** Bind mode
+ * consumes the annotation run outright when no member would keep it -- most bindings treat a
+ * value's leading annotations as framing and discard them, so consuming here is the same as
+ * consuming one call later, and nothing is buffered. Tree mode has no such case: every node in
+ * `tree/nodes.ts` carries its own `annotations`, so the variant's reader must see the run intact,
+ * and it has to be rewound. Closing that would mean a `TypeReader` able to be handed annotations
+ * already read, which is a change to the compiled reader contract rather than to this file.
  */
 import type { Task } from '../io/bytes.js';
 import type { SchemaLocation } from '../core/diagnostic.js';

@@ -330,6 +330,68 @@ describe('bindReader -- variant (§3.2 !type-ref dispatch)', () => {
     // proves dispatch doesn't eat the type-ref/annotations before the member gets a turn to.
     expect(readWith(unionReader, '@note !a { n: 5 }')).toEqual({ kind: 'a', n: 5 });
   });
+
+  it('reads a long annotation run without replaying it, and still finds the type-ref', () => {
+    // Dispatch has to reach past the annotations to the `!type-ref`. Where no member would KEEP
+    // those annotations -- every reader but `readAnnotated` treats them as framing and discards
+    // them -- they are consumed rather than looked ahead over and rewound, so nothing is retained.
+    // Whether it retains them or not is not directly observable; that the value still reads
+    // correctly through either path is, and that is the property a change here could break.
+    const annotations = Array.from({ length: 2000 }, (_, i) => `@n${String(i)}:[1 2 3]`).join(' ');
+    expect(readWith(unionReader, `${annotations} !a { n: 7 }`)).toEqual({ kind: 'a', n: 7 });
+  });
+
+  it('consumes exactly one value when dispatch fails, so the next one still aligns', () => {
+    // The risky half of consuming rather than rewinding: the "no member matched" path must skip
+    // what is LEFT of the value (its type-ref and core-value), not a whole data-value whose
+    // annotations it has already eaten. Reading an array of them is what catches a miscount --
+    // one event too few or too many and the second element is read from the middle of the first.
+    const arrayOfUnions = array<readonly unknown[], unknown>({
+      element: unionBinding,
+      construct: (values) => values,
+      read: (host) => host,
+    });
+    const reader = bindReader(arrayOfUnions as Binding<readonly unknown[]>, {
+      readAtom: intReader,
+    });
+    // Exactly one diagnostic. A miscount here does not throw -- it re-reads the tail of the
+    // skipped value as if it were the next element, and the extra reports that produces are the
+    // signal. (The array abandons construction once anything is reported, so the elements
+    // themselves are not available to inspect; the positive control below covers those.)
+    const { diagnostics } = readCollecting(
+      reader,
+      '[ @x @y !c { n: 1 }, !a { n: 2 }, @z !b { s: "ok" } ]',
+    );
+    expect(diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+
+    // The positive control: the same shape with every element dispatching, read end to end.
+    expect(readWith(reader, '[ @x @y !a { n: 1 }, !a { n: 2 }, @z !b { s: "ok" } ]')).toEqual([
+      { kind: 'a', n: 1 },
+      { kind: 'a', n: 2 },
+      { kind: 'b', s: 'ok' },
+    ]);
+  });
+
+  it('still rewinds when a member would keep the annotations', () => {
+    // The other branch: an `annotated` member reads the value's own annotation run, so dispatch
+    // must leave it untouched. Consuming it here would silently drop what that member exists for.
+    const boxed: AnnotatedBinding<{ readonly n: unknown; readonly tags: readonly string[] }> = {
+      kind: 'annotated',
+      value: aBinding,
+      construct: (value: unknown, annotations: Annotations) => ({
+        n: value,
+        tags: annotations.values.map((a) => a.name),
+      }),
+      unwrap: (host: unknown) => (host as { n: unknown }).n,
+      annotationsOf: () => ({ values: [] }),
+    } as unknown as AnnotatedBinding<{ readonly n: unknown; readonly tags: readonly string[] }>;
+    const withAnnotated = variant({ a: boxed, b: bBinding });
+    const reader = bindReader(withAnnotated as Binding<unknown>, { readAtom: intReader });
+    expect(readWith(reader, '@urgent @owner:"al" !a { n: 3 }')).toEqual({
+      n: { kind: 'a', n: 3 },
+      tags: ['urgent', 'owner'],
+    });
+  });
 });
 
 describe('bindReader -- annotated (§3.1 boxed as a value)', () => {
