@@ -4,28 +4,26 @@
  * (the tool did not reach a verdict), which is this whole work package's own stated distinction.
  *
  * **Why this exists at all, rather than just trusting `validate()`'s collected `diagnostics`.**
- * `@ltr8/tson`'s `validate()`/`readTree()` route every problem a *reader* finds through the
- * `DiagnosticsReceiver` in scope, so a collecting call never throws for those -- but a
- * base-syntax failure (malformed UTF-8, an unlexable token, a structural parse error) is raised
- * by the lexer/event stream *before* any `ReadContext` exists to report through, and reaches the
- * caller as a thrown `TsonLexError`/`TsonParseError`/`TsonUnsupportedDocumentError` regardless of
- * which receiver was in play. The reference implementation's own facade documents catching
- * exactly this case into a diagnostic ("both facades catch a document that will not lex or parse
- * ... a collecting read never throws for a bad document") -- this port's `validate()` does not
- * (verified by reading `facade/tree.ts`/`compiler/compile.ts`: neither wraps `createDataStream`),
- * so a malformed document handed to `validate()` throws past the collector rather than showing up
- * in its `diagnostics`. **This is a facade gap worth reporting upstream**, not something this CLI
- * works around by reaching past the facade -- it is worked around here by catching exactly the
- * error classes `@ltr8/tson` already exports and classifying them the same way a collected
- * `VALIDATION_ERROR` diagnostic would read.
+ * `@ltr8/tson`'s `validate()` now holds to its own contract in full: a base-syntax failure
+ * (malformed UTF-8, an unlexable token, a structural parse error) and a construct the library has
+ * no reader for both reach the collector as diagnostics rather than being thrown past it, so the
+ * common path through `commands/validate.ts` never enters this classifier at all. What is left
+ * for it is the calls that are genuinely fail-fast -- `readTree`, and every schema-side
+ * resolve/link/compile call, none of which collect -- plus the ones this CLI makes against a
+ * *schema* document rather than a data one (`isInvalidSchemaError` below).
  *
- * The same asymmetry applies to `TsonNotImplementedError`: `compile()`'s own reader cache is
- * lazy (`compiler/compile.ts`'s own doc -- a deliberate divergence from the reference
+ * It also stays as the second half of the same classification for data reads, because the two
+ * routes must agree: a document that throws `TsonLexError` here is classified `'invalid'` with a
+ * `VALIDATION_ERROR` diagnostic, which is the identical shape `validate()` would have collected.
+ * A caller cannot tell which route their document took, and should not be able to.
+ *
+ * The one distinction neither route may lose is `TsonNotImplementedError`. `compile()`'s reader
+ * cache is lazy (`compiler/compile.ts`'s own doc -- a deliberate divergence from the reference
  * implementation's eager compile), so a gap in this library surfaces only when a value of that
- * type is actually read, as a thrown exception past the collector, not as a `NOT_IMPLEMENTED`
- * diagnostic beside the others the way the reference implementation's design intends. Until a
- * later wave threads `NOT_IMPLEMENTED` through the reader stack the way the reference does, this
- * classifier is the only place that distinction is made for the CLI's own reporting.
+ * type is actually read. Thrown, it lands here as `'not-implemented'`; collected, it carries the
+ * `NOT_IMPLEMENTED` code that `commands/validate.ts` reads off the diagnostic list. Either way it
+ * escalates the run past `EXIT.INVALID` to `EXIT.FAULT`, because nothing was checked -- reporting
+ * a library gap as "your document is invalid" is the one answer that is simply false.
  */
 import {
   TsonLexError,

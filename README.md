@@ -172,19 +172,11 @@ Both spec parts are implemented and the shared conformance suite passes in full 
 deferrals (e.g. `token_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
 resolved schema output) and known gaps. In particular:
 
-- **`validate()`/`readTree()`'s collecting mode does not catch a base-syntax failure.** A malformed
-  document (bad UTF-8, an unlexable token, a structural parse error) throws
-  `TsonLexError`/`TsonParseError`/`TsonUnsupportedDocumentError` straight past a
-  `DiagnosticsCollector`, rather than being collected as a diagnostic — a caller wanting a "never
-  throws" read must catch these three types itself.
 - **`createTson` bundles no standard library.** A fresh instance starts with an empty registry;
   the standard library is registered explicitly, as shown above.
 - **No document-header classification helper.** Whether a document is data or schema is determined
   by its header per §2.2, but this library has no lightweight lookahead API for it yet — a caller
   parses with `parseDocument` or `parseSchemaDocument` knowing in advance which one it has.
-- **No public content-hash export.** `@ltr8/tson` computes content hashes internally but does not
-  yet re-export a `hash`/`contentHash` function for a consumer to call directly (the CLI's `hash`
-  command reimplements the same algorithm rather than reaching into internals).
 
 ## Specification
 

@@ -20,10 +20,28 @@
  * `readTree` throws {@link TsonReadError} at the first problem (the fail-fast counterpart);
  * `validate` collects every one and always returns a value, `diagnostics` empty meaning the
  * document conforms -- `compile.ts`'s own `read`/`validate` split, generalised the same way.
+ *
+ * **Both hold to that split even for a failure raised before any reader is running.** A document
+ * that will not lex or parse, and a construct this library has no reader for, are both routed
+ * through the receiver by {@link readWholeDocument} rather than thrown past it; see its own note
+ * for why each keeps a distinct diagnostic code. Without that, `validate` threw for exactly the
+ * documents a caller reached for a collecting read to handle.
  */
 import type { ByteInput, Task } from '../io/bytes.js';
-import { collector, throwing, type DiagnosticsReceiver } from '../core/diagnostic.js';
-import { TsonInternalError, TsonReadError } from '../core/errors.js';
+import {
+  collector,
+  throwing,
+  type Diagnostic,
+  type DiagnosticsReceiver,
+} from '../core/diagnostic.js';
+import {
+  TsonInternalError,
+  TsonLexError,
+  TsonNotImplementedError,
+  TsonParseError,
+  TsonReadError,
+  TsonUnsupportedDocumentError,
+} from '../core/errors.js';
 import { createDataStream } from '../stream/dataStream.js';
 import { createReadContext } from '../reader/context.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
@@ -32,7 +50,7 @@ import {
   type SchemalessTreeReaderOptions,
 } from '../reader/schemaless/index.js';
 import type { CompiledSchema, ValidationResult } from '../compiler/compile.js';
-import type { Value } from '../tree/nodes.js';
+import { missingNode, type Value } from '../tree/nodes.js';
 import {
   runOverAsyncSource,
   runOverBytes,
@@ -66,8 +84,51 @@ function pickReader(options: ReadTreeOptions | undefined): TypeReader<Value> {
   );
 }
 
+/**
+ * A failure the lexer or the event stream raises **before** any {@link ReadContext} exists to
+ * report through: malformed UTF-8, an unlexable token, a structural violation of §2's grammar, or
+ * a document this implementation will not read at all (a declared encoding other than UTF-8).
+ * Everything a *reader* finds already goes through the receiver; these three do not, because at
+ * the point they are raised there is nothing to go through yet.
+ */
+function isBaseSyntaxError(
+  error: unknown,
+): error is TsonLexError | TsonParseError | TsonUnsupportedDocumentError {
+  return (
+    error instanceof TsonLexError ||
+    error instanceof TsonParseError ||
+    error instanceof TsonUnsupportedDocumentError
+  );
+}
+
+/**
+ * The root value handed back for a document that produced none. `''` is the RFC 6901 pointer for
+ * the document root, and it is deliberately not `undefined`: `''` is a *valid* pointer meaning
+ * exactly "the root", where `undefined` would mean "no location at all".
+ */
+function noRootValue(): Value {
+  return missingNode('');
+}
+
+/**
+ * Reports `diagnostic`, and — if the receiver answers by throwing, which is what a fail-fast read
+ * does — attaches `cause` to that error on its way out. {@link DiagnosticsReceiver} passes only a
+ * diagnostic, so this is the one place the original error can stay attached to the throw it
+ * produced, which is what lets a caller who wants the narrower `TsonLexError` back still reach it.
+ */
+function reportCaused(receiver: DiagnosticsReceiver, diagnostic: Diagnostic, cause: unknown): void {
+  try {
+    receiver.report(diagnostic);
+  } catch (thrown) {
+    if (thrown instanceof Error && thrown.cause === undefined) {
+      thrown.cause = cause;
+    }
+    throw thrown;
+  }
+}
+
 /** {@link compiler/compile.ts}'s own `readValue`, generalised over any `TypeReader<Value>` -- see this module's own top note. */
-function* readWholeDocument(
+function* readDocumentValue(
   reader: TypeReader<Value>,
   input: ByteInput,
   receiver: DiagnosticsReceiver,
@@ -92,6 +153,58 @@ function* readWholeDocument(
     );
   }
   return value;
+}
+
+/**
+ * {@link readDocumentValue} with the two failures that would otherwise escape a collecting read
+ * routed through the receiver instead — so `validate()` really does hold to its own contract that
+ * an empty `diagnostics` means the document conforms, and a non-empty one is the whole story. The
+ * reference implementation's facade documents the same behaviour ("both facades catch a document
+ * that will not lex or parse ... a collecting read never throws for a bad document").
+ *
+ * Two, not one:
+ *
+ * - **A base-syntax failure** ({@link isBaseSyntaxError}) is a verdict on the document, and
+ *   reaches the receiver as `VALIDATION_ERROR` carrying the position the error already knew.
+ * - **{@link TsonNotImplementedError}** is a verdict on *this library*, and reaches it as
+ *   `NOT_IMPLEMENTED` — the code `core/diagnostic.ts` defines for exactly that ("a library gap,
+ *   not bad input"). It escapes at read time rather than at compile time because
+ *   `compiler/compile.ts` builds each entry's reader lazily, so a construct with no reader yet is
+ *   discovered only when a value of that type is actually read. A caller must still be able to
+ *   tell it apart from a document that is genuinely invalid, which is why it keeps its own code
+ *   rather than being folded into `VALIDATION_ERROR`.
+ *
+ * Neither is swallowed: a fail-fast read's receiver ({@link throwing}) turns the diagnostic
+ * straight back into a throw, so `readTree` still stops at the first problem — as one
+ * {@link TsonReadError}, with the original error as its `cause`, which is what its own TSDoc
+ * has always claimed it raises.
+ *
+ * Anything else — {@link TsonInternalError} above all — propagates untouched. A broken invariant
+ * is not a diagnostic about the document, and reporting one as though it were would tell a caller
+ * their input was bad when the bug is here.
+ */
+function* readWholeDocument(
+  reader: TypeReader<Value>,
+  input: ByteInput,
+  receiver: DiagnosticsReceiver,
+): Task<Value> {
+  try {
+    return yield* readDocumentValue(reader, input, receiver);
+  } catch (error) {
+    if (isBaseSyntaxError(error)) {
+      reportCaused(
+        receiver,
+        { code: 'VALIDATION_ERROR', message: error.message, dataPosition: error.position },
+        error,
+      );
+      return noRootValue();
+    }
+    if (error instanceof TsonNotImplementedError) {
+      reportCaused(receiver, { code: 'NOT_IMPLEMENTED', message: error.message }, error);
+      return noRootValue();
+    }
+    throw error;
+  }
 }
 
 function readTreeTask(

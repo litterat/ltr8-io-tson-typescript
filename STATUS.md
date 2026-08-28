@@ -52,7 +52,16 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 - [x] I-Regexp engine (RFC 9485) — linear-time, ReDoS-safe
 - [x] Binding layer — authored descriptors with inferred static types
 - [x] Front door — `parse`, `readTree`, `validate`, `write` (flat, tree-shakable), `createTson`
-      as a config-bound registry over them (`src/facade/`, `src/config.ts`)
+      as a config-bound registry over them (`src/facade/`, `src/config.ts`). A collecting read
+      never throws for a bad document, the behaviour the reference implementation's own facade
+      states: a base-syntax failure (bad UTF-8, an unlexable token, a structural parse error)
+      reaches the collector as `VALIDATION_ERROR` with the position it already knew, and a
+      construct the library has no reader for as `NOT_IMPLEMENTED` — the code that keeps a library
+      gap distinguishable from a verdict on the document, which matters because `compile()` builds
+      readers lazily and a gap therefore surfaces at read time. `readTree` still fails fast, now as
+      the single `TsonReadError` its contract always named, with the original error as its `cause`.
+      A `TsonInternalError` is deliberately not caught: a broken invariant is not a diagnostic
+      about the document
 - [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`,
       `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin` (pinning, the
       inverse of `declaredSha256`) beside `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
@@ -119,25 +128,6 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   already registered and never itself needs to suspend. A reference list preloaded out of
   dependency order fails with a clear `TsonSchemaValidationError` naming what wasn't registered
   yet, rather than silently trying to fetch mid-resolution.
-- **`validate()`/`readTree()`'s collecting mode does not catch a base-syntax failure into a
-  diagnostic.** The reference implementation's own facade documents doing exactly this ("both
-  facades catch a document that will not lex or parse ... a collecting read never throws for a bad
-  document") — this port's `facade/tree.ts` does not: a malformed document (bad UTF-8, an
-  unlexable token, a structural parse error) throws `TsonLexError`/`TsonParseError`/
-  `TsonUnsupportedDocumentError` straight past a `DiagnosticsCollector`, because the failure
-  happens in `createDataStream`, before any `ReadContext` exists to report through. A caller using
-  `validate()` for a "collect everything, never throw" read must additionally catch these three
-  types itself — the CLI's own `problem.ts` does this (`classifyReadError`). Worth closing by
-  wrapping `readWholeDocument` the way the reference implementation's facade does.
-- **`compile()`'s lazy reader cache means `TsonNotImplementedError` can still escape a collecting
-  read.** `compiler/compile.ts`'s `compile` builds each entry's `TypeReader` on first request
-  rather than eagerly (a deliberate divergence from the reference implementation, noted in that
-  module's own doc) — so a construct this library cannot read yet is only discovered, and thrown,
-  when a value of that type is actually read, past whatever `DiagnosticsReceiver` is in scope
-  rather than surfacing as a `NOT_IMPLEMENTED` diagnostic beside the others. The CLI treats this as
-  its own distinct case (`problem.ts`'s `'not-implemented'` classification, escalating a `validate`
-  run's exit code past invalid to a library-gap fault) rather than mistaking a gap for a verdict on
-  the document.
 - **All three bundled schemas resolve, link, and match their fixtures up to two deferrals.**
   `subtypes` is exact against `meta-kernel-resolved.tn` (top 17, atom 6, product 5, sum 1,
   text_type 2, atom_specification 2, array 1).

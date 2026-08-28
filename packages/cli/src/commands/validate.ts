@@ -193,7 +193,18 @@ async function validateOne(
       context === undefined
         ? await validate(source)
         : await validate(source, { schema: context.compiled, root: context.root });
-    return { file, ok: result.diagnostics.length === 0, diagnostics: result.diagnostics };
+    // A NOT_IMPLEMENTED diagnostic is not a verdict on the document -- it says this library has no
+    // reader for a construct, so nothing was checked. `validate()` collects it beside the real
+    // ones (with its own code, which is the point), and this run escalates past invalid to a
+    // library-gap fault on the strength of that code, exactly as the `catch` below does for the
+    // same error when it is thrown instead.
+    const notImplemented = result.diagnostics.some((d) => d.code === 'NOT_IMPLEMENTED');
+    return {
+      file,
+      ok: result.diagnostics.length === 0,
+      ...(notImplemented ? { notImplemented: true } : {}),
+      diagnostics: result.diagnostics,
+    };
   } catch (error) {
     const problem = classifyReadError(error);
     if (problem.kind === 'invalid') {
