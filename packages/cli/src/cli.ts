@@ -55,6 +55,10 @@ Options:
   --root <name>            the schema entry the root value reads against (with --schema)
   --format text|json|tson  output format (default: text)
   --help, -h               print this help
+  --                       end option parsing; every later argument is a file name
+
+Any other argument beginning with '-' is a usage error (exit 2), never a file name --
+a mistyped flag is not something to try to open.
 
 Exit codes:
   0  valid
@@ -72,6 +76,21 @@ const INIT_USAGE =
 
 function isHelpFlag(arg: string): boolean {
   return arg === '--help' || arg === '-h';
+}
+
+/**
+ * Whether `arg` looks like a flag rather than a file name. A lone `-` does not: it is
+ * `validate`'s own stdin token. Everything else beginning with `-` does, which is why an
+ * unrecognised one is a usage error rather than a file the command then fails to open -- a
+ * mistyped `--schemas` reported as ENOENT tells a script the tool ran and the file was missing,
+ * when in fact nothing was checked.
+ */
+function looksLikeFlag(arg: string): boolean {
+  return arg.startsWith('-') && arg !== '-';
+}
+
+function rejectUnknownFlag(arg: string, usage: string): never {
+  throw new UsageError(`unrecognized option '${arg}'\n${usage}`);
 }
 
 function requireValue(args: readonly string[], index: number, flag: string): string {
@@ -99,11 +118,20 @@ function parseValidateArgs(
   let schemaLocation: string | undefined;
   let root: string | undefined;
   const files: string[] = [];
+  // `--` ends option parsing, so a file genuinely named like a flag stays reachable.
+  let literal = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === undefined) continue;
+    if (literal) {
+      files.push(arg);
+      continue;
+    }
     if (isHelpFlag(arg)) return 'help';
     switch (arg) {
+      case '--':
+        literal = true;
+        break;
       case '--schema':
         schemaLocation = requireValue(args, ++i, '--schema');
         break;
@@ -114,6 +142,7 @@ function parseValidateArgs(
         format = parseFormatArg(requireValue(args, ++i, '--format'));
         break;
       default:
+        if (looksLikeFlag(arg)) rejectUnknownFlag(arg, VALIDATE_USAGE);
         files.push(arg);
     }
   }
@@ -153,14 +182,24 @@ function parseFilesAndFormat(
 ): { files: string[]; format: Format } | 'help' {
   let format: Format = 'text';
   const files: string[] = [];
+  let literal = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === undefined) continue;
+    if (literal) {
+      files.push(arg);
+      continue;
+    }
     if (isHelpFlag(arg)) return 'help';
+    if (arg === '--') {
+      literal = true;
+      continue;
+    }
     if (arg === '--format') {
       format = parseFormatArg(requireValue(args, ++i, '--format'));
       continue;
     }
+    if (looksLikeFlag(arg)) rejectUnknownFlag(arg, usage);
     files.push(arg);
   }
   if (files.length === 0) {
@@ -199,6 +238,11 @@ async function runInitExampleCommand(args: readonly string[]): Promise<number> {
   if (args.some(isHelpFlag)) {
     process.stdout.write(`${INIT_USAGE}\n`);
     return EXIT.OK;
+  }
+  // Flags first: `init-example --force somewhere` is two arguments, and reporting only "too many
+  // arguments" for it would leave the caller to work out which of the two was wrong.
+  for (const arg of args) {
+    if (looksLikeFlag(arg)) rejectUnknownFlag(arg, INIT_USAGE);
   }
   if (args.length > 1) {
     throw new UsageError(INIT_USAGE);

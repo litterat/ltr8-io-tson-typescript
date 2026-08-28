@@ -135,6 +135,23 @@ and `fileSchemaSource` (containment checked after `realpath`) live behind the se
 `@ltr8/tson/source` subpath — never imported by the package's default entry, so a browser bundle
 never pulls in Node's `fs`/`http`.
 
+### Content hashing and identity
+
+[TSON-DATA] §2.2.1's two mechanisms have their own subpath, `@ltr8/tson/identity`, because neither
+needs the rest of the library — a document's content hash is computed over raw bytes and a canonical
+identity over a URI string, so nothing here reaches the compiler, the lexer or the event stream:
+
+```ts
+import { sha256Hex, withSha256Pin, canonicalizeIdentity } from '@ltr8/tson/identity';
+
+const hex = await sha256Hex(schemaBytes); // SHA-256 over every byte past the !!id line
+const pinned = withSha256Pin('https://example.com/order.tn', hex);
+canonicalizeIdentity(pinned); // 'example.com/order.tn' — scheme and query stripped, nothing else
+```
+
+`declaredSha256` reads a pin back out and `verifyContentHash` checks content against one; the
+registry uses the same pair internally when `preload` fetches a pinned reference.
+
 ### CLI
 
 ```bash

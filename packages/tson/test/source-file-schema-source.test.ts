@@ -3,7 +3,7 @@
  * `realpath` (so a symlink escaping the mapped directory is refused, not followed), only a
  * regular file is read, and a size cap enforced while streaming.
  */
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -110,6 +110,22 @@ describe('fileSchemaSource: containment, checked after realpath', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it('a directory that realpaths to the filesystem root still serves the files under it', async () => {
+    // The containment predicate is `real === root || real.startsWith(root + sep)`, and for a root
+    // of '/' that second term is '//' -- which no real path begins with, so every file under it
+    // was refused. It failed closed, so this was a denial rather than an escape, but a source
+    // mapped to '/' that reads nothing is not the behaviour anyone configured.
+    const root = makeDir();
+    const target = join(root, 'schemas.tn');
+    writeFileSync(target, 'served from the root');
+    const viaRoot = join(root, 'slash');
+    symlinkSync('/', viaRoot);
+    const source = fileSchemaSource({ mapHosts: { 'schemas.example.com': viaRoot } });
+    // The identity's path is the target's own absolute path, resolved beneath a root of '/'.
+    const bytes = await source.fetch(`https://schemas.example.com${realpathSync(target)}`);
+    expect(new TextDecoder().decode(bytes)).toBe('served from the root');
   });
 
   it('a symlink that resolves back inside the directory is fine', async () => {

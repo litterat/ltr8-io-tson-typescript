@@ -12,6 +12,9 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: 'node24',
+  // Keep `node:fs` written as `node:fs` -- see packages/tson/tsup.config.ts's own note. This is a
+  // `#!/usr/bin/env node` binary, so the prefix is simply the correct specifier for what it is.
+  removeNodeProtocol: false,
   splitting: false,
   treeshake: true,
   banner: {

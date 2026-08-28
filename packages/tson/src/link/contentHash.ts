@@ -154,3 +154,30 @@ export async function verifyContentHash(content: Uint8Array, referenceUri: strin
     throw new TsonContentHashMismatchError(referenceUri, declared, actual);
   }
 }
+/**
+ * `reference` with its `sha256` content-hash parameter set to `hex` — the pinning half of
+ * [TSON-DATA] §2.2.1, and the inverse of {@link declaredSha256}. Any existing `sha256` parameter
+ * is replaced; every other query parameter is left untouched and in place, because a reference
+ * that already carries one is not this function's to rewrite.
+ *
+ * The result is exactly what {@link verifyContentHash} then checks: pinning and verifying are
+ * the two ends of one mechanism, so they live in one module rather than being re-derived by
+ * every tool that wants to stamp a hash onto an id it just computed.
+ */
+export function withSha256Pin(reference: string, hex: string): string {
+  if (!FULL_LOWERCASE_HEX.test(hex)) {
+    throw new TsonSchemaValidationError(
+      `'${hex}' is not a content hash -- expected 64 lowercase hex digits ([TSON-DATA] §2.2.1)`,
+    );
+  }
+  const q = reference.indexOf('?');
+  if (q < 0) {
+    return `${reference}?sha256=${hex}`;
+  }
+  const params = reference
+    .slice(q + 1)
+    .split('&')
+    .filter((param) => param !== '' && !param.startsWith('sha256='));
+  params.push(`sha256=${hex}`);
+  return `${reference.slice(0, q)}?${params.join('&')}`;
+}

@@ -107,6 +107,43 @@ describe('validate (schemaless)', () => {
   });
 });
 
+describe('an unrecognized option is a usage error, not a file name', () => {
+  // A mistyped flag used to be pushed onto the file list, opened, and reported as ENOENT -- exit
+  // 70, a library fault. That tells a CI pipeline the tool broke when in fact the invocation was
+  // wrong, and it never says which word was the problem.
+
+  it.each([
+    ['validate', '--schemas'],
+    ['validate', '-x'],
+    ['compile', '--formt'],
+    ['hash', '--pin'],
+    ['init-example', '--force'],
+  ])('%s %s: exit 2, naming the option', async (command, flag) => {
+    const io = captureOutput();
+    const code = await main([command, flag, join(dir, 'anything.tn')]);
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain(`unrecognized option '${flag}'`);
+  });
+
+  it("does not mistake validate's own '-' stdin token for a flag", async () => {
+    // The one argument that begins with '-' and is not an option. It reaches the file list, and
+    // the failure below is stdin being empty, not the argument being rejected.
+    const io = captureOutput();
+    const code = await main(['validate', '-', '-']);
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).not.toContain('unrecognized option');
+  });
+
+  it("'--' ends option parsing, so a file named like a flag stays reachable", async () => {
+    const file = join(dir, '--odd-name.tn');
+    await writeFile(file, '{ a: 1 }\n', 'utf8');
+    const io = captureOutput();
+    const code = await main(['validate', '--', file]);
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+});
+
 describe('init-example + schema-governed validate, end to end', () => {
   it('writes a schema and data file that then validate against the bundled standard library', async () => {
     const io = captureOutput();

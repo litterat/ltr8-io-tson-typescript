@@ -15,7 +15,8 @@
  * edit. See this CLI's own top-level report for this as a deliberate, documented divergence.
  */
 import { readFile } from 'node:fs/promises';
-import { readIdDirective, sha256Hex, withSha256Pin } from '../contentHash.js';
+import { sha256Hex, withSha256Pin, TsonSchemaValidationError } from '@ltr8/tson/identity';
+import { readIdDirective } from '../idDirective.js';
 import { describeError } from '../problem.js';
 
 export interface HashFileResult {
@@ -31,7 +32,9 @@ export interface HashFileResult {
 /** Reads and hashes one file. Throws only for a problem that stops the whole run (an unreadable file) -- see `commands/validate.ts`'s own note on that split, applied identically here. */
 async function hashOne(file: string): Promise<HashFileResult> {
   const bytes = await readFile(file);
-  const contentHash = await sha256Hex(bytes); // throws RangeError when the first line has no terminator
+  // Throws TsonSchemaValidationError when the first line has no terminator -- a content verdict
+  // on the document, which `runHash` below turns into a per-file result rather than a run failure.
+  const contentHash = await sha256Hex(bytes);
   const id = readIdDirective(bytes)?.id;
   return {
     file,
@@ -48,28 +51,17 @@ export interface HashRun {
 
 /** Runs `hash` over every file, without throwing for a per-file content problem -- only an unreadable file escapes as a rejected promise, for the caller to classify as a usage failure. */
 
-/** Whether `error` is a node system error carrying `code`. */
-function isNodeError(error: unknown, code: string): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === code
-  );
-}
-
 export async function runHash(files: readonly string[]): Promise<HashRun> {
   const results: HashFileResult[] = [];
   for (const file of files) {
     try {
       results.push(await hashOne(file));
     } catch (error) {
-      // `RangeError` alone is too wide a net. `sha256Hex` raises one for a document whose first
-      // line has no terminator — a real content verdict — but node's own readFile raises
-      // ERR_FS_FILE_TOO_LARGE as a RangeError too, for a file over 2 GiB. Reported as a content
-      // verdict, that told a caller their file was invalid when it had never been read at all,
-      // and exited 1 where a usage failure was the honest answer.
-      if (error instanceof RangeError && !isNodeError(error, 'ERR_FS_FILE_TOO_LARGE')) {
+      // Only the library's own §2.2.1 verdict is a per-file result. Everything else -- an
+      // unreadable file, node's own ERR_FS_FILE_TOO_LARGE for a file over 2 GiB -- means the
+      // document was never read, and reporting that as "invalid" would tell a caller their file
+      // was bad when nothing had been checked.
+      if (error instanceof TsonSchemaValidationError) {
         results.push({ file, ok: false, problem: describeError(error) });
         continue;
       }

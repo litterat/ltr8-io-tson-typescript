@@ -153,7 +153,11 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
         { cause: error },
       );
     }
-    if (real !== root && !real.startsWith(root + sep)) {
+    // `root + sep` would be `//` for a directory that realpaths to `/` (and `C:\\` on Windows),
+    // which no real path starts with -- so the predicate would fail closed and refuse every file
+    // under it. A root that already ends in the separator carries its own boundary.
+    const boundary = root.endsWith(sep) ? root : root + sep;
+    if (real !== root && !real.startsWith(boundary)) {
       throw notPermitted(
         reference,
         `resolves to '${real}', which is outside '${root}' -- a schema path may not escape the ` +

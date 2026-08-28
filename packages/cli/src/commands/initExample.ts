@@ -13,7 +13,7 @@
  * for anything this CLI emits as TSON.
  *
  * `person.tn`'s `!!meta`/`!!import` reference meta.tn/core.tn by the *exact* canonical id the
- * bundled copies this CLI embeds declare (read back via `contentHash.ts`'s own `readIdDirective`
+ * bundled copies this CLI embeds declare (read back via `idDirective.ts`'s own `readIdDirective`
  * rather than hand-copied), so `tson validate --schema <dir>/person.tn --root person
  * <dir>/person-data.tn` resolves against this CLI's own bootstrapped standard library
  * (`../stdlib.ts`) with nothing further to configure.
@@ -22,7 +22,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomNode, recordNode, write, type Value } from '@ltr8/tson';
 import { CORE_TN, META_TN } from '../bundledSchemas.generated.js';
-import { readIdDirective } from '../contentHash.js';
+import { readIdDirective } from '../idDirective.js';
 
 const PERSON_SCHEMA_ID = 'https://example.com/tson-cli/examples/person.tn';
 

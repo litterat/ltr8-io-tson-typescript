@@ -6,6 +6,7 @@ import {
   declaredSha256,
   sha256Hex,
   verifyContentHash,
+  withSha256Pin,
 } from '../src/link/contentHash.js';
 import { TsonContentHashMismatchError, TsonSchemaValidationError } from '../src/core/errors.js';
 
@@ -114,5 +115,41 @@ describe('verifyContentHash', () => {
     await expect(
       verifyContentHash(doc, `https://tson.io/x.tn?sha256=${wrong}`),
     ).rejects.toBeInstanceOf(TsonContentHashMismatchError);
+  });
+});
+
+describe('withSha256Pin (§2.2.1)', () => {
+  const HEX = 'ab'.repeat(32);
+
+  it('appends the query when the reference carries none', () => {
+    expect(withSha256Pin('https://example.com/s.tn', HEX)).toBe(
+      `https://example.com/s.tn?sha256=${HEX}`,
+    );
+  });
+
+  it('replaces an existing sha256 and keeps every other parameter in place', () => {
+    expect(withSha256Pin(`https://example.com/s.tn?a=1&sha256=${'cd'.repeat(32)}&b=2`, HEX)).toBe(
+      `https://example.com/s.tn?a=1&b=2&sha256=${HEX}`,
+    );
+  });
+
+  it('round-trips through declaredSha256, which is the point of the pair', () => {
+    expect(declaredSha256(withSha256Pin('https://example.com/s.tn', HEX))).toBe(HEX);
+  });
+
+  it('refuses to stamp anything that is not a full-length lowercase hex digest', () => {
+    // §2.2.1 fixes the value's shape. A pin that declaredSha256 would then reject is not a pin,
+    // and writing one produces a reference nothing can resolve.
+    for (const bad of ['', 'AB'.repeat(32), 'ab'.repeat(31), `${HEX}0`]) {
+      expect(() => withSha256Pin('https://example.com/s.tn', bad)).toThrow(
+        TsonSchemaValidationError,
+      );
+    }
+  });
+
+  it('does not leave an empty parameter behind when it replaces the only one', () => {
+    expect(withSha256Pin('https://example.com/s.tn?sha256=old', HEX)).toBe(
+      `https://example.com/s.tn?sha256=${HEX}`,
+    );
   });
 });

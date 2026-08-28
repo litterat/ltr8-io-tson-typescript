@@ -53,6 +53,13 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 - [x] Binding layer — authored descriptors with inferred static types
 - [x] Front door — `parse`, `readTree`, `validate`, `write` (flat, tree-shakable), `createTson`
       as a config-bound registry over them (`src/facade/`, `src/config.ts`)
+- [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`,
+      `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin` (pinning, the
+      inverse of `declaredSha256`) beside `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
+      Its own subpath rather than part of the default entry: nothing in it reaches the compiler,
+      the lexer or the event stream, so a consumer who wants only a document's content hash takes
+      only that. The CLI's `hash` command consumes it rather than reimplementing §2.2.1, which is
+      what it did before this existed
 - [x] Schema sources — `@ltr8/tson/source`'s `httpSchemaSource` (deny-by-default host allow-list,
       no redirects ever, size cap enforced while streaming, timeout) and `fileSchemaSource`
       (containment checked after `realpath`); both Node-only, reachable only through that
@@ -82,19 +89,16 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   too is the proper fix, and the bound is what keeps the failure honest until then. The limit is
   a constant, where §9.1 asks for a configurable one.
 
-- **Three low-severity security findings from Wave 6's adversarial pass remain open.** The two
-  high and three medium ones are fixed; these three are recorded rather than closed:
-  - The CLI treats an unrecognised flag as a filename, so a mistyped `--schemas` becomes an
-    ENOENT reported as exit 70 (library fault) where exit 2 (usage) is the honest answer.
-  - `tsup`'s `removeNodeProtocol` strips the `node:` prefix from the published `source` bundle.
-    The subpath's export conditions already keep a browser bundler out, so this is defence in
-    depth rather than an exposure, but the prefix is worth restoring.
-  - `node10` type resolution fails for every subpath: that resolver predates `exports`. The
-    package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer
-    on `moduleResolution: "node"` will not see the subpaths.
-  - `fileSchemaSource`'s containment predicate degenerates when a mapped directory realpaths to
-    `/`: `root + sep` is `//`, which nothing matches, so every file under it is refused. It fails
-    closed, so this is a denial rather than an escape.
+- **`node10` type resolution fails for every subpath**, that resolver predating `exports`. The
+  package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer on
+  `moduleResolution: "node"` will not see the subpaths. It is the last of Wave 6's adversarial
+  findings left open — the two high, three medium and three of the four low ones are fixed:
+  an unrecognised CLI flag is now a usage error (exit 2) naming the option rather than a filename
+  the tool then fails to open, with `--` as the escape hatch for a file genuinely named like one;
+  `tsup`'s `removeNodeProtocol` is off in both packages, so `node:fs` stays written as `node:fs`;
+  and `fileSchemaSource`'s containment predicate no longer degenerates for a directory that
+  realpaths to `/` (`root + sep` was `//`, which nothing matches, so it failed closed and refused
+  every file under it).
 
 - **`createTson` bundles no standard library.** Unlike the reference implementation's
   `Tson.builder().build()`, which loads `meta-kernel`/`meta.tn`/`core.tn` from packaged classpath
@@ -115,16 +119,6 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   already registered and never itself needs to suspend. A reference list preloaded out of
   dependency order fails with a clear `TsonSchemaValidationError` naming what wasn't registered
   yet, rather than silently trying to fetch mid-resolution.
-- **`@ltr8/tson` exposes no way to compute a document's own content hash.**
-  `link/contentHash.ts`'s `sha256Hex`/`contentStart` (§2.2.1) and `link/identity.ts`'s
-  `canonicalizeIdentity` are not re-exported from `index.ts` or from any subpath (`./bind`,
-  `./tree`, `./regex`, `./schema`, `./write`, `./source`) — verified by grep, not assumed. The
-  library computes a content hash internally (`Tson.preload`'s `?sha256=` pin verification), but a
-  consumer wanting one directly — exactly what `tson hash` needs — has nothing to call. The CLI
-  works around this by reimplementing the same from-spec algorithm itself
-  (`packages/cli/src/contentHash.ts`) rather than reaching past the package's public surface into
-  its internals; a later wave should add a small `hash`/`contentHash` export (`./index` or a new
-  `./identity` subpath) so this stops being necessary.
 - **`validate()`/`readTree()`'s collecting mode does not catch a base-syntax failure into a
   diagnostic.** The reference implementation's own facade documents doing exactly this ("both
   facades catch a document that will not lex or parse ... a collecting read never throws for a bad

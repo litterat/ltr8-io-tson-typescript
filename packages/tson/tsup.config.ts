@@ -9,6 +9,7 @@ export default defineConfig([
       regex: 'src/regex/index.ts',
       schema: 'src/schema/index.ts',
       write: 'src/write/index.ts',
+      identity: 'src/identity/index.ts',
     },
     format: ['esm', 'cjs'],
     dts: true,
@@ -36,6 +37,12 @@ export default defineConfig([
     clean: false,
     platform: 'node',
     target: 'node24',
+    // tsup rewrites `node:fs` to `fs` by default. This subpath is Node-only by construction, and
+    // the prefix is what says so: it is the one specifier form a browser bundler cannot mistake
+    // for a resolvable package, so stripping it turns a loud "no such module node:fs" into a
+    // silent attempt to resolve an `fs` shim. The export conditions above already keep a browser
+    // bundler out of this entry; keeping the prefix is the second lock on the same door.
+    removeNodeProtocol: false,
     splitting: false,
     treeshake: true,
   },

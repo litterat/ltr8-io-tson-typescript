@@ -63,6 +63,17 @@
         "default": "./dist/schema.cjs"
       }
     },
+    "./identity": {
+      "@ltr8/source": "./src/identity/index.ts",
+      "import": {
+        "types": "./dist/identity.d.ts",
+        "default": "./dist/identity.js"
+      },
+      "require": {
+        "types": "./dist/identity.d.cts",
+        "default": "./dist/identity.cjs"
+      }
+    },
     "./write": {
       "@ltr8/source": "./src/write/index.ts",
       "import": {
