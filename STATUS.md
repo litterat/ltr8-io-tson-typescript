@@ -190,13 +190,24 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   `TypeReader` that can be handed annotations already read — a change to the compiled reader
   contract, not to that file.
 
-- **`annotations` is bound as an ordinary wire field, not as a record's annotations carrier.**
-  `bind/binding.ts` types `annotationsCarrier` against `annotations/index.ts`'s
-  `Annotations` (`{ values }`), while `schema/meta` carries its own stand-in
-  (`readonly Annotation[]`); the two do not meet. This no longer costs key annotations — those go
-  through `schema/annotationReader.ts` and the compiled readers, not through a binding — so what
-  is left is the binding-layer mismatch itself, which shows up when a _record body_ carries wire
-  annotations rather than when a declaration's name does.
+- **Writing a resolved schema back out puts a value's annotations in a field named
+  `annotations`, where §3.1 puts them in front of the value.** `spec/m/*-resolved.tn` writes
+  `type: @alias:type_name token` and `doc => @annotation !type_definition { … }`; this port writes
+  the same annotations as an ordinary `annotations: [ … ]` member of the record, which §8.1's
+  `type_definition`/`type_ref` do not declare. `bundled-schemas-resolve.test.ts` lifts the field
+  into the framing position on both sides so the comparison stays about _which_ annotations a
+  value carries, and says so where it does it.
+
+  The cause is a genuine type mismatch, not an oversight: `bind/binding.ts`'s `annotationsCarrier`
+  is typed against `annotations/index.ts`'s wire `Annotations` (`{ values }`, each value a raw
+  `DataValue`), while `schema/meta` carries resolved annotations (`readonly Annotation[]`, each
+  value a _bound_ host value — a tree `Value` since `schema/annotationReader.ts`). Those are
+  different things, and a `RecordBinding` cannot convert between them: wire→bound needs a reader
+  for the annotation's type, and bound→wire needs an atom encoder, neither of which the carrier
+  hook is handed. Closing it means widening that contract, not rewiring `schema/bindings.ts`.
+
+  Key annotations (§6, `@doc` on a declaration's name) are _not_ affected: they go through
+  `schema/annotationReader.ts` and the compiled readers, never through a binding.
 
 ## Scaffold
 
