@@ -77,12 +77,24 @@ function reducedRational(numerator: bigint, denominator: bigint): string {
  * text (`"12.0"`) the suite's own float vectors were authored against (confirmed against
  * `vocabulary/valid/float64-hex-float-expected.tn` et al. -- see this harness's own report for
  * why that gap belongs to `atom/numeric/float.ts`, not this conversion). Every value these
- * vectors exercise is finite and exactly decimal-representable (the suite restricts float
- * vectors to exactly that, by its own README), so appending `.0` to a point-free finite result is
- * enough to match; `.nan`/`+.inf`/`-.inf` already contain a `.` and pass through unchanged.
+ * vectors exercise is finite and exactly decimal-representable (the suite restricts float vectors
+ * to exactly that, by its own README). `writeFloat` spells the fractional part itself, so this
+ * checks that rather than supplying it; `.nan`/`+.inf`/`-.inf` already carry a `.`.
  */
 function canonicalFloatText(text: string): string {
-  return text.includes('.') ? text : `${text}.0`;
+  // Kept as an assertion rather than a transformation: `writeFloat` now spells a whole float with
+  // its fractional part, matching the suite's canonical text and `Double#toString`. If that ever
+  // regresses, this fails loudly here instead of silently papering over it the way appending
+  // `.0` did.
+  if (
+    !text.includes('.') &&
+    !text.includes('e') &&
+    !text.includes('E') &&
+    !/^[-+]?(nan|inf)/i.test(text)
+  ) {
+    throw new Error(`float atom wrote '${text}' with no fractional part; expected canonical form`);
+  }
+  return text;
 }
 
 function integerReader(typeRef: string, bits: bigint, signed: boolean): VocabularyReader {

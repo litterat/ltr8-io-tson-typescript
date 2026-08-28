@@ -37,6 +37,12 @@
       "types": "./dist/schema.d.ts",
       "import": "./dist/schema.js",
       "require": "./dist/schema.cjs"
+    },
+    "./write": {
+      "@ltr8/source": "./src/write/index.ts",
+      "types": "./dist/write.d.ts",
+      "import": "./dist/write.js",
+      "require": "./dist/write.cjs"
     }
   },
   "main": "./dist/index.cjs",

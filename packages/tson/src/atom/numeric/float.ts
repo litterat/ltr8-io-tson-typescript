@@ -152,14 +152,19 @@ function parseAtFormatPrecision(text: string, format: FloatFormat, typeRef: stri
 }
 
 /**
- * §7.6's `special-value` spelling (`.nan`/`+.inf`/`-.inf`) for the non-finite cases, `-0`/`0` for
- * signed zero (JS's own `(-0).toString()` drops the sign, unlike `Float.toString()`/
- * `Double.toString()`, so zero needs its own case), and `String(value)` otherwise -- already the
- * shortest decimal that reads back to the exact same `number`, which is what a round trip needs;
- * see this module's own TSDoc for why matching `Float.toString()`'s narrower binary32-shortest
- * text is not attempted here.
+ * §7.6's `special-value` spelling (`.nan`/`+.inf`/`-.inf`) for the non-finite cases, `-0.0`/`0.0`
+ * for signed zero (JS's own `(-0).toString()` drops the sign, unlike `Float.toString()`/
+ * `Double.toString()`, so zero needs its own case), and `String(value)` otherwise, with a `.0`
+ * appended whenever that text would otherwise look like an `integer` production (§7.6) --
+ * `String(value)` is already the shortest decimal that reads back to the exact same `number`,
+ * which is what a round trip needs, but a token's *form* is information too: an unannotated `12`
+ * and `12.0` both narrow back to this same `number` (§5.6), yet only the second re-narrows to the
+ * `float` grammar form (§4.3/§4.5) an untyped write of this value must preserve -- exactly the
+ * distinction `Double#toString()` preserves by never omitting the point, matching this
+ * package's own STATUS.md-tracked writer gap. See this module's own TSDoc for why matching
+ * `Float.toString()`'s narrower binary32-shortest text is not attempted here.
  */
-function writeFloat(value: number): string {
+export function writeFloat(value: number): string {
   if (Number.isNaN(value)) {
     return '.nan';
   }
@@ -167,9 +172,19 @@ function writeFloat(value: number): string {
     return value > 0 ? '+.inf' : '-.inf';
   }
   if (value === 0) {
-    return Object.is(value, -0) ? '-0' : '0';
+    return Object.is(value, -0) ? '-0.0' : '0.0';
   }
-  return String(value);
+  const text = String(value);
+  return hasFractionOrExponent(text) ? text : `${text}.0`;
+}
+
+/** Whether `text` (a `String(number)` result) already contains a `.` or an `e`/`E` exponent marker. */
+function hasFractionOrExponent(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === '.' || c === 'e' || c === 'E') return true;
+  }
+  return false;
 }
 
 function isSubnormal(value: number, format: FloatFormat): boolean {

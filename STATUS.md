@@ -31,21 +31,21 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 - [x] Binary types — `base64`, `base64url`, `base32`, `hex`
 - [x] Temporal types — `date`, `time`, `datetime`, `duration`
 - [x] Tree model — `Value` nodes, RFC 6901 pointers
-- [ ] Writers — streaming emit, optional `!!id`/`!!schema` header
+- [x] Writers — streaming emit, optional `!!id`/`!!schema` header
 - [ ] Document header classification (§7.1)
 
 ## Part 2 — type system and schema (Class 2)
 
 - [x] Schema grammar — schema documents parsed into a faithful AST
 - [x] Desugaring — every sugar form lifted to a closed synthetic entry
-- [ ] Resolution — composition, refinement, constructor application, templates
+- [x] Resolution — composition, refinement, constructor application, templates
 - [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
       reverse-index population, choice disjointness and `@disjoint` assertion checking
 - [x] Identity and hashing — canonical `!!id` (`link/identity.ts`), `?sha256=` pinning and content
       hashing via `crypto.subtle` (`link/contentHash.ts`, async — the one async surface in `link/`)
-- [ ] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end
-- [ ] Compilation — a compiled, schema-validating reader
-- [ ] Diagnostics — the data- and schema-side problem model
+- [x] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end
+- [x] Compilation — a compiled, schema-validating reader
+- [x] Diagnostics — the data- and schema-side problem model
 
 ## Beyond the reference implementation's shape
 
@@ -80,9 +80,6 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   "memory is proportional to nesting depth" and wants the annotations captured rather than
   skipped-and-replayed. Wave 7's memory sweep is where this gets measured.
 
-- **`writeFloat` does not spell a whole float with a fractional part.** `write()` of `12` gives
-  `"12"` where the suite's canonical text and `Double#toString` both give `"12.0"`. Reading is
-  unaffected and round-trips; this is a writer-side formatting gap, and the writers land in Wave 5.
 - **`annotations` is bound as an ordinary wire field, not as a record's annotations carrier.**
   `bind/binding.ts` types `annotationsCarrier` against `annotations/index.ts`'s
   `Annotations` (`{ values }`), while `schema/meta` carries its own stand-in

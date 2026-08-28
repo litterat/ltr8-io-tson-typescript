@@ -7,6 +7,7 @@ export default defineConfig({
     tree: 'src/tree/index.ts',
     regex: 'src/regex/index.ts',
     schema: 'src/schema/index.ts',
+    write: 'src/write/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,
