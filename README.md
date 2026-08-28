@@ -8,6 +8,18 @@ browsers, with **zero runtime dependencies**.
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
 
+## Versioning
+
+`0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
+built against, so `0.33.x` implements the **2026 Revision 33** series. A new spec revision moves the
+minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
+which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
+identity is re-pinned.
+
+Both packages are released in lockstep at the same version, and `@ltr8/tson-cli` depends on
+`@ltr8/tson` at an exact pin rather than a range: the two are built and tested together, and the CLI
+uses subpath entry points whose surface a caret range does not promise.
+
 ## What TSON is
 
 TSON is a schema system with its own notation, not a data format with a schema bolted on. At its

@@ -20,6 +20,12 @@ Every read accepts a complete `Uint8Array` (returning synchronously) or a `Reada
 `AsyncIterable<Uint8Array>` (returning a `Promise`, resolving as bytes arrive). Memory stays
 proportional to nesting depth either way — nothing materialises a whole document to read part of it.
 
+## Versioning
+
+`0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
+`0.33.x` is built against the 2026 Revision 33 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+released in lockstep at the same version.
+
 ## Entry points
 
 Take only what you need; importing `parse` does not pull in the schema compiler.
