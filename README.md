@@ -4,8 +4,9 @@ A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node
 browsers, with **zero runtime dependencies**.
 
 > **Status: both spec parts implemented; 146/146 shared conformance vectors passing.** See
-> [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm — `publint`,
-> `arethetypeswrong`, and a browser-bundle smoke test have not run yet (Wave 7).
+> [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
+> ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
+> builds every browser-facing entry point and runs it with no Node globals in scope.
 
 ## What TSON is
 

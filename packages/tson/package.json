@@ -4,6 +4,28 @@
   "type": "module",
   "sideEffects": false,
   "license": "Apache-2.0",
+  "description": "TSON (Typed Schema Object Notation) \u2014 streaming parser, schema compiler and validator. Zero runtime dependencies.",
+  "keywords": [
+    "tson",
+    "parser",
+    "schema",
+    "serialization",
+    "data-format",
+    "streaming",
+    "typed"
+  ],
+  "homepage": "https://github.com/litterat/ltr8-io-tson-typescript#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/litterat/ltr8-io-tson-typescript.git",
+    "directory": "packages/tson"
+  },
+  "bugs": {
+    "url": "https://github.com/litterat/ltr8-io-tson-typescript/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=24"
   },
