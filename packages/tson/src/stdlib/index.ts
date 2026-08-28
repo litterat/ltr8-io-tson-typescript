@@ -42,6 +42,15 @@ export function registerStandardLibrary(tson: Tson): Tson {
   // `io/utf8.ts`'s own encoder rather than the host `TextEncoder`: this project's type
   // configuration carries no `DOM` lib, and the library encodes UTF-8 itself everywhere else too.
   tson.register(linkSchema(bootstrapMetaKernel(encodeUtf8(META_KERNEL_TN))));
+  // Then meta-kernel again, ordinarily, governed by the bootstrap output just registered --
+  // exactly what `schema/bootstrap.ts` says to do: "a caller wanting meta-kernel's entries
+  // properly marked runs `resolveSchema` over the same document instead, governed by this
+  // function's own output". The bootstrap route exists to break §1.5's circularity (meta-kernel's
+  // `!!meta` names itself) and stops there: it attaches no `@synthetic` marker to the entries it
+  // lifts and carries no key annotations at all, so without this second pass the standard
+  // library's own kernel is the one schema in it missing both. It re-registers under the same
+  // canonical identity, replacing the transient form.
+  tson.resolveSchema(META_KERNEL_TN);
   tson.resolveSchema(META_TN);
   tson.resolveSchema(CORE_TN);
   return tson;

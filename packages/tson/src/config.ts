@@ -65,6 +65,7 @@ import type { DefinitionGetter } from './compiler/resolverTypes.js';
 import { parseSchemaDocument } from './compiler/schemaParser.js';
 import { compile as compileCore, type CompiledSchema } from './compiler/compile.js';
 import { createDefinitionMetaReader } from './schema/metaReader.js';
+import { createAnnotationValueReader } from './schema/annotationReader.js';
 import { topBinding } from './schema/bindings.js';
 import { toCoreValue } from './bind/encode.js';
 import { defaultAtomEncoder } from './write/bindingWriter.js';
@@ -130,6 +131,21 @@ function importedFrom(schema: LinkedSchema): ImportedSchema {
   };
 }
 
+/**
+ * The governing meta, compiled -- memoized per {@link LinkedSchema}, because every schema governed
+ * by one needs the same compiled readers and compiling is not free. Keyed by identity in a
+ * `WeakMap`: a linked schema nobody holds any more takes its compiled form with it.
+ */
+const compiledMetas = new WeakMap<LinkedSchema, CompiledSchema>();
+
+function compiledMetaFor(meta: LinkedSchema): CompiledSchema {
+  const already = compiledMetas.get(meta);
+  if (already !== undefined) return already;
+  const compiled = compileCore(meta);
+  compiledMetas.set(meta, compiled);
+  return compiled;
+}
+
 /** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
@@ -149,6 +165,11 @@ function resolveAgainstRegistry(
     importedFrom(requireRegistered(schemas, importUri, id));
   const resolved = resolveSchemaCore(document, {
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
+    // §6/§3.3.3: a declaration's key annotations (`@doc` and anything else a meta-schema defines)
+    // name ordinary entries of the governing meta, and their values are read through that
+    // schema's own compiled readers. Without this every key annotation resolved name-only, so a
+    // resolved schema lost the documentation the author wrote on it.
+    annotationValueReader: createAnnotationValueReader(compiledMetaFor(governingMeta)),
     metaDefinitions,
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,

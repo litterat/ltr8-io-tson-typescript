@@ -86,3 +86,31 @@ describe('standardLibrary()', () => {
     expect(registerStandardLibrary(tson)).toBe(tson);
   });
 });
+
+describe('the standard library carries its own key annotations (§6)', () => {
+  const tson = standardLibrary();
+  const kernel = [...tson.schemas.values()].find((s) => s.id.includes('meta-kernel'));
+
+  it('registers meta-kernel with its @doc values, not the bare bootstrap form', () => {
+    // `bootstrapMetaKernel` exists to break §1.5's circularity and stops there: it attaches no
+    // `@synthetic` marker and carries no key annotations. `registerStandardLibrary` therefore
+    // resolves meta-kernel a second time, ordinarily, against the bootstrap output -- which is
+    // what `schema/bootstrap.ts`'s own doc says a caller wanting properly marked entries does.
+    expect(kernel).toBeDefined();
+    const doc = kernel?.keyAnnotations.get('top')?.find((a) => a.name === 'doc');
+    expect(doc?.value).toBeDefined();
+  });
+
+  it('marks every sugar-lifted entry @synthetic (§8.2)', () => {
+    const synthetic = [...(kernel?.keyAnnotations ?? [])].filter(([, annotations]) =>
+      annotations.some((a) => a.name === 'synthetic'),
+    );
+    expect(synthetic.length).toBeGreaterThan(0);
+  });
+
+  it('reads a @doc value as an atom node carrying the text the author wrote', () => {
+    const doc = kernel?.keyAnnotations.get('top')?.find((a) => a.name === 'doc');
+    expect(doc?.value).toMatchObject({ kind: 'atom' });
+    expect((doc?.value as { value: unknown }).value).toMatch(/^Base kinds\./u);
+  });
+});

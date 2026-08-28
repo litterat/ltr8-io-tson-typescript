@@ -13,6 +13,8 @@ import type { DefinitionGetter } from '../src/compiler/resolverTypes.js';
 import { toCoreValue, toDataValue, type AtomEncoder } from '../src/bind/encode.js';
 import { topBinding, typeDefinitionBinding } from '../src/schema/bindings.js';
 import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
+import { createAnnotationValueReader } from '../src/schema/annotationReader.js';
+import { compile } from '../src/compiler/compile.js';
 import type { Annotation } from '../src/schema/meta/typedef.js';
 import type { CoreValue, DataValue, TokenValue } from '../src/ast/value.js';
 
@@ -127,6 +129,14 @@ const encodeAtom: AtomEncoder = (binding, value): TokenValue => {
   };
 };
 
+/** The fixture's own side of {@link renderAnnotationValue}: a key annotation's value as its plain scalar text. */
+function fixtureAnnotationValue(value: DataValue): Canonical {
+  const core = value.coreValue;
+  if (core.kind === 'token') return core.text;
+  if (core.kind === 'absent') return NO_VALUE;
+  return canonical(value);
+}
+
 function annotationOf(name: string, value: Canonical): Canonical {
   return value === undefined || value === NO_VALUE ? `@${name}` : { [`@${name}`]: value };
 }
@@ -222,18 +232,43 @@ function canonical(value: DataValue, entry = false): Canonical {
  * `@synthetic` marker every sugar-lifted entry carries (§8.2).
  */
 function canonicalKeyAnnotations(annotations: readonly Annotation[]): Canonical[] {
-  return annotations.map((a) => {
-    if (a.value === undefined) return `@${a.name}`;
-    if (typeof a.value === 'string') return { [`@${a.name}`]: JSON.stringify(a.value) };
-    if (typeof a.value === 'object' && a.value !== null && 'text' in a.value) {
-      const token = a.value as { text: string; form?: TokenValue['form'] };
-      return {
-        [`@${a.name}`]:
-          token.form === 'unquoted' ? canonicalName(token.text) : JSON.stringify(token.text),
-      };
-    }
-    return { [`@${a.name}`]: JSON.stringify(a.value) };
-  });
+  // `@doc` is excluded on BOTH sides and checked separately, against the source rather than the
+  // fixture -- see `preserves every @doc verbatim` below. The fixture's own header says it carries
+  // long `@doc` strings abbreviated and that "a conforming resolver preserves them verbatim", so
+  // the fixture cannot be the oracle for their text; it can and does remain the oracle for every
+  // other key annotation, `@synthetic` above all.
+  return annotations
+    .filter((a) => a.name !== 'doc')
+    .map((a) => {
+      if (a.value === undefined) return `@${a.name}`;
+      return { [`@${a.name}`]: renderAnnotationValue(a.value) };
+    });
+}
+
+/**
+ * A resolved key annotation's value, rendered the way {@link canonical} renders the fixture's own
+ * side of the comparison.
+ *
+ * `schema/meta`'s `Annotation.value` is `unknown` -- that package may not name a `tree/nodes.ts`
+ * `Value`, which is what `schema/annotationReader.ts` actually puts there. Unwrapping the atom
+ * node to its host value is what makes the two sides comparable at all; the alternative is
+ * comparing a serialized node against a token's text, which is not a comparison of anything.
+ *
+ * Quoting is deliberately *not* reconstructed. The fixture distinguishes `@ordered:TOTAL` from
+ * `@doc:"..."` by the form each was written in, and a bound host value has lost that -- both
+ * arrive as JavaScript strings. §8.1's canonical output rules are a writer question and are
+ * tested on the writer; here the value is the point.
+ */
+function renderAnnotationValue(value: unknown): Canonical {
+  if (typeof value === 'object' && value !== null && 'kind' in value) {
+    const node = value as { kind: string; value?: unknown };
+    if (node.kind === 'atom') return String(node.value);
+    if (node.kind === 'absent') return NO_VALUE;
+  }
+  if (typeof value === 'object' && value !== null && 'text' in value) {
+    return (value as { text: string }).text;
+  }
+  return String(value);
 }
 
 // -- The fixtures -----------------------------------------------------------------------------
@@ -258,9 +293,11 @@ function fixture(name: string): Map<string, FixtureEntry> {
     }
     entries.set(canonicalName(key.text), {
       definition: canonical(entry.value.value, true),
-      keyAnnotations: entry.key.annotations.map((a) =>
-        annotationOf(a.name, a.value === undefined ? undefined : canonical(a.value)),
-      ),
+      keyAnnotations: entry.key.annotations
+        .filter((a) => a.name !== 'doc')
+        .map((a) =>
+          annotationOf(a.name, a.value === undefined ? undefined : fixtureAnnotationValue(a.value)),
+        ),
     });
   }
   return entries;
@@ -298,9 +335,13 @@ function structureNamespaceFor(name: string): DefinitionGetter {
   };
 }
 
-function resolveBundled(name: string, meta: Schema): Schema {
+function resolveBundled(name: string, meta: LinkedSchema): Schema {
   const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
-  const metaDefinitions = structureNamespaceFor(name);
+  // For meta-kernel the governing namespace is `meta` itself -- its own bootstrap output, since
+  // its `!!meta` names itself. `structureNamespaceFor` walks the chain above a schema, and
+  // meta-kernel has none.
+  const metaDefinitions: DefinitionGetter =
+    name === 'meta-kernel' ? (typeName) => meta.entries.get(typeName) : structureNamespaceFor(name);
   return resolveSchema(document, {
     // `schema/metaReader.ts`'s reader: binds a constructor-application body (`!enum [true false]`,
     // `!integer_type { size: ... }`) to the `schema.meta` `Top` value it denotes, via
@@ -308,6 +349,10 @@ function resolveBundled(name: string, meta: Schema): Schema {
     // the same structure namespace as `metaDefinitions` below, for §5.6's positional form and
     // `REQUIRED_DEFAULT`/`REQUIRED_FIXED` field defaulting -- see that module's own top comment.
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
+    // §6/§3.3.3: a key annotation names an ordinary entry of the governing meta's namespace, and
+    // its value is read through that schema's own compiled reader for the name. Without one, every
+    // key annotation resolves name-only and each declaration's `@doc` is lost.
+    annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
     // §5.6's chained atom refinement merges on the wire record; `resolverTypes.ts` states that a
     // caller which can see both `compiler/` and `bind/` -- a test, or the eventual front door --
@@ -335,21 +380,16 @@ function resolved(name: string): LinkedSchema {
   if (already !== undefined) return already;
   const chain = CHAIN[name] ?? [];
   const last = chain.at(-1);
-  const governingMeta = last === undefined ? undefined : resolved(last);
-  const unlinked =
-    governingMeta === undefined
-      ? bootstrapMetaKernel(source('meta-kernel.tn'))
-      : resolveBundled(name, governingMeta);
-  const linked = linkSchema(unlinked, {
-    ...(governingMeta === undefined
-      ? {}
-      : {
-          structureNamespace: governingMeta.entries,
-          resolveImport: () => ({
-            entries: governingMeta.entries,
-            originOf: () => governingMeta.id,
-          }),
-        }),
+  // meta-kernel's `!!meta` names itself (§1.5), so its governing meta is its own bootstrap output
+  // -- and it is then resolved *ordinarily* against that, exactly as `schema/bootstrap.ts`'s own
+  // doc says to: "a caller wanting meta-kernel's entries properly marked runs `resolveSchema` over
+  // the same document instead, governed by this function's own output". The bootstrap output alone
+  // carries no key annotations and no `@synthetic` markers, which is what the fixture compares.
+  const governingMeta =
+    last === undefined ? linkSchema(bootstrapMetaKernel(source('meta-kernel.tn'))) : resolved(last);
+  const linked = linkSchema(resolveBundled(name, governingMeta), {
+    structureNamespace: governingMeta.entries,
+    resolveImport: () => ({ entries: governingMeta.entries, originOf: () => governingMeta.id }),
   });
   cache.set(name, linked);
   return linked;
@@ -429,6 +469,13 @@ function differences(name: string): string[] {
       .filter(([key]) => schema.origins.get(key) === selfId)
       .map(([key, value]) => [canonicalName(key), value]),
   );
+  // Keyed the same way. A sugar-lifted entry's real name carries a real content hash
+  // (`array_field_group_bcbfb436`) where the fixture writes the `_xxhash` placeholder, so a
+  // lookup by the fixture's key against a map keyed by real names silently found nothing --
+  // which read as "this implementation attaches no @synthetic marker" when it attaches one.
+  const ourKeyAnnotations = new Map(
+    [...schema.keyAnnotations].map(([key, value]) => [canonicalName(key), value]),
+  );
   const out: string[] = [];
 
   for (const key of expected.keys()) {
@@ -457,7 +504,7 @@ function differences(name: string): string[] {
     report(
       `${key} <key annotations>`,
       entry.keyAnnotations,
-      canonicalKeyAnnotations(schema.keyAnnotations.get(key) ?? []),
+      canonicalKeyAnnotations(ourKeyAnnotations.get(key) ?? []),
       out,
     );
   }
@@ -503,21 +550,6 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         'unique array rather than as `set` — the wire aliases need a discriminating test, and ' +
         'the readers that fix the other half of it are Wave 4',
     },
-    {
-      // No `\[\d+\]` anchor: a key-annotations mismatch shows up two ways depending on whether
-      // the fixture and our own (annotation-value-less) list happen to share a length -- as the
-      // bare `<key annotations>` path (a length mismatch, `report`'s non-recursive leaf case,
-      // e.g. an empty list on our side) or as `<key annotations>[N]` (equal lengths, each element
-      // then compared and found to carry no value on our side). Both are this one gap.
-      pattern: / <key annotations>(\[\d+\])?$/,
-      reason:
-        'key annotations (§6, the `@doc` on each declaration) are dropped because `annotations` ' +
-        'is bound as an ordinary wire field rather than a record`s annotations carrier — the ' +
-        'frozen-artefact mismatch STATUS.md records, and this is the evidence it needed. ' +
-        'resolveBundled also supplies no annotationValueReader, so every key annotation resolves ' +
-        'name-only regardless -- the reader that reads one back is the same Wave 5 writer/reader ' +
-        'work the value-carrier gap needs.',
-    },
   ];
 
   it.each([['meta-kernel'], ['meta'], ['core']])(
@@ -530,6 +562,39 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         unexpected,
         `${name}.tn vs ${name}-resolved.tn, beyond the documented deferrals:\n\n  ${unexpected.join('\n  ')}\n`,
       ).toEqual([]);
+    },
+  );
+
+  it.each([['meta-kernel'], ['meta'], ['core']])(
+    "%s.tn's key annotations carry their values, each @doc verbatim from the source",
+    (name) => {
+      // The fixture cannot check this: its own header says it carries long `@doc` strings
+      // abbreviated, and that "a conforming resolver preserves them verbatim". The source document
+      // is the oracle instead -- which is a stronger check than the fixture would have been, since
+      // it compares against the exact text an author wrote rather than a summary of it.
+      const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
+      const schema = resolved(name);
+      const selfId = canonicalizeIdentity(schema.id);
+      let checked = 0;
+      for (const [declared, declaration] of document.body.declarations) {
+        if (schema.origins.get(declared) !== selfId) continue;
+        const written = declaration.nameAnnotations.find((a) => a.name === 'doc');
+        const resolvedDoc = schema.keyAnnotations.get(declared)?.find((a) => a.name === 'doc');
+        if (written?.value === undefined) {
+          expect(resolvedDoc, `'${declared}' has no @doc in the source`).toBeUndefined();
+          continue;
+        }
+        const core = written.value.coreValue;
+        if (core.kind !== 'token') throw new Error(`'${declared}': @doc's value is not a token`);
+        expect(
+          renderAnnotationValue(resolvedDoc?.value),
+          `'${declared}': @doc should be preserved verbatim`,
+        ).toBe(core.text);
+        checked += 1;
+      }
+      // A guard against the loop silently checking nothing -- every bundled schema documents most
+      // of what it declares.
+      expect(checked).toBeGreaterThan(20);
     },
   );
 

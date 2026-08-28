@@ -12,6 +12,8 @@ import { fromBytes, fromString, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
 import { resolveSchema, type Schema } from '../src/compiler/schemaResolver.js';
+import { compile } from '../src/compiler/compile.js';
+import { createAnnotationValueReader } from '../src/schema/annotationReader.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
 import type { DefinitionGetter } from '../src/compiler/resolverTypes.js';
 import { toCoreValue, type AtomEncoder } from '../src/bind/encode.js';
@@ -64,11 +66,15 @@ function structureNamespaceFor(name: BundledName): DefinitionGetter {
   };
 }
 
-function resolveBundled(name: BundledName, meta: Schema): Schema {
+function resolveBundled(name: BundledName, meta: LinkedSchema): Schema {
   const document = runSync(parseSchemaDocument(fromBytes(bundledSource(`${name}.tn`))));
   const metaDefinitions = structureNamespaceFor(name);
   return resolveSchema(document, {
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
+    // §6/§3.3.3: a key annotation's value is read through the *governing meta's* own compiled
+    // reader for the annotation's name. Without one every key annotation resolves name-only, and
+    // the `@doc` on each declaration is lost from the resolved output.
+    annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
     encodeSourceBody: (body) => toCoreValue(topBinding, body, encodeAtom),
     resolveImport: () => ({ entries: meta.entries, originOf: () => meta.id }),
@@ -117,6 +123,7 @@ export function resolveUserSchema(source: string): LinkedSchema {
     meta.entries.get(typeName) ?? resolvedBundled('meta-kernel').entries.get(typeName);
   const unlinked = resolveSchema(document, {
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
+    annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
     encodeSourceBody: (body) => toCoreValue(topBinding, body, encodeAtom),
     resolveImport: () => ({ entries: core.entries, originOf: () => core.id }),

@@ -143,26 +143,21 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   yet, rather than silently trying to fetch mid-resolution.
 - **All three bundled schemas resolve, link, and match their fixtures up to two deferrals.**
   `subtypes` is exact against `meta-kernel-resolved.tn` (top 17, atom 6, product 5, sum 1,
-  text_type 2, atom_specification 2, array 1).
+  text_type 2, atom_specification 2, array 1), and every key annotation (§6) now resolves with its
+  value: `schema/annotationReader.ts` reads one through the governing meta's own compiled reader
+  for the annotation's name, over `compiler/dataValueEvents.ts`'s replay of the written value.
+  `@synthetic` is compared against the fixture exactly; `@doc` is compared against the **source
+  document** instead, because `*-resolved.tn`'s own header says it carries long `@doc` strings
+  abbreviated and that "a conforming resolver preserves them verbatim" — so the fixture cannot be
+  the oracle for their text, and the source is a stronger one.
   `packages/tson/test/bundled-schemas-resolve.test.ts` holds each remaining difference as an
   assertion rather than a skip, so the list can only shrink:
   - A REQUIRED_WITH_DEFAULT atom-specification field (`spec`, `component`, the `allow_*` flags)
     is written where the fixture omits it at its default. Whether such a field is written at its
-    default is a writer question, and the writers land in Wave 5.
+    default is a writer question.
   - `token_set` round-trips as an unordered unique `array` rather than as `set` — `topBinding`
     maps every host `ArrayBody` to the `array` wire name, and the aliases need a discriminating
     test on the write side and a reader on the other.
-  - Key annotations (§6's `@doc` on each declaration) are dropped. This is the evidence the
-    annotations-carrier gap below needed: it is not cosmetic, it loses documentation from the
-    resolved output.
-
-- **Streaming reads pull one chunk per suspension**, which is what makes "memory is proportional
-  to nesting depth" true of them. `runOver` previously ran a concurrent pump loop pushing every
-  chunk as fast as the source yielded it, so a producer faster than the parser — a file stream, a
-  fast socket — queued the whole document in memory regardless of what had been consumed. It now
-  steps the task first and pulls only when the task has suspended, and closes the source (running
-  a generator's `finally`, releasing a `ReadableStream`'s reader lock) when a task finishes early.
-  `classifyDocument` is the case that made this visible and `drivers.test.ts` pins it directly.
 
 - **A variant's dispatch lookahead buffers a value's whole annotation run.** `readVariant` skips
   annotations inside `lookingAhead` to find the `!type-ref`, so the events it rewinds grow with
@@ -174,8 +169,10 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 - **`annotations` is bound as an ordinary wire field, not as a record's annotations carrier.**
   `bind/binding.ts` types `annotationsCarrier` against `annotations/index.ts`'s
   `Annotations` (`{ values }`), while `schema/meta` carries its own stand-in
-  (`readonly Annotation[]`); the two do not meet. Wave 3's fixture comparison against
-  `spec/m/*-resolved.tn` is what will show whether this changes the resolved output.
+  (`readonly Annotation[]`); the two do not meet. This no longer costs key annotations — those go
+  through `schema/annotationReader.ts` and the compiled readers, not through a binding — so what
+  is left is the binding-layer mismatch itself, which shows up when a _record body_ carries wire
+  annotations rather than when a declaration's name does.
 
 ## Scaffold
 
