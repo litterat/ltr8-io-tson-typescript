@@ -239,6 +239,10 @@ See [CLAUDE.md](CLAUDE.md) for the design constraints and conventions,
 [PORT-PLAN.md](PORT-PLAN.md) for how the port is organised, and
 [ORCHESTRATION.md](ORCHESTRATION.md) for how it was executed.
 
+[PORT-PLAN-REVISED.md](PORT-PLAN-REVISED.md) is the plan rewritten after the port shipped: what the
+original got right, the eight things it got wrong, and the same material generalised for porting TSON
+to another language. Read it before starting one.
+
 ## Related
 
 - [ltr8-io-tson-java](https://github.com/litterat/ltr8-io-tson-java) — the reference implementation

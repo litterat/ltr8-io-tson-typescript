@@ -1,5 +1,10 @@
 # Scaffold `ltr8-io-tson-typescript` for a one-shot Java→TypeScript port
 
+> **This is the plan as written before the port ran, kept as the record of what was actually
+> followed.** [PORT-PLAN-REVISED.md](PORT-PLAN-REVISED.md) is what it should have said — written
+> after the port shipped and after the defects these gates failed to catch were found — and is
+> generalised for porting TSON to a language other than TypeScript. Start there.
+
 ## Context
 
 `/Users/david/github/ltr8-io-tson-typescript` is an empty directory. It is to become the TypeScript
