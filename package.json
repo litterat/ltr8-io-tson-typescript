@@ -20,7 +20,7 @@
     "build": "npm run build --workspace @ltr8/tson && npm run build --workspace @ltr8/tson-cli",
     "gen:unicode": "node scripts/gen-unicode-tables.mjs",
     "check:unicode": "node scripts/check-unicode-tables.mjs",
-    "gen:cli-schemas": "node scripts/gen-cli-bundled-schemas.mjs",
+    "gen:stdlib-schemas": "node scripts/gen-stdlib-schemas.mjs",
     "refs": "./scripts/fetch-references.sh"
   },
   "devDependencies": {

@@ -10,6 +10,7 @@ export default defineConfig([
       schema: 'src/schema/index.ts',
       write: 'src/write/index.ts',
       identity: 'src/identity/index.ts',
+      stdlib: 'src/stdlib/index.ts',
     },
     format: ['esm', 'cjs'],
     dts: true,

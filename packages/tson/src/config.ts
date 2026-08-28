@@ -11,14 +11,24 @@
  * than one schema, or resolving `!!import`/`!!meta` against schemas it does not have compiled
  * ahead of time.
  *
- * **No bundled standard library.** Unlike the reference implementation's `Tson.builder().build()`
- * (which loads `meta-kernel`/`meta.tn`/`core.tn` from packaged classpath resources before a
- * caller does anything), this port bundles nothing: `spec/m/*.tn`'s vendored bytes are not
- * embedded in `@ltr8/tson`, so a fresh {@link Tson} starts with an *empty* registry. A caller
- * wanting the standard library registers it themselves, once, from bytes they already have or
- * fetch through their own {@link SchemaSource} -- meta-kernel's own bootstrap circularity
- * (§1.5: its `!!meta` names itself) needs `schema/bootstrap.ts`'s own `bootstrapMetaKernel`
- * regardless, since nothing here can special-case it silently:
+ * **A fresh {@link Tson} starts with an empty registry**, unlike the reference implementation's
+ * `Tson.builder().build()`, which loads `meta-kernel`/`meta.tn`/`core.tn` from packaged classpath
+ * resources before a caller does anything. That is not a gap: this module's import graph is what a
+ * browser consumer of `readTree` pays for, and 45 KB of schema text belongs on the other side of a
+ * subpath boundary from it. `@ltr8/tson/stdlib` is that boundary, and it is one line to cross:
+ *
+ * ```ts
+ * import { standardLibrary } from '@ltr8/tson/stdlib';
+ *
+ * const tson = standardLibrary(); // meta-kernel, meta.tn and core.tn already registered
+ * const catalog = tson.resolveSchema(catalogSchemaText);
+ * const value = tson.readTree(documentBytes, { schema: tson.compile(catalog), root: 'reading' });
+ * ```
+ *
+ * A caller who wants the standard library from somewhere else -- a newer revision, a private
+ * mirror -- registers it the same way `stdlib/index.ts` does, since meta-kernel's own bootstrap
+ * circularity (§1.5: its `!!meta` names itself) needs `schema/bootstrap.ts`'s `bootstrapMetaKernel`
+ * regardless, and nothing here can special-case it silently:
  *
  * ```ts
  * import { createTson, bootstrapMetaKernel, linkSchema } from '@ltr8/tson';
@@ -29,9 +39,6 @@
  *   'https://tson.io/2026/33/m/meta.tn',
  *   'https://tson.io/2026/33/m/core.tn',
  * ]);
- * const catalog = tson.resolveSchema(catalogSchemaText); // its own !!meta/!!import already registered
- * const compiled = tson.compile(catalog);
- * const value = tson.readTree(documentBytes, { schema: compiled, root: 'reading' });
  * ```
  *
  * **Resolution is synchronous; fetching is not — that split is why {@link preload} exists at

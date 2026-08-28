@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 /**
- * Generates the checked-in copy of the three bundled schemas the CLI bootstraps at startup:
+ * Generates the checked-in copy of the three bundled schemas the standard library ships:
  *
- *   packages/cli/src/bundledSchemas.generated.ts
+ *   packages/tson/src/stdlib/schemas.generated.ts
  *
- * `@ltr8/tson` itself embeds no standard library (`STATUS.md`'s "known gaps" -- deliberately out
- * of scope for the front-door package, since a browser consumer of `parse`/`readTree` should not
- * pay for meta-kernel/meta.tn/core.tn it never asked to load). The CLI is Node-only and *always*
- * wants the standard library available offline (`tson validate --schema ...` has to work with no
- * network access), so it carries its own copy the same way `spec/` itself is vendored: read once
- * from the pinned reference commit's `spec/m/*.tn` and embedded as string constants, rather than
- * read from disk at run time (a published `@ltr8/tson-cli` package is not installed next to this
- * repository's `spec/` directory).
+ * They are embedded as string constants rather than read from disk at run time, for two reasons
+ * that both matter: a published package is not installed next to this repository's `spec/`
+ * directory, and reading files is not something a browser build can do at all. Embedding is what
+ * makes `@ltr8/tson/stdlib` work identically in Node and in a browser with no I/O of any kind.
+ *
+ * They live behind their own subpath, never on the package's default entry, so a consumer of
+ * `parse`/`readTree` does not pay for a standard library it never asked to load. That property is
+ * why this is generated into `stdlib/` rather than into `index.ts`'s import graph.
  *
  * Each `.tn` file's exact bytes are embedded via `JSON.stringify`, which handles every escape a
  * schema document's own text could contain (quotes, backslashes, the triple-quoted `@doc` bodies)
  * correctly regardless of content -- no hand-rolled escaping to get subtly wrong.
  *
- * Run with `npm run gen:cli-schemas`. Output must be a no-op diff against a matching `spec/m/`;
+ * Run with `npm run gen:stdlib-schemas`. Output must be a no-op diff against a matching `spec/m/`;
  * re-run this whenever `CLAUDE.md`'s vendored-spec pin moves.
  */
 
@@ -28,7 +28,7 @@ import prettier from 'prettier';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC_M = join(REPO_ROOT, 'spec/m');
-const OUT_PATH = join(REPO_ROOT, 'packages/cli/src/bundledSchemas.generated.ts');
+const OUT_PATH = join(REPO_ROOT, 'packages/tson/src/stdlib/schemas.generated.ts');
 
 const SCHEMAS = [
   { file: 'meta-kernel.tn', constant: 'META_KERNEL_TN' },
@@ -69,7 +69,7 @@ const formatted = await prettier.format(source, {
 });
 writeFileSync(OUT_PATH, formatted);
 
-console.log(`packages/cli/src/bundledSchemas.generated.ts`);
+console.log(`packages/tson/src/stdlib/schemas.generated.ts`);
 for (const { file, text } of parts) {
   console.log(`  ${file.padEnd(16)} ${String(text.length).padStart(6)} bytes`);
 }

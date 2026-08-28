@@ -109,9 +109,21 @@ const result = validate(bytes, { schema: compiledSchema, root: 'order' });
 
 `createTson(config)` adds what the flat functions cannot be on their own: a registry that resolves
 and links a schema against every other schema an instance already knows about, and — given a
-`SchemaSource` — fetches the ones it doesn't. It bundles no standard library itself; a caller
-registers `meta-kernel`/`meta.tn`/`core.tn` once, from bytes it already has or fetches through its
-own `SchemaSource`:
+`SchemaSource` — fetches the ones it doesn't. A fresh instance starts empty; `@ltr8/tson/stdlib`
+hands back one with `meta-kernel`/`meta.tn`/`core.tn` already registered, embedded as source text
+so nothing is fetched or read from disk:
+
+```ts
+import { standardLibrary } from '@ltr8/tson/stdlib';
+
+const tson = standardLibrary();
+const catalog = tson.resolveSchema(catalogSchemaText); // its !!meta/!!import already registered
+const value = tson.readTree(documentBytes, { schema: tson.compile(catalog), root: 'reading' });
+```
+
+It is a separate subpath so that importing `parse` or `readTree` does not drag in 45 KB of schema
+text a Class 1 read never looks at. To register a standard library from somewhere else — a newer
+revision, a private mirror — do what that subpath does, fetching through your own `SchemaSource`:
 
 ```ts
 import { createTson, bootstrapMetaKernel, linkSchema } from '@ltr8/tson';
@@ -120,10 +132,6 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
 await tson.preload(['https://tson.io/2026/33/m/meta.tn', 'https://tson.io/2026/33/m/core.tn']);
-
-const catalog = tson.resolveSchema(catalogSchemaText); // its own !!meta/!!import already registered
-const compiled = tson.compile(catalog);
-const value = tson.readTree(documentBytes, { schema: compiled, root: 'reading' });
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -161,8 +169,8 @@ npx @ltr8/tson-cli compile person.tn
 npx @ltr8/tson-cli hash person.tn        # prints the canonical content hash (§2.2.1)
 ```
 
-`validate`/`compile`/`hash` bootstrap their own copy of `meta-kernel`/`meta.tn`/`core.tn`, embedded
-at build time, so they work offline with no `SchemaSource` configured. Exit codes: `0` valid, `1`
+`validate`/`compile`/`hash` register `@ltr8/tson/stdlib`'s embedded
+`meta-kernel`/`meta.tn`/`core.tn`, so they work offline with no `SchemaSource` configured. Exit codes: `0` valid, `1`
 invalid input, `2` usage error, `70` library gap or internal fault.
 
 ## What is and isn't implemented
@@ -172,8 +180,6 @@ Both spec parts are implemented and the shared conformance suite passes in full 
 deferrals (e.g. `token_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
 resolved schema output) and known gaps. In particular:
 
-- **`createTson` bundles no standard library.** A fresh instance starts with an empty registry;
-  the standard library is registered explicitly, as shown above.
 - **No document-header classification helper.** Whether a document is data or schema is determined
   by its header per §2.2, but this library has no lightweight lookahead API for it yet — a caller
   parses with `parseDocument` or `parseSchemaDocument` knowing in advance which one it has.

@@ -74,6 +74,17 @@
         "default": "./dist/identity.cjs"
       }
     },
+    "./stdlib": {
+      "@ltr8/source": "./src/stdlib/index.ts",
+      "import": {
+        "types": "./dist/stdlib.d.ts",
+        "default": "./dist/stdlib.js"
+      },
+      "require": {
+        "types": "./dist/stdlib.d.cts",
+        "default": "./dist/stdlib.cjs"
+      }
+    },
     "./write": {
       "@ltr8/source": "./src/write/index.ts",
       "import": {

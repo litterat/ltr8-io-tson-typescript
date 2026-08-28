@@ -62,6 +62,15 @@ rejected by it rather than by a decoder. No vector in the current suite declares
       the single `TsonReadError` its contract always named, with the original error as its `cause`.
       A `TsonInternalError` is deliberately not caught: a broken invariant is not a diagnostic
       about the document
+- [x] Standard library, embedded — `@ltr8/tson/stdlib`: `meta-kernel`/`meta.tn`/`core.tn` as
+      source-text constants generated from `spec/m/` by `scripts/gen-stdlib-schemas.mjs`, plus
+      `standardLibrary(config?)` (a `Tson` with all three already registered, what the reference
+      implementation's `Tson.builder().build()` hands back) and `registerStandardLibrary(tson)`.
+      Its own subpath, never the default entry, so a browser consumer of `parse`/`readTree` does
+      not carry 45 KB of schema text it never looks at — verified against the built bundles, not
+      assumed. No I/O on any platform: nothing is read from disk and no `SchemaSource` is
+      consulted, so registering the standard library never reaches the network even when one is
+      configured. The CLI now consumes this instead of embedding its own copy
 - [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`,
       `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin` (pinning, the
       inverse of `declaredSha256`) beside `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
@@ -109,14 +118,6 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   realpaths to `/` (`root + sep` was `//`, which nothing matches, so it failed closed and refused
   every file under it).
 
-- **`createTson` bundles no standard library.** Unlike the reference implementation's
-  `Tson.builder().build()`, which loads `meta-kernel`/`meta.tn`/`core.tn` from packaged classpath
-  resources, this port embeds nothing: `spec/m/*.tn`'s vendored bytes are not compiled into
-  `@ltr8/tson`, so a fresh `Tson` starts with an empty registry and a caller registers the
-  standard library themselves (`config.ts`'s own top-of-file example shows the sequence:
-  `bootstrapMetaKernel` + `linkSchema` + `register` for the kernel, then `preload` for meta/core).
-  Embedding the three bundled schemas as static, browser-safe strings would make that automatic;
-  it is real, scoped work of its own and not something this front-door package attempted.
 - **Schema resolution stays synchronous; fetching does not, and that split is a deliberate
   platform divergence from the Java, not a spec question.** `link/link.ts`'s/
   `compiler/schemaResolver.ts`'s `resolveImport` is a plain synchronous function — the frozen

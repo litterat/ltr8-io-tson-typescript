@@ -21,7 +21,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomNode, recordNode, write, type Value } from '@ltr8/tson';
-import { CORE_TN, META_TN } from '../bundledSchemas.generated.js';
+import { CORE_TN, META_TN } from '@ltr8/tson/stdlib';
 import { readIdDirective } from '../idDirective.js';
 
 const PERSON_SCHEMA_ID = 'https://example.com/tson-cli/examples/person.tn';
