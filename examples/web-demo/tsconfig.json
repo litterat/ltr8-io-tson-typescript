@@ -1,0 +1,16 @@
+{
+  // The demo is plain browser JavaScript, and it is the one place in this repository that may say
+  // `document` -- `packages/tson` carries no `DOM` lib precisely so it cannot. This project exists
+  // to give the linter's project service somewhere to put these files, and to state that boundary.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/**/*.js", "build.mjs"]
+}

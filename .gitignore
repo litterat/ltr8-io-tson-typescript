@@ -8,3 +8,6 @@ coverage/
 dist-types/
 dist/
 node_modules/
+
+# Built by `npm run demo:web`; regenerated from src/ on demand.
+examples/web-demo/dist/

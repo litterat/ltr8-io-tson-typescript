@@ -79,3 +79,9 @@ jobs:
         # here could see that through the symlink it does not, and the installed CLI was a silent
         # no-op that exited 0 for every command, `validate` included.
         run: npm run smoke:cli
+
+      - name: Build the browser demo
+        # Also a check, not only an artifact: the demo bundles at `platform: 'browser'`, where
+        # `@ltr8/tson/source` cannot be resolved at all and esbuild refuses a Node built-in rather
+        # than shimming one. A build that succeeds is a build carrying neither.
+        run: npm run demo:web

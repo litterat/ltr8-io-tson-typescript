@@ -189,6 +189,19 @@ canonicalizeIdentity(pinned); // 'example.com/order.tn' — scheme and query str
 `declaredSha256` reads a pin back out and `verifyContentHash` checks content against one; the
 registry uses the same pair internally when `preload` fetches a pinned reference.
 
+### Browser demo
+
+`examples/web-demo` is a validation-diagnostics page that runs the whole pipeline client-side — the
+schema is resolved, linked and compiled in the browser, the document is validated against it, and
+every fault is reported in one pass with a code, a path, an expected/found pair and a position.
+
+```bash
+npm run demo:web                 # writes examples/web-demo/dist (index.html + demo.js + demo.css)
+npx serve examples/web-demo/dist # ES modules need http://, not file://
+```
+
+84 KB gzipped, all of it: lexer, parser, schema compiler, validator, and the three bundled schemas.
+
 ### CLI
 
 ```bash

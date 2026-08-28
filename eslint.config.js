@@ -45,6 +45,7 @@ export default defineConfig(
         createTypeScriptImportResolver({
           project: [
             'packages/*/tsconfig.json',
+            'examples/*/tsconfig.json',
             'packages/*/src/source/tsconfig.json',
             'test/tsconfig.json',
           ],
@@ -104,6 +105,24 @@ export default defineConfig(
           ],
         },
       ],
+    },
+  },
+  {
+    // The browser demo is plain JS against the DOM -- the one place in this repository that is
+    // *supposed* to reach for browser globals, which `packages/tson` itself never may.
+    files: ['examples/**'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      globals: {
+        document: 'readonly',
+        performance: 'readonly',
+        TextEncoder: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        console: 'readonly',
+        Buffer: 'readonly',
+        process: 'readonly',
+      },
     },
   },
   {

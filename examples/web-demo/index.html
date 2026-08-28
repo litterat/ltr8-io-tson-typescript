@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Validation diagnostics — TSON</title>
+    <meta
+      name="description"
+      content="Every fault in one pass. A TSON schema compiled and a document validated entirely in the browser."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23111827'/%3E%3Ctext x='8' y='12' font-family='monospace' font-size='10' font-weight='bold' fill='%235eead4' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./demo.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="https://tson.io">tson.io</a>
+        <nav class="site-nav">
+          <a href="https://tson.io/spec">Specification</a>
+          <a href="https://github.com/litterat/ltr8-io-tson-typescript">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="hero">
+        <p class="eyebrow">Diagnostics</p>
+        <h1>Every fault in one pass.</h1>
+        <p class="lede">
+          A fail-fast validator stops at the first problem, so fixing a document takes one round
+          trip per error. TSON collects <strong>all of them</strong>, each with a code, a path, what
+          was expected and what was found. Edit either pane — the schema compiles and the document
+          validates <strong>entirely in your browser</strong>, with no network involved.
+        </p>
+      </section>
+
+      <div class="scenarios">
+        <span class="label">Try</span>
+        <span id="scenarios" class="chips"></span>
+      </div>
+
+      <div class="panes">
+        <div class="pane">
+          <div class="pane-head">
+            <span class="pane-title">document.tn</span>
+            <span class="pane-note">
+              read against
+              <input
+                id="root"
+                class="root-input"
+                aria-label="schema entry the root value reads against"
+              />
+              <span class="hint" title="Leave this empty to read with no schema at all (Class 1)"
+                >ⓘ</span
+              >
+            </span>
+          </div>
+          <div class="editor">
+            <div class="gutter" id="gutter" aria-hidden="true"></div>
+            <textarea id="data" spellcheck="false" aria-label="TSON document"></textarea>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-head">
+            <span class="pane-title">diagnostics</span>
+            <span class="pane-note">click one to jump to it</span>
+          </div>
+          <div class="verdict ok" id="verdict"><span class="dot"></span><span>…</span></div>
+          <ul class="diags" id="diags"></ul>
+        </div>
+      </div>
+
+      <div class="panes">
+        <div class="pane full">
+          <div class="pane-head">
+            <span class="pane-title">people.tn — the schema</span>
+            <span class="pane-note">resolved, linked and compiled in the browser</span>
+          </div>
+          <div class="editor">
+            <textarea id="schema" spellcheck="false" rows="18" aria-label="TSON schema"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <span
+          >Powered by <code>@ltr8/tson</code>, zero runtime dependencies. The whole page — lexer,
+          parser, schema compiler, validator and the three bundled schemas — is
+          <strong id="size">…</strong> gzipped.</span
+        >
+        <span
+          >A diagnostic's <code>NOT_IMPLEMENTED</code> code means a gap in the library, never a
+          verdict on your document.</span
+        >
+      </div>
+    </main>
+
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>
