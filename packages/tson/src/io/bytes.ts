@@ -172,23 +172,53 @@ export async function runAsync<T>(task: Task<T>, input: ChunkInput): Promise<T> 
   return step.value;
 }
 
-/** Feed an async byte source into a {@link ChunkInput}, then run a task over it. */
+/**
+ * Feed an async byte source into a {@link ChunkInput}, then run a task over it.
+ *
+ * **Demand-driven, one chunk per suspension.** The task is stepped first; a chunk is pulled from
+ * `source` only when the task has suspended on {@link NEED_INPUT} and therefore actually needs
+ * one. That is what makes `CLAUDE.md`'s "memory is proportional to nesting depth" true of
+ * streaming reads: a producer faster than the parser -- a file stream, a fast socket -- cannot run
+ * ahead and queue the whole document in memory, because nothing asks it for a second chunk until
+ * the first is consumed.
+ *
+ * It is also what lets a task that finishes early *stop* early. `classifyDocument` reads a
+ * document's header and returns; the loop exits, and the `finally` calls the iterator's own
+ * `return()`, which runs a generator's `finally` and releases a `ReadableStream`'s reader lock.
+ * Nothing further is pulled from the source at all.
+ *
+ * Once the source is exhausted the loop keeps stepping the task without pulling again: after
+ * {@link ChunkInput.end} the input reports `ended`, and a task's remaining steps are its ordinary
+ * EOF handling.
+ */
 export async function runOver<T>(
   source: AsyncIterable<Uint8Array>,
   makeTask: (input: ByteInput) => Task<T>,
 ): Promise<T> {
   const input = chunkInput();
   const task = makeTask(input);
-  const pumping = (async (): Promise<void> => {
-    try {
-      for await (const chunk of source) input.push(chunk);
-    } finally {
-      input.end();
-    }
-  })();
+  const iterator = source[Symbol.asyncIterator]();
+  let sourceEnded = false;
   try {
-    return await runAsync(task, input);
+    let step = task.next();
+    while (!step.done) {
+      if (sourceEnded) {
+        await input.pump(); // returns immediately once ended; keeps this a microtask loop
+      } else {
+        const next = await iterator.next();
+        if (next.done === true) {
+          sourceEnded = true;
+          input.end();
+        } else {
+          input.push(next.value);
+        }
+      }
+      step = task.next();
+    }
+    return step.value;
   } finally {
-    await pumping;
+    if (!sourceEnded) {
+      await iterator.return?.();
+    }
   }
 }

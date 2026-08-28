@@ -64,6 +64,7 @@ export {
 export * from './tree/accessors.js';
 
 // ── The flat front door ─────────────────────────────────────────────────────────────────────
+export * from './facade/classify.js';
 export * from './facade/parse.js';
 export * from './facade/tree.js';
 export * from './facade/write.js';

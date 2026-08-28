@@ -143,6 +143,22 @@ and `fileSchemaSource` (containment checked after `realpath`) live behind the se
 `@ltr8/tson/source` subpath — never imported by the package's default entry, so a browser bundle
 never pulls in Node's `fs`/`http`.
 
+### Classifying a document
+
+Whether a file is data or schema is a property of its header, not its extension (§2.2), and §7.1
+is explicit that deciding costs at most two directives of lookahead and no value parsing —
+"streams, previews, and content sniffers can classify a document from its opening bytes":
+
+```ts
+import { classifyDocument } from '@ltr8/tson';
+
+classifyDocument(bytes); // { kind: 'schema', id: '…', meta: '…' } | { kind: 'data', id?: '…' }
+```
+
+It really does stop at the header: classifying a gigabyte document costs the same as classifying a
+two-line one, a document whose body will not parse still classifies, and over a stream only the
+chunks the header needs are pulled from the source.
+
 ### Content hashing and identity
 
 [TSON-DATA] §2.2.1's two mechanisms have their own subpath, `@ltr8/tson/identity`, because neither
@@ -179,10 +195,6 @@ Both spec parts are implemented and the shared conformance suite passes in full 
 [STATUS.md](STATUS.md) for the itemised checklist, including the small number of documented
 deferrals (e.g. `token_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
 resolved schema output) and known gaps. In particular:
-
-- **No document-header classification helper.** Whether a document is data or schema is determined
-  by its header per §2.2, but this library has no lightweight lookahead API for it yet — a caller
-  parses with `parseDocument` or `parseSchemaDocument` knowing in advance which one it has.
 
 ## Specification
 

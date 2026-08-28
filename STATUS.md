@@ -32,7 +32,8 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 - [x] Temporal types — `date`, `time`, `datetime`, `duration`
 - [x] Tree model — `Value` nodes, RFC 6901 pointers
 - [x] Writers — streaming emit, optional `!!id`/`!!schema` header
-- [ ] Document header classification (§7.1)
+- [x] Document header classification (§7.1, §2.2) — `classifyDocument`: data or schema from the
+      header alone, at most two directives of lookahead, no value parsing
 
 ## Part 2 — type system and schema (Class 2)
 
@@ -143,6 +144,14 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   - Key annotations (§6's `@doc` on each declaration) are dropped. This is the evidence the
     annotations-carrier gap below needed: it is not cosmetic, it loses documentation from the
     resolved output.
+
+- **Streaming reads pull one chunk per suspension**, which is what makes "memory is proportional
+  to nesting depth" true of them. `runOver` previously ran a concurrent pump loop pushing every
+  chunk as fast as the source yielded it, so a producer faster than the parser — a file stream, a
+  fast socket — queued the whole document in memory regardless of what had been consumed. It now
+  steps the task first and pulls only when the task has suspended, and closes the source (running
+  a generator's `finally`, releasing a `ReadableStream`'s reader lock) when a task finishes early.
+  `classifyDocument` is the case that made this visible and `drivers.test.ts` pins it directly.
 
 - **A variant's dispatch lookahead buffers a value's whole annotation run.** `readVariant` skips
   annotations inside `lookingAhead` to find the `!type-ref`, so the events it rewinds grow with
