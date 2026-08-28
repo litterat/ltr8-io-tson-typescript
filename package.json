@@ -21,16 +21,20 @@
     "gen:unicode": "node scripts/gen-unicode-tables.mjs",
     "check:unicode": "node scripts/check-unicode-tables.mjs",
     "gen:stdlib-schemas": "node scripts/gen-stdlib-schemas.mjs",
-    "refs": "./scripts/fetch-references.sh"
+    "refs": "./scripts/fetch-references.sh",
+    "check:package": "publint packages/tson && publint packages/cli && attw --pack packages/tson --profile node16 --exclude-entrypoints source && attw --pack packages/tson --profile node16 --entrypoints ./source --ignore-rules no-resolution && attw --pack packages/cli --profile node16"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "10.0.1",
     "@types/node": "26.4.0",
+    "esbuild": "^0.27.7",
     "eslint": "10.9.1",
     "eslint-import-resolver-node": "0.3.9",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import-x": "4.17.1",
     "prettier": "3.9.6",
+    "publint": "^0.3.24",
     "tsup": "8.5.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",

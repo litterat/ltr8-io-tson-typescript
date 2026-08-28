@@ -45,8 +45,29 @@ jobs:
         run: npm test
 
       - name: Conformance tests
+        # Not continue-on-error. It was, while the port was mid-flight and the suite was expected
+        # to be red -- but all 146 vectors pass now, and a green suite behind continue-on-error is
+        # a suite that can go red without anyone finding out.
         run: npm run test:conformance
-        continue-on-error: true
 
       - name: Build
         run: npm run build
+
+      - name: Package
+        # What a consumer sees, which nothing before this step checks: publint reads the published
+        # `exports`/`files`/`bin` for the mistakes that only show up after `npm publish`, and
+        # arethetypeswrong resolves every subpath the way a real TypeScript consumer does, from
+        # both CJS and ESM. The `node16` profile is the whole check -- `node10` predates `exports`
+        # entirely and this package targets Node 24+.
+        #
+        # `./source` is checked on its own with `no-resolution` ignored, because not resolving is
+        # what that subpath is for: it offers only the `node` condition, so a bundler *must* fail
+        # to reach it (`browser-bundle.test.ts` asserts the same property from the other side).
+        # Ignoring the rule for the whole package would hide a genuinely broken subpath, so the
+        # other seven are checked strictly.
+        run: |
+          npx publint packages/tson
+          npx publint packages/cli
+          npx attw --pack packages/tson --profile node16 --exclude-entrypoints source
+          npx attw --pack packages/tson --profile node16 --entrypoints ./source --ignore-rules no-resolution
+          npx attw --pack packages/cli --profile node16

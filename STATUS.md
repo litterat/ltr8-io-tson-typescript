@@ -94,8 +94,13 @@ rejected by it rather than by a decoder. No vector in the current suite declares
       `compile`, and `hash` all run against a real generated example and exit `0`
 - [x] Dual ESM/CJS publish — `npm run build` (tsup) produces `dist/*.{js,cjs,d.ts,d.cts}` for every
       subpath of both packages
-- [ ] Browser bundle — no bundler-driven smoke test yet; verified only indirectly (no `node:`
-      import outside `src/source/`, no `DOM` lib in any `tsconfig`)
+- [x] Browser bundle — `browser-bundle.test.ts` bundles all eight browser-facing subpaths with
+      esbuild at `platform: 'browser'` (from `src/`, via the `@ltr8/source` condition, so it holds
+      on a clean checkout), asserts no `node:` import survives, and runs the result in a `vm`
+      context carrying only web globals — no `process`, `Buffer`, `require` or `__dirname` — where
+      it parses, reads a tree, and registers the standard library and compiles a schema.
+      `@ltr8/tson/source` is asserted unreachable twice over: not exported under the conditions a
+      real browser bundler uses, and unbundlable even with the source condition forced on
 
 ## Known gaps
 
