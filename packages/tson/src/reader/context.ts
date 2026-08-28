@@ -306,6 +306,18 @@ export function* lookingAhead<T>(
     // nested lookahead's rewind must land ahead of the enclosing one's. An enclosing lookahead
     // does not also record these as its own -- they leave `consumed` here and re-enter
     // `recording` only if the enclosing pass reads through them itself.
-    cursor.rewound.unshift(...consumed);
+    //
+    // Rebuilt front-to-back rather than `unshift(...consumed)`. Spreading an array into arguments
+    // passes one argument per element, so a long lookahead — a variant dispatch skipping a large
+    // annotation run is how this was found — threw a raw `RangeError: Maximum call stack size
+    // exceeded`, a host error out of a reader whose contract is to report diagnostics. Unshifting
+    // one at a time avoids that but is quadratic, since each shifts the whole array. Draining the
+    // queue once and pushing both halves back is linear, and `rewound` is `readonly` as a binding
+    // rather than as an array, so it keeps its identity.
+    if (consumed.length > 0) {
+      const pending = cursor.rewound.splice(0, cursor.rewound.length);
+      for (const event of consumed) cursor.rewound.push(event);
+      for (const event of pending) cursor.rewound.push(event);
+    }
   }
 }

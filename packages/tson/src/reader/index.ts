@@ -17,3 +17,5 @@ export type {
   ValueReaderFactoryRegistry,
 } from './contracts.js';
 export * from './context.js';
+export * from './bind.js';
+export * from './schemaless/index.js';

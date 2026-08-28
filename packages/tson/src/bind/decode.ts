@@ -141,16 +141,32 @@ function tokenOf(value: CoreValue, wireType: string): TokenValue {
  * `enum_body.members`) without knowing a single `FieldState`; ambiguous elsewhere, in which case
  * this returns `undefined` and positional form is refused.
  */
-function inferPositionalField(
-  fields: readonly { wireName: string; required: boolean; binding: BindingRef<unknown> }[],
-): string | undefined {
-  const nonCollectionRequired = fields.filter((f) => {
+export function inferPositionalField<
+  F extends {
+    readonly wireName: string;
+    readonly required: boolean;
+    readonly unbound?: boolean;
+    readonly binding: BindingRef<unknown>;
+  },
+>(fields: readonly F[]): F | undefined {
+  // Two exclusions, and both are load-bearing. An `unbound` slot never receives wire data at all,
+  // so it can never be the field a bare value fills. A collection-shaped field already defaults to
+  // empty when absent ("absent and empty list are the same"), so a bare value is never meant for
+  // one either.
+  //
+  // This is exported and shared rather than reimplemented: `reader/bind.ts` had its own copy that
+  // kept the unbound exclusion and dropped the collection one, so the same Binding read through
+  // the two paths could infer two different fields.
+  const bindable = fields.filter((f) => f.unbound !== true);
+  const candidates = bindable.filter((f) => {
     if (!f.required) return false;
     const kind = resolveRef(f.binding).kind;
     return kind !== 'array' && kind !== 'map';
   });
-  if (nonCollectionRequired.length === 1) return nonCollectionRequired[0]?.wireName;
-  if (fields.length === 1) return fields[0]?.wireName;
+  if (candidates.length === 1) return candidates[0];
+  // A record whose every field is collection-shaped (`enum_body.members`) falls back to its sole
+  // field.
+  if (bindable.length === 1) return bindable[0];
   return undefined;
 }
 
@@ -232,7 +248,8 @@ export function fromCoreValue<T>(
       const policy = fieldsFor?.(resolved);
       let fields = recordFieldsOf(value);
       if (fields === undefined) {
-        const positionalField = policy?.positionalField ?? inferPositionalField(resolved.fields);
+        const positionalField =
+          policy?.positionalField ?? inferPositionalField(resolved.fields)?.wireName;
         if (positionalField === undefined) {
           throw readError(
             'TYPE_MISMATCH',

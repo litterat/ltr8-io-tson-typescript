@@ -73,6 +73,13 @@ rejected by it rather than by a decoder. No vector in the current suite declares
     annotations-carrier gap below needed: it is not cosmetic, it loses documentation from the
     resolved output.
 
+- **A variant's dispatch lookahead buffers a value's whole annotation run.** `readVariant` skips
+  annotations inside `lookingAhead` to find the `!type-ref`, so the events it rewinds grow with
+  the annotation count rather than with nesting depth. The rewind itself is now linear and no
+  longer overflows the stack, but the buffering is a real departure from CLAUDE.md's
+  "memory is proportional to nesting depth" and wants the annotations captured rather than
+  skipped-and-replayed. Wave 7's memory sweep is where this gets measured.
+
 - **`writeFloat` does not spell a whole float with a fractional part.** `write()` of `12` gives
   `"12"` where the suite's canonical text and `Double#toString` both give `"12.0"`. Reading is
   unaffected and round-trips; this is a writer-side formatting gap, and the writers land in Wave 5.
