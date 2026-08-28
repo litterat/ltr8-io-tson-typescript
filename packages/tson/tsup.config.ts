@@ -1,22 +1,42 @@
 import { defineConfig } from 'tsup';
 
-export default defineConfig({
-  entry: {
-    index: 'src/index.ts',
-    bind: 'src/bind/index.ts',
-    tree: 'src/tree/index.ts',
-    regex: 'src/regex/index.ts',
-    schema: 'src/schema/index.ts',
-    write: 'src/write/index.ts',
+export default defineConfig([
+  {
+    entry: {
+      index: 'src/index.ts',
+      bind: 'src/bind/index.ts',
+      tree: 'src/tree/index.ts',
+      regex: 'src/regex/index.ts',
+      schema: 'src/schema/index.ts',
+      write: 'src/write/index.ts',
+    },
+    format: ['esm', 'cjs'],
+    dts: true,
+    // The declaration build runs in its own worker against a synthetic project, which a
+    // composite project rejects. tsconfig.build.json is the same config with composite off.
+    tsconfig: 'tsconfig.build.json',
+    sourcemap: true,
+    clean: true,
+    target: 'node24',
+    splitting: false,
+    treeshake: true,
   },
-  format: ['esm', 'cjs'],
-  dts: true,
-  // The declaration build runs in its own worker against a synthetic project, which a
-  // composite project rejects. tsconfig.build.json is the same config with composite off.
-  tsconfig: 'tsconfig.build.json',
-  sourcemap: true,
-  clean: true,
-  target: 'node24',
-  splitting: false,
-  treeshake: true,
-});
+  {
+    // `src/source/` is its own TS project (`src/source/tsconfig.json` sets `types: ["node"]`,
+    // which the rest of this package deliberately carries none of -- see that file's own top
+    // note and `CLAUDE.md`'s "no Node built-ins in code that must run in a browser"). A second
+    // tsup config is what lets this one entry build against a different tsconfig than the six
+    // above; `clean: false` is load-bearing here; `dist/` was just populated by the config above
+    // and this run must add to it, not wipe it first.
+    entry: { source: 'src/source/index.ts' },
+    format: ['esm', 'cjs'],
+    dts: true,
+    tsconfig: 'src/source/tsconfig.build.json',
+    sourcemap: true,
+    clean: false,
+    platform: 'node',
+    target: 'node24',
+    splitting: false,
+    treeshake: true,
+  },
+]);

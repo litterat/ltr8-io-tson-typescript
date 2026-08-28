@@ -144,6 +144,18 @@ export function canonicalizeIdentity(uriString: string): string {
     throw new TsonSchemaValidationError(`'${uriString}' has a non-lowercase host '${host}'`);
   }
 
+  // A backslash is not a path separator in RFC 3986, but it IS one to the WHATWG URL parser for a
+  // special scheme, which then resolves the dot-segments it exposes. Splitting on '/' alone
+  // therefore sees `..\..\admin` as one harmless segment while a later `new URL()` reads three
+  // and climbs two levels. A raw backslash in a URI path is malformed regardless — RFC 3986
+  // requires it percent-encoded — so it is rejected here, where every consumer is protected,
+  // rather than only where it is currently exploitable.
+  if (uri.path.includes('\\')) {
+    throw new TsonSchemaValidationError(
+      `'${uriString}' contains a raw backslash in its path; RFC 3986 requires it percent-encoded`,
+    );
+  }
+
   for (const segment of uri.path.split('/')) {
     if (segment === '.' || segment === '..') {
       throw new TsonSchemaValidationError(`'${uriString}' contains a dot-segment in its path`);

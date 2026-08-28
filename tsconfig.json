@@ -1,4 +1,8 @@
 {
   "files": [],
-  "references": [{ "path": "packages/tson" }, { "path": "packages/cli" }]
+  "references": [
+    { "path": "packages/tson" },
+    { "path": "packages/tson/src/source" },
+    { "path": "packages/cli" }
+  ]
 }

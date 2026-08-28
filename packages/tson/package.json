@@ -43,6 +43,14 @@
       "types": "./dist/write.d.ts",
       "import": "./dist/write.js",
       "require": "./dist/write.cjs"
+    },
+    "./source": {
+      "@ltr8/source": "./src/source/index.ts",
+      "node": {
+        "types": "./dist/source.d.ts",
+        "import": "./dist/source.js",
+        "require": "./dist/source.cjs"
+      }
     }
   },
   "main": "./dist/index.cjs",

@@ -43,7 +43,11 @@ export default defineConfig(
       // having no zones at all.
       'import-x/resolver-next': [
         createTypeScriptImportResolver({
-          project: ['packages/*/tsconfig.json', 'test/tsconfig.json'],
+          project: [
+            'packages/*/tsconfig.json',
+            'packages/*/src/source/tsconfig.json',
+            'test/tsconfig.json',
+          ],
           noWarnOnMultipleProjects: true,
         }),
       ],

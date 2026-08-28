@@ -51,13 +51,83 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 
 - [x] I-Regexp engine (RFC 9485) — linear-time, ReDoS-safe
 - [x] Binding layer — authored descriptors with inferred static types
-- [ ] Front door — `parse`, `readTree`, `validate`, `write`, `createTson`
-- [ ] Schema sources — HTTPS with a deny-by-default allow-list; file with realpath containment
-- [ ] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `hash`, `init-example`
+- [x] Front door — `parse`, `readTree`, `validate`, `write` (flat, tree-shakable), `createTson`
+      as a config-bound registry over them (`src/facade/`, `src/config.ts`)
+- [x] Schema sources — `@ltr8/tson/source`'s `httpSchemaSource` (deny-by-default host allow-list,
+      no redirects ever, size cap enforced while streaming, timeout) and `fileSchemaSource`
+      (containment checked after `realpath`); both Node-only, reachable only through that
+      separate subpath (`src/source/`, its own `types: ["node"]` project) and never from the
+      package's default entry
+- [x] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `hash`, `init-example`; `text`/`json`/`tson`
+      output (the `tson` format via `write()`, never string concatenation); exit codes `0` valid,
+      `1` invalid input, `2` usage error, `70` library gap or fault. Bootstraps its own copy of
+      meta-kernel/meta.tn/core.tn, embedded at build time from `spec/m/` via a generator script
+      under `scripts/`, so `validate --schema`/`compile` work offline with no `SchemaSource`
+      configured. `hash` is read-only: it prints the pinned reference rather than rewriting the
+      input file in place
 - [ ] Dual ESM/CJS publish, browser bundle
 
 ## Known gaps
 
+- **Three low-severity security findings from Wave 6's adversarial pass remain open.** The two
+  high and three medium ones are fixed; these three are recorded rather than closed:
+  - The CLI treats an unrecognised flag as a filename, so a mistyped `--schemas` becomes an
+    ENOENT reported as exit 70 (library fault) where exit 2 (usage) is the honest answer.
+  - `tsup`'s `removeNodeProtocol` strips the `node:` prefix from the published `source` bundle.
+    The subpath's export conditions already keep a browser bundler out, so this is defence in
+    depth rather than an exposure, but the prefix is worth restoring.
+  - `fileSchemaSource`'s containment predicate degenerates when a mapped directory realpaths to
+    `/`: `root + sep` is `//`, which nothing matches, so every file under it is refused. It fails
+    closed, so this is a denial rather than an escape.
+
+- **`createTson` bundles no standard library.** Unlike the reference implementation's
+  `Tson.builder().build()`, which loads `meta-kernel`/`meta.tn`/`core.tn` from packaged classpath
+  resources, this port embeds nothing: `spec/m/*.tn`'s vendored bytes are not compiled into
+  `@ltr8/tson`, so a fresh `Tson` starts with an empty registry and a caller registers the
+  standard library themselves (`config.ts`'s own top-of-file example shows the sequence:
+  `bootstrapMetaKernel` + `linkSchema` + `register` for the kernel, then `preload` for meta/core).
+  Embedding the three bundled schemas as static, browser-safe strings would make that automatic;
+  it is real, scoped work of its own and not something this front-door package attempted.
+- **Schema resolution stays synchronous; fetching does not, and that split is a deliberate
+  platform divergence from the Java, not a spec question.** `link/link.ts`'s/
+  `compiler/schemaResolver.ts`'s `resolveImport` is a plain synchronous function — the frozen
+  contract every earlier wave built against — while a real schema fetch is I/O and cannot be
+  synchronous in JS the way the reference implementation's blocking `TsonSchemaSource.fetch` is in
+  Java (real threads, so blocking inside a "sync" resolver callback is fine there). `Tson.preload`
+  is therefore where fetching happens: it fetches, resolves, links, and registers each reference
+  **in order**, so that by the time something referencing it is resolved, `resolveImport` finds it
+  already registered and never itself needs to suspend. A reference list preloaded out of
+  dependency order fails with a clear `TsonSchemaValidationError` naming what wasn't registered
+  yet, rather than silently trying to fetch mid-resolution.
+- **`@ltr8/tson` exposes no way to compute a document's own content hash.**
+  `link/contentHash.ts`'s `sha256Hex`/`contentStart` (§2.2.1) and `link/identity.ts`'s
+  `canonicalizeIdentity` are not re-exported from `index.ts` or from any subpath (`./bind`,
+  `./tree`, `./regex`, `./schema`, `./write`, `./source`) — verified by grep, not assumed. The
+  library computes a content hash internally (`Tson.preload`'s `?sha256=` pin verification), but a
+  consumer wanting one directly — exactly what `tson hash` needs — has nothing to call. The CLI
+  works around this by reimplementing the same from-spec algorithm itself
+  (`packages/cli/src/contentHash.ts`) rather than reaching past the package's public surface into
+  its internals; a later wave should add a small `hash`/`contentHash` export (`./index` or a new
+  `./identity` subpath) so this stops being necessary.
+- **`validate()`/`readTree()`'s collecting mode does not catch a base-syntax failure into a
+  diagnostic.** The reference implementation's own facade documents doing exactly this ("both
+  facades catch a document that will not lex or parse ... a collecting read never throws for a bad
+  document") — this port's `facade/tree.ts` does not: a malformed document (bad UTF-8, an
+  unlexable token, a structural parse error) throws `TsonLexError`/`TsonParseError`/
+  `TsonUnsupportedDocumentError` straight past a `DiagnosticsCollector`, because the failure
+  happens in `createDataStream`, before any `ReadContext` exists to report through. A caller using
+  `validate()` for a "collect everything, never throw" read must additionally catch these three
+  types itself — the CLI's own `problem.ts` does this (`classifyReadError`). Worth closing by
+  wrapping `readWholeDocument` the way the reference implementation's facade does.
+- **`compile()`'s lazy reader cache means `TsonNotImplementedError` can still escape a collecting
+  read.** `compiler/compile.ts`'s `compile` builds each entry's `TypeReader` on first request
+  rather than eagerly (a deliberate divergence from the reference implementation, noted in that
+  module's own doc) — so a construct this library cannot read yet is only discovered, and thrown,
+  when a value of that type is actually read, past whatever `DiagnosticsReceiver` is in scope
+  rather than surfacing as a `NOT_IMPLEMENTED` diagnostic beside the others. The CLI treats this as
+  its own distinct case (`problem.ts`'s `'not-implemented'` classification, escalating a `validate`
+  run's exit code past invalid to a library-gap fault) rather than mistaking a gap for a verdict on
+  the document.
 - **All three bundled schemas resolve, link, and match their fixtures up to two deferrals.**
   `subtypes` is exact against `meta-kernel-resolved.tn` (top 17, atom 6, product 5, sum 1,
   text_type 2, atom_specification 2, array 1).

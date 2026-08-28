@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "typecheck": "tsc --build --force && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p packages/tson/test/tsconfig.json",
+    "typecheck": "tsc --build --force && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p packages/tson/test/tsconfig.json && tsc --noEmit -p packages/cli/test/tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -20,6 +20,7 @@
     "build": "npm run build --workspace @ltr8/tson && npm run build --workspace @ltr8/tson-cli",
     "gen:unicode": "node scripts/gen-unicode-tables.mjs",
     "check:unicode": "node scripts/check-unicode-tables.mjs",
+    "gen:cli-schemas": "node scripts/gen-cli-bundled-schemas.mjs",
     "refs": "./scripts/fetch-references.sh"
   },
   "devDependencies": {
