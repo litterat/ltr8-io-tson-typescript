@@ -64,10 +64,23 @@ rejected by it rather than by a decoder. No vector in the current suite declares
       meta-kernel/meta.tn/core.tn, embedded at build time from `spec/m/` via a generator script
       under `scripts/`, so `validate --schema`/`compile` work offline with no `SchemaSource`
       configured. `hash` is read-only: it prints the pinned reference rather than rewriting the
-      input file in place
-- [ ] Dual ESM/CJS publish, browser bundle
+      input file in place. Verified end to end: `init-example`, `validate --schema --root`,
+      `compile`, and `hash` all run against a real generated example and exit `0`
+- [x] Dual ESM/CJS publish — `npm run build` (tsup) produces `dist/*.{js,cjs,d.ts,d.cts}` for every
+      subpath of both packages
+- [ ] Browser bundle — no bundler-driven smoke test yet; verified only indirectly (no `node:`
+      import outside `src/source/`, no `DOM` lib in any `tsconfig`)
 
 ## Known gaps
+
+- **The read stack costs a host call frame per nesting level, and is bounded rather than
+  iterative.** §9.1 asks an implementation to bound nesting, and `MAX_NESTING_DEPTH` (512) does —
+  `parse` raises a `TsonParseError` with a position, `readTree`/`validate` a `TsonReadError`.
+  Before the bound the limit was the host's own call stack, reached around depth 750 and reported
+  as an uncaught `RangeError` out of the public API. The Tier 2 event stream has no such limit
+  (its explicit frame stack walks a million levels); making Tier 3 and the tree readers iterative
+  too is the proper fix, and the bound is what keeps the failure honest until then. The limit is
+  a constant, where §9.1 asks for a configurable one.
 
 - **Three low-severity security findings from Wave 6's adversarial pass remain open.** The two
   high and three medium ones are fixed; these three are recorded rather than closed:
@@ -76,6 +89,9 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   - `tsup`'s `removeNodeProtocol` strips the `node:` prefix from the published `source` bundle.
     The subpath's export conditions already keep a browser bundler out, so this is defence in
     depth rather than an exposure, but the prefix is worth restoring.
+  - `node10` type resolution fails for every subpath: that resolver predates `exports`. The
+    package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer
+    on `moduleResolution: "node"` will not see the subpaths.
   - `fileSchemaSource`'s containment predicate degenerates when a mapped directory realpaths to
     `/`: `root + sep` is `//`, which nothing matches, so every file under it is refused. It fails
     closed, so this is a denial rather than an escape.

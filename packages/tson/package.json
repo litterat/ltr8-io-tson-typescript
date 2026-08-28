@@ -10,46 +10,81 @@
   "exports": {
     ".": {
       "@ltr8/source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./bind": {
       "@ltr8/source": "./src/bind/index.ts",
-      "types": "./dist/bind.d.ts",
-      "import": "./dist/bind.js",
-      "require": "./dist/bind.cjs"
+      "import": {
+        "types": "./dist/bind.d.ts",
+        "default": "./dist/bind.js"
+      },
+      "require": {
+        "types": "./dist/bind.d.cts",
+        "default": "./dist/bind.cjs"
+      }
     },
     "./tree": {
       "@ltr8/source": "./src/tree/index.ts",
-      "types": "./dist/tree.d.ts",
-      "import": "./dist/tree.js",
-      "require": "./dist/tree.cjs"
+      "import": {
+        "types": "./dist/tree.d.ts",
+        "default": "./dist/tree.js"
+      },
+      "require": {
+        "types": "./dist/tree.d.cts",
+        "default": "./dist/tree.cjs"
+      }
     },
     "./regex": {
       "@ltr8/source": "./src/regex/index.ts",
-      "types": "./dist/regex.d.ts",
-      "import": "./dist/regex.js",
-      "require": "./dist/regex.cjs"
+      "import": {
+        "types": "./dist/regex.d.ts",
+        "default": "./dist/regex.js"
+      },
+      "require": {
+        "types": "./dist/regex.d.cts",
+        "default": "./dist/regex.cjs"
+      }
     },
     "./schema": {
       "@ltr8/source": "./src/schema/index.ts",
-      "types": "./dist/schema.d.ts",
-      "import": "./dist/schema.js",
-      "require": "./dist/schema.cjs"
+      "import": {
+        "types": "./dist/schema.d.ts",
+        "default": "./dist/schema.js"
+      },
+      "require": {
+        "types": "./dist/schema.d.cts",
+        "default": "./dist/schema.cjs"
+      }
     },
     "./write": {
       "@ltr8/source": "./src/write/index.ts",
-      "types": "./dist/write.d.ts",
-      "import": "./dist/write.js",
-      "require": "./dist/write.cjs"
+      "import": {
+        "types": "./dist/write.d.ts",
+        "default": "./dist/write.js"
+      },
+      "require": {
+        "types": "./dist/write.d.cts",
+        "default": "./dist/write.cjs"
+      }
     },
     "./source": {
       "@ltr8/source": "./src/source/index.ts",
       "node": {
-        "types": "./dist/source.d.ts",
-        "import": "./dist/source.js",
-        "require": "./dist/source.cjs"
+        "import": {
+          "types": "./dist/source.d.ts",
+          "default": "./dist/source.js"
+        },
+        "require": {
+          "types": "./dist/source.d.cts",
+          "default": "./dist/source.cjs"
+        }
       }
     }
   },
@@ -57,7 +92,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",

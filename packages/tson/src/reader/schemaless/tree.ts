@@ -50,7 +50,8 @@
  * *name*: with no governing schema there is no type to resolve it against (§3.1's Class 1
  * treatment).
  */
-import { TsonAtomTypeError, TsonInternalError } from '../../core/errors.js';
+import { TsonAtomTypeError, TsonInternalError, TsonReadError } from '../../core/errors.js';
+import { MAX_NESTING_DEPTH } from '../../compiler/dataParser.js';
 import type { Task } from '../../io/bytes.js';
 import type { TokenEvent, TsonEvent } from '../../stream/event.js';
 import type { AtomType } from '../../atom/contract.js';
@@ -253,18 +254,32 @@ function checkTypeRef(
 // ---------------------------------------------------------------------------------------------
 
 /** Reads one data-value: its leading annotations and optional type-ref (§2.3), then its core-value. */
-function* readNode(ctx: ReadContext, preserve: boolean): Task<Value> {
+function* readNode(ctx: ReadContext, preserve: boolean, depth = 0): Task<Value> {
+  if (depth >= MAX_NESTING_DEPTH) {
+    // Thrown, not reported-and-recovered, even under a collecting receiver. A nesting bound is a
+    // resource limit rather than a finding about one value: everything below this point is
+    // unreachable, so there is nothing further to collect. Recovering by skipping would also
+    // reintroduce the very problem — skipCoreValue recurses too, so on a 100,000-deep document it
+    // overflows the stack while discarding what the guard just refused to read.
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message: `document nests deeper than ${String(MAX_NESTING_DEPTH)} levels (\u00a79.1)`,
+      path: ctx.path(),
+      expected: `at most ${String(MAX_NESTING_DEPTH)} levels of nesting`,
+      actual: 'deeper',
+    });
+  }
   const annotations = yield* readStructuralAnnotations(ctx);
   const typeRefName = yield* readTypeRefName(ctx);
   const peeked = yield* ctx.peek();
   const match = checkTypeRef(ctx, typeRefName, peeked, preserve);
   switch (peeked.kind) {
     case 'record-start':
-      return yield* readRecord(ctx, typeRefName, annotations, preserve);
+      return yield* readRecord(ctx, typeRefName, annotations, preserve, depth);
     case 'map-start':
-      return yield* readMap(ctx, typeRefName, annotations, preserve);
+      return yield* readMap(ctx, typeRefName, annotations, preserve, depth);
     case 'array-start':
-      return yield* readArray(ctx, typeRefName, annotations, preserve);
+      return yield* readArray(ctx, typeRefName, annotations, preserve, depth);
     case 'empty-brace':
       yield* ctx.next();
       return recordNode(new Map(), typeRefName, annotations);
@@ -289,6 +304,7 @@ function* readRecord(
   typeRefName: string | undefined,
   annotations: Annotations,
   preserve: boolean,
+  depth: number,
 ): Task<Value> {
   yield* ctx.next(); // record-start
   const fields = new Map<string, Value>();
@@ -314,7 +330,7 @@ function* readRecord(
           `'${fieldNameEvent.name}' stated again`,
         );
     }
-    const value = yield* readNode(ctx.field(fieldNameEvent.name), preserve);
+    const value = yield* readNode(ctx.field(fieldNameEvent.name), preserve, depth + 1);
     fields.set(fieldNameEvent.name, value);
   }
   yield* ctx.next(); // record-end
@@ -326,6 +342,7 @@ function* readArray(
   typeRefName: string | undefined,
   annotations: Annotations,
   preserve: boolean,
+  depth: number,
 ): Task<Value> {
   yield* ctx.next(); // array-start
   const elements: Value[] = [];
@@ -335,7 +352,7 @@ function* readArray(
     if (next.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    elements.push(yield* readNode(ctx.index(elements.length), preserve));
+    elements.push(yield* readNode(ctx.index(elements.length), preserve, depth + 1));
   }
   yield* ctx.next(); // array-end
   return arrayNode(elements, typeRefName, annotations);
@@ -352,6 +369,7 @@ function* readMap(
   typeRefName: string | undefined,
   annotations: Annotations,
   preserve: boolean,
+  depth: number,
 ): Task<Value> {
   yield* ctx.next(); // map-start
   const entries: TreeMapEntry[] = [];
@@ -365,7 +383,7 @@ function* readMap(
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
-    const key = yield* readNode(ctx, preserve);
+    const key = yield* readNode(ctx, preserve, depth + 1);
     const identity = keyIdentity(key);
     const digest = identityDigest(identity);
     const bucket = seen.get(digest);
@@ -390,7 +408,7 @@ function* readMap(
     if (beforeValue.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    const value = yield* readNode(ctx.field(keySegment(key)), preserve);
+    const value = yield* readNode(ctx.field(keySegment(key)), preserve, depth + 1);
     entries.push({ key, value });
   }
   yield* ctx.next(); // map-end

@@ -18,7 +18,7 @@
  * sees an event, so a schema document never reaches here as a `Document` at all.
  */
 
-import { TsonInternalError } from '../core/errors.js';
+import { TsonInternalError, TsonParseError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { createDataStream } from '../stream/dataStream.js';
@@ -44,6 +44,22 @@ import type {
  * per {@link CoreValue}, at the point it is constructed (see {@link parseCoreValue}).
  */
 export type PositionRecorder = (value: CoreValue, position: Position) => void;
+/**
+ * The deepest a document may nest before this parser refuses it.
+ *
+ * §9.1 names deeply nested structures a denial-of-service vector and asks an implementation to
+ * bound them. Without a bound the bound still exists — it is just the host's call stack, reached
+ * at around 750 levels and reported as an uncaught `RangeError: Maximum call stack size
+ * exceeded`, which is a host error escaping a public API whose contract is a `TsonParseError`
+ * with a position.
+ *
+ * The Tier 2 event stream has no such limit: it replaced recursion with an explicit frame stack
+ * and walks a million levels. This tier builds a tree through `yield*` delegation, so it costs
+ * real frames per level; making it iterative too is the proper fix and this bound is what keeps
+ * the failure honest until then. 512 is far past any document written by hand or by a
+ * well-behaved generator.
+ */
+export const MAX_NESTING_DEPTH = 512;
 
 const noopRecorder: PositionRecorder = () => {
   // No position tracking wanted by this caller.
@@ -120,6 +136,7 @@ export function* parseDocument(input: ByteInput): Task<ParsedDocument> {
 export function* parseDataValue(
   source: EventSource,
   recorder: PositionRecorder = noopRecorder,
+  depth = 0,
 ): Task<DataValue> {
   const annotations: Annotation[] = [];
   for (;;) {
@@ -135,7 +152,7 @@ export function* parseDataValue(
     typeRef = afterAnnotations.name;
   }
 
-  const coreValue = yield* parseCoreValue(source, recorder);
+  const coreValue = yield* parseCoreValue(source, recorder, depth);
   return {
     annotations,
     ...(typeRef !== undefined ? { typeRef } : {}),
@@ -147,6 +164,7 @@ export function* parseDataValue(
 export function* parseAnnotation(
   source: EventSource,
   recorder: PositionRecorder = noopRecorder,
+  depth = 0,
 ): Task<Annotation> {
   const start = yield* source.next();
   if (start.kind !== 'annotation-start') {
@@ -156,7 +174,7 @@ export function* parseAnnotation(
   let value: DataValue | undefined;
   const peeked = yield* source.peek();
   if (peeked.kind !== 'annotation-end') {
-    value = yield* parseDataValue(source, recorder);
+    value = yield* parseDataValue(source, recorder, depth);
   }
 
   const end = yield* source.next();
@@ -180,9 +198,17 @@ export function* parseAnnotation(
 export function* parseCoreValue(
   source: EventSource,
   recorder: PositionRecorder = noopRecorder,
+  depth = 0,
 ): Task<CoreValue> {
   const event = yield* source.next();
-  const value = yield* reduceCoreEvent(source, event, recorder);
+  if (depth >= MAX_NESTING_DEPTH) {
+    throw new TsonParseError(
+      `document nests deeper than ${String(MAX_NESTING_DEPTH)} levels (\u00a79.1)`,
+      event.position,
+      { expected: `at most ${String(MAX_NESTING_DEPTH)} levels of nesting`, actual: 'deeper' },
+    );
+  }
+  const value = yield* reduceCoreEvent(source, event, recorder, depth);
   recorder(value, event.position);
   return value;
 }
@@ -191,6 +217,7 @@ function* reduceCoreEvent(
   source: EventSource,
   event: TsonEvent,
   recorder: PositionRecorder,
+  depth: number,
 ): Task<CoreValue> {
   switch (event.kind) {
     case 'token':
@@ -200,18 +227,22 @@ function* reduceCoreEvent(
     case 'empty-brace':
       return { kind: 'empty-brace' } satisfies EmptyBrace;
     case 'record-start':
-      return yield* parseRecord(source, recorder);
+      return yield* parseRecord(source, recorder, depth + 1);
     case 'map-start':
-      return yield* parseMap(source, recorder);
+      return yield* parseMap(source, recorder, depth + 1);
     case 'array-start':
-      return yield* parseArray(source, recorder);
+      return yield* parseArray(source, recorder, depth + 1);
     default:
       throw new TsonInternalError(`unexpected event reducing a core-value: '${event.kind}'`);
   }
 }
 
 /** `record = "{" ws field *( separator field ) ws "}"` (§2.5, §7.4). `record-start` already consumed. */
-function* parseRecord(source: EventSource, recorder: PositionRecorder): Task<RecordValue> {
+function* parseRecord(
+  source: EventSource,
+  recorder: PositionRecorder,
+  depth: number,
+): Task<RecordValue> {
   const fields: RecordField[] = [];
   for (;;) {
     const event = yield* source.next();
@@ -219,14 +250,14 @@ function* parseRecord(source: EventSource, recorder: PositionRecorder): Task<Rec
     if (event.kind !== 'field-name') {
       throw new TsonInternalError(`expected field-name or record-end, got '${event.kind}'`);
     }
-    const value = yield* parseScopedValue(source, recorder);
+    const value = yield* parseScopedValue(source, recorder, depth);
     fields.push({ name: event.name, value });
   }
   return { kind: 'record', fields };
 }
 
 /** `map = "{" ws map-entry *( separator map-entry ) ws "}"` (§2.6, §7.4). `map-start` already consumed. */
-function* parseMap(source: EventSource, recorder: PositionRecorder): Task<MapValue> {
+function* parseMap(source: EventSource, recorder: PositionRecorder, depth: number): Task<MapValue> {
   const entries: MapEntry[] = [];
   for (;;) {
     const peeked = yield* source.peek();
@@ -234,19 +265,23 @@ function* parseMap(source: EventSource, recorder: PositionRecorder): Task<MapVal
       yield* source.next();
       break;
     }
-    const key = yield* parseDataValue(source, recorder);
+    const key = yield* parseDataValue(source, recorder, depth);
     const arrow = yield* source.next();
     if (arrow.kind !== 'map-arrow') {
       throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
     }
-    const value = yield* parseScopedValue(source, recorder);
+    const value = yield* parseScopedValue(source, recorder, depth);
     entries.push({ key, value });
   }
   return { kind: 'map', entries };
 }
 
 /** `array = "[" ws [ scoped-value *( separator scoped-value ) ] ws "]"` (§2.7, §7.4). `array-start` already consumed. */
-function* parseArray(source: EventSource, recorder: PositionRecorder): Task<ArrayValue> {
+function* parseArray(
+  source: EventSource,
+  recorder: PositionRecorder,
+  depth: number,
+): Task<ArrayValue> {
   const elements: ScopedValue[] = [];
   for (;;) {
     const peeked = yield* source.peek();
@@ -254,20 +289,24 @@ function* parseArray(source: EventSource, recorder: PositionRecorder): Task<Arra
       yield* source.next();
       break;
     }
-    elements.push(yield* parseScopedValue(source, recorder));
+    elements.push(yield* parseScopedValue(source, recorder, depth));
   }
   return { kind: 'array', elements };
 }
 
 /** `scoped-value = [ schema-directive ws ] data-value` (§2.3, §7.4). */
-function* parseScopedValue(source: EventSource, recorder: PositionRecorder): Task<ScopedValue> {
+function* parseScopedValue(
+  source: EventSource,
+  recorder: PositionRecorder,
+  depth: number,
+): Task<ScopedValue> {
   const peeked = yield* source.peek();
   let schemaRef: string | undefined;
   if (peeked.kind === 'schema-ref') {
     yield* source.next();
     schemaRef = peeked.uri;
   }
-  const value = yield* parseDataValue(source, recorder);
+  const value = yield* parseDataValue(source, recorder, depth);
   return {
     ...(schemaRef !== undefined ? { schemaRef } : {}),
     value,
