@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { UNICODE_VERSION, isNd, isXidContinue, isXidStart } from '../src/unicode/xid.js';
+import { isNfc } from '../src/unicode/nfc.js';
 
 /**
  * The host's Unicode version, when it can be determined. `process.versions.unicode` is a Node
@@ -212,5 +213,42 @@ describeIfHostMatches(`exhaustive cross-check against host Unicode ${UNICODE_VER
       if (isNd(cp) && !isXidContinue(cp)) violations.push(cp);
     }
     expect(violations).toEqual([]);
+  });
+});
+
+describe('NFC is the one property read from the host, and stably so', () => {
+  // `unicode/xid.ts` and `regex/categories.ts` ship their own tables precisely because two hosts
+  // on different Unicode versions disagree about them. NFC is different: Unicode's normalization
+  // stability policy freezes a character's canonical decomposition once it is encoded, and adds no
+  // new canonically-decomposable characters — so `String.prototype.normalize` cannot disagree
+  // across versions about anything the checked-in tables admit. These pin the cases that policy
+  // covers, so a host that somehow answered differently would fail here rather than silently
+  // change which documents are well-formed.
+
+  it('accepts a precomposed character and rejects its decomposed spelling', () => {
+    // Written with escapes rather than literal text: the two spellings are indistinguishable on
+    // screen, and a source file that got normalised in transit would silently make this vacuous.
+    expect(isNfc('caf\u00e9')).toBe(true); // e-acute, precomposed
+    expect(isNfc('cafe\u0301')).toBe(false); // e + COMBINING ACUTE ACCENT
+  });
+
+  it('takes the allocation-free path for anything below the combining marks', () => {
+    // Not a performance assertion -- a correctness one. The fast path answers `true` without
+    // calling `normalize` at all, so it must never be reachable for text that is not NFC.
+    for (const text of ['plain_identifier', 'A0', '_', 'ÿ']) {
+      expect(isNfc(text)).toBe(text.normalize('NFC') === text);
+    }
+  });
+
+  it('agrees with the host across every code point the XID tables admit as a start', () => {
+    // The claim in full: for the characters this library will actually let into an unquoted token,
+    // our answer and the host's are the same. Cheap enough to check exhaustively.
+    const disagreements: number[] = [];
+    for (let cp = 0; cp <= MAX_CODE_POINT; cp++) {
+      if (isSurrogate(cp) || !isXidStart(cp)) continue;
+      const ch = String.fromCodePoint(cp);
+      if (isNfc(ch) !== (ch.normalize('NFC') === ch)) disagreements.push(cp);
+    }
+    expect(disagreements).toEqual([]);
   });
 });

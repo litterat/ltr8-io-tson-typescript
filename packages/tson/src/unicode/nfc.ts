@@ -8,7 +8,13 @@
  *
  * `String.prototype.normalize` is ECMA-262, not `Intl` — present in small-icu Node builds and
  * every browser, so it needs no separate Unicode data of its own, unlike the tables in
- * {@link "./xid.js"}. It does, though, allocate a new string on every call. Both functions here
+ * {@link "./xid.js"}. It is also the one place this library consults the *host's* Unicode data at
+ * all, where `xid.ts` and `regex/categories.ts` ship their own; that asymmetry is deliberate and
+ * safe for the reason the tables are not. Unicode's normalization stability policy freezes this
+ * question: a character's canonical decomposition never changes once encoded, and no new
+ * canonically-decomposable characters are added — so two hosts on different Unicode versions
+ * cannot disagree about whether a token is NFC, where they demonstrably do disagree about
+ * whether a character is `XID_Start`. It does, though, allocate a new string on every call. Both functions here
  * take a fast path around that: a token whose highest code point is below U+0300 (the start of
  * the Combining Diacritical Marks block) contains no combining mark and cannot be affected by
  * canonical composition or decomposition, so it is NFC by construction — checked before
