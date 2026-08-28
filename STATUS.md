@@ -153,11 +153,25 @@ rejected by it rather than by a decoder. No vector in the current suite declares
   `packages/tson/test/bundled-schemas-resolve.test.ts` holds each remaining difference as an
   assertion rather than a skip, so the list can only shrink:
   - A REQUIRED_WITH_DEFAULT atom-specification field (`spec`, `component`, the `allow_*` flags)
-    is written where the fixture omits it at its default. Whether such a field is written at its
-    default is a writer question.
-  - `token_set` round-trips as an unordered unique `array` rather than as `set` — `topBinding`
-    maps every host `ArrayBody` to the `array` wire name, and the aliases need a discriminating
-    test on the write side and a reader on the other.
+    is written where the fixture omits it at its default.
+  - `token_set`'s body is written `!array { … unordered: true unique_items: true }` where the
+    fixture writes `!set { element_type: token }` — the constructor the author actually applied,
+    which §8.1 asks for ("a binding record headed by the applied constructor"). `topBinding`
+    discriminates on the host value's own `kind`, and `set` is a refinement of `array` sharing its
+    shape, so the applied name is not recoverable from the value being written. It _is_ recorded,
+    one level up, in the same entry's `source`.
+
+  **Both are writer-side, and both are shared with the reference implementation** — read there
+  rather than assumed: its `ArrayBody` carries `@Typename(name = "array")` and its own Javadoc says
+  "`state`/`unordered`/`uniqueItems` always appear in written output even at their nominal default
+  — unlike a hand-written writer, generic record binding has no notion of 'this value is the
+  default, omit it'". Its `ResolvedFixtureTest` tolerates no difference at all, and does not have
+  to: it binds the fixture _into the value model_ and compares `TypeDefinition` objects, where both
+  `!set` and `!array` arrive as one `ArrayBody` and a field written at its default is
+  indistinguishable from one omitted. This port compares **written form**, which is the stricter
+  comparison and the reason these two are visible here at all. Worth reporting upstream: a
+  resolved-output writer that cannot name the applied constructor is a §8.1 conformance gap in
+  both implementations, and the reference's own fixture test is structurally unable to see it.
 
 - **A variant's dispatch lookahead buffers a value's whole annotation run.** `readVariant` skips
   annotations inside `lookingAhead` to find the `!type-ref`, so the events it rewinds grow with

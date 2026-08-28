@@ -156,6 +156,17 @@ Optional.empty(), parseCoreValue()))`), and this port follows it: `AtomRefinemen
   where the Java is deliberately stricter than the JDK; read it before writing any atom parser, since
   those checks are the behaviour, not the JDK's.
 
+- Resolved-output writing cannot name the applied constructor. §8.1 says a closed definition's
+  body is "a binding record headed by the applied constructor", and `spec/m/*-resolved.tn` writes
+  `token_set`'s body as `!set { element_type: token }`. Both this port and the reference write
+  `!array { … unordered: true unique_items: true }`: `set` is a refinement of `array` sharing its
+  shape, so the applied name is not recoverable from the value being written, though it is recorded
+  one level up in the same entry's `source`. The reference's own fixture test cannot see this — it
+  binds the fixture into the value model and compares `TypeDefinition` objects, where both forms
+  arrive as one `ArrayBody`. This port compares written form and does see it. Worth reporting
+  upstream as a §8.1 conformance gap in both implementations, or as a modelling gap in the resolved
+  value model, depending on which side the spec means to fix.
+
 ## Build and test
 
 ```bash
