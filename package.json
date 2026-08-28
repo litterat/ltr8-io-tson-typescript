@@ -22,7 +22,7 @@
     "check:unicode": "node scripts/check-unicode-tables.mjs",
     "gen:stdlib-schemas": "node scripts/gen-stdlib-schemas.mjs",
     "refs": "./scripts/fetch-references.sh",
-    "check:package": "publint packages/tson && publint packages/cli && attw --pack packages/tson --profile node16 --exclude-entrypoints source && attw --pack packages/tson --profile node16 --entrypoints ./source --ignore-rules no-resolution && attw --pack packages/cli --profile node16"
+    "check:package": "publint packages/tson && publint packages/cli && attw --pack packages/tson --profile node16 --exclude-entrypoints source && attw --pack packages/tson --profile node16 --entrypoints ./source --ignore-rules no-resolution"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",

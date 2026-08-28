@@ -65,9 +65,8 @@ jobs:
         # to reach it (`browser-bundle.test.ts` asserts the same property from the other side).
         # Ignoring the rule for the whole package would hide a genuinely broken subpath, so the
         # other seven are checked strictly.
-        run: |
-          npx publint packages/tson
-          npx publint packages/cli
-          npx attw --pack packages/tson --profile node16 --exclude-entrypoints source
-          npx attw --pack packages/tson --profile node16 --entrypoints ./source --ignore-rules no-resolution
-          npx attw --pack packages/cli --profile node16
+        #
+        # attw is not run against @ltr8/tson-cli: it is a `bin`-only package with no `exports`,
+        # `main` or `types`, so there is no entry point for a consumer to import and nothing for
+        # attw to resolve. publint checks what that package actually publishes -- its `bin`.
+        run: npm run check:package
