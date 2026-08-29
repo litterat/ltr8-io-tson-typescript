@@ -200,8 +200,26 @@ export function parseSidecar(raw: Uint8Array): Sidecar {
 
   const spec = requiredText(fields, 'spec', 'sidecar');
   const description = requiredText(fields, 'description', 'sidecar');
-  const outcome = requiredText(fields, 'outcome', 'sidecar') as Outcome;
-  const category = optionalText(fields, 'category') as Category | undefined;
+
+  // The outcome is a field-group member label, not a field of its own: exactly one of
+  // valid/error/schema-document is present, and its payload hangs off it. (The resolver layer
+  // writes `valid` as a plain field -- a group needs two members, and §4 gives it one outcome --
+  // which reads the same way from here.)
+  const stated = OUTCOMES.filter((o) => fields.has(o));
+  const outcome = stated[0];
+  if (stated.length !== 1 || outcome === undefined) {
+    throw new Error(
+      `a sidecar states exactly one outcome; found ${stated.length === 0 ? 'none' : stated.join(', ')}`,
+    );
+  }
+  const payload = requireField(fields, outcome, 'sidecar');
+  const payloadFields =
+    outcome === 'schema-document' ? new Map<string, DataValue>() : recordFields(payload, outcome);
+
+  const category =
+    outcome === 'error'
+      ? (requiredText(payloadFields, 'category', 'error') as Category)
+      : undefined;
   const encoding = optionalText(fields, 'encoding') as Encoding | undefined;
   const meta = optionalText(fields, 'meta');
 
@@ -211,22 +229,24 @@ export function parseSidecar(raw: Uint8Array): Sidecar {
       ? undefined
       : arrayElements(importField, 'import').map((el) => tokenText(el.value, 'import entry'));
 
-  const tokensField = fields.get('tokens');
+  const tokensField = payloadFields.get('tokens');
   const tokens =
     tokensField === undefined
       ? undefined
       : arrayElements(tokensField, 'tokens').map((el) => toExpectedToken(el.value));
 
-  const documentField = fields.get('document');
+  const documentField = payloadFields.get('document');
   const expectedDocument =
     documentField === undefined ? undefined : toExpectedDocument(documentField);
 
-  const baseValueField = fields.get('base-value');
+  const baseValueField = payloadFields.get('base-value');
   const baseValue = baseValueField === undefined ? undefined : toExpectedBaseValue(baseValueField);
 
+  // type-ref sits outside the outcome group: an error vector needs it too, since a runner cannot
+  // apply an atom's contract without knowing which atom.
   const typeRef = optionalText(fields, 'type-ref');
 
-  const valueField = fields.get('value');
+  const valueField = payloadFields.get('value');
   const value = valueField === undefined ? undefined : toExpectedVocabularyValue(valueField);
 
   return {
@@ -252,6 +272,25 @@ export function parseSidecar(raw: Uint8Array): Sidecar {
 // per CLAUDE.md, dogfooding means running our own lexer/parser/structural-parser over the
 // bytes, not schema-validating against them). These helpers walk that generic tree by field
 // name to recover the meaning a sidecar author encoded in it.
+
+/** The three outcome labels a sidecar's outcome group may carry, in the order they are reported. */
+const OUTCOMES = ['valid', 'error', 'schema-document'] as const;
+
+/**
+ * The single member of a field group written as a record: its label and its payload.
+ *
+ * A REQUIRED group (§5.11) admits exactly one member, so the label *is* the discriminator --
+ * `kind: token` beside optional `form`/`text` becomes `token: { form, text }`, and a shape that
+ * carried neither or both is no longer expressible. The schemas enforce this; this reads it.
+ */
+function soleMember(dv: DataValue, what: string): readonly [string, DataValue] {
+  const entries = [...recordFields(dv, what)];
+  const only = entries[0];
+  if (entries.length !== 1 || only === undefined) {
+    throw new Error(`${what} must state exactly one kind, found ${String(entries.length)}`);
+  }
+  return only;
+}
 
 /** The record fields of `dv`'s core-value, keyed by field name, `!!schema` directives dropped. */
 function recordFields(dv: DataValue, what: string): Map<string, DataValue> {
@@ -390,8 +429,11 @@ function toExpectedMapEntry(dv: DataValue): ExpectedMapEntry {
 }
 
 function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
-  const fields = recordFields(dv, 'core-value');
-  const kind = requiredText(fields, 'kind', 'core-value');
+  const [kind, payload] = soleMember(dv, 'core-value');
+  // absent and empty-brace carry no payload, so their member is typed void and written `_`.
+  if (kind === 'absent') return { kind: 'absent' };
+  if (kind === 'empty-brace') return { kind: 'empty-brace' };
+  const fields = recordFields(payload, `core-value '${kind}'`);
   switch (kind) {
     case 'token':
       return {
@@ -399,10 +441,6 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
         form: requiredText(fields, 'form', 'core-value') as TokenForm,
         text: requiredText(fields, 'text', 'core-value'),
       };
-    case 'absent':
-      return { kind: 'absent' };
-    case 'empty-brace':
-      return { kind: 'empty-brace' };
     case 'record':
       return {
         kind: 'record',
@@ -432,31 +470,27 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
 // ── Resolver-layer: ExpectedBaseValue ────────────────────────────────────────────────────────
 
 function toExpectedBaseValue(dv: DataValue): ExpectedBaseValue {
-  const fields = recordFields(dv, 'base-value');
-  const kind = requiredText(fields, 'kind', 'base-value');
+  const [kind, payload] = soleMember(dv, 'base-value');
   switch (kind) {
     case 'null':
       return { kind: 'null' };
     case 'boolean':
-      return {
-        kind: 'boolean',
-        value: boolText(requireField(fields, 'value', 'base-value'), 'base-value.value'),
-      };
+      return { kind: 'boolean', value: boolText(payload, 'base-value.boolean') };
     case 'string':
-      return { kind: 'string', text: requiredText(fields, 'text', 'base-value') };
-    case 'number':
       return {
-        kind: 'number',
-        form: toExpectedNumberForm(requireField(fields, 'form', 'base-value')),
+        kind: 'string',
+        text: requiredText(recordFields(payload, 'base-value string'), 'text', 'base-value'),
       };
+    case 'number':
+      return { kind: 'number', form: toExpectedNumberForm(payload) };
     default:
       throw new Error(`unknown base-value kind '${kind}'`);
   }
 }
 
 function toExpectedNumberForm(dv: DataValue): ExpectedNumberForm {
-  const fields = recordFields(dv, 'number-form');
-  const shape = requiredText(fields, 'shape', 'number-form');
+  const [shape, payload] = soleMember(dv, 'number-form');
+  const fields = recordFields(payload, `number-form '${shape}'`);
   const sign = optionalText(fields, 'sign') as NumberSign | undefined;
   switch (shape) {
     case 'integer':
@@ -511,25 +545,31 @@ function toExponent(dv: DataValue): { readonly sign?: NumberSign; readonly digit
 // ── Vocabulary-layer: ExpectedVocabularyValue ────────────────────────────────────────────────
 
 function toExpectedVocabularyValue(dv: DataValue): ExpectedVocabularyValue {
-  const core = dv.coreValue;
-  if (core.kind === 'token') {
-    return core.text;
-  }
-  if (core.kind === 'record') {
-    const fields = new Map<string, DataValue>();
-    for (const field of core.fields) fields.set(field.name, field.value.value);
-    if (fields.has('real') && fields.has('imaginary')) {
+  // The sidecar names the textual family its value is written in, rather than leaving a reader to
+  // infer one from the shape it happens to find. §5.2 leaves the host type implementation-defined,
+  // so what a vector can state is the value's information content and how it spelled it.
+  const [family, payload] = soleMember(dv, 'vocabulary value');
+  switch (family) {
+    case 'decimal':
+    case 'hex':
+    case 'rational':
+    case 'text':
+      return tokenText(payload, `vocabulary value '${family}'`);
+    case 'complex': {
+      const fields = recordFields(payload, 'vocabulary value complex');
       return {
         real: requiredText(fields, 'real', 'vocabulary value'),
         imaginary: requiredText(fields, 'imaginary', 'vocabulary value'),
       };
     }
-    if (fields.has('period') && fields.has('clock')) {
+    case 'duration': {
+      const fields = recordFields(payload, 'vocabulary value duration');
       return {
         period: requiredText(fields, 'period', 'vocabulary value'),
         clock: requiredText(fields, 'clock', 'vocabulary value'),
       };
     }
+    default:
+      throw new Error(`unknown vocabulary value family '${family}'`);
   }
-  throw new Error(`unrecognized vocabulary value shape: core-value kind '${core.kind}'`);
 }

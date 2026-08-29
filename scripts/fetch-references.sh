@@ -20,10 +20,10 @@ REF_DIR="$REPO_ROOT/.references"
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
 JAVA_PIN="fb93c89fc27ec32d85b899c5d281dbcbf42e2951"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-# Deliberately behind the suite's main: the five vectors added after this commit cover behaviour
-# this port has not implemented yet (UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the
-# identifier profile at the three naming positions). Bumping the pin is that work's last step.
-SUITE_PIN="ad091f15fa3aa8de0346b6ce8a30f7b0ace1f70f"
+# Tracks the sidecar redesign. Five vectors in this corpus cover behaviour this port has not
+# implemented yet -- UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the identifier profile at
+# the three naming positions -- and are the port's remaining gap, not a fixture problem.
+SUITE_PIN="a76a7c9435bed247b44156f69d0d914e02ba6144"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"

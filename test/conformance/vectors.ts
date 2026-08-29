@@ -2,9 +2,12 @@ import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /**
- * A conformance-suite layer, mirroring the spec's own §8.1 error categories: `lexer`,
- * `parser`, `resolver`, `vocabulary`. Also the top-level directory name under
- * `.references/ltr8-io-tson-test-suite/tests/`.
+ * A conformance-suite layer: a stage of the pipeline, and the directory name under
+ * `.references/ltr8-io-tson-test-suite/tests/class1/`.
+ *
+ * **Not the spec's §8.1 error categories**, which are `lexer`/`parser`/`resolver`/`validation`
+ * and which these cross: the vocabulary layer raises `resolver` and `validation` errors and never
+ * a "vocabulary" one. An error vector carries its category explicitly for that reason.
  */
 export type Layer = 'lexer' | 'parser' | 'resolver' | 'vocabulary';
 
@@ -41,6 +44,12 @@ export const SUITE_TESTS_ROOT: string = fileURLToPath(
 );
 
 /**
+ * Where this port's own vectors live: the corpus groups by conformance class first, so a Class 1
+ * processor runs `class1/` and skips `class2/` without having to know which layers are Part 2.
+ */
+export const CLASS1_ROOT = `${SUITE_TESTS_ROOT}/class1`;
+
+/**
  * Whether the shared test-suite checkout is present.
  *
  * `.references/` is gitignored and populated by `scripts/fetch-references.sh`, which CI runs and
@@ -66,7 +75,7 @@ const EXPECTED_SUFFIX = '-expected.tn';
  * throwing, so a caller can check {@link suiteAvailable} once and call this per layer.
  */
 export function discoverVectors(layer: Layer): Vector[] {
-  const layerRoot = `${SUITE_TESTS_ROOT}/${layer}`;
+  const layerRoot = `${CLASS1_ROOT}/${layer}`;
   if (!existsSync(layerRoot)) {
     return [];
   }
