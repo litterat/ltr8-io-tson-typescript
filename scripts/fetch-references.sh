@@ -4,7 +4,11 @@
 # into the gitignored .references/ directory.
 #
 #   ltr8-io-tson-java        pinned to JAVA_PIN so the port target cannot move underneath us
-#   ltr8-io-tson-test-suite  tracks main; it is the shared conformance suite
+#   ltr8-io-tson-test-suite  pinned to SUITE_PIN, the shared conformance corpus
+#
+# Both are pinned to a commit, never a branch. Tracking the suite's main meant any vector added
+# or reshaped upstream turned this repo's CI red with no change here -- and the corpus migration
+# ahead would break every consumer at once. Bumping a pin is a deliberate commit.
 #
 # Idempotent: re-running fetches only what changed. Pass --force to re-clone from scratch.
 
@@ -16,7 +20,10 @@ REF_DIR="$REPO_ROOT/.references"
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
 JAVA_PIN="fb93c89fc27ec32d85b899c5d281dbcbf42e2951"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-SUITE_REF="main"
+# Deliberately behind the suite's main: the five vectors added after this commit cover behaviour
+# this port has not implemented yet (UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the
+# identifier profile at the three naming positions). Bumping the pin is that work's last step.
+SUITE_PIN="ad091f15fa3aa8de0346b6ce8a30f7b0ace1f70f"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"
@@ -52,7 +59,7 @@ fetch_pinned() {
 }
 
 fetch_pinned ltr8-io-tson-java       "$JAVA_REPO"  "$JAVA_PIN"
-fetch_pinned ltr8-io-tson-test-suite "$SUITE_REPO" "$SUITE_REF"
+fetch_pinned ltr8-io-tson-test-suite "$SUITE_REPO" "$SUITE_PIN"
 
 echo
 echo "References ready in .references/"
