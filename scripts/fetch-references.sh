@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REF_DIR="$REPO_ROOT/.references"
 
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
-JAVA_PIN="fb93c89fc27ec32d85b899c5d281dbcbf42e2951"
+JAVA_PIN="66222ac26ddf2e5364abc1aca000f61c04237d54"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
 SUITE_REF="main"
 
