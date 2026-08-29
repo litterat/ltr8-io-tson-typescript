@@ -107,10 +107,14 @@ export interface Config extends NestingLimitOptions {
    * the three mechanisms to be a code decision, never read from the environment -- setting this
    * field is exactly that decision, made once, here, rather than implicitly per call.
    *
-   * A schema-governed read (`options.schema` supplied) does not consult this field at all: a
-   * data field name under a schema inherits the declaration's own verdict (§8.2), so there is no
-   * further record-scope check for `Tson` to apply, and `unicode/policy.ts`'s `NamePolicy` has no
-   * schema-layer scopes of its own ([TSON-SCHEMA] §11.4 is not this port's to enforce here).
+   * It governs both layers this instance reaches: §8.2's one Part 1 scope, a record's own field
+   * names, on a schemaless read; and [TSON-SCHEMA] §11.4's schema-layer scopes when a schema is
+   * resolved through {@link Tson.resolveSchema} or {@link Tson.preload}. A schema-governed *read*
+   * consults it for neither -- a data field name under a schema inherits the declaration's own
+   * verdict (§8.2), which the schema's own linking already reached.
+   *
+   * The meta-kernel's own bootstrap is deliberately outside its reach: that link is pinned to the
+   * default, so relaxing a policy here can never change whether the kernel itself loads.
    */
   readonly namePolicy?: NamePolicy;
 }
@@ -176,6 +180,7 @@ function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
   bytes: Uint8Array,
   limit: NestingLimitOptions,
+  namePolicy: NamePolicy | undefined,
 ): LinkedSchema {
   const document = runSync(parseSchemaDocument(fromBytes(bytes), limit));
   const id = document.id;
@@ -199,7 +204,11 @@ function resolveAgainstRegistry(
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
   });
-  return linkSchema(resolved, { structureNamespace: governingMeta.entries, resolveImport });
+  return linkSchema(resolved, {
+    structureNamespace: governingMeta.entries,
+    resolveImport,
+    ...(namePolicy === undefined ? {} : { namePolicy }),
+  });
 }
 
 /** A {@link createTson} instance: the flat front door, plus a schema registry keyed by canonical identity (§2.2.1). */
@@ -253,7 +262,7 @@ export function createTson(config: Config = {}): Tson {
 
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {
     const bytes = typeof source === 'string' ? encodeUtf8(source) : source;
-    const linked = resolveAgainstRegistry(schemas, bytes, limit);
+    const linked = resolveAgainstRegistry(schemas, bytes, limit, config.namePolicy);
     register(linked);
     return linked;
   }
@@ -277,7 +286,7 @@ export function createTson(config: Config = {}): Tson {
       }
       const bytes = await fetchReference(reference);
       await verifyContentHash(bytes, reference);
-      const linked = resolveAgainstRegistry(schemas, bytes, limit);
+      const linked = resolveAgainstRegistry(schemas, bytes, limit, config.namePolicy);
       const declared = canonicalizeIdentity(linked.id);
       if (declared !== canonical) {
         throw new TsonSchemaValidationError(
