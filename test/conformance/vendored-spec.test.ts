@@ -84,7 +84,7 @@ describe('vendored spec files, without the reference checkout', () => {
   it('record the spec revision the port is written against', () => {
     const part1 = readFileSync(join(VENDORED_ROOT, 'tson-part1-data.md'), 'utf8');
     const part2 = readFileSync(join(VENDORED_ROOT, 'tson-part2-schema.md'), 'utf8');
-    expect(part1).toContain('2026 Revision 33');
-    expect(part2).toContain('2026 Revision 33');
+    expect(part1).toContain('2026 Revision 34');
+    expect(part2).toContain('2026 Revision 34');
   });
 });

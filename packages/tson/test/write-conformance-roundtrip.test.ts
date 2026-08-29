@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { discoverAllVectors, suiteAvailable } from '../../../test/conformance/vectors.js';
-import { parseSidecar, type Sidecar } from '../../../test/conformance/sidecar.js';
+import { peekSidecarSummary, type SidecarSummary } from '../../../test/conformance/sidecar.js';
 import type { Vector } from '../../../test/conformance/vectors.js';
 import { fromBytes, fromString, runSync } from '../src/io/bytes.js';
 import { parseDocument } from '../src/compiler/dataParser.js';
@@ -17,8 +17,10 @@ import { compareDecimal } from '../src/atom/numeric/decimalMath.js';
 
 /**
  * `write/`'s own conformance round trip: **parse, write, re-parse, compare** -- the free round-trip
- * property `PORT-PLAN.md`'s work-package brief names, since every valid vector is already a
- * document this implementation can read. Two writers are checked against every such vector:
+ * property `PORT-PLAN.md`'s work-package brief names, since every valid vector at these four
+ * layers is already a document this implementation can read (see {@link roundTrippableVectors}'s
+ * own note on why the lexer layer is not one of them). Two writers are checked against every such
+ * vector:
  *
  * - `astWriter.ts` (syntax-preserving): the re-parsed AST must equal the first parse's AST
  *   exactly, because nothing about that writer is entitled to change a single token's form.
@@ -34,20 +36,34 @@ import { compareDecimal } from '../src/atom/numeric/decimalMath.js';
  */
 const suitePresent = suiteAvailable();
 
-function bestEffortSidecar(vector: Vector): Sidecar | undefined {
+function bestEffortSidecarSummary(vector: Vector): SidecarSummary | undefined {
   try {
-    return parseSidecar(readFileSync(vector.sidecarPath));
+    return peekSidecarSummary(readFileSync(vector.sidecarPath));
   } catch {
     return undefined;
   }
 }
 
-/** Vectors this round trip applies to: a plain valid data document, real UTF-8, no schema splice. */
+/**
+ * Vectors this round trip applies to: a plain valid data document, real UTF-8, no schema splice.
+ *
+ * **Never the lexer layer.** A lexer-layer `valid` vector's sidecar promises only a well-formed
+ * *token stream* (`schemas/lexer-sidecar.tn`'s own `lexer_valid`), not a single parseable
+ * data-value document — the corpus's own README is explicit that the layers are pipeline stages,
+ * not a nesting of guarantees. `lexer/valid/bidi-mark-at-token-boundary`'s subject (`ab ‎ c`)
+ * is exactly such a vector: it tokenizes to two ordinary tokens on purpose, precisely to prove the
+ * bidi mark contributes nothing, and two bare tokens are not one data-value — parsing it as a
+ * document correctly raises `TsonParseError` ("unexpected content after the document's value").
+ * The parser, reader, resolver and vocabulary layers carry no such gap: every one of their
+ * subjects is, by the corpus's own construction, a single data-value document (a bare token for
+ * resolver/vocabulary, a whole document for parser/reader).
+ */
 function roundTrippableVectors(): Vector[] {
   return discoverAllVectors().filter((vector) => {
-    const sidecar = bestEffortSidecar(vector);
+    if (vector.layer === 'lexer') return false;
+    const summary = bestEffortSidecarSummary(vector);
     return (
-      sidecar?.outcome === 'valid' && sidecar.encoding === undefined && sidecar.meta === undefined
+      summary?.outcome === 'valid' && summary.encoding === undefined && summary.meta === undefined
     );
   });
 }

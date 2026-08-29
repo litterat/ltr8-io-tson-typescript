@@ -268,15 +268,15 @@ describe('topBinding -- the polymorphic type_definition.body ([TSON-SCHEMA] §4.
     expect(names).toContain('reference');
   });
 
-  it('"set" and "array" both resolve to the same ArrayBody binding (confirmed against spec/m/meta-kernel-resolved.tn: token_set\'s body reads !set)', () => {
+  it('"set" and "array" both resolve to the same ArrayBody binding (confirmed against spec/m/meta-kernel-resolved.tn: enum_set\'s body reads !set)', () => {
     const arrayMember = topBinding.members.find((m) => m.wireName === 'array');
     const setMember = topBinding.members.find((m) => m.wireName === 'set');
     expect(setMember?.binding).toBe(arrayMember?.binding);
   });
 
-  it('"value"/"token"/"void" all resolve to the same Unit binding (confirmed: all three read body: !unit {})', () => {
+  it('"value"/"identifier"/"void" all resolve to the same Unit binding (confirmed: all three read body: !unit {})', () => {
     const unitMember = topBinding.members.find((m) => m.wireName === 'unit');
-    for (const name of ['value', 'token', 'void']) {
+    for (const name of ['value', 'identifier', 'void']) {
       expect(topBinding.members.find((m) => m.wireName === name)?.binding).toBe(
         unitMember?.binding,
       );

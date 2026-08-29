@@ -46,7 +46,7 @@ jobs:
 
       - name: Conformance tests
         # Not continue-on-error. It was, while the port was mid-flight and the suite was expected
-        # to be red -- but all 146 vectors pass now, and a green suite behind continue-on-error is
+        # to be red -- but all 179 vectors pass now, and a green suite behind continue-on-error is
         # a suite that can go red without anyone finding out.
         run: npm run test:conformance
 

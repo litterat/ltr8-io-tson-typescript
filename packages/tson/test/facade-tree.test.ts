@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { readTree, validate } from '../src/facade/tree.js';
+import { DEFAULT_NAME_POLICY } from '../src/unicode/policy.js';
 import { compile, type CompiledSchema } from '../src/compiler/compile.js';
 import {
   TsonInternalError,
@@ -71,8 +72,8 @@ describe('readTree/validate: schemaless (Class 1)', () => {
 describe('readTree/validate: schema-governed', () => {
   const SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/33/m/meta.tn"
-!!import:"https://tson.io/2026/33/m/core.tn"
+!!meta:"https://tson.io/2026/34/m/meta.tn"
+!!import:"https://tson.io/2026/34/m/core.tn"
 {
   reading => { id: uuid label: non_empty_text }
 }
@@ -225,5 +226,26 @@ describe('a library gap reaches the collector as NOT_IMPLEMENTED, not as a verdi
       expect(error).toBeInstanceOf(TsonReadError);
       expect((error as TsonReadError).cause).toBeInstanceOf(TsonNotImplementedError);
     }
+  });
+});
+
+describe('name hygiene reaches the facade (§8.2)', () => {
+  it('refuses a record whose field names are confusable, at the default policy', () => {
+    // Latin `aec` and Cyrillic `аес` are two identifiers that NFC does not relate and a reader
+    // cannot tell apart. Mechanism 1 is a relation, so it fires on the pair, never on either
+    // name alone.
+    const result = validate(bytesOf('{ aec: 1  аес: 2 }'));
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['NAME_HYGIENE_REFUSED']);
+  });
+
+  it('leaves an ordinary record alone', () => {
+    expect(validate(bytesOf('{ a: 1  b: 2 }')).diagnostics).toEqual([]);
+  });
+
+  it('honours a relaxed policy, which is a code decision and never ambient', () => {
+    const result = validate(bytesOf('{ aec: 1  аес: 2 }'), {
+      namePolicy: { ...DEFAULT_NAME_POLICY, skeletonDistinctness: false },
+    });
+    expect(result.diagnostics).toEqual([]);
   });
 });

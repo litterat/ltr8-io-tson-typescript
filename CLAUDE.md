@@ -10,9 +10,9 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/33/tson-part1-data.md
+  https://tson.io/raw/2026/34/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/33/tson-part2-schema.md
+  https://tson.io/raw/2026/34/tson-part2-schema.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than
@@ -25,7 +25,7 @@ port is written against:
   port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the three
   live bundled schemas `spec/m/{meta-kernel,meta,core}.tn` plus their `*-resolved.tn` resolver-output
   fixtures.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance suite, 146
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 179
   vectors. Tracks `main` so new vectors are picked up.
 
 Both are required before the conformance project will run. A SessionStart hook fetches them
@@ -112,17 +112,15 @@ is on and the distinction is meaningful. The same rule is why a JSON Pointer at 
 
 This port is the spec's second implementation, and the first in a language without the JDK's value
 types. Where the prose resolves ambiguously, or where TypeScript forces a different reading, say so
-in conversation rather than silently picking. Two known divergences from the Java are already live:
+in conversation rather than silently picking.
 
-- Identifier characters use real `XID_Start`/`XID_Continue` tables, where the Java approximates them
-  with `Character.isUnicodeIdentifier*`. This port is stricter, so the two disagree on a small set of
-  code points, and not in the direction one might guess. `Character.isUnicodeIdentifierStart('$')`
-  is `false` — `$` is `Sc`, and the Java rejects it exactly as this port does. The divergence runs
-  the other way: `isUnicodeIdentifierPart` admits every _identifier-ignorable_ character, so the
-  Java accepts U+200C, U+200D, U+00AD, U+2060, U+FEFF and the non-whitespace ISO controls inside an
-  unquoted token where this port rejects them. U+FEFF is worth reporting upstream — §7.1 says a
-  byte-order mark is not a character of the token, so here the port is right and the reference is
-  wrong.
+- Identifier characters use real `XID_Start`/`XID_Continue` tables. The reference now does too, so
+  the two agree; before Revision 34 it approximated them with `Character.isUnicodeIdentifier*`,
+  which admits every _identifier-ignorable_ character and so accepted U+00AD, U+2060, U+FEFF and
+  the non-whitespace ISO controls inside an unquoted token. Note that ZWNJ and ZWJ are _not_ in
+  that list any more: §7.1 admits both into the token profile, because they are `XID_Continue`, and
+  what makes that safe is the identifier grammar's contextual rule at naming positions (§7.7 rule
+  2), not a subtraction from the profile.
 
   **The tables are checked in and authoritative; the host is not consulted for these
   properties.** NFC is the one exception, and a deliberate one: `unicode/nfc.ts` calls
@@ -142,22 +140,6 @@ in conversation rather than silently picking. Two known divergences from the Jav
   on a host with a different Unicode version is a **behavioural change** and belongs in its own
   commit.
 
-- **An atom-refinement body is data, not a `record-def`** — a divergence from §12.1's literal
-  ABNF, taken deliberately. The grammar says
-  `atom-refinement = "!" type-name ws "^" ws record-def`, and §12.1's own prose reinforces it:
-  "No production of this grammar uses the full `data-value`: an atom-refinement body is a braced
-  `record-def`." But `record-def` reduces to `field-def`, whose value is either a `type-ref` or a
-  `field-modifier` — and `field-modifier` is `("~" / "=") (token / absent)`, "never a compound
-  value". Under that reading `min: 1` is invalid and `size: { bits: 8  signed: true }` doubly so.
-
-  That second form is `spec/m/core.tn` line 105, a **live bundled schema the reference
-  implementation resolves**, so the spec's grammar rejects the spec's own schema. The reference
-  parses a data `core-value` here (`new AtomRefinement(target, new DataValue(List.of(),
-Optional.empty(), parseCoreValue()))`), and this port follows it: `AtomRefinement.bindings` is a
-  `DataValue`. The consequence is that the ABNF's `~`/`=` modifiers have no meaning in a
-  refinement body, and this port rejects them. **Worth reporting upstream** — either the
-  production should name `core-value`, or `core.tn` and §5.5's worked example are wrong.
-
 - Every built-in atom is parsed here from scratch, since JS has no host `UUID`, `InetAddress`,
   `LocalDate` or `BigDecimal` to delegate to. `.references/ltr8-io-tson-java/CONFORMANCE.md` records
   where the Java is deliberately stricter than the JDK; read it before writing any atom parser, since
@@ -165,7 +147,7 @@ Optional.empty(), parseCoreValue()))`), and this port follows it: `AtomRefinemen
 
 - Resolved-output writing cannot name the applied constructor. §8.1 says a closed definition's
   body is "a binding record headed by the applied constructor", and `spec/m/*-resolved.tn` writes
-  `token_set`'s body as `!set { element_type: token }`. Both this port and the reference write
+  `enum_set`'s body as `!set { element_type: identifier  min_items: 1 }`. Both this port and the reference write
   `!array { … unordered: true unique_items: true }`: `set` is a refinement of `array` sharing its
   shape, so the applied name is not recoverable from the value being written, though it is recorded
   one level up in the same entry's `source`. The reference's own fixture test cannot see this — it
@@ -173,6 +155,17 @@ Optional.empty(), parseCoreValue()))`), and this port follows it: `AtomRefinemen
   arrive as one `ArrayBody`. This port compares written form and does see it. Worth reporting
   upstream as a §8.1 conformance gap in both implementations, or as a modelling gap in the resolved
   value model, depending on which side the spec means to fix.
+
+- **Name hygiene is policy, not validity** (§8.2, and §11.4 for the schema-layer scopes). The three
+  UTS #39 mechanisms — skeleton distinctness, `Identifier_Status`, restriction level — are
+  implemented and enforced by default, and a refusal is a **fifth outcome**, reported apart from
+  §8.1's four error categories and naming the UTS #39 data version. That separation is the whole
+  design: `confusables.txt`, `IdentifierStatus.txt` and the script-based restriction levels are
+  data Unicode declines to freeze, so a verdict over them can change under a routine UCD refresh,
+  and a content-addressed document (§2.2.1) must mean the same thing forever. Nothing here may
+  decide whether a document is valid. Relaxation is a code decision the caller makes explicitly —
+  never an environment variable, because a security policy read from the environment is ambient
+  authority, invisible at the call site.
 
 ## Build and test
 
@@ -182,7 +175,7 @@ npm install
 npm run typecheck               # tsc --build
 npm run lint
 npm test                        # unit
-npm run test:conformance        # the 146 shared vectors
+npm run test:conformance        # the 179 shared vectors
 npm run build                   # tsup, ESM + CJS + dts
 ```
 
@@ -190,15 +183,34 @@ The conformance project skips with a message when `.references/` is absent, rath
 
 ## Conformance suite
 
+**`RUNNER.md` in the corpus is normative for runners.** It exists because the contract used to live
+only in README prose and two runners written against that prose already disagreed. Read it before
+touching `test/conformance/`; what follows is orientation, not the contract.
+
 Discovery is by directory walk and naming convention — there is no manifest. Each `*.tn` under
-`tests/<layer>/<bucket>/` that does not end `-expected.tn` is a subject; its sibling
-`<slug>-expected.tn` is a TSON sidecar describing the expected outcome. Four rules the runner must
-keep:
+`tests/<class>/<layer>/<bucket>/` that does not end `-expected.tn` is a subject; its sibling
+`<slug>-expected.tn` is a TSON sidecar describing the expected outcome. `<class>` is the spec's own
+conformance class, so a Class 1 processor runs `class1/` and skips `class2/` — that is what the
+directory is for.
+
+The sidecar states its outcome as a **field group** (Part 2 §5.11): the record carries exactly one
+of `valid`, `error` or `schema-document` as a member, and that member's _name_ is the outcome.
+There is no `outcome:` field. The same treatment replaced the flat `kind:`/`shape:` discriminators
+inside the parser, resolver and vocabulary payloads.
+
+Six rules the runner must keep:
 
 - **Parse sidecars with our own parser.** The suite expects an implementation to dogfood.
 - **Feed subjects raw bytes**, never a string that has been decoded and re-encoded. Eight vectors
   carry deliberately malformed UTF-8; a `TextDecoder` round trip destroys exactly what they test.
-- **On `outcome: error`, assert the `category` only** — never the position. The suite does not pin
-  positions and neither should the tests.
-- **Skip, do not fail, `encoding: utf-16` and `utf-32`.** Those are an implementation gap, not a
-  conformance failure.
+- **Assert the `category` on every error vector, at every layer** — and never the position. The
+  category is not derivable from the layer: the vocabulary layer raises `resolver` and `validation`
+  errors and never a "vocabulary" one.
+- **At the reader layer, parse the subject cleanly first**, then assert the read reports. A reader
+  vector exists because no tier below the reader can fail on it, so one that had accidentally
+  become a parse error would otherwise pass for the wrong reason.
+- **Report every skip, and skip only for the three legitimate grounds** — an encoding we do not
+  read (`utf-16`, `utf-32`; `invalid-utf8` is not one, it must reach the lexer), a `class2/` vector
+  under a Class 1 processor, and anything under `proposed/`. Anything else is a failure.
+- **Normalise a synthetic entry's trailing `_[0-9a-f]{8}` before comparing** (Class 2). §8.2 keys
+  identity on structure, so the spelling is not normative and comparing it tests our own hash.

@@ -777,3 +777,38 @@ describe('driving over chunked input with runAsync (Task suspension)', () => {
     expect(es.map(describeEvent)).toEqual(expected);
   });
 });
+
+describe('naming positions take the identifier grammar (§3.1, §3.2, §7.7)', () => {
+  it('rejects a type name that is not an identifier, rather than deferring it to resolution', () => {
+    expect(() => events('!42x 1')).toThrow(TsonParseError);
+    expect(() => events('!42x 1')).toThrow(/not an identifier/);
+  });
+
+  it('rejects an annotation name that is not an identifier', () => {
+    expect(() => events('@42x 1')).toThrow(TsonParseError);
+    expect(() => events('@42x 1')).toThrow(/not an identifier/);
+  });
+
+  it("admits '-', which the identifier profile carries", () => {
+    expect(() => events('!my-type 1')).not.toThrow();
+    expect(() => events('@my-note 1')).not.toThrow();
+  });
+
+  it("refuses '.', which the profile reserves as a future separator", () => {
+    expect(() => events('!my.type 1')).toThrow(TsonParseError);
+  });
+});
+
+describe('a field name is not the multi-line form (§2.5, §7.4)', () => {
+  it('rejects a triple-quoted field name', () => {
+    expect(() => events('{\n"""\nname\n"""\n: 1\n}')).toThrow(TsonParseError);
+  });
+
+  it('still admits the single-line quoted form, which is what keeps JSON keys valid', () => {
+    expect(() => events('{ "first name": 1 }')).not.toThrow();
+  });
+
+  it('still admits a triple-quoted map key, which is a value and keeps all three forms', () => {
+    expect(() => events('{\n"""\nkey\n"""\n=> 1\n}')).not.toThrow();
+  });
+});

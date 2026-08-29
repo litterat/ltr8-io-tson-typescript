@@ -9,25 +9,45 @@
  * (`time-second` of 60 rejected -- `CONFORMANCE.md`'s "one accepted, unfixable gap") and the
  * ±18:00 offset bound this inherits from `java.time.ZoneOffset`.
  *
- * **`precision`/`requireTimezone` are refused, matching `TimeParser.java`'s compact-constructor
- * guard exactly.** `TimeType` (`schema/meta/atoms-temporal.ts`) carries both fields because a
- * resolved body must mirror its constructor's full shape, but neither is enforced by this atom:
- * `precision`'s required semantics (exact vs. maximum fractional-digit count) are unsettled by
- * the spec, and `require_timezone: false` would need an offset-less parse path RFC 3339's
- * `full-time` -- offset mandatory -- doesn't have. A schema that sets either is refused outright
- * (a {@link TsonNotImplementedError} at parser construction) rather than silently accepted and
- * ignored, the same "surfaced gap, not a silent one" call the Java's own comment explains.
+ * **`precision` bounds the written fractional-second digits (§5.5), never a truncation
+ * instruction.** `precision: N` admits a token whose fractional-second part has at most `N`
+ * digits, judged on the token as written -- `12:00:00.100` has three digits whatever instant it
+ * denotes, so this is counted from `token.text` directly rather than derived from the parsed
+ * `nanosecond` value, which would lose exactly that distinction (`.1`/`.10`/`.100` all parse to
+ * the same nanosecond count). `precision: 0` admits no fractional part at all.
+ *
+ * **No `requireTimezone` facet exists** -- RFC 3339 `full-time`, which this atom's `spec` pins,
+ * already makes the offset mandatory, so a facet requiring it would be vacuous and one relaxing
+ * it would widen the atom against its own pin (§5.5). `TimeType` carries no such field.
  */
 
-import {
-  TsonAtomParseError,
-  TsonAtomValidationError,
-  TsonNotImplementedError,
-} from '../../core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import type { TimeType } from '../../schema/meta/atoms-temporal.js';
 import type { PlainTime } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { type ComparableTime, compareTime, formatFullTime, readFullTime } from './rfc3339.js';
+
+/**
+ * The written fractional-second digit count of a `full-time`/`date-time` token's time part --
+ * `.100` counts three, trailing zeros included, matching §5.5's "judged on the written token"
+ * rule for `precision` exactly. Zero when there is no fractional part at all. A local re-scan
+ * rather than a value `readFullTime` itself returns: that function already discards this exact
+ * distinction on the way to a single `nanosecond` integer (`.1`/`.10`/`.100` all parse to
+ * 100000000ns), so recovering it means looking at the text again, not at the parsed value.
+ */
+function writtenFractionDigits(text: string): number {
+  const dot = text.indexOf('.');
+  if (dot === -1) return 0;
+  let count = 0;
+  let i = dot + 1;
+  while (i < text.length) {
+    const code = text.charCodeAt(i);
+    if (code < 0x30 || code > 0x39) break;
+    count++;
+    i++;
+  }
+  return count;
+}
 
 function toComparable(value: PlainTime): ComparableTime {
   return {
@@ -42,28 +62,8 @@ function toComparable(value: PlainTime): ComparableTime {
 /**
  * Builds the `AtomType` for one fully-parameterised `time_type` instance. `typeRef` names the
  * type for error reporting, e.g. `'time'` for §5.4's unconstrained `time => !time_type {}`.
- *
- * @throws {@link TsonNotImplementedError} if `constraints` sets `precision` or
- *   `requireTimezone` -- see this module's own TSDoc.
  */
 export function createTimeParser(typeRef: string, constraints: TimeType): AtomType<PlainTime> {
-  if (constraints.precision !== undefined) {
-    throw new TsonNotImplementedError(
-      `'${typeRef}' does not enforce 'precision' yet, so a schema setting it would be accepted ` +
-        'without the constraint being applied -- the spec does not say whether it bounds the ' +
-        'fractional-second digits exactly or at most, and this implementation will not guess. ' +
-        'Drop it, or constrain the value another way',
-    );
-  }
-  if (constraints.requireTimezone !== undefined) {
-    throw new TsonNotImplementedError(
-      `'${typeRef}' does not enforce 'requireTimezone' yet, so a schema setting it would be ` +
-        'accepted without the constraint being applied. RFC 3339 requires an offset on every ' +
-        "value this atom accepts, so 'true' is already the behaviour; 'false' needs an " +
-        'offset-less parse this atom does not have',
-    );
-  }
-
   function read(token: AtomToken): PlainTime {
     const text = token.text;
     const fields = readFullTime(text, 0);
@@ -82,6 +82,17 @@ export function createTimeParser(typeRef: string, constraints: TimeType): AtomTy
       nanosecond: fields.nanosecond,
       offset: { totalMinutes: fields.offsetMinutes },
     };
+    if (constraints.precision !== undefined) {
+      const digits = writtenFractionDigits(text);
+      if (BigInt(digits) > constraints.precision) {
+        throw new TsonAtomValidationError(
+          typeRef,
+          `'${text}' has ${String(digits)} fractional-second digits, more than the maximum ` +
+            `${constraints.precision.toString()} (§5.5)`,
+          `at most ${constraints.precision.toString()} fractional-second digits`,
+        );
+      }
+    }
     if (constraints.min !== undefined) {
       const bound = constraints.min;
       if (

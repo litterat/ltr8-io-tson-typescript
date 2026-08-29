@@ -34,7 +34,7 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/33/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/34/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),

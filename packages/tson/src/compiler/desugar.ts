@@ -18,6 +18,7 @@
  * [T, U]           !tuple { elements: [{ element_type: T } { element_type: U }] }
  * (A | B)          !choice { variants: [A B] }
  * {K => V}         !map   { key_type: K  value_type: V }
+ * {K => V?}        !map   { key_type: K  value_type: V  state: OPTIONAL }
  * {K => V; N..M}   the same, with min_items/max_items
  * { x: T }         !record { fields: [{ name: x  type: T }] } -- only inside a *template* (§5.2);
  *                  a non-template record body stays a plain record definition
@@ -599,6 +600,7 @@ function bindingOf(ref: TypeRef, context: DesugarContext): Binding | undefined {
       return mapBinding(
         typeRefPass(ref.keyType, context),
         elementRefOf(ref.valueType, context),
+        ref.valueType.optional,
         ref.size,
       );
     case 'tupleRef':
@@ -661,11 +663,17 @@ function arrayBinding(
 }
 
 /**
- * `!map { key_type: K  value_type: V [min_items: N] [max_items: M] }` — the map row. Neither side
- * carries a `state`: `map` declares no such field, and an absent key is already a Part 1
- * resolver error.
+ * `!map { key_type: K  value_type: V [state: OPTIONAL] [min_items: N] [max_items: M] }` — the map
+ * row. `state` governs the entry value, as `array`'s governs the element: `{K => V?}` binds
+ * `OPTIONAL` and admits the absent sentinel there (§5.3, §7.6). The key side carries none — an
+ * absent key is already a Part 1 resolver error.
  */
-function mapBinding(key: TypeRef, value: TypeRef, size: SizeSpec | undefined): Binding | undefined {
+function mapBinding(
+  key: TypeRef,
+  value: TypeRef,
+  valueOptional: boolean,
+  size: SizeSpec | undefined,
+): Binding | undefined {
   if (!isReference(key) || !isReference(value)) {
     return undefined;
   }
@@ -673,6 +681,9 @@ function mapBinding(key: TypeRef, value: TypeRef, size: SizeSpec | undefined): B
   const applicationSlots = new Map<string, TypeRef>();
   refSlot(KEY_TYPE, key, fields, applicationSlots);
   refSlot(VALUE_TYPE, value, fields, applicationSlots);
+  if (valueOptional) {
+    fields.push(nameField(STATE, 'OPTIONAL'));
+  }
   if (size !== undefined) {
     fields.push(...sizeFields(size, `{${shownRef(key)} => ${shownRef(value)}; 0..}`));
   }

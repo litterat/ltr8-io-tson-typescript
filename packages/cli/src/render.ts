@@ -40,6 +40,7 @@ function validateFileNode(file: ValidateRun['files'][number]): Value {
     ['diagnostics', arrayNode(file.diagnostics.map(diagnosticNode))],
   ]);
   if (file.notImplemented === true) fields.set('not_implemented', atomNode(true));
+  if (file.schemaUnavailable === true) fields.set('schema_unavailable', atomNode(true));
   return recordNode(fields);
 }
 
@@ -53,6 +54,7 @@ export function renderValidateRun(run: ValidateRun, format: Format): string {
           valid: f.ok,
           diagnostics: f.diagnostics.map(diagnosticJson),
           ...(f.notImplemented === true ? { not_implemented: true } : {}),
+          ...(f.schemaUnavailable === true ? { schema_unavailable: true } : {}),
         })),
       },
       null,

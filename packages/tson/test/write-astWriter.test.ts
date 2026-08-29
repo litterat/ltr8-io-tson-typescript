@@ -106,7 +106,7 @@ describe('§3.3 directives', () => {
 
 describe('§7.2.3 multi-line tokens round-trip through the real lexer/writer pair', () => {
   it('a simple multi-line value comes back byte-identical when already written at column-0 indent', () => {
-    const text = '"""\nline one\nline two\n"""';
+    const text = '"""\nline one\nline two\n"""\n';
     expect(roundTrip(text)).toBe(text);
   });
 
@@ -115,7 +115,7 @@ describe('§7.2.3 multi-line tokens round-trip through the real lexer/writer pai
     // write back -- the *value* round-trips, the exact source bytes do not, which is exactly
     // what this port's own value-preserving round trip needs.
     const written = writeDataValue(parse('"""\n  line one\n  line two\n  """').root);
-    expect(written).toBe('"""\nline one\nline two\n"""');
+    expect(written).toBe('"""\nline one\nline two\n"""\n');
     // And that written form reads back to the identical decoded value.
     expect(parse(written).root).toEqual(parse('"""\n  line one\n  line two\n  """').root);
   });

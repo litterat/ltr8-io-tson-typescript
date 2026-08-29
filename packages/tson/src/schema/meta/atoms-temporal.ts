@@ -64,11 +64,16 @@ export interface DateType {
 /**
  * The meta-kernel's `time_type` constructor (§5.4's `time` atom, RFC 3339 `full-time`).
  *
- * **`precision`/`requireTimezone` are carried but not enforced** — the constructor declares
- * them, so a resolved body must too, but validating them against an actual value is a later
- * work package's concern (the reference implementation's own reader rejects a schema that
- * sets either, rather than silently ignoring the facet). `precision` is `bigint` because the
- * kernel's own field is typed `integer`.
+ * **No timezone facet.** RFC 3339 `full-time`, which this atom's `spec` pins, already makes
+ * the offset mandatory — a facet requiring it would be vacuous and one relaxing it would
+ * widen the atom against its own pin, so the constructor declares none (§5.5).
+ *
+ * **`precision` bounds the fractional-second digits, judged on the written token** — `N`
+ * admits at most `N` digits (`12:00:00.100` has three, whatever instant it denotes), as a
+ * validation constraint, never a truncation instruction: the atom is exact and a value is
+ * preserved as written. `precision: 0` admits no fractional part. Stated as an upper bound,
+ * the facet is an ordered bound under §5.7 and refines like every other one (§5.5).
+ * `precision` is `bigint` because the kernel's own field is typed `integer`.
  *
  * Also an {@link Atom} variant: `time => !time_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
@@ -78,13 +83,12 @@ export interface TimeType {
   readonly min?: OffsetTime;
   readonly max?: OffsetTime;
   readonly precision?: bigint;
-  readonly requireTimezone?: boolean;
 }
 
 /**
  * The meta-kernel's `datetime_type` constructor (§5.4's `datetime` atom, RFC 3339
- * `date-time`). Carries the same unenforced `precision`/`requireTimezone` pair as
- * {@link TimeType}, for the same reason.
+ * `date-time`). Carries the same `precision` facet as {@link TimeType}, for the same reason,
+ * and the same absence of a timezone facet.
  *
  * Also an {@link Atom} variant: `datetime => !datetime_type {}` is a
  * constructor-application instance (§5.5) whose resolved body is this shape with every
@@ -95,7 +99,6 @@ export interface DateTimeType {
   readonly min?: OffsetDateTime;
   readonly max?: OffsetDateTime;
   readonly precision?: bigint;
-  readonly requireTimezone?: boolean;
 }
 
 /**

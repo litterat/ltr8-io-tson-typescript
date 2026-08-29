@@ -240,12 +240,18 @@ function toArrayBody(value: DataValue, unique: boolean): ArrayBody {
   };
 }
 
-/** `!map { key_type: K  value_type: V }` as the body it denotes. */
+/**
+ * `!map { key_type: K  value_type: V }` as the body it denotes. Meta-kernel's own sole map
+ * instance (`schema => {type_name => type_definition}`) never desugars with the value-optional
+ * sugar, so `state` is always `REQUIRED`, its default -- there is no `state` field in the
+ * binding record to read (§8.1 omits a field at its default).
+ */
 function toMapBody(value: DataValue): MapBody {
   return {
     kind: 'map',
     keyType: { name: bindingField(value, 'key_type'), arguments: [], annotations: [] },
     valueType: { name: bindingField(value, 'value_type'), arguments: [], annotations: [] },
+    state: 'REQUIRED',
   };
 }
 

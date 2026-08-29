@@ -10,15 +10,13 @@
  * inherit their own strictness from `rfc3339.ts` -- the four-digit no-sign year, the ±18:00
  * offset bound, the leap-second gap -- with nothing extra to add here.
  *
- * **`precision`/`requireTimezone` are refused**, the same guard `time.ts` has and for the same
- * reason -- see that module's TSDoc.
+ * **`precision` bounds the written fractional-second digits, and no `requireTimezone` facet
+ * exists** -- the same contract `time.ts` implements and documents in full (§5.5); this module
+ * shares its own local `writtenFractionDigits` re-scan rather than importing it, for the same
+ * reason `rfc3339.ts`'s own `nanosecond` field can't stand in for it there either.
  */
 
-import {
-  TsonAtomParseError,
-  TsonAtomValidationError,
-  TsonNotImplementedError,
-} from '../../core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import type { DateTimeType } from '../../schema/meta/atoms-temporal.js';
 import type { PlainDateTime } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
@@ -30,6 +28,22 @@ import {
   readFullDate,
   readFullTime,
 } from './rfc3339.js';
+
+/** See `time.ts`'s own `writtenFractionDigits` -- the identical re-scan, over the same
+ * `full-time` fractional-second shape that sits at the end of a `date-time` token too. */
+function writtenFractionDigits(text: string): number {
+  const dot = text.indexOf('.');
+  if (dot === -1) return 0;
+  let count = 0;
+  let i = dot + 1;
+  while (i < text.length) {
+    const code = text.charCodeAt(i);
+    if (code < 0x30 || code > 0x39) break;
+    count++;
+    i++;
+  }
+  return count;
+}
 
 function toComparableTime(value: PlainDateTime): ComparableTime {
   return {
@@ -54,31 +68,11 @@ function formatBound(bound: NonNullable<DateTimeType['min']>): string {
  * Builds the `AtomType` for one fully-parameterised `datetime_type` instance. `typeRef` names
  * the type for error reporting, e.g. `'datetime'` for §5.4's unconstrained
  * `datetime => !datetime_type {}`.
- *
- * @throws {@link TsonNotImplementedError} if `constraints` sets `precision` or
- *   `requireTimezone` -- see `time.ts`'s TSDoc.
  */
 export function createDateTimeParser(
   typeRef: string,
   constraints: DateTimeType,
 ): AtomType<PlainDateTime> {
-  if (constraints.precision !== undefined) {
-    throw new TsonNotImplementedError(
-      `'${typeRef}' does not enforce 'precision' yet, so a schema setting it would be accepted ` +
-        'without the constraint being applied -- the spec does not say whether it bounds the ' +
-        'fractional-second digits exactly or at most, and this implementation will not guess. ' +
-        'Drop it, or constrain the value another way',
-    );
-  }
-  if (constraints.requireTimezone !== undefined) {
-    throw new TsonNotImplementedError(
-      `'${typeRef}' does not enforce 'requireTimezone' yet, so a schema setting it would be ` +
-        'accepted without the constraint being applied. RFC 3339 requires an offset on every ' +
-        "value this atom accepts, so 'true' is already the behaviour; 'false' needs an " +
-        'offset-less parse this atom does not have',
-    );
-  }
-
   function fail(text: string): never {
     throw new TsonAtomParseError(
       typeRef,
@@ -108,6 +102,17 @@ export function createDateTimeParser(
       },
     };
 
+    if (constraints.precision !== undefined) {
+      const digits = writtenFractionDigits(text);
+      if (BigInt(digits) > constraints.precision) {
+        throw new TsonAtomValidationError(
+          typeRef,
+          `'${text}' has ${String(digits)} fractional-second digits, more than the maximum ` +
+            `${constraints.precision.toString()} (§5.5)`,
+          `at most ${constraints.precision.toString()} fractional-second digits`,
+        );
+      }
+    }
     if (constraints.min !== undefined) {
       const bound = constraints.min;
       if (

@@ -5,14 +5,14 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 
 describe('canonicalizeIdentity (§2.2.1)', () => {
   it('strips the scheme and its :// delimiter, keeping lowercase host plus path', () => {
-    expect(canonicalizeIdentity('https://tson.io/2026/33/m/core.tn')).toBe(
-      'tson.io/2026/33/m/core.tn',
+    expect(canonicalizeIdentity('https://tson.io/2026/34/m/core.tn')).toBe(
+      'tson.io/2026/34/m/core.tn',
     );
   });
 
   it('strips the query (a `?sha256=` pin is verification metadata, not identity)', () => {
-    expect(canonicalizeIdentity('https://tson.io/2026/33/m/core.tn?sha256=abc123')).toBe(
-      'tson.io/2026/33/m/core.tn',
+    expect(canonicalizeIdentity('https://tson.io/2026/34/m/core.tn?sha256=abc123')).toBe(
+      'tson.io/2026/34/m/core.tn',
     );
   });
 

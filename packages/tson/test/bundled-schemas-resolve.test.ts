@@ -544,7 +544,7 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         'field is written at default is a writer question (Wave 5)',
     },
     {
-      pattern: /^token_set\.body\.(!|v\.(unordered|unique_items))$/,
+      pattern: /^enum_set\.body\.(!|v\.(unordered|unique_items))$/,
       reason:
         'topBinding writes every host ArrayBody as `array`, so a set round-trips as an unordered ' +
         'unique array rather than as `set` — the wire aliases need a discriminating test, and ' +

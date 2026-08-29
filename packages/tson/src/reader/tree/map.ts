@@ -124,7 +124,26 @@ export function mapTreeReader(
       if (maybeRef.kind === 'schema-ref') {
         yield* ctx.next();
       }
-      const value = yield* valueParser.read(ctx.field(keySegment));
+      const valuePeek = yield* ctx.peek();
+      let value: Value;
+      if (valuePeek.kind === 'absent') {
+        // The entry is present with an absent value, so it counts toward the size bounds either
+        // way (§5.3); what the state decides is whether the absence is permitted at all (§7.6).
+        yield* ctx.next();
+        if (body.state === 'REQUIRED') {
+          ctx
+            .field(keySegment)
+            .report(
+              'FIELD_REQUIRED',
+              `'${displayName}' entry '${keySegment}' is absent, but values are required`,
+              'a value',
+              '(absent)',
+            );
+        }
+        value = absentNode();
+      } else {
+        value = yield* valueParser.read(ctx.field(keySegment));
+      }
       sink(key, value);
       count += 1;
     }

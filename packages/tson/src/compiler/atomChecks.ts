@@ -363,6 +363,9 @@ function timeNarrows(source: TimeType, refined: TimeType): string[] {
   const out: string[] = [];
   checkAtLeast(out, 'min', source.min, refined.min, compareOffsetTime);
   checkAtMost(out, 'max', source.max, refined.max, compareOffsetTime);
+  // `precision` is an upper bound on written fractional-second digits (§5.5), so it refines the
+  // way every other upper bound does: a refinement may lower it, never raise it.
+  checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
   return out;
 }
 
@@ -376,6 +379,8 @@ function dateTimeNarrows(source: DateTimeType, refined: DateTimeType): string[] 
   const out: string[] = [];
   checkAtLeast(out, 'min', source.min, refined.min, compareOffsetDateTime);
   checkAtMost(out, 'max', source.max, refined.max, compareOffsetDateTime);
+  // As for `time`: an upper bound on written digits refines downward only (§5.5).
+  checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
   return out;
 }
 
@@ -404,6 +409,17 @@ function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: number): string[] {
 }
 
 // ── enum ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An enum states at least one member (§9). `enum.members` is typed `enum_set`, whose `min_items`
+ * is `1`, so `!enum []` describes no value at all and is refused at schema load rather than
+ * left to fail against every document.
+ */
+function enumCoherence(t: EnumBody): string[] {
+  return t.members.length === 0
+    ? ["'members' is empty, so the enum admits no value -- an enum states at least one member"]
+    : [];
+}
 
 function enumNarrows(source: EnumBody, refined: EnumBody): string[] {
   const out: string[] = [];
@@ -578,8 +594,9 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
       return cidrCoherence(atom, 32);
     case 'cidr6_type':
       return cidrCoherence(atom, 128);
-    case 'unit':
     case 'enum':
+      return enumCoherence(atom);
+    case 'unit':
     case 'uuid_type':
     case 'complex_type':
     case 'ipv4_type':

@@ -3,7 +3,7 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: both spec parts implemented; 146/146 shared conformance vectors passing.** See
+> **Status: both spec parts implemented; 179/179 shared conformance vectors passing.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
@@ -11,7 +11,7 @@ browsers, with **zero runtime dependencies**.
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.33.x` implements the **2026 Revision 33** series. A new spec revision moves the
+built against, so `0.34.x` implements the **2026 Revision 34** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
@@ -144,7 +144,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/33/m/meta.tn', 'https://tson.io/2026/33/m/core.tn']);
+await tson.preload(['https://tson.io/2026/34/m/meta.tn', 'https://tson.io/2026/34/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -239,8 +239,8 @@ resolved schema output) and known gaps. In particular:
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/33/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/33/tson-part2-schema.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/34/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/34/tson-part2-schema.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.
@@ -254,7 +254,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test                        # unit — 1816 tests
-npm run test:conformance        # 146 shared vectors
+npm run test:conformance        # 179 shared vectors
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 

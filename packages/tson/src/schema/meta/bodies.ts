@@ -104,14 +104,19 @@ export interface ArrayBody {
 /**
  * The kernel's `map` constructor's own vocabulary, resolved (§4.2, §8.1) —
  * `access_pattern`/`size_type` are fixed (`NAMED`/`VARIABLE`) and never appear in output.
- * Also backs the kernel's own `schema` type (`map<type_name, type_definition>`). Unlike
- * {@link ArrayBody}/{@link TupleElement}, a map entry carries no `element_state` — every
- * key present names a present value; there is no positional "optional" concept here.
+ * Also backs the kernel's own `schema` type (`map<type_name, type_definition>`).
+ *
+ * **`state` governs the *value* side only** — the key side admits no `?` and is always
+ * present ([TSON-SCHEMA] §5.3, §7.6). `state` defaults to {@link ElementState.REQUIRED}
+ * (every key present names a present value); the `{K => V?}` sugar produces
+ * {@link ElementState.OPTIONAL}, and only then may a map entry's value be absent on the
+ * wire — the entry itself, keyed by `K`, is unconditional either way.
  */
 export interface MapBody {
   readonly kind: 'map';
   readonly keyType: TypeRef;
   readonly valueType: TypeRef;
+  readonly state: ElementState;
   readonly minItems?: bigint;
   readonly maxItems?: bigint;
 }
@@ -150,12 +155,18 @@ export interface ChoiceBody {
 }
 
 /**
- * The kernel's `enum` constructor's own vocabulary, resolved (§4.1, §8.1): `members:
- * set<token>` — backs `boolean` (`[true false]`), the kernel's own internal enumerations
- * (`product_access_type`, `field_state`, `type_kind`, ...), and every user-declared `!enum
- * [...]` instance. Kept as an ordered array, matching how {@link
+ * The kernel's `enum` constructor's own vocabulary, resolved (§4.1, §8.1): `members: enum_set`
+ * — `!set { element_type: identifier  min_items: 1 }` — backs `boolean` (`[true false]`), the
+ * kernel's own internal enumerations (`product_access_type`, `field_state`, `type_kind`, ...),
+ * and every user-declared `!enum [...]` instance. Kept as an ordered array, matching how {@link
  * TypeDefinition.supertypes}/{@link TypeDefinition.subtypes} already represent conceptual
  * sets — member order is preserved for deterministic output, not semantically significant.
+ *
+ * **Two constraints this type does not itself enforce**, both `enum_set`'s own vocabulary
+ * (§4.2, §9): at least one member (`min_items: 1` — an empty `!enum []` is a schema-load
+ * error), and every member individually well-formed against §7.7's identifier grammar (an
+ * `!enum` member is no longer any whitespace-free lexeme — `!enum [1 2 3]` is now an error).
+ * Enforcing either is a resolver/compiler concern, not this value model's.
  */
 export interface EnumBody {
   readonly kind: 'enum';

@@ -19,29 +19,34 @@ function lexAll(source: string): string[] {
   );
 }
 
-describe('format controls are not identifier characters (§7.1, §9.4)', () => {
-  // ZWNJ and ZWJ are XID_Continue from Unicode 16, so nothing about the property tables keeps
-  // them out. §7.1 subtracts them deliberately: they are invisible, so they are confusable and
-  // spoofing surface. A name whose orthography needs them must be quoted.
+describe('the joining controls ZWNJ/ZWJ are ordinary token content at the lexer layer (§7.1)', () => {
+  // Both are XID_Continue — UAX #31 made them default identifier characters when it withdrew its
+  // former contextual requirement, relocating the safety rule to UTS #39 — and §7.1 states the
+  // token profile as the property union with no subtraction, so the lexer admits them
+  // unconditionally. What constrains a joiner is a *name* rule at naming positions (§7.7 rule 2),
+  // layered on top by the identifier grammar — out of the lexer's own scope entirely.
 
   it.each([
     ['ZWNJ', '‌'],
     ['ZWJ', '‍'],
-  ])('rejects %s inside an unquoted token', (_name, control) => {
-    expect(() => lexAll(`a${control}b`)).toThrow(TsonLexError);
+  ])('lexes %s inside an unquoted token as ordinary continuation content', (_name, control) => {
+    const kinds = lexAll(`a${control}b`);
+    expect(kinds).toEqual([`unquoted-token:a${control}b`]);
   });
 
   it.each([
     ['ZWNJ', '‌'],
     ['ZWJ', '‍'],
   ])('rejects %s at the start of an unquoted token', (_name, control) => {
+    // Neither is XID_Start, so unquoted-start still refuses it regardless of the continuation
+    // change — this is unaffected by the revision.
     expect(() => lexAll(`${control}ab`)).toThrow(TsonLexError);
   });
 
   it.each([
     ['ZWNJ', '‌'],
     ['ZWJ', '‍'],
-  ])('accepts %s inside a quoted token, which is how such a name is written', (_name, control) => {
+  ])('accepts %s inside a quoted token, as before', (_name, control) => {
     const kinds = lexAll(`"a${control}b"`);
     expect(kinds).toHaveLength(1);
     expect(kinds[0]).toBe(`single-line-token:a${control}b`);

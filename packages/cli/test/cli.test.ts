@@ -212,7 +212,7 @@ describe('hash', () => {
     const code = await main(['hash', join(SPEC_M, 'core.tn')]);
     expect(code).toBe(EXIT.OK);
     expect(io.stdout()).toContain(
-      'sha256:47cc7d4b9ad7de345d1cd4c5667e0face81391c90ede151fea15e4b31cd9b32b',
+      'sha256:c2127732df2dbac80ac4bbb7cb7d35070bfe546472368088a2f76343a8d85830',
     );
   });
 
@@ -226,7 +226,7 @@ describe('hash', () => {
     };
     expect(parsed.valid).toBe(true);
     expect(parsed.files[0]?.content_hash).toBe(
-      '47cc7d4b9ad7de345d1cd4c5667e0face81391c90ede151fea15e4b31cd9b32b',
+      'c2127732df2dbac80ac4bbb7cb7d35070bfe546472368088a2f76343a8d85830',
     );
   });
 

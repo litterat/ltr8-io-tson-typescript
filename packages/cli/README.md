@@ -13,7 +13,7 @@ npx @ltr8/tson-cli hash person.tn
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
-`0.33.x` is built against the 2026 Revision 33 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+`0.34.x` is built against the 2026 Revision 34 series. `@ltr8/tson` and `@ltr8/tson-cli` are
 released in lockstep at the same version.
 
 ## Commands

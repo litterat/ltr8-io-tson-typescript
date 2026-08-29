@@ -104,12 +104,23 @@ interface Cursor {
 }
 
 /**
- * Maps every {@link ReadContext} this module creates back to the {@link Cursor} it shares --
- * what lets {@link lookingAhead} reach the cursor without the public {@link ReadContext} shape
- * carrying an implementation-only property. A context this module did not create (there is no
- * other implementation) simply has no entry, which {@link lookingAhead} treats as a usage error.
+ * The key every {@link ReadContext} this module creates carries its {@link Cursor} under -- what
+ * lets {@link lookingAhead} reach the cursor without the public {@link ReadContext} shape
+ * declaring an implementation-only property.
+ *
+ * **A registry-global symbol, not a module-local one, and not a `WeakMap`.** A bundler that gives
+ * two subpath entries their own copy of this module gives each copy its own module-level state,
+ * so a context built through one copy is invisible to the other's lookup -- and the reader stack
+ * routinely crosses entries, since a caller registering the standard library
+ * (`@ltr8/tson/stdlib`) reads through `@ltr8/tson`. Keying on `Symbol.for` makes the lookup agree
+ * across copies, because the symbol is the same object in every one.
  */
-const cursorOf = new WeakMap<ReadContext, Cursor>();
+const CURSOR = Symbol.for('io.ltr8.tson.readContext.cursor');
+
+/** A context carrying its cursor, which is every context {@link makeContext} builds. */
+interface CursorCarrier {
+  [CURSOR]?: Cursor;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Path/pointer rendering
@@ -187,7 +198,7 @@ function descend(cursor: Cursor, tail: PathStep | undefined): number {
  * implementation, so this is unreachable rather than a supported case.
  */
 export function nestingLimitOf(ctx: ReadContext): number {
-  return cursorOf.get(ctx)?.maxNestingDepth ?? DEFAULT_MAX_NESTING_DEPTH;
+  return (ctx as ReadContext & CursorCarrier)[CURSOR]?.maxNestingDepth ?? DEFAULT_MAX_NESTING_DEPTH;
 }
 
 function makeContext(
@@ -329,7 +340,7 @@ function makeContext(
     },
   };
 
-  cursorOf.set(ctx, cursor);
+  (ctx as ReadContext & CursorCarrier)[CURSOR] = cursor;
   return ctx;
 }
 
@@ -359,14 +370,14 @@ export function createReadContext(
  * The port of `DefaultTsonReadContext.lookingAhead` -- see `contracts.ts`'s own doc on
  * {@link lookingAhead} for the full contract. Every {@link ReadContext} `lookahead` might be
  * called with was created by {@link makeContext} above (there is no other implementation of this
- * interface in the package), so the {@link cursorOf} lookup cannot fail for a context this
- * library made -- exactly the invariant the Java original's own comment states about its cast.
+ * interface in the package), so the {@link CURSOR} lookup cannot fail for a context this library
+ * made -- exactly the invariant the Java original's own comment states about its cast.
  */
 export function* lookingAhead<T>(
   ctx: ReadContext,
   lookahead: (ctx: ReadContext) => Task<T>,
 ): Task<T> {
-  const cursor = cursorOf.get(ctx);
+  const cursor = (ctx as ReadContext & CursorCarrier)[CURSOR];
   if (cursor === undefined) {
     throw new TsonInternalError(
       'lookingAhead was called with a ReadContext this module did not create -- ' +

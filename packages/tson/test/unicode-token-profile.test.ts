@@ -42,16 +42,23 @@ describe('isUnquotedTokenStart (§7.1)', () => {
     expect(isUnquotedTokenStart(0x24)).toBe(false);
   });
 
-  it('excludes ZWNJ and ZWJ, which §7.1 subtracts from the profile', () => {
-    // The subtraction is load-bearing, not defensive: from Unicode 16 both are XID_Continue, so a
-    // profile built from the property alone admits exactly the two code points the spec removes.
-    // They are invisible, hence confusable and spoofing surface (§9.4); a name needing them must
-    // be quoted.
+  it('admits ZWNJ and ZWJ as continuation characters, per this revision', () => {
+    // Both are XID_Continue, and §7.1 states the profile as exactly the property union with no
+    // subtraction — unlike earlier revisions, which excluded them here. What now constrains a
+    // joiner is the identifier grammar's contextual rule at naming positions (§7.7 rule 2), not
+    // this token-level profile: a joiner is ordinary content anywhere a value or a schemaless
+    // field name may appear.
     for (const cp of [0x200c, 0x200d]) {
-      expect(isXidContinue(cp), 'the property still admits it').toBe(true);
-      expect(isUnquotedTokenStart(cp), 'but the profile must not').toBe(false);
-      expect(isUnquotedTokenContinue(cp), 'in either position').toBe(false);
+      expect(isXidContinue(cp), 'the property admits it').toBe(true);
+      expect(isUnquotedTokenContinue(cp), 'and so does the token profile').toBe(true);
     }
+  });
+
+  it('still rejects ZWNJ and ZWJ as token-start characters', () => {
+    // Neither is XID_Start (both are XID_Continue only), so unquoted-start excludes them on that
+    // basis alone — nothing about §7.1's no-subtraction rule changes this.
+    expect(isUnquotedTokenStart(0x200c)).toBe(false);
+    expect(isUnquotedTokenStart(0x200d)).toBe(false);
   });
 
   it('rejects the other identifier-ignorable characters the Java admits', () => {

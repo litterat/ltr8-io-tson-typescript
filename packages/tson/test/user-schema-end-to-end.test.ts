@@ -40,8 +40,8 @@ import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.j
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/33/m/meta.tn"
-!!import:"https://tson.io/2026/33/m/core.tn"
+!!meta:"https://tson.io/2026/34/m/meta.tn"
+!!import:"https://tson.io/2026/34/m/core.tn"
 {
   reading => {
     id: uuid
@@ -480,19 +480,38 @@ describe('round trip: parse, write, parse, compare', () => {
  * Two behaviours the run above reaches but does not validate, pinned here as assertions rather
  * than left unsaid, so each one can only shrink.
  */
-describe('gaps this gate leaves open', () => {
-  it("does not check §7.2's subsumption rule: a data type-ref at a typed position is skipped, not verified", () => {
+// ── §7.2 subsumption: a value's own type-ref must be admitted by the position it stands in ────
+
+describe("§7.2's subsumption rule: a data type-ref at a typed position is verified, not skipped", () => {
+  it('reports UNKNOWN_TYPE_REF for a wrong type-ref, and for one naming no type at all', () => {
     // §7.2: "At a position whose declared type is `T`, a value annotated `!S` is valid if and only
-    // if [...] `S` is `T` or `T` appears in `S`'s transitive supertypes." Outside a choice, whose
-    // own dispatch does read the type-ref (`compiler/choiceReader.ts`), every reader here skips
-    // the annotation and validates the value as the position's declared type regardless -- so
-    // neither a wrong type-ref nor one naming no type at all is reported.
+    // if [...] `S` is `T` or `T` appears in `S`'s transitive supertypes." `reading` has no
+    // subtypes in this schema, so both `!site` (a real entry, but not one `reading` admits) and
+    // `!nonsense` (naming nothing at all) are refused with the "has no subtypes" wording
+    // (`compiler/subsumption.ts`).
     const wrongType = validate(compiled, 'reading', bytes(CONFORMING.replace('{', '!site {')));
-    expect(wrongType.diagnostics).toEqual([]);
+    expect(wrongType.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(wrongType.diagnostics[0]?.message).toContain(
+      "'!site' is not valid at a 'reading' position",
+    );
+
     const noSuchType = validate(compiled, 'reading', bytes(CONFORMING.replace('{', '!nonsense {')));
-    expect(noSuchType.diagnostics).toEqual([]);
+    expect(noSuchType.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(noSuchType.diagnostics[0]?.message).toContain(
+      "'!nonsense' is not valid at a 'reading' position",
+    );
   });
 
+  it("still admits the position's own type stated explicitly, and a choice's own variant tag", () => {
+    // `sample: !temperature { celsius: -12.5 }` in `CONFORMING` already exercises a choice's own
+    // dispatch surviving this guard (choices are excluded from it by name); this covers the other
+    // two admitted shapes at the record root itself.
+    const ownType = validate(compiled, 'reading', bytes(CONFORMING.replace('{', '!reading {')));
+    expect(ownType.diagnostics).toEqual([]);
+  });
+});
+
+describe('gaps this gate leaves open', () => {
   it('locates a root-level atom problem in the data but not in the schema', () => {
     // `compile.ts` hands `buildAtomReader` no `SchemaLocation`, so an atom anchors none of its
     // own: inside a record it inherits the record's (asserted above -- `/reading/label` and

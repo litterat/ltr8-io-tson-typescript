@@ -47,6 +47,14 @@ import type {
 import type { AtomToken } from '../atom/contract.js';
 import type { TokenForm as LexerTokenForm } from '../lexer/token.js';
 import type { PlainDateTime, PlainTime, TsonDecimal } from '../value/types.js';
+import {
+  tryParseNumber,
+  tryParseRational,
+  type NumberForm,
+  type Sign,
+} from '../base/numberGrammar.js';
+import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
+import { TsonReadError } from '../core/errors.js';
 
 import type { Decimal, Rational, Unit } from './meta/algebra.js';
 import type {
@@ -157,14 +165,23 @@ const textBinding: Binding<string> = atom<string>('text');
 
 /**
  * A bare, unquoted lexeme used as a name -- meta-kernel's `field_name`/`type_name`/`param_name`,
- * every one of which is a `REFERENCE`-kind alias to `token` in the resolved output
- * (`SchemaMetaNameBinder.ALIASES` maps all three to `"token"` for exactly this reason). The host
- * value is the token's own text; `form` is not carried here (an identifier is never written
- * quoted in practice, and this position's TypeScript type is a plain `string`, not
- * {@link Token}) -- see {@link tokenBinding} for the position that keeps `form` too.
+ * every one of which is a `REFERENCE`-kind alias to `identifier` in the resolved output
+ * (`SchemaMetaNameBinder.ALIASES` maps all three to `"identifier"` for exactly this reason). The
+ * host value is the token's own text; `form` is not carried here (§7.4/§7.7's identifier grammar
+ * -- `XID_Start` initial, `XID_Continue ∪ { - }` thereafter, in NFC -- is a strict subset of the
+ * unquoted-token profile, so a well-formed identifier is never written quoted, and this
+ * position's TypeScript type is a plain `string`, not {@link Token}) -- see {@link tokenBinding}
+ * for the position that keeps `form` too.
+ *
+ * **Does not itself enforce the identifier grammar.** This binding reads/writes the raw token
+ * text for the wire shape `type_name`/`field_name`/`param_name`/`enum_set` share; validating that
+ * text against §7.7's `XID_Start`/`XID_Continue` profile is the job of a dedicated `identifier`
+ * atom parser (mirroring the Java reference's `IdentifierParser`, `atom/contract.ts`'s `AtomType`
+ * shape) once one exists in this port -- see this module's own report for exactly where that
+ * still needs to be wired in.
  */
 const identifierBinding: Binding<string> = bridge<string, AtomToken>(
-  atom<AtomToken>('token'),
+  atom<AtomToken>('identifier'),
   (text) => ({ text, form: 'unquoted' }),
   (wire) => wire.text,
 );
@@ -189,6 +206,69 @@ const int32Binding: Binding<number> = bridge<number, bigint>(
   (b) => Number(b),
 );
 
+// -------------------------------------------------------------------------------------------
+// Exact-numeric bounds -- `decimal_type`/`float_type`/`rational_type`'s own `min`/
+// `exclusive_min`/`max`/`exclusive_max`/`multiple_of` (§5.6, §9)
+// -------------------------------------------------------------------------------------------
+
+/**
+ * These bounds are not typed `number`/`rational` on the wire at all: `decimal_type`/
+ * `float_type`/`rational_type` all declare them `value` (`spec/m/meta.tn`), meta-kernel's own
+ * universal-atom escape hatch -- so per §5.2 the token is settled by [TSON-DATA] §4 base type
+ * resolution, never by the constrained family's own atom parser. An unquoted integer bound
+ * (`min: 1`, `min: 0x10`) resolves to §4.3's `number` case with an `integer`/`based-integer`
+ * form; an unquoted non-integer bound (`min: 1.0`, `min: 1e3`) resolves to the same case with a
+ * `float` form. Every one of `decimalFromWire`/`rationalFromWire` below parses with the same
+ * hand-written number grammar (`base/numberGrammar.ts`) every atom parser already shares --
+ * `CLAUDE.md`'s "no `RegExp`" rule for the number grammar applies transitively to every reader
+ * of it, this module included.
+ */
+
+/** Total over every {@link NumberForm} a bound's own token can resolve to -- `special-value` (`nan`/`infinity`) has no exact decimal or rational expansion and is rejected the same way an unparsable token is. */
+function decimalOfNumberForm(form: NumberForm): Decimal | undefined {
+  if (form.kind === 'integer' || form.kind === 'based-integer') {
+    return { unscaledValue: toExactInteger(form), scale: 0 };
+  }
+  if (form.kind === 'float') {
+    const exact = toExactDecimal(form);
+    return { unscaledValue: exact.unscaled, scale: -exact.exponent };
+  }
+  return undefined;
+}
+
+/**
+ * `w` is whatever the atom leaf's own decoder currently hands back for this position -- see this
+ * binding's own doc for why that is *not* {@link TsonDecimal} even though the underlying
+ * {@link atom} leaf is labelled `'number'`. Accepts a `bigint` (an integer already narrowed one
+ * level up), the token's own raw text (parsed here via `tryParseNumber`), or an already-shaped
+ * {@link TsonDecimal} (defensively, in case a future decoder starts handing one back) -- total
+ * over all three, never silently producing `NaN`.
+ */
+function decimalFromWire(w: unknown): Decimal {
+  if (typeof w === 'bigint') {
+    return { unscaledValue: w, scale: 0 };
+  }
+  if (typeof w === 'object' && w !== null && 'unscaled' in w && 'exponent' in w) {
+    const d = w as TsonDecimal;
+    return { unscaledValue: d.unscaled, scale: -d.exponent };
+  }
+  if (typeof w === 'string') {
+    const form = tryParseNumber(w);
+    const decimal = form === undefined ? undefined : decimalOfNumberForm(form);
+    if (decimal !== undefined) return decimal;
+  }
+  throw notANumericBound('an exact decimal', w);
+}
+
+/** `expected <label>, found <w>` -- mirrors `reader/bind.ts`'s own `ATOM_CONSTRAINT_VIOLATION` shape, thrown here rather than reported directly since this module has no `ReadContext` of its own (`bind/decode.ts`'s `TsonReadError` is the seam `definitionResolver.ts`'s `bindAtomInstance` already catches and re-reports through). */
+function notANumericBound(label: string, w: unknown): TsonReadError {
+  const found = typeof w === 'string' ? `'${w}'` : typeof w === 'bigint' ? w.toString() : typeof w;
+  return new TsonReadError({
+    code: 'TYPE_MISMATCH',
+    message: `expected ${label} at this 'value'-typed bound, found ${found}`,
+  });
+}
+
 /**
  * Exact decimal (§5.6's `number`, SQL's exact tier) -- the kernel's `min`/`exclusive_min`/`max`/
  * `exclusive_max`/`multiple_of` escape-hatch `value` fields on {@link DecimalType}/
@@ -197,16 +277,69 @@ const int32Binding: Binding<number> = bridge<number, bigint>(
  * constrained family's own atom. This port's {@link Decimal} (`unscaledValue`/`scale`,
  * `BigDecimal`'s own two fields) is a different sign convention from {@link TsonDecimal}
  * (`unscaled`/`exponent`, `value = unscaled * 10^exponent`) -- `exponent = -scale` is the whole
- * of the conversion.
+ * of the conversion. The leaf stays labelled `'number'` (write formats through the real `number`
+ * atom's own `write`, `atom/numeric/decimal.ts`) -- only the read direction ({@link
+ * decimalFromWire}) is defensive about what actually arrives at a `value`-typed position, per
+ * this section's own top doc.
  */
-const decimalBinding: Binding<Decimal> = bridge<Decimal, TsonDecimal>(
-  atom<TsonDecimal>('number'),
+const decimalBinding: Binding<Decimal> = bridge<Decimal, unknown>(
+  atom<unknown>('number'),
   (d) => ({ unscaled: d.unscaledValue, exponent: -d.scale }),
-  (w) => ({ unscaledValue: w.unscaled, scale: -w.exponent }),
+  decimalFromWire,
 );
 
-/** Exact fraction (§5.6's `rational`) -- {@link Rational} here and `value/types.ts`'s own `Rational` share one shape (`numerator`/`denominator`, both `bigint`), so no bridge is needed. */
-const rationalBinding: Binding<Rational> = atom<Rational>('rational');
+/**
+ * `w` counterpart of {@link decimalFromWire} for `rational_type`'s own `value`-typed bounds
+ * (`spec/m/meta.tn`). §7.6's `rational` grammar (`a/b`) is an *extended* form outside `number`
+ * (`base/numberGrammar.ts`'s own doc), always quoted in practice since `/` is outside the
+ * unquoted token profile (§7.1) -- `atom/numeric/rational.ts`'s own note -- so a quoted bound's
+ * text is tried against it first; a bare integer bound (`min: 1`) is `number`'s own integer
+ * form instead, narrowed to the rational `n/1`.
+ */
+function rationalFromWire(w: unknown): Rational {
+  if (typeof w === 'bigint') {
+    return { numerator: w, denominator: 1n };
+  }
+  if (typeof w === 'object' && w !== null && 'numerator' in w && 'denominator' in w) {
+    return w as Rational;
+  }
+  if (typeof w === 'string') {
+    const rational = tryParseRational(w);
+    if (rational !== undefined) {
+      return {
+        numerator: applyGrammarSign(rational.sign, stripGrammarUnderscores(rational.numerator)),
+        denominator: BigInt(stripGrammarUnderscores(rational.denominator)),
+      };
+    }
+    const form = tryParseNumber(w);
+    if (form?.kind === 'integer' || form?.kind === 'based-integer') {
+      return { numerator: toExactInteger(form), denominator: 1n };
+    }
+  }
+  throw notANumericBound('a rational (or an integer)', w);
+}
+
+/** Strips the grammar's digit-separator underscores, without a regex -- `numberNarrowing.ts`'s own private helper, restated here since `rational`'s two halves (`RationalForm.numerator`/`.denominator`) never reach that module. */
+function stripGrammarUnderscores(digits: string): string {
+  let out = '';
+  for (let i = 0; i < digits.length; i += 1) {
+    const ch = digits.charAt(i);
+    if (ch !== '_') out += ch;
+  }
+  return out;
+}
+
+function applyGrammarSign(sign: Sign | undefined, digits: string): bigint {
+  const magnitude = BigInt(digits);
+  return sign === 'minus' ? -magnitude : magnitude;
+}
+
+/** Exact fraction (§5.6's `rational`) -- {@link Rational} here and `value/types.ts`'s own `Rational` share one shape (`numerator`/`denominator`, both `bigint`), so the write direction needs no reshaping; only the read direction is defensive, per {@link rationalFromWire}'s own doc. */
+const rationalBinding: Binding<Rational> = bridge<Rational, unknown>(
+  atom<unknown>('rational'),
+  (r) => r,
+  rationalFromWire,
+);
 
 /** RFC 3339 `full-date` (§5.4's `date`) -- {@link CalendarDate} is `value/types.ts`'s `PlainDate` restated field-for-field (`year`/`month`/`day`), so the atom position is reused directly with no bridge. */
 const calendarDateBinding: Binding<CalendarDate> = atom<CalendarDate>('date');
@@ -258,13 +391,15 @@ const offsetDateTimeBinding: Binding<OffsetDateTime> = bridge<OffsetDateTime, Pl
 );
 
 /**
- * meta-kernel's `token` primitive (§4.2, §9): the canonical NFC-normalised lexeme, text plus the
- * form that produced it. §8's resolved form is a bare scalar (the same escape hatch `value`/`void`
- * share), which is why the Java original registers {@link Token} as an atom rather than binding it
- * as a two-field record (`TsonAtomContext`'s own comment: "binding it structurally writes it as
- * `{ text: ... form: ... }`... where §8's resolved form has a scalar"). `form`'s casing differs
- * from the lexer's own ({@link TokenForm}'s `UNQUOTED`/... vs. `AtomToken`'s lower-kebab forms);
- * the bridge is exactly that remap.
+ * A raw token, text plus the form that produced it -- the shape {@link RecordField.value} and
+ * {@link TypeArgumentValue.value} need for meta-kernel's `value` escape-hatch field (§4.2, §9):
+ * unlike {@link identifierBinding}, this position keeps `form` because a fixed/default/argument
+ * value is read back exactly as spelled, quoting included. §8's resolved form is a bare scalar
+ * (the same escape hatch `void` shares), which is why the Java original registers {@link Token}
+ * as an atom rather than binding it as a two-field record (`TsonAtomContext`'s own comment:
+ * "binding it structurally writes it as `{ text: ... form: ... }`... where §8's resolved form has
+ * a scalar"). `form`'s casing differs from the lexer's own ({@link TokenForm}'s `UNQUOTED`/... vs.
+ * `AtomToken`'s lower-kebab forms); the bridge is exactly that remap.
  */
 const tokenFormFromWire: Record<LexerTokenForm, TokenForm> = {
   unquoted: 'UNQUOTED',
@@ -320,7 +455,7 @@ const sourcePositionBinding: Binding<SourcePosition> = bridge<SourcePosition, st
 // Unit / Annotation
 // -------------------------------------------------------------------------------------------
 
-/** meta-kernel's `unit => ~atom & {}` (§4.2): the empty ATOM body backing `value`/`token`/`void`. */
+/** meta-kernel's `unit => ~atom & {}` (§4.2): the empty ATOM body backing `value`/`identifier`/`void`. */
 const unitBinding: RecordBinding<Unit> = record<Unit>({
   fields: [],
   construct: () => ({ kind: 'unit' }),
@@ -597,13 +732,15 @@ const mapBodyBinding: RecordBinding<MapBody> = record<MapBody>({
       'valueType',
       lazy((): Binding<TypeRef> => typeRefBinding),
     ),
-    optional<MapBody, 'minItems'>(2, 'min_items', 'minItems', bigintBinding),
-    optional<MapBody, 'maxItems'>(3, 'max_items', 'maxItems', bigintBinding),
+    field<MapBody, 'state'>(2, 'state', 'state', elementStateBinding),
+    optional<MapBody, 'minItems'>(3, 'min_items', 'minItems', bigintBinding),
+    optional<MapBody, 'maxItems'>(4, 'max_items', 'maxItems', bigintBinding),
   ],
   construct: (slots) => {
-    const [keyType, valueType, minItems, maxItems] = slots as [
+    const [keyType, valueType, state, minItems, maxItems] = slots as [
       TypeRef,
       TypeRef,
+      ElementState,
       bigint | undefined,
       bigint | undefined,
     ];
@@ -611,6 +748,7 @@ const mapBodyBinding: RecordBinding<MapBody> = record<MapBody>({
       kind: 'map',
       keyType,
       valueType,
+      state,
       ...opt('minItems', minItems),
       ...opt('maxItems', maxItems),
     };
@@ -973,21 +1111,18 @@ const timeTypeBinding: RecordBinding<TimeType> = record<TimeType>({
     optional<TimeType, 'min'>(0, 'min', 'min', offsetTimeBinding),
     optional<TimeType, 'max'>(1, 'max', 'max', offsetTimeBinding),
     optional<TimeType, 'precision'>(2, 'precision', 'precision', bigintBinding),
-    optional<TimeType, 'requireTimezone'>(3, 'require_timezone', 'requireTimezone', booleanBinding),
   ],
   construct: (slots) => {
-    const [min, max, precision, requireTimezone] = slots as [
+    const [min, max, precision] = slots as [
       OffsetTime | undefined,
       OffsetTime | undefined,
       bigint | undefined,
-      boolean | undefined,
     ];
     return {
       kind: 'time_type',
       ...opt('min', min),
       ...opt('max', max),
       ...opt('precision', precision),
-      ...opt('requireTimezone', requireTimezone),
     };
   },
 });
@@ -997,26 +1132,18 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = record<DateTimeType>({
     optional<DateTimeType, 'min'>(0, 'min', 'min', offsetDateTimeBinding),
     optional<DateTimeType, 'max'>(1, 'max', 'max', offsetDateTimeBinding),
     optional<DateTimeType, 'precision'>(2, 'precision', 'precision', bigintBinding),
-    optional<DateTimeType, 'requireTimezone'>(
-      3,
-      'require_timezone',
-      'requireTimezone',
-      booleanBinding,
-    ),
   ],
   construct: (slots) => {
-    const [min, max, precision, requireTimezone] = slots as [
+    const [min, max, precision] = slots as [
       OffsetDateTime | undefined,
       OffsetDateTime | undefined,
       bigint | undefined,
-      boolean | undefined,
     ];
     return {
       kind: 'datetime_type',
       ...opt('min', min),
       ...opt('max', max),
       ...opt('precision', precision),
-      ...opt('requireTimezone', requireTimezone),
     };
   },
 });
@@ -1135,11 +1262,12 @@ const macTypeBinding: RecordBinding<MacType> = record<MacType>({
 
 /**
  * `type_definition.body: top` (§4.1, §8.1) -- the wire's own `!type-ref` before the value picks
- * the member (§3.1), confirmed directly against `spec/m/*-resolved.tn`: `token_set`'s body reads
- * `!set { element_type: token }`, not `!array { ... }`, even though `set` shares {@link ArrayBody}'s
- * shape rather than declaring one of its own -- both wire names below resolve to
- * {@link arrayBodyBinding}. `value`/`token`/`void` are the three instances of {@link unitBinding}
- * (confirmed the same way: all three read `body: !unit {}}` in `meta-kernel-resolved.tn`).
+ * the member (§3.1), confirmed directly against `spec/m/*-resolved.tn`: `enum_set`'s body reads
+ * `!set { element_type: identifier  min_items: 1 }`, not `!array { ... }`, even though `set`
+ * shares {@link ArrayBody}'s shape rather than declaring one of its own -- both wire names below
+ * resolve to {@link arrayBodyBinding}. `value`/`identifier`/`void` are the three instances of
+ * {@link unitBinding} (confirmed the same way: all three read `body: !unit {}}` in
+ * `meta-kernel-resolved.tn`).
  *
  * `data` (the meta layer's open extension point) and the held `TemplateBody` (§5.10, which "never
  * serialises and carries no `kind` tag" -- `Top`'s own doc) both have no member here: neither is
@@ -1160,7 +1288,7 @@ const topBinding: VariantBinding<Top> = variant(
     enum: enumBodyBinding,
     unit: unitBinding,
     value: unitBinding,
-    token: unitBinding,
+    identifier: unitBinding,
     void: unitBinding,
     reference: referenceBinding,
     unknown_type: unknownTypeBinding,
@@ -1192,7 +1320,7 @@ const topBinding: VariantBinding<Top> = variant(
   // model, could be read but never written.
   //
   // Every host kind has a member of the same name. The extra members are read-only wire aliases:
-  // `set` is written as an array body (its set-ness lives in `unordered`), and `value`/`token`/
+  // `set` is written as an array body (its set-ness lives in `unordered`), and `value`/`identifier`/
   // `void` share the unit binding. Reading still reaches them through byWireName.
   'kind',
 );
@@ -1363,7 +1491,7 @@ export {
  * value every `*-resolved.tn` entry is). A later work package building the real
  * `BindingRegistry`/reader wiring (definition resolution, linking) is free to `chain()` this
  * behind or in front of its own tables; this is deliberately not the full
- * `SchemaMetaNameBinder`-equivalent alias set (`field_name`/`type_name`/`param_name` -> `token`,
+ * `SchemaMetaNameBinder`-equivalent alias set (`field_name`/`type_name`/`param_name` -> `identifier`,
  * and the like) since those names are use-site aliases the reference flattener (§8.3) resolves
  * away before a value reaches this registry at all -- see this file's own report for the finding.
  */
@@ -1378,7 +1506,7 @@ export const metaBindings: BindingRegistry = registry({
   enum: enumBodyBinding,
   unit: unitBinding,
   value: unitBinding,
-  token: unitBinding,
+  identifier: unitBinding,
   void: unitBinding,
   reference: referenceBinding,
   unknown_type: unknownTypeBinding,

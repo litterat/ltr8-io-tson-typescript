@@ -56,6 +56,7 @@ import { START, type Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
 import type { DocumentStart, EventSource, TsonEvent } from './event.js';
 
 /** Creates an {@link EventSource} over `input`. Nothing is read until {@link EventSource.next}/{@link EventSource.peek} is driven. */
@@ -324,6 +325,18 @@ function isBareTokenType(type: TokenType): boolean {
   }
 }
 
+/**
+ * Whether `type` may spell a record field name: `field-name = unquoted-token / single-line-token`
+ * (§7.4).
+ *
+ * Narrower than {@link isBareTokenType} by one form. A map key is a *value* and keeps all three,
+ * so the two predicates part company exactly at the brace dispatch, where one consumed token and
+ * one of lookahead decide which reading a `{` opens (§2.8).
+ */
+function isFieldNameTokenType(type: TokenType): boolean {
+  return type === 'unquoted-token' || type === 'single-line-token';
+}
+
 function tokenFormOf(type: TokenType): 'unquoted' | 'single-line' | 'multi-line' {
   switch (type) {
     case 'unquoted-token':
@@ -451,6 +464,15 @@ function* parseTypeRefName(state: StreamState): Task<string> {
   if (!adjacentTo(bang, name)) {
     throw parseError(name, "'!' must be immediately adjacent to the type name (no whitespace)");
   }
+  if (!isIdentifierText(name.text)) {
+    // §3.2: "the type name is an unquoted token whose text matches the identifier grammar
+    // (§7.7); `!42x` is a parse error, not a reference to an undeclared type."
+    throw parseError(
+      name,
+      `'${name.text}' is not an identifier, so it names no type (§3.2, §7.7): a name starts with ` +
+        `an XID_Start character and continues with XID_Continue or '-', in NFC`,
+    );
+  }
   yield* advance(state); // name
 
   const next = yield* peekToken(state);
@@ -479,10 +501,10 @@ function* parseTypeRefName(state: StreamState): Task<string> {
   return name.text;
 }
 
-/** `field-name = token` (§7.4): any of the three token forms. */
+/** `field-name = unquoted-token / single-line-token` (§7.4): the multi-line form names no field. */
 function* expectFieldNameToken(state: StreamState, construct: string): Task<Token> {
   const name = yield* peekToken(state);
-  if (!isBareTokenType(name.type)) {
+  if (!isFieldNameTokenType(name.type)) {
     throw mismatch(construct, name);
   }
   yield* advance(state);
@@ -557,6 +579,16 @@ function* stepAnnotationOnly(state: StreamState): Task<void> {
     throw parseError(
       name,
       "'@' must be immediately adjacent to the annotation name (no whitespace)",
+    );
+  }
+  if (!isIdentifierText(name.text)) {
+    // §3.1's name is the same `identifier` the type-ref position takes (§7.7); a token that
+    // fails the grammar names no annotation, and the position admits no quoted form to fall
+    // back on.
+    throw parseError(
+      name,
+      `'${name.text}' is not an identifier, so it names no annotation (§3.1, §7.7): a name ` +
+        `starts with an XID_Start character and continues with XID_Continue or '-', in NFC`,
     );
   }
   yield* advance(state); // name
@@ -637,6 +669,9 @@ function* parseBraceValue(state: StreamState): Task<void> {
   if (isBareTokenType(t1.type)) {
     const t2 = yield* peekSecond(state);
     if (t2.type === 'colon') {
+      if (!isFieldNameTokenType(t1.type)) {
+        throw mismatch('a record field name', t1);
+      }
       yield* advance(state); // field-name token
       yield* advance(state); // ':'
       state.ready.push({ kind: 'record-start', position: lbrace.start });

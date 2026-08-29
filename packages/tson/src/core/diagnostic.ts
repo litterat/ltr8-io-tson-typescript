@@ -23,6 +23,8 @@ export type DiagnosticCode =
   | 'UNRECOGNIZED_FIELD'
   /** Two entries of one map share a key (§2.6). */
   | 'DUPLICATE_MAP_KEY'
+  /** A map entry's key is the absent sentinel (§2.9). */
+  | 'ABSENT_MAP_KEY'
   /** Two fields of one record share a name (§2.5). */
   | 'DUPLICATE_FIELD'
   /** The governing schema itself is invalid, unreachable, or failed to resolve. */
@@ -34,7 +36,23 @@ export type DiagnosticCode =
   /** A construct this implementation has not built yet — a library gap, not bad input. */
   | 'NOT_IMPLEMENTED'
   /** A schema type and its registered binding disagree about the type's fields. */
-  | 'BIND_MISMATCH';
+  | 'BIND_MISMATCH'
+  /**
+   * A schema reference (`!!import`, `!!meta`, or `!!schema`) that no configured source would
+   * supply. Not a verdict on the schema itself: the reference was never obtained, so whether it
+   * would have resolved is unknown -- unlike `SCHEMA_ERROR`, which means the schema *was*
+   * obtained and is wrong.
+   */
+  | 'SCHEMA_UNAVAILABLE'
+  /**
+   * [TSON-DATA] §8.2's name-hygiene policy refused a name -- §8.1's "fifth outcome", carried on a
+   * `Diagnostic` only for a *collecting* read's own record (`DiagnosticsCollector.diagnostics`).
+   * A fail-fast read never throws a `Diagnostic` bearing this code: it throws
+   * `core/errors.ts`'s own `TsonNameHygieneRefusedError` instead, which is deliberately not
+   * reconstructible from a `DiagnosticCode` alone, because §8.1 requires this outcome to be
+   * unmistakable for one of the four categories the rest of this union enumerates.
+   */
+  | 'NAME_HYGIENE_REFUSED';
 
 /**
  * Where in a schema a problem was found: the schema's canonical id, a JSON Pointer into it,

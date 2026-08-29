@@ -23,6 +23,8 @@
  * bound a family *derives* rather than stores (an integer's own `size` implies a range with no
  * `min`/`max` facet behind it), where absent is the normal, correct state.
  */
+import { writeDecimal } from '../atom/numeric/decimalMath.js';
+import type { Decimal } from '../schema/meta/algebra.js';
 
 /**
  * One end of a range as a comparable value plus whether it is inclusive, paired with the wire
@@ -37,7 +39,53 @@ export interface Bound<T> {
 }
 
 function describe<T>(bound: Bound<T>): string {
-  return `${bound.facet} ${String(bound.value)}`;
+  return `${bound.facet} ${renderBoundValue(bound.value)}`;
+}
+
+/**
+ * A bound's value as an author would recognise it.
+ *
+ * A facet value is whatever its own family models — a `bigint` for an integer bound, a
+ * {@link TsonDecimal} for a decimal one, a `Rational` for a rational one, a record for a temporal
+ * one. Only the primitives have a useful `toString`, and the rest render as `[object Object]`,
+ * which turns a real diagnostic about the author's own schema into noise. Each shape is spelled
+ * out here rather than asking every atom family for a renderer, because a diagnostic's rendering
+ * is this module's concern and nothing else consumes it.
+ */
+export function renderBoundValue(value: unknown): string {
+  if (typeof value === 'bigint' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'string') return value;
+  if (isRationalShape(value)) {
+    return `${value.numerator.toString()}/${value.denominator.toString()}`;
+  }
+  if (isDecimalShape(value)) {
+    return writeDecimal({ unscaled: value.unscaledValue, exponent: -value.scale });
+  }
+  // A temporal or network bound: its own fields, in declaration order, which is the closest thing
+  // to the token the author wrote that this layer can reach.
+  return JSON.stringify(value);
+}
+
+function isDecimalShape(value: unknown): value is Decimal {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'unscaledValue' in value &&
+    'scale' in value &&
+    typeof (value as Decimal).unscaledValue === 'bigint'
+  );
+}
+
+function isRationalShape(value: unknown): value is { numerator: bigint; denominator: bigint } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'numerator' in value &&
+    'denominator' in value &&
+    typeof (value as { numerator: unknown }).numerator === 'bigint'
+  );
 }
 
 /**
@@ -144,7 +192,9 @@ export function checkAtLeast<T>(
   compare: (a: T, b: T) => number,
 ): void {
   if (source !== undefined && refined !== undefined && compare(refined, source) < 0) {
-    out.push(`${facet} ${String(refined)} is below the source's own ${String(source)}`);
+    out.push(
+      `${facet} ${renderBoundValue(refined)} is below the source's own ${renderBoundValue(source)}`,
+    );
   }
 }
 
@@ -157,7 +207,9 @@ export function checkAtMost<T>(
   compare: (a: T, b: T) => number,
 ): void {
   if (source !== undefined && refined !== undefined && compare(refined, source) > 0) {
-    out.push(`${facet} ${String(refined)} is above the source's own ${String(source)}`);
+    out.push(
+      `${facet} ${renderBoundValue(refined)} is above the source's own ${renderBoundValue(source)}`,
+    );
   }
 }
 

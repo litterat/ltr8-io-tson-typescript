@@ -66,3 +66,24 @@ export function isUnquotedTokenNfc(text: string, maxCodePoint: number): boolean 
   if (maxCodePoint < COMBINING_MARK_THRESHOLD) return true;
   return text.normalize('NFC') === text;
 }
+
+/**
+ * `text` in Unicode Normalization Form C.
+ *
+ * Name identity across the series is byte identity of NFC text (§2.5, §2.6, §7.2.1): a
+ * precomposed and a decomposed spelling of one character are one name, and the comparison is
+ * made on the normalized form rather than on the source bytes. Callers that compare *decoded*
+ * text — a quoted field name, a scalar map key — route it through here first.
+ *
+ * Below U+0300 no code point's NFC form differs from itself, so the common all-ASCII case
+ * returns `text` unchanged without allocating.
+ */
+export function toNfc(text: string): string {
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint >= COMBINING_MARK_THRESHOLD) {
+      return text.normalize('NFC');
+    }
+  }
+  return text;
+}

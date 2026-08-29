@@ -2,10 +2,12 @@ import { TsonInternalError, TsonLexError } from '../core/errors.js';
 import { START, position, type Position } from '../core/position.js';
 import { NEED_INPUT, type ByteInput, type Task } from '../io/bytes.js';
 import {
-  isPatternWhiteSpace,
+  isHorizontalSpace,
+  isIgnorableFormat,
   isUnquotedTokenContinue,
   isUnquotedTokenNfc,
   isUnquotedTokenStart,
+  isWsLineTerm,
 } from '../unicode/index.js';
 import type { Token, TokenForm, TokenType } from './token.js';
 
@@ -82,6 +84,7 @@ export function createLexer(input: ByteInput): Lexer {
     tokenStart: START,
     tokenText: '',
     tokenForm: undefined,
+    lastCodePoint: undefined,
   };
 
   return {
@@ -129,6 +132,13 @@ interface LexerState {
   tokenStart: Position;
   tokenText: string;
   tokenForm: TokenForm | undefined;
+  /**
+   * The last code point {@link advance} consumed, or `undefined` before the first. This is the
+   * character on the near side of a whitespace run — half of what {@link skipWhitespace} needs to
+   * decide whether an ignorable format control (§7.2 rule 1) sits at a token boundary or inside
+   * what would otherwise be one token.
+   */
+  lastCodePoint: number | undefined;
 }
 
 // ── Code points ─────────────────────────────────────────────────────────
@@ -367,6 +377,7 @@ function* advance(state: LexerState): Task<number> {
   } else {
     state.col += 1;
   }
+  state.lastCodePoint = codePoint;
   return codePoint;
 }
 
@@ -385,14 +396,90 @@ function* stripLeadingBom(state: LexerState): Task<void> {
   }
 }
 
-// ── Whitespace (§7.1, §7.2 rule 1) ──────────────────────────────────────
+// ── Whitespace (§7.2 rule 1, §7.4's `ws`/`ws1`) ─────────────────────────
 
+/** An ignorable format control found mid-run, with the position it started at, for {@link requireTokenBoundary}'s error. */
+interface IgnorableOccurrence {
+  readonly control: number;
+  readonly at: Position;
+}
+
+/**
+ * Consumes the `Pattern_White_Space` run before a token, holding UAX #31 requirement R3a-1's two
+ * treatments apart (§7.2 rule 1).
+ *
+ * **LRM and RLM are not horizontal space.** R3a-1 sorts `Pattern_White_Space` into end-of-line and
+ * horizontal space (ordinary separators, unconditionally legal) and *ignorable format controls* —
+ * LRM (U+200E) and RLM (U+200F), the two members carrying `Default_Ignorable_Code_Point` — which
+ * are consumed and contribute nothing (they neither separate nor join tokens) but are legal only
+ * where a token boundary already exists: adjacent to horizontal space or a line terminator, at the
+ * start or end of a line, or between two tokens a structural or special token already separates.
+ * Folding them into ordinary whitespace instead is what would let `[1<LRM>2]` read as two elements
+ * and `ad<LRM>min` lex as two tokens — an insertion that plainly changes the document's meaning,
+ * and invisibly (§9.5 rests on this being refused).
+ *
+ * The check follows R3a-1's own stated strategy: since these controls are legal only where a
+ * boundary would, in their absence, already exist, a control is consumed unconditionally and a
+ * run holding no *real* separator is illegal exactly when the code points on either side of the
+ * whole run would otherwise have continued one unquoted token — decided once, after the run ends,
+ * by looking at the code point last advanced past before this call ({@link
+ * LexerState.lastCodePoint}) and whatever code point the cursor now sits on.
+ */
 function* skipWhitespace(state: LexerState): Task<void> {
+  const precedingCodePoint = state.lastCodePoint;
+  let sawRealSeparator = false;
+  let ignorable: IgnorableOccurrence | undefined;
   for (;;) {
     const cp = yield* peekAt(state, 0);
-    if (cp === undefined || !isPatternWhiteSpace(cp)) return;
+    if (cp === undefined) break;
+    if (isIgnorableFormat(cp)) {
+      ignorable ??= { control: cp, at: position(state.line, state.col, state.byteOffset) };
+    } else if (isHorizontalSpace(cp) || isWsLineTerm(cp)) {
+      sawRealSeparator = true;
+    } else {
+      break;
+    }
     yield* advance(state);
   }
+  if (ignorable !== undefined && !sawRealSeparator) {
+    yield* requireTokenBoundary(state, precedingCodePoint, ignorable);
+  }
+}
+
+/**
+ * Refuses an ignorable format control that stands inside what would otherwise be one unquoted
+ * token, rather than at a boundary — see {@link skipWhitespace}. Both neighbours continuing a
+ * token is what says the two would have been one token without it; a run adjacent to real
+ * horizontal space or a line terminator never reaches here, {@link skipWhitespace} calling this
+ * only once the whole run has been found to hold no such separator.
+ */
+function* requireTokenBoundary(
+  state: LexerState,
+  precedingCodePoint: number | undefined,
+  ignorable: IgnorableOccurrence,
+): Task<void> {
+  const following = yield* peekAt(state, 0);
+  if (!continuesAToken(precedingCodePoint) || !continuesAToken(following)) return;
+  if (following === CP_DOT && (yield* peekAt(state, 1)) === CP_DOT) return; // `..` terminates the token regardless (§7.2 rule 3)
+  // Both continuesAToken checks above are type predicates, so precedingCodePoint and following
+  // are narrowed to `number` here — no assertion needed to hand them to String.fromCodePoint.
+  throw new TsonLexError(
+    `${nameOfIgnorableFormat(ignorable.control)} stands between '${String.fromCodePoint(precedingCodePoint)}' and ` +
+      `'${String.fromCodePoint(following)}', which without it are one token — an ignorable format ` +
+      `control may only stand where a token boundary already exists. Remove it, or quote the token to keep it ` +
+      `as content`,
+    ignorable.at,
+  );
+}
+
+/** Whether `cp` would carry on an unquoted token — the test for "these two would have been one token". */
+function continuesAToken(cp: number | undefined): cp is number {
+  return cp !== undefined && isUnquotedTokenContinue(cp);
+}
+
+/** The two ignorable format controls, spelled for a message; nothing else reaches here. */
+function nameOfIgnorableFormat(control: number): string {
+  return control === 0x200e ? 'U+200E LEFT-TO-RIGHT MARK' : 'U+200F RIGHT-TO-LEFT MARK';
 }
 
 function* skipSpacesTabs(state: LexerState): Task<void> {

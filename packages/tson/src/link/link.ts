@@ -31,9 +31,11 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
+import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { checkDisjointAssertions, computeDisjointness } from './disjointness.js';
+import { checkNameHygiene } from './nameHygiene.js';
 import { validateReferences } from './referenceValidation.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -99,6 +101,23 @@ export interface LinkDeps {
    * failed.
    */
   readonly receiver?: DiagnosticsReceiver;
+  /**
+   * [TSON-DATA] §8.2's name-hygiene policy, applied over [TSON-SCHEMA] §11.4's schema-layer
+   * scopes (`nameHygiene.ts`'s own `checkNameHygiene`). Defaults to {@link DEFAULT_NAME_POLICY}
+   * — mechanisms 1 and 2 enforced, mechanism 3 at Highly Restrictive over the whole name — the
+   * same default every other name-hygiene call site in this package applies. A relaxation is a
+   * caller's explicit code decision (§8.2 forbids relaxing one silently), passed here exactly
+   * once per link rather than read from the environment.
+   *
+   * **Never pass a caller-relaxed policy when linking the meta-kernel bootstrap document
+   * itself** (`schema/bootstrap.ts`'s `bootstrapMetaKernel` output) — the reference
+   * implementation locks that one document to its own default regardless of what a caller
+   * configures ("a policy should not be able to break meta-kernel"), and every call site in this
+   * package that links it omits this field for exactly that reason. An *ordinary* schema
+   * (meta.tn and core.tn included, once resolved the normal way rather than through the
+   * bootstrap route) has no such restriction and may take a caller's own policy.
+   */
+  readonly namePolicy?: NamePolicy;
 }
 
 /**
@@ -113,6 +132,7 @@ export interface LinkDeps {
  */
 export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const { resolveImport, structureNamespace, receiver } = deps;
+  const namePolicy = deps.namePolicy ?? DEFAULT_NAME_POLICY;
 
   const origins = new Map<string, string>();
   let merged = mergeImports(schema.imports, resolveImport, origins);
@@ -141,6 +161,12 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
 
   merged = computeSubtypes(merged, localNames);
   merged = computeDisjointness(merged);
+
+  checkNameHygiene(merged, {
+    schemaId: schema.id,
+    namePolicy,
+    ...(receiver === undefined ? {} : { receiver }),
+  });
 
   validateReferences(merged, {
     schemaId: schema.id,

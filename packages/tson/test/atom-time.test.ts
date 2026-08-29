@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  TsonAtomParseError,
-  TsonAtomValidationError,
-  TsonNotImplementedError,
-} from '../src/core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createTimeParser } from '../src/atom/temporal/time.js';
 import type { AtomToken } from '../src/atom/contract.js';
 import type { TimeType } from '../src/schema/meta/atoms-temporal.js';
@@ -103,17 +99,28 @@ describe('§5.4 !time -- time_type min/max, instant-normalised', () => {
   });
 });
 
-describe('§5.4 !time -- precision/requireTimezone refused', () => {
-  it('refuses a schema that sets precision', () => {
-    expect(() => createTimeParser('time', { kind: 'time_type', precision: 3n })).toThrow(
-      TsonNotImplementedError,
-    );
+describe('§5.5 !time -- precision', () => {
+  it('accepts a token at exactly the bound', () => {
+    const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
+    expect(parser.read(token('10:15:30.100Z')).nanosecond).toBe(100000000);
   });
 
-  it('refuses a schema that sets requireTimezone', () => {
-    expect(() => createTimeParser('time', { kind: 'time_type', requireTimezone: false })).toThrow(
-      TsonNotImplementedError,
-    );
+  it('accepts a token under the bound', () => {
+    const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
+    expect(parser.read(token('10:15:30Z')).nanosecond).toBe(0);
+  });
+
+  it('rejects a token with more written digits than the bound, even with trailing zeros', () => {
+    const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
+    // Four written digits, even though the trailing zero means the same nanosecond count as
+    // `.100` would -- precision is judged on the written token (§5.5), not the parsed value.
+    expect(() => parser.read(token('10:15:30.1000Z'))).toThrow(TsonAtomValidationError);
+  });
+
+  it('precision: 0 admits no fractional part at all', () => {
+    const parser = createTimeParser('time', { kind: 'time_type', precision: 0n });
+    expect(parser.read(token('10:15:30Z')).nanosecond).toBe(0);
+    expect(() => parser.read(token('10:15:30.1Z'))).toThrow(TsonAtomValidationError);
   });
 });
 

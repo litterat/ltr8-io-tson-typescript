@@ -50,7 +50,12 @@
  * *name*: with no governing schema there is no type to resolve it against (§3.1's Class 1
  * treatment).
  */
-import { TsonAtomTypeError, TsonInternalError, TsonReadError } from '../../core/errors.js';
+import {
+  TsonAtomTypeError,
+  TsonInternalError,
+  TsonNameHygieneRefusedError,
+  TsonReadError,
+} from '../../core/errors.js';
 import {
   maxNestingDepthOf,
   nestingLimitExpectation,
@@ -74,6 +79,9 @@ import type {
 } from '../../ast/value.js';
 import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/nodes.js';
 import { absentNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
+import { toNfc } from '../../unicode/nfc.js';
+import { nameHygieneRefusal, DEFAULT_NAME_POLICY, type NamePolicy } from '../../unicode/policy.js';
+import { UTS39_VERSION } from '../../unicode/uts39.js';
 import { deepEqual } from '../tree/equality.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import { lookupBuiltinAtom } from './vocabulary.js';
@@ -88,6 +96,16 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    * on why reporting, not silence, is the default.
    */
   readonly preserveUnknownTypeRefs?: boolean;
+  /**
+   * [TSON-DATA] §8.2's name-hygiene policy, applied over each record's own field names (§8.2's
+   * one Part 1 scope) once per record, after its fields are read. Defaults to
+   * {@link DEFAULT_NAME_POLICY} -- mechanisms 1 and 2 enforced, mechanism 3 at Highly Restrictive
+   * over the whole name -- matching §8.2's own defaults. Relaxing any of the three is this
+   * field's job (`unicode/policy.ts`'s own `with*` functions build a relaxed value); §8.2 forbids
+   * relaxing one silently, e.g. from an environment variable, which is exactly what passing a
+   * policy explicitly here is not.
+   */
+  readonly namePolicy?: NamePolicy;
 }
 
 /**
@@ -100,8 +118,9 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
 export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}): TypeReader<Value> {
   const preserve = options.preserveUnknownTypeRefs ?? false;
   const limit = maxNestingDepthOf(options);
+  const namePolicy = options.namePolicy ?? DEFAULT_NAME_POLICY;
   return {
-    read: (ctx: ReadContext): Task<Value> => readNode(ctx, preserve, limit, 0),
+    read: (ctx: ReadContext): Task<Value> => readNode(ctx, preserve, limit, namePolicy, 0),
   };
 }
 
@@ -276,7 +295,13 @@ function checkTypeRef(
 // ---------------------------------------------------------------------------------------------
 
 /** Reads one data-value: its leading annotations and optional type-ref (§2.3), then its core-value. */
-function* readNode(ctx: ReadContext, preserve: boolean, limit: number, depth: number): Task<Value> {
+function* readNode(
+  ctx: ReadContext,
+  preserve: boolean,
+  limit: number,
+  namePolicy: NamePolicy,
+  depth: number,
+): Task<Value> {
   if (depth >= limit) {
     // Thrown, not reported-and-recovered, even under a collecting receiver. A nesting bound is a
     // resource limit rather than a finding about one value: everything below this point is
@@ -297,11 +322,11 @@ function* readNode(ctx: ReadContext, preserve: boolean, limit: number, depth: nu
   const match = checkTypeRef(ctx, typeRefName, peeked, preserve);
   switch (peeked.kind) {
     case 'record-start':
-      return yield* readRecord(ctx, typeRefName, annotations, preserve, limit, depth);
+      return yield* readRecord(ctx, typeRefName, annotations, preserve, limit, namePolicy, depth);
     case 'map-start':
-      return yield* readMap(ctx, typeRefName, annotations, preserve, limit, depth);
+      return yield* readMap(ctx, typeRefName, annotations, preserve, limit, namePolicy, depth);
     case 'array-start':
-      return yield* readArray(ctx, typeRefName, annotations, preserve, limit, depth);
+      return yield* readArray(ctx, typeRefName, annotations, preserve, limit, namePolicy, depth);
     case 'empty-brace':
       yield* ctx.next();
       return recordNode(new Map(), typeRefName, annotations);
@@ -327,6 +352,7 @@ function* readRecord(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
+  namePolicy: NamePolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // record-start
@@ -342,22 +368,73 @@ function* readRecord(
     if (beforeValue.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    if (fields.has(fieldNameEvent.name)) {
+    // §2.5 settles identity on the NFC form of the decoded name, so the two spellings of one
+    // character are one field however each was written, and the map is keyed on that form.
+    const fieldName = toNfc(fieldNameEvent.name);
+    if (fields.has(fieldName)) {
       ctx
-        .field(fieldNameEvent.name)
+        .field(fieldName)
         .report(
           'DUPLICATE_FIELD',
-          `duplicate field '${fieldNameEvent.name}' -- a record states each field at most once ` +
+          `duplicate field '${fieldName}' -- a record states each field at most once ` +
             `(§2.5), and the repeat states a value for nothing`,
           'each field stated once',
-          `'${fieldNameEvent.name}' stated again`,
+          `'${fieldName}' stated again`,
         );
     }
-    const value = yield* readNode(ctx.field(fieldNameEvent.name), preserve, limit, depth + 1);
-    fields.set(fieldNameEvent.name, value);
+    const value = yield* readNode(ctx.field(fieldName), preserve, limit, namePolicy, depth + 1);
+    fields.set(fieldName, value);
   }
   yield* ctx.next(); // record-end
+  reportNameHygiene(ctx, fields.keys(), namePolicy);
   return recordNode(fields, typeRefName, annotations);
+}
+
+/**
+ * [TSON-DATA] §8.2's name-hygiene check over `fieldNames` -- one record's own field names, §8.2's
+ * one Part 1 scope ("At this layer there is one: the field names of one record"). Run once per
+ * record, after every field has been read (§2.5's duplicate-field check above already ran per
+ * occurrence as fields arrived; this is the different rule that two *distinct* names read alike,
+ * and mechanism 1 needs the whole set collected before it can see a collision at all).
+ *
+ * **A refusal is a fifth outcome, not one of §8.1's four error categories** -- reported through
+ * `ctx.report` so a *collecting* read gets the ordinary `Diagnostic` shape (path, position, the
+ * new `NAME_HYGIENE_REFUSED` code) in its list exactly like every other finding, but a *fail-fast*
+ * read must not surface it as {@link TsonReadError}: that class is what a caller (a conformance
+ * runner among them) tests to recognise §8.1's resolver category, and a policy refusal is
+ * explicitly not one. `ctx.report` synchronously throws only when its receiver is fail-fast
+ * (`core/diagnostic.ts`'s own `throwing`), and only as a direct consequence of the `report` call
+ * this function just made -- so any throw caught here is that conversion, and re-thrown as
+ * {@link TsonNameHygieneRefusedError} (with the intermediate `TsonReadError` attached as `cause`)
+ * instead of left to escape as-is. A collecting receiver never throws, so this function returns
+ * normally for it, exactly as every other `ctx.report` call site in this module does.
+ */
+function reportNameHygiene(
+  ctx: ReadContext,
+  fieldNames: Iterable<string>,
+  namePolicy: NamePolicy,
+): void {
+  const refusal = nameHygieneRefusal(fieldNames, namePolicy);
+  if (refusal === undefined) return;
+  // §8.2 "on detection": reported at the second occurrence's position, in the manner of §2.6's
+  // duplicate-key diagnostic -- `names` ends with the offending name for every mechanism (the
+  // one name itself for mechanisms 2/3, `collision.second` for mechanism 1).
+  const at = refusal.names[refusal.names.length - 1] ?? '';
+  const message =
+    `this record's field names are refused under [TSON-DATA] §8.2's name-hygiene policy: ` +
+    `${refusal.detail} (computed against UTS #39 version ${UTS39_VERSION})`;
+  try {
+    ctx
+      .field(at)
+      .report('NAME_HYGIENE_REFUSED', message, 'field names §8.2 can tell apart', `'${at}'`);
+  } catch (thrown) {
+    throw new TsonNameHygieneRefusedError(message, {
+      mechanism: refusal.mechanism,
+      names: refusal.names,
+      uts39Version: UTS39_VERSION,
+      cause: thrown,
+    });
+  }
 }
 
 function* readArray(
@@ -366,6 +443,7 @@ function* readArray(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
+  namePolicy: NamePolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // array-start
@@ -376,7 +454,9 @@ function* readArray(
     if (next.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    elements.push(yield* readNode(ctx.index(elements.length), preserve, limit, depth + 1));
+    elements.push(
+      yield* readNode(ctx.index(elements.length), preserve, limit, namePolicy, depth + 1),
+    );
   }
   yield* ctx.next(); // array-end
   return arrayNode(elements, typeRefName, annotations);
@@ -394,6 +474,7 @@ function* readMap(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
+  namePolicy: NamePolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // map-start
@@ -408,7 +489,19 @@ function* readMap(
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
-    const key = yield* readNode(ctx, preserve, limit, depth + 1);
+    const key = yield* readNode(ctx, preserve, limit, namePolicy, depth + 1);
+    if (key.kind === 'absent') {
+      // §2.9: the absent sentinel states that a position carries no value, and a map key is a
+      // position that must. The map-entry production admits any value in key position, so this
+      // is the reader's to refuse -- no grammar rule and no schema can see it first.
+      ctx.report(
+        'ABSENT_MAP_KEY',
+        `a map key is the absent sentinel -- '_' states that a position carries no value (§2.9), ` +
+          `and an entry with no key states an entry for nothing`,
+        'a key',
+        'the absent sentinel',
+      );
+    }
     const identity = keyIdentity(key);
     const digest = identityDigest(identity);
     const bucket = seen.get(digest);
@@ -433,7 +526,13 @@ function* readMap(
     if (beforeValue.kind === 'schema-ref') {
       yield* ctx.next();
     }
-    const value = yield* readNode(ctx.field(keySegment(key)), preserve, limit, depth + 1);
+    const value = yield* readNode(
+      ctx.field(keySegment(key)),
+      preserve,
+      limit,
+      namePolicy,
+      depth + 1,
+    );
     entries.push({ key, value });
   }
   yield* ctx.next(); // map-end
@@ -563,13 +662,15 @@ function identityDigest(value: unknown): string {
 function keyIdentity(node: Value): unknown {
   switch (node.kind) {
     case 'atom':
-      return node.value;
+      // §2.6 asks for "the same NFC-normalized string after escape processing" for a scalar; a
+      // decoded atom that is not text carries no spelling for normalization to reach.
+      return typeof node.value === 'string' ? toNfc(node.value) : node.value;
     case 'array':
       return node.elements.map(keyIdentity);
     case 'record': {
       const identity = new Map<string, unknown>();
       for (const [name, value] of node.fields) {
-        identity.set(name, keyIdentity(value));
+        identity.set(toNfc(name), keyIdentity(value));
       }
       return identity;
     }

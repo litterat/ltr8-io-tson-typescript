@@ -4,8 +4,10 @@ import { fromString, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import { collector } from '../src/core/diagnostic.js';
 import {
+  TsonBindMismatchError,
   TsonInternalError,
   TsonNotImplementedError,
+  TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
 import {
@@ -317,6 +319,112 @@ describe('collecting mode (a DiagnosticsReceiver in options)', () => {
     // `bad` is present as an absorbing placeholder, not missing.
     expect(schema.entries.has('bad')).toBe(true);
     expect(recordBodyOf(schema, 'bad').fields).toEqual([]);
+  });
+});
+
+// ── Positive classification: every reportable failure gets its own code, nothing falls to a
+//    catch-all, and an error none of the four categories claims still propagates as itself ─────
+
+/** A structure namespace exposing one constructor entry, `ctorName`, for `!ctorName { }` declarations to resolve against. */
+function structureNamespaceWith(ctorName: string): (name: string) => TypeDefinition | undefined {
+  const entry: TypeDefinition = {
+    kind: 'PRODUCT',
+    parameters: [],
+    constructor: true,
+    supertypes: [],
+    subtypes: [],
+    body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+    annotations: [],
+  };
+  return (name) => (name === ctorName ? entry : undefined);
+}
+
+describe('positive classification of a failed declaration', () => {
+  it("reports BIND_MISMATCH for a TsonBindMismatchError the meta reader throws while binding '!ctor { }'", () => {
+    const doc = document('bad => !something { }  good => { x: text }');
+    const receiver = collector();
+    const schema = resolveSchema(
+      doc,
+      deps({
+        definitionMetaReader: () => {
+          throw new TsonBindMismatchError("bound class disagrees with 'something'");
+        },
+        metaDefinitions: structureNamespaceWith('something'),
+      }),
+      { receiver },
+    );
+    expect(receiver.diagnostics).toHaveLength(1);
+    expect(receiver.diagnostics[0]?.code).toBe('BIND_MISMATCH');
+    expect(receiver.diagnostics[0]?.schemaPointer).toBe('/bad');
+    expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
+  });
+
+  it('reports SCHEMA_UNAVAILABLE for a TsonSchemaFetchError the structure namespace throws', () => {
+    // Injected through `metaDefinitions` rather than `definitionMetaReader`: the latter's own
+    // caller (`definitionResolver.ts`'s `bindAtomInstance`) already folds an unrecognised error
+    // from that particular seam into `TsonNotImplementedError`, so a fetch failure can only reach
+    // this resolver's own classifier unwrapped through a namespace lookup, exactly as a governing
+    // meta backed by a real schema loader would raise one.
+    const doc = document('bad => !something { }  good => { x: text }');
+    const receiver = collector();
+    const schema = resolveSchema(
+      doc,
+      deps({
+        metaDefinitions: (name) => {
+          if (name === 'something') {
+            throw new TsonSchemaFetchError(
+              'https://example.com/unreachable.tn1',
+              'not-permitted',
+              'no configured source would supply this schema',
+            );
+          }
+          return undefined;
+        },
+      }),
+      { receiver },
+    );
+    expect(receiver.diagnostics).toHaveLength(1);
+    expect(receiver.diagnostics[0]?.code).toBe('SCHEMA_UNAVAILABLE');
+    expect(receiver.diagnostics[0]?.schemaPointer).toBe('/bad');
+    expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
+  });
+
+  it('rethrows a BIND_MISMATCH-worthy error unchanged when there is no receiver (fail-fast)', () => {
+    const doc = document('bad => !something { }');
+    expect(() =>
+      resolveSchema(
+        doc,
+        deps({
+          definitionMetaReader: () => {
+            throw new TsonBindMismatchError('mismatch');
+          },
+          metaDefinitions: structureNamespaceWith('something'),
+        }),
+      ),
+    ).toThrow(TsonBindMismatchError);
+  });
+
+  it('never classifies an unrecognised error as a verdict -- it propagates as itself, not SCHEMA_ERROR', () => {
+    // `metaDefinitions` throwing is a bug in the caller-supplied structure namespace, not any of
+    // the four reportable categories -- injected here rather than through `definitionMetaReader`,
+    // since `definitionResolver.ts`'s own `bindAtomInstance` already folds an unrecognised error
+    // from *that* seam into `TsonNotImplementedError` (a deliberate, lower-level classification
+    // this test is not the one to re-cover).
+    const doc = document('bad => !something { }');
+    const receiver = collector();
+    expect(() =>
+      resolveSchema(
+        doc,
+        deps({
+          metaDefinitions: () => {
+            throw new TsonInternalError('a bug in this namespace, not a document problem');
+          },
+        }),
+        { receiver },
+      ),
+    ).toThrow(TsonInternalError);
+    // Nothing was reported -- the fault propagated instead of being laundered into a diagnostic.
+    expect(receiver.diagnostics).toHaveLength(0);
   });
 });
 

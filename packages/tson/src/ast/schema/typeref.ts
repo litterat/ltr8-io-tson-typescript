@@ -130,9 +130,10 @@ export interface ArrayRef {
  * responsible for never constructing it with an `ArrayRef`, `MapRef`, `TupleRef`, or
  * `ChoiceRef` key.
  *
- * The value is an {@link ElementType} for symmetry with the bracket forms, but a map declares
- * no `state` field, so a `?` on the value side is a parse error rather than something this type
- * can carry.
+ * The value is an {@link ElementType}: `{K => V?}` marks the value OPTIONAL exactly as `[T?]`
+ * marks an array element (§5.3), under which an entry's value may be the absent sentinel and the
+ * entry still counts toward the size bounds. The key side carries no such suffix — an absent key
+ * is a resolver error ([TSON-DATA] §2.9), and `map-key` has no `?` to write (§12.1).
  */
 export interface MapRef {
   readonly kind: 'mapRef';

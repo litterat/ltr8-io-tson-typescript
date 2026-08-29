@@ -41,11 +41,14 @@ export interface ValidateFileResult {
   readonly diagnostics: readonly Diagnostic[];
   /** This file hit a construct `@ltr8/tson` cannot read yet -- escalates the whole run past `EXIT.INVALID`. */
   readonly notImplemented?: boolean;
+  /** `--schema` named a document no configured source would supply -- this file was never checked against it. */
+  readonly schemaUnavailable?: boolean;
 }
 
 export interface ValidateRun {
   readonly ok: boolean;
   readonly notImplemented: boolean;
+  readonly schemaUnavailable: boolean;
   readonly files: readonly ValidateFileResult[];
 }
 
@@ -151,13 +154,25 @@ async function readCappedBody(
   return bytes;
 }
 
-/** Loads, resolves, links and compiles `location` against the bundled standard library. Every failure here is a usage-shaped problem: the caller asked this run to validate against a schema that isn't usable, before any data file was even opened. */
+/**
+ * Loads, resolves, links and compiles `location` against the bundled standard library.
+ *
+ * A {@link TsonSchemaFetchError} propagates unchanged rather than becoming a {@link UsageError}:
+ * `--schema https://…` naming a document no source would supply is not a usage mistake -- the
+ * command line was fine, the schema just could not be obtained -- and {@link runValidate} routes
+ * it to a `SCHEMA_UNAVAILABLE` outcome instead. Every other failure here stays usage-shaped: the
+ * caller asked this run to validate against a schema that isn't usable, before any data file was
+ * even opened.
+ */
 async function loadCompiledSchema(location: string): Promise<CompiledSchema> {
   const tson = stdlibTson();
   let bytes: Uint8Array;
   try {
     bytes = await loadSchemaBytes(location);
   } catch (error) {
+    if (error instanceof TsonSchemaFetchError) {
+      throw error;
+    }
     throw new UsageError(
       `cannot read schema '${location}': ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -165,6 +180,9 @@ async function loadCompiledSchema(location: string): Promise<CompiledSchema> {
   try {
     return tson.compile(tson.resolveSchema(bytes));
   } catch (error) {
+    if (error instanceof TsonSchemaFetchError) {
+      throw error;
+    }
     if (isInvalidSchemaError(error)) {
       throw new UsageError(`schema '${location}' does not resolve: ${error.message}`);
     }
@@ -224,9 +242,16 @@ async function validateOne(
 
 /**
  * Runs `validate` over every file. Throws {@link UsageError} for a bad invocation (no files, `-`
- * given more than once, `--schema` without `--root`, a schema that will not load) before any data
- * file is opened; an unreadable *data* file still throws past this function too, for the same
- * classification reason `commands/compile.ts`/`commands/hash.ts` leave one to their own callers.
+ * given more than once, `--schema` without `--root`, a schema that will not resolve) before any
+ * data file is opened; an unreadable *data* file still throws past this function too, for the
+ * same classification reason `commands/compile.ts`/`commands/hash.ts` leave one to their own
+ * callers.
+ *
+ * **A `--schema` no configured source would supply is its own outcome, not a usage error.** No
+ * file is opened either way, but every requested file comes back marked `schemaUnavailable`
+ * rather than the run simply throwing -- the same shape a per-file `NOT_IMPLEMENTED` already
+ * takes, so a caller reading `diagnostics` sees one consistent story regardless of how early the
+ * run stopped.
  */
 export async function runValidate(options: ValidateOptions): Promise<ValidateRun> {
   if (options.files.length === 0) {
@@ -238,18 +263,36 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
       `standard input can only be read once, but '-' was given ${String(stdinCount)} times`,
     );
   }
-  let context: SchemaContext | undefined;
   // The guard is deliberately both ways. `--root` alone used to be accepted and then discarded,
   // so a run whose `--schema` was dropped or mistyped silently fell back to schemaless Class-1
   // checking and reported "valid" for data no one had checked against a schema.
-  if (options.schemaLocation === undefined && options.root !== undefined) {
+  const { schemaLocation, root } = options;
+  if (schemaLocation === undefined && root !== undefined) {
     throw new UsageError('validate: --schema is required when --root is given');
   }
-  if (options.schemaLocation !== undefined) {
-    if (options.root === undefined) {
-      throw new UsageError('validate: --root is required when --schema is given');
+  if (schemaLocation !== undefined && root === undefined) {
+    throw new UsageError('validate: --root is required when --schema is given');
+  }
+
+  let context: SchemaContext | undefined;
+  if (schemaLocation !== undefined && root !== undefined) {
+    let compiled: CompiledSchema;
+    try {
+      compiled = await loadCompiledSchema(schemaLocation);
+    } catch (error) {
+      if (!(error instanceof TsonSchemaFetchError)) {
+        throw error;
+      }
+      const diagnostic: Diagnostic = { code: 'SCHEMA_UNAVAILABLE', message: error.message };
+      const files: ValidateFileResult[] = options.files.map((file) => ({
+        file,
+        ok: false,
+        schemaUnavailable: true,
+        diagnostics: [diagnostic],
+      }));
+      return { ok: false, notImplemented: false, schemaUnavailable: true, files };
     }
-    context = { compiled: await loadCompiledSchema(options.schemaLocation), root: options.root };
+    context = { compiled, root };
   }
 
   const files: ValidateFileResult[] = [];
@@ -259,6 +302,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
   return {
     ok: files.every((f) => f.ok),
     notImplemented: files.some((f) => f.notImplemented === true),
+    schemaUnavailable: files.some((f) => f.schemaUnavailable === true),
     files,
   };
 }

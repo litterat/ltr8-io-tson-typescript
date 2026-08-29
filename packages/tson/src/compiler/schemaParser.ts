@@ -677,13 +677,13 @@ function* parseMapKey(state: CursorState): Task<TypeRef> {
   return key;
 }
 
-/** Neither side of the map sugar's `'=>'` admits `?` (§5.3): `map` declares no `state` field, and an absent key is already a data-grammar error. */
+/** The map sugar's key side admits no `?` (§5.3): an absent key is already a data-grammar error ([TSON-DATA] §2.9), and `map-key` has no `?` to write (§12.1). The value side does admit one. */
 function* rejectMapQuestion(state: CursorState, side: string): Task<void> {
   if (yield* check(state, 'question')) {
     const here = yield* peekToken(state);
     throw parseError(
       here,
-      `'?' is not permitted on a map type's ${side} (§5.3); a map has no element state to mark optional`,
+      `'?' is not permitted on a map type's ${side} (§5.3); an absent key states an entry for nothing`,
     );
   }
 }
@@ -748,8 +748,7 @@ function* parseTypeArg(state: CursorState): Task<TypeArg> {
 function* parseMapBody(state: CursorState): Task<MapRef> {
   const key = yield* parseMapKey(state);
   yield* expect(state, 'map-arrow-token', "a map type's '=>'");
-  const value = yield* parseTypeRef(state);
-  yield* rejectMapQuestion(state, 'value');
+  const value = yield* parseElementType(state);
   let size: SizeSpec | undefined;
   if (yield* check(state, 'semicolon')) {
     yield* advance(state);
@@ -760,7 +759,7 @@ function* parseMapBody(state: CursorState): Task<MapRef> {
   return {
     kind: 'mapRef',
     keyType: key,
-    valueType: { typeRef: value, optional: false },
+    valueType: value,
     ...(size !== undefined ? { size } : {}),
   };
 }

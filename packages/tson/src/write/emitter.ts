@@ -378,7 +378,11 @@ export function createEmitter(sink: TextSink): Emitter {
         emit(escapeMultiLineContent(line));
         emit('\n');
       }
-      emit('"""');
+      // §7.2.3 puts the closing delimiter on its own line: only spaces and tabs may follow it
+      // before the line ends. Whatever comes next -- an element separator, a map arrow, a
+      // closing brace -- therefore starts on the next line, so the terminator is written here
+      // rather than left to a caller that has no way to know it is owed one.
+      emit('"""\n');
     },
   };
 }

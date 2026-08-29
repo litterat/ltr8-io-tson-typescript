@@ -144,7 +144,7 @@ describe('a schema document is bounded too, on every path into it', () => {
   // Worse than the data-side case, because a schema is routinely fetched from somewhere else:
   // each of these used to exhaust the host call stack inside `resolveSchema`/`compile` and escape
   // as an uncaught RangeError.
-  const HEADER = '!!id:"test://deep.tn"\n!!meta:"https://tson.io/2026/33/m/meta.tn"\n';
+  const HEADER = '!!id:"test://deep.tn"\n!!meta:"https://tson.io/2026/34/m/meta.tn"\n';
 
   const VECTORS: readonly (readonly [string, (n: number) => string])[] = [
     [
@@ -182,8 +182,8 @@ describe('a recursive schema-governed read is bounded (the compiled reader stack
   // schema type reading a deep document overflowed the host stack and escaped `readTree`.
   const compiled = compile(
     resolveUserSchema(`!!id:"test://recursive.tn"
-!!meta:"https://tson.io/2026/33/m/meta.tn"
-!!import:"https://tson.io/2026/33/m/core.tn"
+!!meta:"https://tson.io/2026/34/m/meta.tn"
+!!import:"https://tson.io/2026/34/m/core.tn"
 {
   node => { children: [node] }
 }

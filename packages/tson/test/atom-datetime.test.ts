@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  TsonAtomParseError,
-  TsonAtomValidationError,
-  TsonNotImplementedError,
-} from '../src/core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createDateTimeParser } from '../src/atom/temporal/datetime.js';
 import type { AtomToken } from '../src/atom/contract.js';
 import type { DateTimeType } from '../src/schema/meta/atoms-temporal.js';
@@ -76,10 +72,20 @@ describe('§5.4 !datetime -- datetime_type min/max, instant-normalised across da
   });
 });
 
-describe('§5.4 !datetime -- precision/requireTimezone refused', () => {
-  it('refuses a schema that sets precision', () => {
-    expect(() =>
-      createDateTimeParser('datetime', { kind: 'datetime_type', precision: 3n }),
-    ).toThrow(TsonNotImplementedError);
+describe('§5.5 !datetime -- precision', () => {
+  it('accepts a token at exactly the bound', () => {
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 3n });
+    expect(parser.read(token('2025-03-13T10:15:30.100Z')).time.nanosecond).toBe(100000000);
+  });
+
+  it('rejects a token with more written digits than the bound, even with trailing zeros', () => {
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 3n });
+    expect(() => parser.read(token('2025-03-13T10:15:30.1000Z'))).toThrow(TsonAtomValidationError);
+  });
+
+  it('precision: 0 admits no fractional part at all', () => {
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 0n });
+    expect(parser.read(token('2025-03-13T10:15:30Z')).time.nanosecond).toBe(0);
+    expect(() => parser.read(token('2025-03-13T10:15:30.1Z'))).toThrow(TsonAtomValidationError);
   });
 });

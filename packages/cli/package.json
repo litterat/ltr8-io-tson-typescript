@@ -1,6 +1,6 @@
 {
   "name": "@ltr8/tson-cli",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Command line tool for TSON (Typed Schema Object Notation): validate, compile, hash and scaffold documents.",
@@ -42,6 +42,6 @@
     "clean": "rm -rf dist dist-types *.tsbuildinfo"
   },
   "dependencies": {
-    "@ltr8/tson": "0.33.0"
+    "@ltr8/tson": "0.34.0"
   }
 }

@@ -1,11 +1,13 @@
 /**
  * `tson` -- the `@ltr8/tson-cli` entry point. Four commands (`validate`, `compile`, `hash`,
  * `init-example`), three output formats (`text`, `json`, `tson`), and the exit-code contract
- * `exit.ts` documents in full: **0 valid, 1 invalid input, 2 usage error, 70 a library gap or
- * fault** -- the 1-vs-70 split being the one a script depends on, so it is never guessed at:
- * every command's own run function (`commands/*.ts`) already separates "a per-file verdict" from
- * "this run could not reach one", and this module's only job is turning that separation into an
- * exit code and rendered output, never re-deciding it.
+ * `exit.ts` documents in full: **0 valid, 1 invalid input, 2 usage error, 69 a schema nothing
+ * would supply, 70 a library gap or fault** -- the 1-vs-70 split being the one a script depends
+ * on most, so it is never guessed at: every command's own run function (`commands/*.ts`) already
+ * separates "a per-file verdict" from "this run could not reach one", and `exit.ts`'s own
+ * `exitCodeFor` is where `validate`'s collected diagnostics are ranked into whichever of the
+ * three non-OK codes applies -- this module's only job is calling that and rendering the result,
+ * never re-deciding it.
  *
  * Argument parsing is hand-rolled, deliberately, matching the reference implementation's own
  * choice for the same reason it states: the flag set is small and fixed enough that a real
@@ -15,7 +17,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { UsageError, EXIT } from './exit.js';
+import { UsageError, EXIT, exitCodeFor } from './exit.js';
 import { describeError } from './problem.js';
 import {
   parseFormat,
@@ -67,6 +69,7 @@ Exit codes:
   0  valid
   1  at least one file invalid
   2  usage error
+ 69  a --schema reference no configured source would supply -- nothing here was checked
  70  library gap or internal fault
 `;
 
@@ -167,14 +170,23 @@ async function runValidateCommand(args: readonly string[]): Promise<number> {
   }
   const run = await runValidate(parsed.options);
   process.stdout.write(`${renderValidateRun(run, parsed.format)}\n`);
-  if (run.notImplemented) {
+  if (run.ok) {
+    return EXIT.OK;
+  }
+  const code = exitCodeFor(run.files.flatMap((f) => f.diagnostics));
+  if (code === EXIT.FAULT) {
     process.stderr.write(
       'note: some input could not be checked -- a construct is not implemented yet (see the ' +
         'not_implemented entries above). This is a gap in tson, not a problem with your document.\n',
     );
-    return EXIT.FAULT;
+  } else if (code === EXIT.SCHEMA_UNAVAILABLE) {
+    process.stderr.write(
+      'note: some input could not be checked -- a schema could not be obtained (see the ' +
+        'schema_unavailable entries above). Nothing here has read that schema, so nothing here ' +
+        'is saying your document, or that schema, is wrong.\n',
+    );
   }
-  return run.ok ? EXIT.OK : EXIT.INVALID;
+  return code;
 }
 
 // ── compile ──────────────────────────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@
  * admits nothing and does not — the strictness of each end is load-bearing here, which is why
  * {@link checkRange} takes {@link Bound}s rather than raw values.
  */
+import { renderBoundValue } from './atomNarrowing.js';
 import type { Bound } from './atomNarrowing.js';
 
 /**
@@ -38,7 +39,7 @@ export function checkRange<T>(
   const order = compare(lower.value, upper.value);
   if (order > 0) {
     out.push(
-      `${lower.facet} ${String(lower.value)} is above ${upper.facet} ${String(upper.value)}`,
+      `${lower.facet} ${renderBoundValue(lower.value)} is above ${upper.facet} ${renderBoundValue(upper.value)}`,
     );
   } else if (order === 0 && !(lower.inclusive && upper.inclusive)) {
     out.push(
@@ -61,7 +62,9 @@ export function checkOrdered<T>(
   compare: (a: T, b: T) => number,
 ): void {
   if (lower !== undefined && upper !== undefined && compare(lower, upper) > 0) {
-    out.push(`${lowerFacet} ${String(lower)} is above ${upperFacet} ${String(upper)}`);
+    out.push(
+      `${lowerFacet} ${renderBoundValue(lower)} is above ${upperFacet} ${renderBoundValue(upper)}`,
+    );
   }
 }
 

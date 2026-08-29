@@ -195,28 +195,28 @@ describe('§7.2.3 multi-line strings -- closing delimiter at column 0, so no ind
     const text = emit((out) => {
       out.multiLineString('line one' + LINE_FEED + 'line two');
     });
-    expect(text).toBe('"""\nline one\nline two\n"""');
+    expect(text).toBe('"""\nline one\nline two\n"""\n');
   });
 
   it('escapes trailing whitespace on a content line so it is not stripped back off on read', () => {
     const text = emit((out) => {
       out.multiLineString('trailing ' + TAB);
     });
-    expect(text).toBe('"""\ntrailing\\u0020\\u0009\n"""');
+    expect(text).toBe('"""\ntrailing\\u0020\\u0009\n"""\n');
   });
 
   it('escapes a leading """ so it is not mistaken for the closing delimiter', () => {
     const text = emit((out) => {
       out.multiLineString('"""oops');
     });
-    expect(text).toBe('"""\n\\u0022""oops\n"""');
+    expect(text).toBe('"""\n\\u0022""oops\n"""\n');
   });
 
   it('preserves an empty trailing line from a trailing newline in the value', () => {
     const text = emit((out) => {
       out.multiLineString('one' + LINE_FEED);
     });
-    expect(text).toBe('"""\none\n\n"""');
+    expect(text).toBe('"""\none\n\n"""\n');
   });
 });
 

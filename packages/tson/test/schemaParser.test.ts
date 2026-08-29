@@ -163,12 +163,10 @@ describe('type-def: plain reference (§8.3)', () => {
 });
 
 describe('type-def: atom refinement and instance (§5.5)', () => {
-  it('an atom refinement body is data, not the record-def the ABNF names (§5.5)', () => {
-    // Deliberate, documented divergence from §12.1's literal ABNF — see CLAUDE.md's spec-feedback
-    // section. The grammar says `atom-refinement = "!" type-name ws "^" ws record-def`, and
-    // record-def's field-def admits only a type-ref or a `~`/`=` modifier over a BARE token. Under
-    // that reading `spec/m/core.tn` line 105 is invalid, and core.tn is a live bundled schema the
-    // reference implementation resolves. The reference parses a core-value here; so does this.
+  it('an atom refinement body is data, not a record of field declarations (§5.5, §12.1)', () => {
+    // `atom-refinement = "!" type-name ws "^" ws ( record / empty-brace )` names the data
+    // grammar's braced core-value, which is what lets `spec/m/core.tn` line 105 —
+    // `{ size: { bits: 8  signed: true } }` — parse at all.
     const simple = typeDefOf('!integer ^ { min: 1 }');
     expect(simple.kind).toBe('atomRefinement');
 
@@ -179,9 +177,9 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
     expect(nested.bindings.coreValue.kind).toBe('record');
   });
 
-  it("rejects the ABNF's `~`/`=` field modifiers in a refinement body", () => {
-    // The other side of the same divergence, stated so it is not rediscovered as a regression:
-    // reading the body as data means the schema-only modifier syntax has no meaning here.
+  it('rejects the `~`/`=` field modifiers in a refinement body', () => {
+    // The other side of the same rule, stated so it is not rediscovered as a regression: the
+    // body is data, so the schema-only modifier syntax has no meaning in it.
     expect(thrownBy(`${META} { x => !integer ^ { min: ~ 1 } }`)).toBeInstanceOf(TsonParseError);
   });
   it("parses a real atom refinement's bindings as data, not as type definitions (§5.5)", () => {
@@ -660,9 +658,16 @@ describe('map sugar (§5.3)', () => {
     expect(def.ref.size).toEqual({ kind: 'ranged', lower: '1', upper: '10' });
   });
 
-  it('rejects "?" on either side of "=>"', () => {
+  it('rejects "?" on the key side, where an absent key states an entry for nothing', () => {
     expect(thrownBy(`${META} { x => {text? => integer} }`)).toBeInstanceOf(TsonParseError);
-    expect(thrownBy(`${META} { x => {text => integer?} }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it('admits "?" on the value side, marking the entry value OPTIONAL (§5.3)', () => {
+    const def = typeDefOf('{text => integer?}');
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapRef') {
+      throw new Error('unreachable');
+    }
+    expect(def.ref.valueType.optional).toBe(true);
   });
 
   it('rejects a second entry: a map type is a single key => value entry', () => {
@@ -738,7 +743,7 @@ describe("the spec's own worked example (§1.6)", () => {
     const doc = parse(`
 !!id:"https://example.com/task.tn"
 ${META}
-!!import:"https://tson.io/2026/33/m/core.tn"
+!!import:"https://tson.io/2026/34/m/core.tn"
 @doc:"Task-tracking example schema."
 {
   priority => integer

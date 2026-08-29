@@ -76,8 +76,8 @@ import type { Top, TypeDefinition } from './meta/typedef.js';
 // -------------------------------------------------------------------------------------------
 
 /**
- * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`token`, `text`, `boolean`,
- * `integer`, `value`, and the six enum-shaped constraint atoms `type_kind`/`field_state`/
+ * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`identifier`, `token`,
+ * `text`, `boolean`, `integer`, `value`, and the six enum-shaped constraint atoms `type_kind`/`field_state`/
  * `element_state`/`complex_component`/`ieee_format`/`binary_encoding`). Deliberately narrow:
  * this is not a general-purpose `atom/` replacement, only what a schema *source* document's own
  * constructor-application bodies ever carry -- min/max bounds, size bits, enum members, boolean
@@ -87,6 +87,7 @@ import type { Top, TypeDefinition } from './meta/typedef.js';
 export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
   switch (binding.wireType) {
     case 'token':
+    case 'identifier':
       return { text: wire.text, form: wire.form };
 
     case 'text':

@@ -36,8 +36,8 @@
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
  * tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/33/m/meta.tn',
- *   'https://tson.io/2026/33/m/core.tn',
+ *   'https://tson.io/2026/34/m/meta.tn',
+ *   'https://tson.io/2026/34/m/core.tn',
  * ]);
  * ```
  *
@@ -53,6 +53,7 @@
  */
 import { TsonSchemaFetchError, TsonSchemaValidationError } from './core/errors.js';
 import type { NestingLimitOptions } from './core/limits.js';
+import type { NamePolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
 import { verifyContentHash } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
@@ -93,6 +94,25 @@ export interface Config extends NestingLimitOptions {
    * throw {@link TsonSchemaFetchError} with reason `'not-permitted'` naming the missing source.
    */
   readonly schemaSource?: SchemaSource;
+  /**
+   * [TSON-DATA] §8.2's name-hygiene policy, applied by {@link Tson.readTree}/{@link Tson.validate}
+   * over each schemaless record's own field names (§8.2's one Part 1 scope). Omitted means
+   * `reader/schemaless/tree.ts`'s own default (`DEFAULT_NAME_POLICY` -- mechanisms 1 and 2
+   * enforced, mechanism 3 at Highly Restrictive over the whole name), matching §8.2's own
+   * defaults exactly, the same way an omitted {@link NestingLimitOptions.maxNestingDepth} keeps
+   * that module's own default.
+   *
+   * Stated once on the instance rather than per call, for the same reason {@link maxNestingDepth}
+   * is: the whole reason to hold a `Tson` is to say a policy once. §8.2 requires any relaxation of
+   * the three mechanisms to be a code decision, never read from the environment -- setting this
+   * field is exactly that decision, made once, here, rather than implicitly per call.
+   *
+   * A schema-governed read (`options.schema` supplied) does not consult this field at all: a
+   * data field name under a schema inherits the declaration's own verdict (§8.2), so there is no
+   * further record-scope check for `Tson` to apply, and `unicode/policy.ts`'s `NamePolicy` has no
+   * schema-layer scopes of its own ([TSON-SCHEMA] §11.4 is not this port's to enforce here).
+   */
+  readonly namePolicy?: NamePolicy;
 }
 
 /**
@@ -106,6 +126,11 @@ export interface Config extends NestingLimitOptions {
  */
 function limitOf(config: Config): NestingLimitOptions {
   return config.maxNestingDepth === undefined ? {} : { maxNestingDepth: config.maxNestingDepth };
+}
+
+/** {@link Config.namePolicy}, as the `{ namePolicy }` fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, one field over. */
+function namePolicyOptionOf(config: Config): { readonly namePolicy?: NamePolicy } {
+  return config.namePolicy === undefined ? {} : { namePolicy: config.namePolicy };
 }
 
 function requireRegistered(
@@ -220,6 +245,7 @@ export interface Tson {
 export function createTson(config: Config = {}): Tson {
   const schemas = new Map<string, LinkedSchema>();
   const limit = limitOf(config);
+  const namePolicyOption = namePolicyOptionOf(config);
 
   function register(schema: LinkedSchema): void {
     schemas.set(canonicalizeIdentity(schema.id), schema);
@@ -271,15 +297,20 @@ export function createTson(config: Config = {}): Tson {
     compile: compileCore,
     fetch: fetchReference,
     preload,
-    // Bound to this instance's limit rather than passed through bare, so `tson.parse(bytes)` and
-    // `tson.readTree(bytes)` obey the policy the instance was configured with. A caller's own
-    // per-call options still win: they are spread after the instance's.
+    // Bound to this instance's limit (and, for a schemaless tree read, its namePolicy) rather
+    // than passed through bare, so `tson.parse(bytes)`/`tson.readTree(bytes)`/`tson.validate(bytes)`
+    // obey the policy the instance was configured with. A caller's own per-call options still
+    // win: they are spread after the instance's.
+    //
+    // `namePolicyOption` is spread into `readTree`/`validate` only -- `parse`'s own options are
+    // `NestingLimitOptions` alone (it produces a parsed *document*, not a schemaless tree, and
+    // has no record-scope name-hygiene check of its own to configure).
     parse: ((source: never, options?: NestingLimitOptions) =>
       parse(source, { ...limit, ...options })) as Tson['parse'],
     readTree: ((source: never, options?: ReadTreeOptions) =>
-      readTree(source, { ...limit, ...options })) as Tson['readTree'],
+      readTree(source, { ...limit, ...namePolicyOption, ...options })) as Tson['readTree'],
     validate: ((source: never, options?: ReadTreeOptions) =>
-      validate(source, { ...limit, ...options })) as Tson['validate'],
+      validate(source, { ...limit, ...namePolicyOption, ...options })) as Tson['validate'],
     write,
   };
 }

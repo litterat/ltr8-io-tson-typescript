@@ -79,7 +79,7 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
 
   it.each([
     ['value', 'unit'],
-    ['token', 'unit'],
+    ['identifier', 'unit'],
     ['void', 'unit'],
   ])('resolves %s as a bare, empty instance of unit (§5.5)', (name, target) => {
     const entry = entryOf(schema, name);
@@ -121,29 +121,30 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     }
   });
 
-  it("flattens a REFERENCE-kind alias (type_name => token) at every use site inside the array-of-type_name synthetic, keeping the author's own name as @alias (§8.3)", () => {
+  it("flattens a REFERENCE-kind alias (type_name => identifier) at every use site inside the array-of-type_name synthetic, keeping the author's own name as @alias (§8.3)", () => {
     // type_name itself: an unflattened, single-hop alias entry.
     const typeName = entryOf(schema, 'type_name');
     expect(typeName.kind).toBe('REFERENCE');
     expect((typeName.body as Reference).target).toEqual({
-      name: 'token',
+      name: 'identifier',
       arguments: [],
       annotations: [],
     });
 
     // The synthetic array instance meta-kernel's own `[type_name]?` (e.g. record.supertypes)
-    // lifts to: its element_type must be flattened past type_name, onto token, carrying @alias.
+    // lifts to: its element_type must be flattened past type_name, onto identifier, carrying
+    // @alias.
     const synthetic = [...schema.entries.values()].find(
       (entry) =>
         entry.source?.name === 'array' &&
         'elementType' in entry.body &&
-        entry.body.elementType.name === 'token' &&
+        entry.body.elementType.name === 'identifier' &&
         entry.body.elementType.annotations.some(
           (a) => a.name === 'alias' && a.value === 'type_name',
         ),
     );
     if (synthetic === undefined) {
-      throw new Error('expected a synthetic array-of-type_name entry, flattened onto token');
+      throw new Error('expected a synthetic array-of-type_name entry, flattened onto identifier');
     }
   });
 });

@@ -63,6 +63,7 @@ import { schemalessTreeReader } from '../reader/schemaless/tree.js';
 import { choiceTreeReader } from './choiceReader.js';
 import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
+import { guardSubsumption } from './subsumption.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
 
@@ -161,20 +162,42 @@ function buildReader(
     );
   }
 
+  // §7.2's subsumption rule -- a value's own `!type-ref` must be admitted by the position's
+  // declared type -- applied at every position it governs (every `Atom`/`Product` body) rather
+  // than only where a record happens to declare subtypes; see `subsumption.ts`'s own doc for which
+  // kinds it deliberately leaves alone (`choice`, `reference`, `extern`, `unknown`).
   if (isRecordBody(body)) {
-    return recordTreeReader(name, name, body, (field) => resolve(field.type.name), location());
+    const built = recordTreeReader(
+      name,
+      name,
+      body,
+      (field) => resolve(field.type.name),
+      location(),
+    );
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isArrayBody(body)) {
-    return arrayTreeReader(name, name, body, resolve, location());
+    const built = arrayTreeReader(name, name, body, resolve, location());
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isMapBody(body)) {
-    return mapTreeReader(name, name, body, resolve, location());
+    const built = mapTreeReader(name, name, body, resolve, location());
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isTupleBody(body)) {
-    return tupleTreeReader(name, name, body, resolve, location());
+    const built = tupleTreeReader(name, name, body, resolve, location());
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isChoiceBody(body)) {
-    return choiceTreeReader(name, name, body, resolve, location());
+    return choiceTreeReader(
+      name,
+      name,
+      body,
+      resolve,
+      location(),
+      definition.disjoint === true,
+      schema.entries,
+    );
   }
   if (isReference(body)) {
     // A closed alias reads exactly as its target does (§8.3) -- no framing of its own to add, so
@@ -199,7 +222,8 @@ function buildReader(
     );
   }
   if (isAtom(body)) {
-    return buildAtomReader(name, body);
+    const built = buildAtomReader(name, body);
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   // A `DATA`-kind entry (meta-schema vocabulary, not a data type, §4.1) named where a type is
   // expected -- `typedef.ts`'s own doc calls this "a resolver error checked at schema load", so

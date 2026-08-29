@@ -3,24 +3,43 @@
 ← back to the [README](README.md)
 
 Built against TSON Part 1 (lexer + data format), a working draft:
-https://tson.io/raw/2026/33/tson-part1-data.md, and Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/33/tson-part2-schema.md
+https://tson.io/raw/2026/34/tson-part1-data.md, and Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/34/tson-part2-schema.md
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-suite at https://github.com/litterat/ltr8-io-tson-test-suite — 146 vectors.
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite — 179 vectors, all Class 1.
 
-**Conformance: 146 / 146 vectors passing.**
+**Conformance: 179 / 179 vectors passing.**
 
-18 lexer, 25 parser, 14 resolver, 89 vocabulary. Sidecars are parsed with this implementation's
-own parser, as the shared suite expects. Subjects are fed as raw bytes — verified directly for the
-eight vectors carrying deliberately malformed UTF-8, which reach the lexer unmodified and are
-rejected by it rather than by a decoder. No vector in the current suite declares `utf-16` or
-`utf-32`, so nothing is skipped.
+27 lexer, 29 parser, 20 reader, 14 resolver, 89 vocabulary. `RUNNER.md` in the corpus is normative
+for runners and all six of its rules are implemented: sidecars are parsed with this
+implementation's own parser; subjects are fed as raw bytes — verified directly for the eight
+vectors carrying deliberately malformed UTF-8, which reach the lexer unmodified and are rejected
+by it rather than by a decoder; the error `category` is asserted on every error vector, with the
+mapping layer-aware, since `resolver` at the vocabulary layer and `resolver` at the reader layer
+are different error classes here; a reader-layer subject is parsed cleanly before the read is
+asserted, so a vector that had become a parse error cannot pass for the wrong reason; no position
+is ever asserted; and a synthetic entry's trailing content hash is normalised before comparison.
+
+Two skips, both declared and reported: `class2/`, because this processor claims the Class 1
+conformance class (RUNNER.md's ground 2, "declared by conformance class, not per vector"), and
+`proposed/`, which is empty in the pinned checkout. No vector declares `utf-16` or `utf-32`, and
+no vector uses the schema-governed splice yet, though both paths are implemented.
 
 ## Part 1 — data format (Class 1)
 
 - [x] Lexer — UTF-8 decoding, code-point addressing, NFC checking, malformed-sequence rejection
 - [x] Unicode tables — `XID_Start`/`XID_Continue`/`Nd`, `Pattern_White_Space`
+- [x] Ignorable format controls (§7.2) — LRM and RLM are consumed where a token boundary already
+      exists and refused where they would otherwise split one unquoted token, so `ad<LRM>min` is a
+      lexer error naming the invisible character rather than two tokens read silently
+- [x] Identifier grammar (§7.7) — the `identifier` production over a token's decoded text, in NFC,
+      with UTS #39 §3.1.1.1's joining-control contexts, applied at annotation and type-annotation
+      names as a parse error
+- [x] Name hygiene (§8.2) — all three UTS #39 mechanisms over the one Part 1 scope, a record's own
+      field names, enforced by default and refused as a fifth outcome distinct from §8.1's four
+      categories, naming the UTS #39 data version. Relaxation is a `namePolicy` the caller passes
+      in code; nothing is read from the environment
 - [x] Event stream — the Tier 2 pull source
 - [x] Data parser — the Tier 3 AST
 - [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer)
@@ -38,6 +57,14 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 ## Part 2 — type system and schema (Class 2)
 
 - [x] Schema grammar — schema documents parsed into a faithful AST
+- [x] Name hygiene at the schema layer (§11.4) — the four scopes §11.4 names: one enum's members,
+      one record's field names including group labels, one schema's declared names, and the merged
+      namespace at `!!import`, where two schemas each clean alone collide on import. Choice
+      variants are deliberately not a scope; a confusable variant pair is already a confusable pair
+      of declared names
+- [x] Subsumption at every governed position (§7.2) — a stray or wrong `!Type` is refused at an
+      atom, array, map or tuple position and at a record with no subtypes, not only where a record
+      declares subtypes
 - [x] Desugaring — every sugar form lifted to a closed synthetic entry
 - [x] Resolution — composition, refinement, constructor application, templates
 - [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
@@ -103,6 +130,66 @@ rejected by it rather than by a decoder. No vector in the current suite declares
       real browser bundler uses, and unbundlable even with the source condition forced on
 
 ## Known gaps
+
+- **A data document's annotations are preserved but never resolved (§6).** §6 says an annotation
+  names a type reachable one hop through the governing target — the `!!schema` target for a data
+  document — that an annotation whose name does not resolve there is an error, and that the value
+  is validated against that type's contract. This port validates neither: `@no_such_annotation`,
+  `@label:42` where `label => text`, a `void`-targeted annotation given a value, and a
+  record-targeted annotation missing a required field all pass. The schema side does enforce
+  resolution — an unknown annotation on a declaration is caught — so it is the data path that is
+  missing the check, and the schema side's own refusal surfaces as an internal error rather than a
+  resolver diagnostic, so it is mis-routed even where it works. Worth knowing why an
+  implementation would get this wrong rather than merely skip it: under a declared `text` _field_
+  an unquoted `42` is the string `"42"` (§7.4), but at an annotation position there is no such
+  re-reading, so reusing field-typed token reading for annotation values accepts what §6 refuses.
+
+- **A CJS consumer mixing subpath entries still gets one copy of a shared module per entry.**
+  The ESM build shares chunks, so `@ltr8/tson` and `@ltr8/tson/stdlib` name one copy of everything
+  they both reach — which they must, since a `standardLibrary()` caller reads through both, and
+  two copies means two sets of classes, so `instanceof` answers `false` across them and every
+  schema verdict is misread as a library fault. Code splitting is ESM-only in esbuild, so the CJS
+  output still carries a copy per entry. Nothing in the package currently depends on module
+  identity across entries — the read context's cursor is keyed on a `Symbol.for` registry symbol
+  for that reason — but a new module-level `Map`, `WeakMap` or `instanceof` across the boundary
+  would reintroduce it silently for CJS.
+
+- **A data document's annotations are preserved but never resolved (§6).** §6 says an annotation
+  names a type reachable one hop through the governing target — the `!!schema` target for a data
+  document — that an annotation whose name does not resolve there is an error, and that the value
+  is validated against that type's contract. This port validates neither: `@no_such_annotation`,
+  `@label:42` where `label => text`, a `void`-targeted annotation given a value, and a
+  record-targeted annotation missing a required field all pass. The schema side does enforce
+  resolution — an unknown annotation on a declaration is caught — so it is the data path that is
+  missing the check, and the schema side's own refusal surfaces as an internal error rather than a
+  resolver diagnostic, so it is mis-routed even where it works. Worth knowing why an
+  implementation would get this wrong rather than merely skip it: under a declared `text` _field_
+  an unquoted `42` is the string `"42"` (§7.4), but at an annotation position there is no such
+  re-reading, so reusing field-typed token reading for annotation values accepts what §6 refuses.
+
+- **Each subpath entry is a self-contained bundle, so a shared module can exist twice.**
+  `tsup` builds with `splitting: false`, which means `reader/context.ts` (among others) is emitted
+  into both `dist/index.js` and `dist/stdlib.js`. Module-level state therefore has one copy per
+  entry, and a read that crosses entries — which every `standardLibrary()` caller does, since the
+  readers come from `@ltr8/tson` and the registry from `@ltr8/tson/stdlib` — sees two of it. The
+  read context's cursor lookup is keyed on a `Symbol.for` registry symbol for exactly that reason,
+  so it agrees across copies; nothing else in the package currently depends on module-level
+  identity, but a new module-level `WeakMap`, `Map` or counter would reintroduce the hazard
+  silently. The structural fix is chunk sharing, which `splitting: false` currently forgoes.
+
+- **Use-site naming is not implemented (§8.3).** A diagnostic names the entry a reference resolves
+  to, not the alias the author wrote at that position, so `c: pct` where `pct => small` reports
+  `'small'` — a declaration the author never wrote, and possibly in a file they never opened. The
+  reference implementation renames a shared compiled reader per use site at compile time, free at
+  read time. The tree readers here already carry a `displayName` distinct from `name`, so the
+  container half is a short step; the atom builders have no such parameter across their twenty
+  constructor families, which is what makes it a real change rather than a rename.
+
+- **A value type-argument's identity compares its spelling, not its value (§8.2).** Revision 34
+  settles that a literal argument is recorded verbatim but compared under [TSON-DATA] §4 value
+  equivalence, so `vector<float32, 255>` and `vector<float32, 0xFF>` are one instantiation entry
+  while `1` and `1.0` stay two. This port keys the entry on the written form, so the first pair
+  mints two entries that mean the same thing. It costs a duplicate entry, never a wrong verdict.
 
 - **The read stack costs a host call frame per nesting level, and is bounded rather than
   iterative.** §9.1's bound is `maxNestingDepth`, configurable per call (`parse`, `readTree`,
@@ -213,9 +300,11 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 
 - [x] Workspace, tooling, CI
 - [x] Frozen contract layer — the types every work package builds against
-- [x] Conformance harness — discovers and pairs all 146 vectors
+- [x] Conformance harness — discovers and pairs all 179 vectors, under RUNNER.md's six rules
 - [x] Reference fetch — pinned Java source and the vector suite
 - [x] Vendored `spec/` — the two spec parts and the six bundled schemas, byte for byte
 - [x] Unicode tables — `XID_Start` / `XID_Continue` / `Nd`, generated and checked in
+- [x] UTS #39 tables — `Identifier_Status`, the confusables skeleton map, script data and the
+      joining-control properties, generated into `src/unicode/` by `scripts/gen-uts39-tables.mjs`
 - [x] I-Regexp general categories — all 36 of RFC 9485's, generated into the `regex/` leaf
 - [x] Orchestration — `ORCHESTRATION.md` and the eight wave scripts under `.claude/workflows/`

@@ -20,7 +20,15 @@ export default defineConfig([
     sourcemap: true,
     clean: true,
     target: 'node24',
-    splitting: false,
+    // **Load-bearing, not cosmetic.** Without it every entry is a self-contained bundle, so a
+    // module reachable from two of them is emitted twice and its module-level state exists
+    // twice with it -- and `instanceof` across the copies answers `false`, since each copy
+    // declares its own classes. The read stack crosses entries routinely: a caller registering
+    // the standard library (`@ltr8/tson/stdlib`) reads through `@ltr8/tson`. Splitting gives
+    // the shared modules one chunk and one identity. It applies to the ESM output only, which
+    // is esbuild's own limit; a CJS consumer that mixes subpath entries still gets one copy per
+    // entry, so nothing may depend on module identity across them.
+    splitting: true,
     treeshake: true,
   },
   {

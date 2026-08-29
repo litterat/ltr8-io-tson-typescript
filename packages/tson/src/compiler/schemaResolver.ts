@@ -37,8 +37,10 @@
  * knows the resolution order a document's own declarations create.
  */
 import {
+  TsonBindMismatchError,
   TsonInternalError,
   TsonNotImplementedError,
+  TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
@@ -143,8 +145,8 @@ export interface ResolveSchemaOptions {
   /**
    * Where a failed declaration is reported, letting every other declaration still resolve
    * ([TSON-DATA] §8.1: "continue processing after an error to report multiple issues in a single
-   * pass"). Omitted means fail-fast: the first `TsonSchemaValidationError`/`TsonNotImplementedError`
-   * propagates instead, and the caller sees the exact declaration that failed.
+   * pass"). Omitted means fail-fast: the first {@link ReportableSchemaError} propagates instead,
+   * and the caller sees the exact declaration that failed.
    *
    * **The result is only trustworthy when nothing was reported.** A schema that produced
    * diagnostics contains placeholder entries in place of every declaration that failed -- see
@@ -390,9 +392,25 @@ export function resolveSchema(
 /** [TSON-SCHEMA] §8.2's derived marker, attached to the key of every entry this resolver materialised from a sugar form. */
 const SYNTHETIC: Annotations = [{ name: 'synthetic' }];
 
-/** The two exception types a failed declaration is ever reported under -- see `definitionResolver.ts`'s own classification note. */
-function isReportable(e: unknown): e is TsonSchemaValidationError | TsonNotImplementedError {
-  return e instanceof TsonSchemaValidationError || e instanceof TsonNotImplementedError;
+/**
+ * The exception types a failed declaration is ever reported under. Every case is a positive
+ * classification ({@link schemaProblemCode}); anything else -- {@link TsonInternalError} above
+ * all -- is not reportable and propagates as itself, a fault in this library rather than a
+ * verdict on the document.
+ */
+type ReportableSchemaError =
+  | TsonSchemaValidationError
+  | TsonNotImplementedError
+  | TsonBindMismatchError
+  | TsonSchemaFetchError;
+
+function isReportable(e: unknown): e is ReportableSchemaError {
+  return (
+    e instanceof TsonSchemaValidationError ||
+    e instanceof TsonNotImplementedError ||
+    e instanceof TsonBindMismatchError ||
+    e instanceof TsonSchemaFetchError
+  );
 }
 
 /**
@@ -508,8 +526,12 @@ function typeParamsOfDeclaration(declaration: Declaration): readonly string[] {
 }
 
 /**
- * One declaration's failure as a {@link Diagnostic} -- `NOT_IMPLEMENTED` for a
- * {@link TsonNotImplementedError} (a library gap), `SCHEMA_ERROR` for a
+ * One declaration's failure as a {@link Diagnostic}, classified positively -- `BIND_MISMATCH` for
+ * a {@link TsonBindMismatchError} (the reading application's own binding disagrees with the
+ * schema, not an author mistake; subsumes {@link TsonMissingBindingError}), `NOT_IMPLEMENTED` for
+ * a {@link TsonNotImplementedError} (a library gap), `SCHEMA_UNAVAILABLE` for a
+ * {@link TsonSchemaFetchError} (no configured source would supply a schema this declaration's own
+ * constructor is bound against -- not obtained, so never judged), and `SCHEMA_ERROR` for a
  * {@link TsonSchemaValidationError} (the author's mistake), matching the classification
  * `definitionResolver.ts`'s own errors already carry. `schemaPointer` names the declaration by an
  * RFC 6901-shaped `/name` rather than embedding it in the message, since the message is already
@@ -519,16 +541,23 @@ function typeParamsOfDeclaration(declaration: Declaration): readonly string[] {
 function schemaProblem(
   schemaId: string,
   declarationName: string,
-  error: TsonSchemaValidationError | TsonNotImplementedError,
+  error: ReportableSchemaError,
   position: Position | undefined,
 ): Diagnostic {
   return {
-    code: error instanceof TsonNotImplementedError ? 'NOT_IMPLEMENTED' : 'SCHEMA_ERROR',
+    code: schemaProblemCode(error),
     message: error.message,
     schemaId,
     schemaPointer: `/${declarationName}`,
     ...(position === undefined ? {} : { schemaPosition: position }),
   };
+}
+
+function schemaProblemCode(error: ReportableSchemaError): Diagnostic['code'] {
+  if (error instanceof TsonBindMismatchError) return 'BIND_MISMATCH';
+  if (error instanceof TsonNotImplementedError) return 'NOT_IMPLEMENTED';
+  if (error instanceof TsonSchemaFetchError) return 'SCHEMA_UNAVAILABLE';
+  return 'SCHEMA_ERROR';
 }
 
 /** The {@link requiredGet} twin `definitionResolver.ts` also carries -- a runtime backstop instead of a non-null assertion (`eslint.config.js` forbids `!`), safe by construction at every call site here. */

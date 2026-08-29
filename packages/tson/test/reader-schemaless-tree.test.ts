@@ -191,3 +191,32 @@ describe('schemalessTreeReader -- wire annotations (§3.1)', () => {
     expect(field.annotations.values.map((a) => a.name)).toEqual(['doc']);
   });
 });
+
+describe('schemalessTreeReader -- name identity is NFC identity (§2.5, §2.6)', () => {
+  it('a precomposed and a decomposed spelling of one character are one field name', () => {
+    const { diagnostics } = readCollect('{ "\\u00E9": 1  "e\\u0301": 2 }');
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_FIELD']);
+  });
+
+  it('the same rule governs a scalar map key', () => {
+    const { diagnostics } = readCollect('{ "\\u00E9" => 1  "e\\u0301" => 2 }');
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
+  });
+
+  it('an all-ASCII document reports nothing, since no code point normalizes', () => {
+    const { diagnostics } = readCollect('{ a: 1  b: 2 }');
+    expect(diagnostics).toEqual([]);
+  });
+});
+
+describe('schemalessTreeReader -- the absent sentinel is not a map key (§2.9)', () => {
+  it('rejects an absent key, which no grammar rule and no schema can refuse first', () => {
+    const { diagnostics } = readCollect('{ _ => 1 }');
+    expect(diagnostics.map((d) => d.code)).toEqual(['ABSENT_MAP_KEY']);
+  });
+
+  it('accepts an absent entry value, which states a present entry carrying nothing', () => {
+    const { diagnostics } = readCollect('{ a => _ }');
+    expect(diagnostics).toEqual([]);
+  });
+});

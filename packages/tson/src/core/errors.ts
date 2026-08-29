@@ -283,3 +283,57 @@ export class TsonNotImplementedError extends TsonError {
 export class TsonInternalError extends TsonError {
   override readonly name = 'TsonInternalError';
 }
+
+/**
+ * [TSON-DATA] §8.2's mechanism that refused a name -- see {@link TsonNameHygieneRefusedError}.
+ * Kept here rather than imported from `unicode/policy.ts`'s own identically-shaped type: `core/`
+ * sits below `unicode/` in this package's import graph, and a plain string-literal union needs no
+ * shared identity to be assignable both ways.
+ */
+export type NameHygieneMechanism =
+  'skeleton-distinctness' | 'identifier-status' | 'restriction-level';
+
+/**
+ * A document refused under [TSON-DATA] §8.2's name-hygiene policy -- §8.1's "fifth,
+ * distinguishable outcome": "a refusal... MUST NOT be reported in any of the four categories
+ * above" (lexer, parser, resolver, validation). This is what makes that true structurally rather
+ * than by convention: it extends {@link TsonError} directly, never {@link TsonLexError},
+ * {@link TsonParseError}, {@link TsonReadError}, or {@link TsonAtomTypeError} (or any of their
+ * subclasses), so `instanceof` against every one of those four families -- what a category-mapping
+ * caller like a conformance runner tests -- answers `false` unconditionally. A document that is
+ * refused is never also reported as invalid; the two are different processors' verdicts on two
+ * different questions.
+ *
+ * §8.2 requires a refusal to **name the UTS #39 data version it was computed against**, because
+ * the mechanisms depend on `confusables.txt`, `IdentifierStatus.txt`, and `Script` -- none of
+ * which the Unicode Consortium freezes -- so two conforming processors can legitimately disagree,
+ * and the version is the only thing that explains it (`unicode/uts39.ts`'s own `UTS39_VERSION`).
+ */
+export class TsonNameHygieneRefusedError extends TsonError {
+  override readonly name: string = 'TsonNameHygieneRefusedError';
+  /** Which of §8.2's three mechanisms refused the document. */
+  readonly mechanism: NameHygieneMechanism;
+  /**
+   * The offending name, or (for `'skeleton-distinctness'`, a relation over a pair) the confusable
+   * pair `[first, second]` in the order they occurred -- `unicode/policy.ts`'s own
+   * `NameHygieneRefusal.names`.
+   */
+  readonly names: readonly string[];
+  /** The UCD release this refusal was computed against. */
+  readonly uts39Version: string;
+
+  constructor(
+    message: string,
+    details: {
+      readonly mechanism: NameHygieneMechanism;
+      readonly names: readonly string[];
+      readonly uts39Version: string;
+      readonly cause?: unknown;
+    },
+  ) {
+    super(message, details.cause === undefined ? undefined : { cause: details.cause });
+    this.mechanism = details.mechanism;
+    this.names = details.names;
+    this.uts39Version = details.uts39Version;
+  }
+}
