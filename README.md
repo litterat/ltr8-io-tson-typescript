@@ -3,7 +3,8 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: both spec parts implemented; 146/146 shared conformance vectors passing.** See
+> **Status: both spec parts implemented; 153/153 shared conformance vectors passing at the
+> pinned suite commit.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
@@ -254,7 +255,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test                        # unit — 1816 tests
-npm run test:conformance        # 146 shared vectors
+npm run test:conformance        # 153 shared vectors, at the pinned suite commit
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 

@@ -7,11 +7,14 @@ https://tson.io/raw/2026/33/tson-part1-data.md, and Part 2 (schema grammar + typ
 working draft: https://tson.io/raw/2026/33/tson-part2-schema.md
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-suite at https://github.com/litterat/ltr8-io-tson-test-suite — 146 vectors.
+suite at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 153 vectors.
 
-**Conformance: 146 / 146 vectors passing.**
+**Conformance: 153 / 153 vectors passing at the pinned suite commit.** The pin deliberately
+lags the suite's own main: five vectors added after it cover behaviour this port has not
+implemented yet -- UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the identifier profile at
+the three naming positions.
 
-18 lexer, 25 parser, 14 resolver, 89 vocabulary. Sidecars are parsed with this implementation's
+25 lexer, 25 parser, 14 resolver, 89 vocabulary. Sidecars are parsed with this implementation's
 own parser, as the shared suite expects. Subjects are fed as raw bytes — verified directly for the
 eight vectors carrying deliberately malformed UTF-8, which reach the lexer unmodified and are
 rejected by it rather than by a decoder. No vector in the current suite declares `utf-16` or
@@ -213,7 +216,7 @@ rejected by it rather than by a decoder. No vector in the current suite declares
 
 - [x] Workspace, tooling, CI
 - [x] Frozen contract layer — the types every work package builds against
-- [x] Conformance harness — discovers and pairs all 146 vectors
+- [x] Conformance harness — discovers and pairs every vector at the pinned suite commit
 - [x] Reference fetch — pinned Java source and the vector suite
 - [x] Vendored `spec/` — the two spec parts and the six bundled schemas, byte for byte
 - [x] Unicode tables — `XID_Start` / `XID_Continue` / `Nd`, generated and checked in
