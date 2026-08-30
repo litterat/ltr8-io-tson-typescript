@@ -1,6 +1,7 @@
 
 .claude/settings.local.json
 .DS_Store
+.idea/
 .references/
 *.tsbuildinfo
 # Reference checkouts fetched by scripts/fetch-references.sh
