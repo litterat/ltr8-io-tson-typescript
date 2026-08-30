@@ -11,12 +11,15 @@ browsers, with **zero runtime dependencies**.
 
 ## Agent skill
 
-**[`.claude/skills/tson-ts/`](.claude/skills/tson-ts/SKILL.md) is a written-for-agents guide to
-using this library** — entry points, the schema/registry workflow, diagnostics, the CLI, and the
-pitfalls, with references covering the full export inventory, the binding layer and every diagnostic
-code. Claude Code picks it up automatically in this repository; elsewhere, copy the directory into
-`~/.claude/skills/`. It complements the notation-level `tson-data` and `tson-schema` skills at
+**[`skills/tson-ts/`](skills/tson-ts/SKILL.md) is a written-for-agents guide to using this
+library** — entry points, the schema/registry workflow, diagnostics, the CLI, and the pitfalls, with
+references covering the full export inventory, the binding layer and every diagnostic code. It
+complements the notation-level `tson-data` and `tson-schema` skills at
 [tson.io](https://tson.io) — those cover the format, this one covers the API.
+
+Claude Code loads it automatically in a clone of this repository, through the
+`.claude/skills/tson-ts` symlink; elsewhere, copy or symlink `skills/tson-ts/` into
+`~/.claude/skills/`.
 
 `CLAUDE.md` is the orientation for working _on_ the implementation, not with it.
 
