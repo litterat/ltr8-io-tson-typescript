@@ -9,6 +9,17 @@ browsers, with **zero runtime dependencies**.
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
 
+## Agent skill
+
+**[`.claude/skills/tson-ts/`](.claude/skills/tson-ts/SKILL.md) is a written-for-agents guide to
+using this library** — entry points, the schema/registry workflow, diagnostics, the CLI, and the
+pitfalls, with references covering the full export inventory, the binding layer and every diagnostic
+code. Claude Code picks it up automatically in this repository; elsewhere, copy the directory into
+`~/.claude/skills/`. It complements the notation-level `tson-data` and `tson-schema` skills at
+[tson.io](https://tson.io) — those cover the format, this one covers the API.
+
+`CLAUDE.md` is the orientation for working _on_ the implementation, not with it.
+
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
@@ -91,14 +102,15 @@ const parsed = parse(bytes);
 parsed.document.root.coreValue.kind; // 'record'
 
 // readTree: the built-in type vocabulary resolved into a queryable Value tree (§5).
-// Throws (TsonLexError / TsonParseError / TsonReadError) on a malformed or unresolvable document.
+// Throws TsonReadError on a malformed or unresolvable document, with the narrower
+// TsonLexError / TsonParseError on its `cause` when there was one.
 const tree = readTree(bytes);
 asString(at(tree, '/customer/name')); // 'Ada Lovelace'
 asString(get(get(tree, 'customer'), 'name')); // 'Ada Lovelace'
 
 // validate: like readTree, but collects into a ValidationResult { value, diagnostics } instead
-// of throwing on a *validation* failure. A document that will not lex or parse at all still
-// throws straight through — see "What is and isn't implemented" below.
+// of throwing. An empty `diagnostics` is the only "valid": a document that will not lex or
+// parse at all is reported there too, as a VALIDATION_ERROR over a `missing` root value.
 const result = validate(bytes);
 result.diagnostics; // []
 
