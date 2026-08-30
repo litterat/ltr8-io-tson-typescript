@@ -7,9 +7,12 @@ https://tson.io/raw/2026/34/tson-part1-data.md, and Part 2 (schema grammar + typ
 working draft: https://tson.io/raw/2026/34/tson-part2-schema.md
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite — 179 vectors, all Class 1.
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 179
+vectors, all Class 1.
 
-**Conformance: 179 / 179 vectors passing.**
+**Conformance: 179 / 179 vectors passing at the pinned suite commit.** The pin no longer lags
+the corpus: the three behaviours it was held back for — UAX31-R3a-1 bidi marks, ZWNJ/ZWJ
+continuation, and the identifier profile at the three naming positions — are implemented.
 
 27 lexer, 29 parser, 20 reader, 14 resolver, 89 vocabulary. `RUNNER.md` in the corpus is normative
 for runners and all six of its rules are implemented: sidecars are parsed with this
@@ -300,7 +303,8 @@ no vector uses the schema-governed splice yet, though both paths are implemented
 
 - [x] Workspace, tooling, CI
 - [x] Frozen contract layer — the types every work package builds against
-- [x] Conformance harness — discovers and pairs all 179 vectors, under RUNNER.md's six rules
+- [x] Conformance harness — discovers and pairs every vector at the pinned suite commit, under
+      RUNNER.md's six rules
 - [x] Reference fetch — pinned Java source and the vector suite
 - [x] Vendored `spec/` — the two spec parts and the six bundled schemas, byte for byte
 - [x] Unicode tables — `XID_Start` / `XID_Continue` / `Nd`, generated and checked in

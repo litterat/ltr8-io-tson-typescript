@@ -4,7 +4,11 @@
 # into the gitignored .references/ directory.
 #
 #   ltr8-io-tson-java        pinned to JAVA_PIN so the port target cannot move underneath us
-#   ltr8-io-tson-test-suite  tracks main; it is the shared conformance suite
+#   ltr8-io-tson-test-suite  pinned to SUITE_PIN, the shared conformance corpus
+#
+# Both are pinned to a commit, never a branch. Tracking the suite's main meant any vector added
+# or reshaped upstream turned this repo's CI red with no change here -- and the corpus migration
+# ahead would break every consumer at once. Bumping a pin is a deliberate commit.
 #
 # Idempotent: re-running fetches only what changed. Pass --force to re-clone from scratch.
 
@@ -16,7 +20,11 @@ REF_DIR="$REPO_ROOT/.references"
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
 JAVA_PIN="66222ac26ddf2e5364abc1aca000f61c04237d54"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-SUITE_REF="main"
+# The corpus as reorganised for Revision 34: tests/<class>/<layer>/<bucket>/, a reader layer, and
+# RUNNER.md, which is normative for runners. The three behaviours the previous pin deliberately
+# lagged -- UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the identifier profile at the three
+# naming positions -- are implemented, so the pin no longer lags.
+SUITE_PIN="c5b4c55f7232218f6482349e6c49e14259268921"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"
@@ -52,7 +60,7 @@ fetch_pinned() {
 }
 
 fetch_pinned ltr8-io-tson-java       "$JAVA_REPO"  "$JAVA_PIN"
-fetch_pinned ltr8-io-tson-test-suite "$SUITE_REPO" "$SUITE_REF"
+fetch_pinned ltr8-io-tson-test-suite "$SUITE_REPO" "$SUITE_PIN"
 
 echo
 echo "References ready in .references/"
