@@ -171,15 +171,38 @@ in conversation rather than silently picking.
 
 ```bash
 ./scripts/fetch-references.sh   # populate .references/ (required for conformance)
-npm install
+npm ci                          # ci, never install -- see below
 npm run typecheck               # tsc --build
 npm run lint
 npm test                        # unit
 npm run test:conformance        # the 179 shared vectors
+npm run check:lockfile          # every declared peer resolves within the lockfile
 npm run build                   # tsup, ESM + CJS + dts
 ```
 
 The conformance project skips with a message when `.references/` is absent, rather than failing.
+
+**Install with `npm ci`, and do not commit what `npm install` does to the lockfile.** This is not
+tidiness. `unrs-resolver` (through `eslint-import-resolver-typescript`) ships one native binding
+per platform plus a `wasm32-wasi` fallback, and the fallback pulls `@napi-rs/wasm-runtime`, which
+declares **hard peer dependencies** on `@emnapi/core` and `@emnapi/runtime`. A correct lockfile
+hoists those two to the top level, where the peer can see them. Running `npm install` on linux-x64
+takes the native binding, decides the hoisted entries are unused, and **deletes them** — leaving a
+lockfile that `npm ci` refuses on every platform that does use the fallback, while still passing
+here. That is a one-way ratchet: the platform that breaks it is the platform that cannot detect it.
+
+`npm ci` only reads the lockfile, so it cannot do this; the SessionStart hook uses it, and falls
+back to `npm install` with a warning only when the lockfile is itself the problem. When the
+lockfile genuinely needs fixing, incremental repair does not reach a correct tree —
+`npm install --package-lock-only` leaves the broken shape untouched. Regenerate it:
+
+```bash
+rm -rf node_modules package-lock.json && npm install && npm run check:lockfile
+```
+
+`check:lockfile` is what makes this visible anywhere: it reads the lockfile instead of installing
+from it, so it judges the optional bindings the current platform never fetches, and returns the
+same verdict everywhere.
 
 ## Conformance suite
 

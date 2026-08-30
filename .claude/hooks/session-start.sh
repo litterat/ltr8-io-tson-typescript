@@ -54,10 +54,19 @@ if [ -x ./scripts/fetch-references.sh ]; then
 fi
 
 # --- 3. Workspace dependencies ---------------------------------------------
-# No-op until the scaffold lands a package.json. npm install (not ci) so the
-# cached container layer is reused across sessions.
+# ci, not install. `npm install` does not leave the lockfile alone: on linux-x64 it takes
+# unrs-resolver's native binding and drops the hoisted @emnapi entries that the wasm fallback's
+# peer dependencies need on every other platform, so a correct lockfile comes back broken and the
+# session opens with an unexplained modification to a file nobody touched. `npm ci` only reads it.
+#
+# The fallback is deliberate: a session must still start when the lockfile is the thing that is
+# wrong, and it says so rather than silently repairing.
 if [ -f package.json ]; then
-  npm install --no-fund --no-audit
+  if ! npm ci --no-fund --no-audit; then
+    echo "session-start: WARNING npm ci failed; falling back to npm install." >&2
+    echo "session-start: the lockfile may need regenerating -- run npm run check:lockfile" >&2
+    npm install --no-fund --no-audit
+  fi
 fi
 
 echo "session-start: ready"

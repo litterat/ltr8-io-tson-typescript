@@ -26,6 +26,11 @@ export default defineConfig(
       parserOptions: {
         projectService: {
           allowDefaultProject: ['*.js', '*.ts', '*.mjs', 'scripts/*.mjs', 'packages/*/*.ts'],
+          // The generators and checkers under scripts/ are all linted through the default
+          // project, and there are now more of them than the service admits by default. Raising
+          // the ceiling costs a little lint time on files that carry no type information worth
+          // building a project for; the alternative is a tsconfig per script.
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 12,
         },
         // This file is linted under the default project, which carries no Node types, so
         // import.meta.dirname types as `any` here even though it is a real Node 20.11+ API.

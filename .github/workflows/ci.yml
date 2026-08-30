@@ -23,7 +23,11 @@ jobs:
         run: ./scripts/fetch-references.sh
 
       - name: Install dependencies
-        run: npm install
+        # ci, not install. `npm install` rewrites the lockfile it is handed, and on this runner's
+        # platform it rewrites it wrongly: linux-x64 takes unrs-resolver's native binding, so npm
+        # drops the hoisted @emnapi entries the wasm fallback's peers need everywhere else. A
+        # green run here was hiding a lockfile no other platform could install from.
+        run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
@@ -33,6 +37,11 @@ jobs:
 
       - name: Format
         run: npm run format:check
+
+      - name: Lockfile integrity
+        # Platform-independent, unlike `npm ci` itself: it reads the lockfile rather than
+        # installing from it, so it sees the optional bindings this runner never fetches.
+        run: npm run check:lockfile
 
       - name: Unicode tables
         # Verifies the committed tables without letting the runner decide what they contain.

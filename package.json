@@ -21,6 +21,7 @@
     "gen:unicode": "node scripts/gen-unicode-tables.mjs",
     "gen:uts39": "node scripts/gen-uts39-tables.mjs",
     "check:unicode": "node scripts/check-unicode-tables.mjs",
+    "check:lockfile": "node scripts/check-lockfile.mjs",
     "gen:stdlib-schemas": "node scripts/gen-stdlib-schemas.mjs",
     "refs": "./scripts/fetch-references.sh",
     "demo:web": "node examples/web-demo/build.mjs",
