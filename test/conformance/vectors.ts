@@ -136,11 +136,10 @@ function walkLayerRoot<L extends string>(
 /**
  * Every vector for one layer under `tests/class1/<layer>/`.
  *
- * `class2/` is deliberately never walked here: RUNNER.md's second legitimate skip ground — "a
- * `class2/` vector under a Class 1 processor" — is "declared by conformance class, not per
- * vector", and this project claims only [TSON-DATA]'s Class 1 (see `CLAUDE.md`: "the data-format
- * processor"). There is nothing to enumerate or skip one vector at a time; the declaration is
- * this function's own signature never looking there.
+ * `class2/` is not walked here because it has its own walker, {@link discoverClass2Vectors}, over
+ * its own layer vocabulary — not because it is skipped. This port implements the schema layer, so
+ * a `class2/` vector is one it must pass; RUNNER.md's "a `class2/` vector under a Class 1
+ * processor" skip ground is not one this runner ever takes.
  */
 export function discoverVectors(layer: Layer): Vector[] {
   return walkLayerRoot(`${SUITE_TESTS_ROOT}/class1/${layer}`, layer, layer, false);
