@@ -101,32 +101,32 @@ describe('a data value at the document root (§2.3, §7.4)', () => {
 
 describe('the document header (§2.2)', () => {
   it('carries an !!id directive, uninterpreted, on DocumentStart', () => {
-    const es = events('!!id:"https://example.com/x.tn1"\n_');
+    const es = events('!!id:"https://example.com/x.tn"\n_');
     const start = es[0];
     expect(start?.kind).toBe('document-start');
-    expect(start).toMatchObject({ id: 'https://example.com/x.tn1' });
+    expect(start).toMatchObject({ id: 'https://example.com/x.tn' });
     expect((start as { schema?: string }).schema).toBeUndefined();
   });
 
   it('carries !!id then !!schema, both uninterpreted, in one DocumentStart', () => {
     const es = events(
-      '!!id:"https://example.com/orders/1042.tn1"\n' +
-        '!!schema:"https://example.com/order.tn1"\n' +
+      '!!id:"https://example.com/orders/1042.tn"\n' +
+        '!!schema:"https://example.com/order.tn"\n' +
         'Alice\n',
     );
     expect(es[0]).toMatchObject({
       kind: 'document-start',
-      id: 'https://example.com/orders/1042.tn1',
-      schema: 'https://example.com/order.tn1',
+      id: 'https://example.com/orders/1042.tn',
+      schema: 'https://example.com/order.tn',
     });
     expect(es[1]).toEqual(expect.objectContaining({ kind: 'token', text: 'Alice' }));
   });
 
   it('!!schema is legal without a preceding !!id', () => {
-    const es = events('!!schema:"https://example.com/order.tn1" Alice');
+    const es = events('!!schema:"https://example.com/order.tn" Alice');
     expect(es[0]).toMatchObject({
       kind: 'document-start',
-      schema: 'https://example.com/order.tn1',
+      schema: 'https://example.com/order.tn',
     });
     expect((es[0] as { id?: string }).id).toBeUndefined();
   });
@@ -151,14 +151,14 @@ describe('the document header (§2.2)', () => {
   });
 
   it('!!meta rejects the document as unsupported, not as malformed (§1.5, §2.2)', () => {
-    expect(() => events('!!meta:"https://example.com/m.tn1" { }')).toThrow(
+    expect(() => events('!!meta:"https://example.com/m.tn" { }')).toThrow(
       TsonUnsupportedDocumentError,
     );
   });
 
   it('!!id then !!meta is still rejected as a schema document', () => {
     expect(() =>
-      events('!!id:"https://example.com/x.tn1"\n!!meta:"https://example.com/m.tn1" { }'),
+      events('!!id:"https://example.com/x.tn"\n!!meta:"https://example.com/m.tn" { }'),
     ).toThrow(TsonUnsupportedDocumentError);
   });
 
@@ -173,7 +173,7 @@ describe('the document header (§2.2)', () => {
   });
 
   it('a directive name that is not "id"/"schema"/"meta" in header position is a parse error', () => {
-    expect(() => events('!!import:"https://example.com/x.tn1" Alice')).toThrow(TsonParseError);
+    expect(() => events('!!import:"https://example.com/x.tn" Alice')).toThrow(TsonParseError);
   });
 });
 
@@ -500,10 +500,10 @@ describe('arrays (§2.7)', () => {
   });
 
   it('an element may carry its own !!schema directive, scoped to that element alone (§2.7, §3.3)', () => {
-    expect(shape('[ !!schema:"https://example.com/s.tn1" 1 2 ]')).toEqual([
+    expect(shape('[ !!schema:"https://example.com/s.tn" 1 2 ]')).toEqual([
       'DocumentStart(|)',
       'ArrayStart',
-      'SchemaRef(https://example.com/s.tn1)',
+      'SchemaRef(https://example.com/s.tn)',
       'Token(1,unquoted)',
       'Token(2,unquoted)',
       'ArrayEnd',
@@ -512,7 +512,7 @@ describe('arrays (§2.7)', () => {
   });
 
   it('a directive other than !!schema is not permitted at an element position (§3.3)', () => {
-    expect(() => events('[ !!import:"https://example.com/x.tn1" 1 ]')).toThrow(TsonParseError);
+    expect(() => events('[ !!import:"https://example.com/x.tn" 1 ]')).toThrow(TsonParseError);
   });
 });
 
@@ -714,7 +714,7 @@ describe('the frame stack replaces recursion (CLAUDE.md: memory proportional to 
 
   it('a combined smoke test balances every container across many constructs at once', () => {
     const source = `
-      !!id:"https://example.com/orders/1.tn1"
+      !!id:"https://example.com/orders/1.tn"
       {
         customer: @verified !string "Alice"
         tags: [ premium _ "gold" ]

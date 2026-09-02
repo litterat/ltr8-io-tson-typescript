@@ -10,16 +10,16 @@ import { DEFAULT_NAME_POLICY, withSkeletonDistinctness } from '../src/unicode/po
  * Kept as its own file rather than added to `config.test.ts`: that file is under concurrent edit
  * elsewhere in this work, and this is a small, self-contained addition.
  */
-describe('createTson({ namePolicy })', () => {
-  it('is absent by default -- an empty config carries no namePolicy of its own', () => {
+describe('createTson({ identifierPolicy })', () => {
+  it('is absent by default -- an empty config carries no identifierPolicy of its own', () => {
     const tson = createTson();
-    expect(tson.config.namePolicy).toBeUndefined();
+    expect(tson.config.identifierPolicy).toBeUndefined();
   });
 
   it('is carried on the instance config exactly as configured', () => {
     const relaxed = withSkeletonDistinctness(DEFAULT_NAME_POLICY, false);
-    const tson = createTson({ namePolicy: relaxed });
-    expect(tson.config.namePolicy).toBe(relaxed);
+    const tson = createTson({ identifierPolicy: relaxed });
+    expect(tson.config.identifierPolicy).toBe(relaxed);
   });
 });
 
@@ -40,7 +40,7 @@ describe('the name policy reaches schema linking (§11.4)', () => {
 
   it("honours a relaxed policy, which is the caller's own code decision", () => {
     const tson = standardLibrary({
-      namePolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false),
+      identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false),
     });
     expect(tson.resolveSchema(CONFUSABLE_SCHEMA).entries.size).toBeGreaterThan(0);
   });
