@@ -25,7 +25,7 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isDataBody } from './bodyKind.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
-import type { Reference, TypeDefinition } from '../schema/meta/typedef.js';
+import type { Annotations, Reference, TypeDefinition } from '../schema/meta/typedef.js';
 
 /**
  * The granularity at which TSON text discriminates an untagged value ([TSON-DATA] §4's four
@@ -178,6 +178,25 @@ export interface CheckDisjointAssertionsOptions {
   readonly schemaId: string;
   /** Where a failing assertion is reported; omitted means fail-fast (see `referenceValidation.ts`'s own note). */
   readonly receiver?: DiagnosticsReceiver;
+  /**
+   * `entries.get(name)`'s own key-position annotations (§6) for every *local* name -- the same
+   * map `compiler/schemaResolver.ts`'s `Schema.keyAnnotations`/`link/link.ts`'s
+   * `LinkedSchema.keyAnnotations` already carry through resolution and linking. §6 lets
+   * `@disjoint` appear before the declared name, not only on the entry's own value, and this
+   * function checks both channels for the marker. Omitted means "no key annotations in scope":
+   * every local entry is then checked against its own {@link TypeDefinition.annotations} alone.
+   */
+  readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
+}
+
+/** `true` when `name` carries a `@disjoint` marker, on its own value ({@link TypeDefinition.annotations}) or on its declaration (`keyAnnotations`, §6). */
+function assertsDisjoint(
+  def: TypeDefinition,
+  name: string,
+  keyAnnotations: ReadonlyMap<string, Annotations> | undefined,
+): boolean {
+  if (def.annotations.some((a) => a.name === 'disjoint')) return true;
+  return (keyAnnotations?.get(name) ?? []).some((a) => a.name === 'disjoint');
 }
 
 /**
@@ -193,26 +212,23 @@ export interface CheckDisjointAssertionsOptions {
  * diagnostic here stamps *this* schema's own identity -- re-checking an imported entry would
  * report another document's problem against this one.
  *
- * **Checked against `def.annotations` only, not key annotations.** §6 lets `@disjoint` appear
- * before the declared name too, but a resolved schema's key annotations
- * (`schemaResolver.ts`'s own `Schema.keyAnnotations`) are a project-tracked gap
- * (`STATUS.md`: "`annotations` is bound as an ordinary wire field, not as a record's annotations
- * carrier"). A caller with a `Schema.keyAnnotations` map in hand may extend the check this
- * function performs by also testing that map for the marker; this function itself sees only the
- * definition's own `annotations`.
+ * **Checked against both annotation channels.** §6 lets `@disjoint` appear before the declared
+ * name (a *key* annotation) as readily as on the entry's own value; {@link
+ * CheckDisjointAssertionsOptions.keyAnnotations}, when a caller supplies it, is checked alongside
+ * `def.annotations` so a marker written either way is caught.
  */
 export function checkDisjointAssertions(
   merged: ReadonlyMap<string, TypeDefinition>,
   localNames: ReadonlySet<string>,
   options: CheckDisjointAssertionsOptions,
 ): void {
-  const { schemaId, receiver } = options;
+  const { schemaId, receiver, keyAnnotations } = options;
   for (const name of localNames) {
     const def = merged.get(name);
     if (def === undefined) continue;
     const body = def.body;
     if (!('kind' in body) || isDataBody(body) || body.kind !== 'choice') continue;
-    if (!def.annotations.some((a) => a.name === 'disjoint')) continue;
+    if (!assertsDisjoint(def, name, keyAnnotations)) continue;
     if (def.disjoint === true) continue; // verified -- the assertion holds, and says so
 
     const variants = body.variants.map((v) => v.name);

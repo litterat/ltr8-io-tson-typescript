@@ -52,6 +52,7 @@ import {
   typeDefinitionBinding,
   typeKindBinding,
   typeRefBinding,
+  typeRefAnnotatedBinding,
   unitBinding,
   unknownTypeBinding,
   uriTypeBinding,
@@ -194,6 +195,7 @@ const _check52: AssertExact<Infer<typeof macTypeBinding>, MacType> = true;
 const _check53: AssertExact<Infer<typeof topBinding>, Top> = true;
 const _check54: AssertExact<Infer<typeof typeDefinitionBinding>, TypeDefinition> = true;
 const _check55: AssertExact<Infer<typeof typeRefBinding>, TypeRef> = true;
+const _check56: AssertExact<Infer<typeof typeRefAnnotatedBinding>, TypeRef> = true;
 
 // -------------------------------------------------------------------------------------------
 // Runtime coverage
@@ -315,12 +317,71 @@ describe('the TypeRef <-> TypeArgument declaration-order cycle ([TSON-SCHEMA] §
     expect(element.get()).toBe(typeArgumentBinding);
   });
 
-  it('typeArgumentRefBinding\'s own "ref" field resolves eagerly back to typeRefBinding (no cycle needed on this edge)', () => {
+  it('typeArgumentRefBinding\'s own "ref" field resolves eagerly to typeRefAnnotatedBinding (no cycle needed on this edge)', () => {
     const refSlot = typeArgumentRefBinding.fields[0];
     expect(refSlot?.wireName).toBe('name'); // TypeArgument.java: @Field("name") TypeRef ref
-    if (refSlot?.binding.kind !== 'lazy')
-      throw new Error('expected lazy (typeRefBinding not yet const-bound at this point)');
-    expect(refSlot.binding.get()).toBe(typeRefBinding);
+    expect(refSlot?.binding).toBe(typeRefAnnotatedBinding);
+  });
+});
+
+describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([TSON-SCHEMA] §3.1, §8.3)", () => {
+  it('is what every type_ref-typed field slot in this module actually binds through', () => {
+    expect(typeArgumentRefBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(referenceBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(recordFieldBinding.fields[1]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(tupleElementBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(arrayBodyBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(mapBodyBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(mapBodyBinding.fields[1]?.binding).toBe(typeRefAnnotatedBinding);
+  });
+
+  it('construct() attaches the wire annotations onto TypeRef.annotations, on top of the bare name/arguments typeRefBinding builds', () => {
+    const inner = typeRefBinding.construct(['user_id', []]);
+    const built = typeRefAnnotatedBinding.construct(inner, {
+      values: [
+        {
+          name: 'alias',
+          value: {
+            annotations: [],
+            coreValue: { kind: 'token', text: 'user_id', form: 'unquoted' },
+          },
+        },
+      ],
+    });
+    expect(built).toEqual({
+      name: 'user_id',
+      arguments: [],
+      annotations: [{ name: 'alias', value: 'user_id' }],
+    });
+  });
+
+  it('construct() carries a valueless annotation with no "value" key (exactOptionalPropertyTypes)', () => {
+    const built = typeRefAnnotatedBinding.construct(typeRefBinding.construct(['x', []]), {
+      values: [{ name: 'synthetic' }],
+    });
+    expect(built.annotations).toEqual([{ name: 'synthetic' }]);
+    const [firstAnnotation] = built.annotations;
+    expect(firstAnnotation === undefined ? undefined : 'value' in firstAnnotation).toBe(false);
+  });
+
+  it('unwrap()/annotationsOf() round-trip a TypeRef carrying its own @alias back to wire shape', () => {
+    const typeRef: TypeRef = {
+      name: 'text',
+      arguments: [],
+      annotations: [{ name: 'alias', value: 'user_id' }],
+    };
+    expect(typeRefAnnotatedBinding.unwrap(typeRef)).toBe(typeRef);
+    expect(typeRefAnnotatedBinding.annotationsOf(typeRef)).toEqual({
+      values: [
+        {
+          name: 'alias',
+          value: {
+            annotations: [],
+            coreValue: { kind: 'token', text: 'user_id', form: 'unquoted' },
+          },
+        },
+      ],
+    });
   });
 });
 

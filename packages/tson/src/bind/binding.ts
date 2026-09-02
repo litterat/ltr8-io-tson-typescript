@@ -457,9 +457,9 @@ export interface BindingRegistry {
 
 // ---------------------------------------------------------------------------------------------
 // The combinator functions -- record, tuple, array, map, variant, bridge, lazy, field, optional,
-// registry, chain -- are NOT declared here, and must not be. This module is types only and emits
-// no JavaScript, so declaring them here as `declare function` published a bind subpath whose .d.ts
-// promised eleven values over an empty module. They live in bind/combinators.ts and
+// annotated, registry, chain -- are NOT declared here, and must not be. This module is types only
+// and emits no JavaScript, so declaring them here as `declare function` published a bind subpath
+// whose .d.ts promised twelve values over an empty module. They live in bind/combinators.ts and
 // bind/registry.ts; bind/index.ts re-exports this module alongside them, so the {@link} references
 // throughout this file resolve across the package once those exist.
 //
