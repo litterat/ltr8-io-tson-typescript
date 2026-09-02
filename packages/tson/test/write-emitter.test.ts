@@ -68,6 +68,73 @@ describe('§2.5/§2.6/§2.7 separation -- a single space before every element, n
   });
 });
 
+describe('§2.5/§7.1/§7.2/§2.9 field-name quoting -- unquoted only where it survives the round trip', () => {
+  function field(name: string): string {
+    return emit((out) => {
+      out.beginRecord();
+      out.field(name);
+      out.unquotedToken('1');
+      out.endRecord();
+    });
+  }
+
+  it('an identifier-shaped name is written unquoted', () => {
+    expect(field('name')).toBe('{ name: 1 }');
+  });
+
+  it('a digit-led name that is a legal token but not an identifier stays unquoted (§2.5: field names are lexical)', () => {
+    expect(field('42x')).toBe('{ 42x: 1 }');
+  });
+
+  it('a name starting with _ is quoted -- token-initial _ is the absent sentinel (§2.9), not a token character (§7.1)', () => {
+    expect(field('_id')).toBe('{ "_id": 1 }');
+  });
+
+  it('a name that is exactly _ is quoted, the same way', () => {
+    expect(field('_')).toBe('{ "_": 1 }');
+  });
+
+  it('an empty name is quoted -- unquoted-token has no empty spelling (§7.1)', () => {
+    expect(field('')).toBe('{ "": 1 }');
+  });
+
+  it('a name containing a space is quoted -- space is outside the token profile', () => {
+    expect(field('first name')).toBe('{ "first name": 1 }');
+  });
+
+  it.each(['.', '-', '+'])('a lone boundary sign %j is quoted -- alone it is never an unquoted token (§7.2.4)', (sign) => {
+    expect(field(sign)).toBe(`{ "${sign}": 1 }`);
+  });
+
+  it('a sign immediately followed by a continuation character stays unquoted', () => {
+    expect(field('-abc')).toBe('{ -abc: 1 }');
+    expect(field('+abc')).toBe('{ +abc: 1 }');
+    expect(field('.5abc')).toBe('{ .5abc: 1 }');
+  });
+
+  it('two adjacent dots force quoting -- the lexer terminates before a run of dots (§7.2 rule 3)', () => {
+    expect(field('a..b')).toBe('{ "a..b": 1 }');
+    expect(field('..')).toBe('{ "..": 1 }');
+  });
+
+  it('a name that is not NFC-normalized is quoted -- an unquoted token must already be NFC (§7.2.1)', () => {
+    const decomposed = 'é'; // "é" spelled as e + combining acute accent, not the precomposed U+00E9
+    expect(field(decomposed)).toBe(`{ "${decomposed}": 1 }`);
+  });
+
+  it('an already-precomposed name stays unquoted', () => {
+    expect(field('é')).toBe('{ é: 1 }');
+  });
+
+  it('a keyword-shaped name stays unquoted -- a field name is lexical, not identifier-constrained (§2.5)', () => {
+    expect(field('true')).toBe('{ true: 1 }');
+  });
+
+  it('a quoted spelling still escapes exactly as quotedString would', () => {
+    expect(field('a"b')).toBe('{ "a\\"b": 1 }');
+  });
+});
+
 describe('§3.1 annotations', () => {
   it('a valueless annotation carries its own trailing space (§3.1: the boundary rule)', () => {
     const text = emit((out) => {
