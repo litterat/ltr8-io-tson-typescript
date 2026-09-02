@@ -948,6 +948,46 @@ export function scriptOf(codePoint: number): ScriptId {
   return scriptIdAt(SCRIPT_TABLE, codePoint);
 }
 
+/**
+ * The UCD \`Script\` property's long-form value name for each {@link ScriptId}, indexed by id --
+ * the exact spelling {@link scriptNamed} accepts back. \`${String(scriptNames.length)}\` entries, one per script this
+ * build recognises.
+ */
+const SCRIPT_NAMES: readonly string[] = ${JSON.stringify(scriptNames)};
+
+/** \`SCRIPT_NAMES\`, inverted once at module load rather than scanned per lookup. */
+const SCRIPT_IDS_BY_NAME: ReadonlyMap<string, ScriptId> = /* @__PURE__ */ new Map(
+  SCRIPT_NAMES.map((name, id) => [name, id]),
+);
+
+/**
+ * Resolves \`name\` to the {@link ScriptId} this build assigns it, or \`undefined\` for a name this
+ * build does not recognise -- the counterpart of {@link scriptOf} for a script named as text
+ * rather than probed from a code point, e.g. a \`--identifier-scripts Latin+Cyrillic\` combination.
+ *
+ * **Only the UCD \`Script\` property's long-form value names are accepted** (\`"Latin"\`,
+ * \`"Cyrillic"\`, \`"Old_Italic"\`), matched exactly, case-sensitively. The four-letter alias form
+ * (\`"Latn"\`, \`"Cyrl"\`) is not: Node's Unicode property escapes accept both spellings, but which
+ * four-letter code the UCD assigns which script is data this generator has no host-accessible
+ * source for -- \`\\p{Script=...}\` validates a candidate string, it does not enumerate the aliases
+ * a name has, so deriving the alias table would mean transcribing UTS #24's
+ * \`PropertyValueAliases.txt\` by hand into this file, which is a second hand-maintained copy of
+ * data the long-form table already carries as data. A caller with an alias in hand spells the long
+ * form instead.
+ */
+export function scriptNamed(name: string): ScriptId | undefined {
+  return SCRIPT_IDS_BY_NAME.get(name);
+}
+
+/**
+ * The long-form name {@link scriptNamed} accepts back for \`id\` -- the exact spelling this build
+ * assigned it, for rendering a {@link ScriptId} a caller only holds as an opaque number (e.g. an
+ * admitted script combination read back off a policy).
+ */
+export function scriptName(id: ScriptId): string {
+  return SCRIPT_NAMES[id] ?? \`Script#\${String(id)}\`;
+}
+
 ${JOINING_TABLES.map(
   (t) =>
     `/** ${t.label}: ${String(t.rangeCount)} ranges, ${String(t.byteLength)} bytes encoded. */\nconst ${t.constant} = /* @__PURE__ */ decodeTable('${t.base64}');`,

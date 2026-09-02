@@ -258,6 +258,218 @@ export function scriptOf(codePoint: number): ScriptId {
   return scriptIdAt(SCRIPT_TABLE, codePoint);
 }
 
+/**
+ * The UCD `Script` property's long-form value name for each {@link ScriptId}, indexed by id --
+ * the exact spelling {@link scriptNamed} accepts back. `171` entries, one per script this
+ * build recognises.
+ */
+const SCRIPT_NAMES: readonly string[] = [
+  'Adlam',
+  'Ahom',
+  'Anatolian_Hieroglyphs',
+  'Arabic',
+  'Armenian',
+  'Avestan',
+  'Balinese',
+  'Bamum',
+  'Bassa_Vah',
+  'Batak',
+  'Bengali',
+  'Bhaiksuki',
+  'Bopomofo',
+  'Brahmi',
+  'Braille',
+  'Buginese',
+  'Buhid',
+  'Canadian_Aboriginal',
+  'Carian',
+  'Caucasian_Albanian',
+  'Chakma',
+  'Cham',
+  'Cherokee',
+  'Chorasmian',
+  'Common',
+  'Coptic',
+  'Cuneiform',
+  'Cypriot',
+  'Cypro_Minoan',
+  'Cyrillic',
+  'Deseret',
+  'Devanagari',
+  'Dives_Akuru',
+  'Dogra',
+  'Duployan',
+  'Egyptian_Hieroglyphs',
+  'Elbasan',
+  'Elymaic',
+  'Ethiopic',
+  'Garay',
+  'Georgian',
+  'Glagolitic',
+  'Gothic',
+  'Grantha',
+  'Greek',
+  'Gujarati',
+  'Gunjala_Gondi',
+  'Gurmukhi',
+  'Gurung_Khema',
+  'Han',
+  'Hangul',
+  'Hanifi_Rohingya',
+  'Hanunoo',
+  'Hatran',
+  'Hebrew',
+  'Hiragana',
+  'Imperial_Aramaic',
+  'Inherited',
+  'Inscriptional_Pahlavi',
+  'Inscriptional_Parthian',
+  'Javanese',
+  'Kaithi',
+  'Kannada',
+  'Katakana',
+  'Kawi',
+  'Kayah_Li',
+  'Kharoshthi',
+  'Khitan_Small_Script',
+  'Khmer',
+  'Khojki',
+  'Khudawadi',
+  'Kirat_Rai',
+  'Lao',
+  'Latin',
+  'Lepcha',
+  'Limbu',
+  'Linear_A',
+  'Linear_B',
+  'Lisu',
+  'Lycian',
+  'Lydian',
+  'Mahajani',
+  'Makasar',
+  'Malayalam',
+  'Mandaic',
+  'Manichaean',
+  'Marchen',
+  'Masaram_Gondi',
+  'Medefaidrin',
+  'Meetei_Mayek',
+  'Mende_Kikakui',
+  'Meroitic_Cursive',
+  'Meroitic_Hieroglyphs',
+  'Miao',
+  'Modi',
+  'Mongolian',
+  'Mro',
+  'Multani',
+  'Myanmar',
+  'Nabataean',
+  'Nag_Mundari',
+  'Nandinagari',
+  'New_Tai_Lue',
+  'Newa',
+  'Nko',
+  'Nushu',
+  'Nyiakeng_Puachue_Hmong',
+  'Ogham',
+  'Ol_Chiki',
+  'Ol_Onal',
+  'Old_Hungarian',
+  'Old_Italic',
+  'Old_North_Arabian',
+  'Old_Permic',
+  'Old_Persian',
+  'Old_Sogdian',
+  'Old_South_Arabian',
+  'Old_Turkic',
+  'Old_Uyghur',
+  'Oriya',
+  'Osage',
+  'Osmanya',
+  'Pahawh_Hmong',
+  'Palmyrene',
+  'Pau_Cin_Hau',
+  'Phags_Pa',
+  'Phoenician',
+  'Psalter_Pahlavi',
+  'Rejang',
+  'Runic',
+  'Samaritan',
+  'Saurashtra',
+  'Sharada',
+  'Shavian',
+  'Siddham',
+  'SignWriting',
+  'Sinhala',
+  'Sogdian',
+  'Sora_Sompeng',
+  'Soyombo',
+  'Sundanese',
+  'Sunuwar',
+  'Syloti_Nagri',
+  'Syriac',
+  'Tagalog',
+  'Tagbanwa',
+  'Tai_Le',
+  'Tai_Tham',
+  'Tai_Viet',
+  'Takri',
+  'Tamil',
+  'Tangsa',
+  'Tangut',
+  'Telugu',
+  'Thaana',
+  'Thai',
+  'Tibetan',
+  'Tifinagh',
+  'Tirhuta',
+  'Todhri',
+  'Toto',
+  'Tulu_Tigalari',
+  'Ugaritic',
+  'Unknown',
+  'Vai',
+  'Vithkuqi',
+  'Wancho',
+  'Warang_Citi',
+  'Yezidi',
+  'Yi',
+  'Zanabazar_Square',
+];
+
+/** `SCRIPT_NAMES`, inverted once at module load rather than scanned per lookup. */
+const SCRIPT_IDS_BY_NAME: ReadonlyMap<string, ScriptId> = /* @__PURE__ */ new Map(
+  SCRIPT_NAMES.map((name, id) => [name, id]),
+);
+
+/**
+ * Resolves `name` to the {@link ScriptId} this build assigns it, or `undefined` for a name this
+ * build does not recognise -- the counterpart of {@link scriptOf} for a script named as text
+ * rather than probed from a code point, e.g. a `--identifier-scripts Latin+Cyrillic` combination.
+ *
+ * **Only the UCD `Script` property's long-form value names are accepted** (`"Latin"`,
+ * `"Cyrillic"`, `"Old_Italic"`), matched exactly, case-sensitively. The four-letter alias form
+ * (`"Latn"`, `"Cyrl"`) is not: Node's Unicode property escapes accept both spellings, but which
+ * four-letter code the UCD assigns which script is data this generator has no host-accessible
+ * source for -- `\p{Script=...}` validates a candidate string, it does not enumerate the aliases
+ * a name has, so deriving the alias table would mean transcribing UTS #24's
+ * `PropertyValueAliases.txt` by hand into this file, which is a second hand-maintained copy of
+ * data the long-form table already carries as data. A caller with an alias in hand spells the long
+ * form instead.
+ */
+export function scriptNamed(name: string): ScriptId | undefined {
+  return SCRIPT_IDS_BY_NAME.get(name);
+}
+
+/**
+ * The long-form name {@link scriptNamed} accepts back for `id` -- the exact spelling this build
+ * assigned it, for rendering a {@link ScriptId} a caller only holds as an opaque number (e.g. an
+ * admitted script combination read back off a policy).
+ */
+export function scriptName(id: ScriptId): string {
+  return SCRIPT_NAMES[id] ?? `Script#${String(id)}`;
+}
+
 /** Joining_Type Dual_Joining or Left_Joining ($LJ): 76 ranges, 163 bytes encoded. */
 const LEFT_JOINING = /* @__PURE__ */ decodeTable(
   'oAwABQABAAEEBAwBBgEBIwEIDxIlAQEJAAEAAQEoAgIAEgIFAwEIAQABAAEBHwoDDgIDAQACAgIFSiBWBAIAAQkBAAoAAQMCAB0AAgQSCQUBAgUBDr4eABhYDiEBAJWfAjLNxAEECAAFCQECCgORAQABAAMCAQEBAAIAHAHRAiEBAJ8DAWsCARAMAhwDAgsuAAEBBAACAQEBAQACAAUBtLIDQw==',

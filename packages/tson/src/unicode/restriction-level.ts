@@ -71,6 +71,19 @@ export const DEFAULT_RESTRICTION_LEVEL: RestrictionLevel = 'HIGHLY_RESTRICTIVE';
 /** §8.2's RECOMMENDED default unit — the whole name, not per-segment. */
 export const DEFAULT_RESTRICTION_UNIT: RestrictionUnit = 'WHOLE_NAME';
 
+/**
+ * One script combination a {@link "./policy.js"} `NamePolicy`/`TokenPolicy` admits over and
+ * above its level — the port of the pinned Java reference's `TsonUnicodePolicy.permitting`,
+ * e.g. `[SCRIPT_LATIN, SCRIPT_CYRILLIC]` for a deployment that knows it is Russian. A plain
+ * array rather than a `ReadonlySet`: a combination is always small (two or three scripts) and a
+ * caller builds one from parsed text (`policy.ts`'s own `permitting`), where an array is what a
+ * `--identifier-scripts Latin+Cyrillic` flag naturally becomes.
+ */
+export type ScriptCombination = readonly ScriptId[];
+
+/** No admitted combinations — every {@link "./policy.js"} default. */
+export const NO_PERMITTED_SCRIPTS: readonly ScriptCombination[] = [];
+
 /** Latin + Han + Hiragana + Katakana (Latn + Jpan). */
 const JPAN: ReadonlySet<ScriptId> = new Set([
   SCRIPT_LATIN,
@@ -93,6 +106,15 @@ function isSubsetOf(scripts: ReadonlySet<ScriptId>, of: ReadonlySet<ScriptId>): 
   return true;
 }
 
+/** Whether every script in `scripts` also appears in `combination` — {@link isSubsetOf} for an admitted combination, which arrives as a plain array rather than a `Set`. */
+function isSubsetOfCombination(
+  scripts: ReadonlySet<ScriptId>,
+  combination: ScriptCombination,
+): boolean {
+  for (const script of scripts) if (!combination.includes(script)) return false;
+  return true;
+}
+
 /** The scripts `unit` is written in, ignoring Common, Inherited, and Unknown (§5.1). */
 function scriptsOf(unit: string): Set<ScriptId> {
   const seen = new Set<ScriptId>();
@@ -109,8 +131,24 @@ function scriptsOf(unit: string): Set<ScriptId> {
   return seen;
 }
 
-/** Whether `scripts` — already known to mix more than one script — is a combination `level` admits. */
-function covered(scripts: ReadonlySet<ScriptId>, level: RestrictionLevel): boolean {
+/**
+ * Whether `scripts` — already known to mix more than one script — is a combination `level`
+ * admits, either directly or because `permittedScripts` names it.
+ *
+ * **`permittedScripts` is checked first, ahead of the level's own rules** (mirroring the pinned
+ * Java reference's `TsonUnicodePolicy.covered` exactly): an admitted combination overrides even
+ * `SINGLE_SCRIPT`, which otherwise admits no mixture at all. A combination admits `scripts` when
+ * `scripts` is **contained in** it — `permitting([LATIN, CYRILLIC, GREEK])` also covers a
+ * Latin-only or Latin+Cyrillic unit, not only the full three-script mixture.
+ */
+function covered(
+  scripts: ReadonlySet<ScriptId>,
+  level: RestrictionLevel,
+  permittedScripts: readonly ScriptCombination[],
+): boolean {
+  for (const combination of permittedScripts) {
+    if (isSubsetOfCombination(scripts, combination)) return true;
+  }
   if (level === 'SINGLE_SCRIPT') return false;
   if (isSubsetOf(scripts, JPAN) || isSubsetOf(scripts, HANB) || isSubsetOf(scripts, KORE))
     return true;
@@ -136,7 +174,11 @@ function covered(scripts: ReadonlySet<ScriptId>, level: RestrictionLevel): boole
  * `'PER_SEGMENT'`) and skips calling this at all in that case, matching §8.2's own segmentation,
  * which considers only the non-empty runs between separators.
  */
-function satisfiesLevelOverUnit(unit: string, level: RestrictionLevel): boolean {
+function satisfiesLevelOverUnit(
+  unit: string,
+  level: RestrictionLevel,
+  permittedScripts: readonly ScriptCombination[],
+): boolean {
   if (level === 'MINIMALLY_RESTRICTIVE' || level === 'UNRESTRICTED') return true;
 
   if (level === 'ASCII_ONLY') {
@@ -145,7 +187,7 @@ function satisfiesLevelOverUnit(unit: string, level: RestrictionLevel): boolean 
   }
 
   const scripts = scriptsOf(unit);
-  return scripts.size <= 1 || covered(scripts, level);
+  return scripts.size <= 1 || covered(scripts, level, permittedScripts);
 }
 
 /**
@@ -157,16 +199,22 @@ function satisfiesLevelOverUnit(unit: string, level: RestrictionLevel): boolean 
  * splits on `_`/`-`, checking each non-empty segment independently and skipping empty ones (a
  * leading, trailing, or doubled separator) — a leading/trailing/doubled separator is not itself
  * a script-mixing problem this mechanism exists to catch.
+ *
+ * `permittedScripts` (default {@link NO_PERMITTED_SCRIPTS}) is `NamePolicy`/`TokenPolicy`'s own
+ * script-combination admission (§8.2 mechanism 3's relaxation device): a mixed-script unit whose
+ * scripts are contained in any one of these combinations satisfies `level` regardless of what
+ * `level` alone would say, checked ahead of `level`'s own rules — see {@link covered}.
  */
 export function satisfiesRestrictionLevel(
   text: string,
   level: RestrictionLevel = DEFAULT_RESTRICTION_LEVEL,
   unit: RestrictionUnit = DEFAULT_RESTRICTION_UNIT,
+  permittedScripts: readonly ScriptCombination[] = NO_PERMITTED_SCRIPTS,
 ): boolean {
   if (level === 'MINIMALLY_RESTRICTIVE' || level === 'UNRESTRICTED') return true;
 
   if (unit === 'WHOLE_NAME') {
-    return text.length === 0 || satisfiesLevelOverUnit(text, level);
+    return text.length === 0 || satisfiesLevelOverUnit(text, level, permittedScripts);
   }
 
   let start = 0;
@@ -178,7 +226,9 @@ export function satisfiesRestrictionLevel(
     ) {
       continue;
     }
-    if (i > start && !satisfiesLevelOverUnit(text.slice(start, i), level)) return false;
+    if (i > start && !satisfiesLevelOverUnit(text.slice(start, i), level, permittedScripts)) {
+      return false;
+    }
     start = i + 1;
   }
   return true;

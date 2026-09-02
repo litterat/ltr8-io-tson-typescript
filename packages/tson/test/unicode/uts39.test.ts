@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   identifierStatusAllowed,
+  scriptName,
+  scriptNamed,
   scriptOf,
   SCRIPT_CYRILLIC,
   SCRIPT_GREEK,
@@ -75,5 +77,53 @@ describe('scriptOf (UAX #24 Script)', () => {
   it('is total over the whole scalar-value range, including an unassigned code point', () => {
     expect(() => scriptOf(0x10ffff)).not.toThrow();
     expect(() => scriptOf(0)).not.toThrow();
+  });
+});
+
+describe('scriptNamed / scriptName (UCD Script property value names)', () => {
+  it('resolves the long-form names the restriction-level and joining-control checks name', () => {
+    expect(scriptNamed('Latin')).toBe(SCRIPT_LATIN);
+    expect(scriptNamed('Cyrillic')).toBe(SCRIPT_CYRILLIC);
+    expect(scriptNamed('Greek')).toBe(SCRIPT_GREEK);
+    expect(scriptNamed('Han')).toBe(SCRIPT_HAN);
+    expect(scriptNamed('Hiragana')).toBe(SCRIPT_HIRAGANA);
+    expect(scriptNamed('Katakana')).toBe(SCRIPT_KATAKANA);
+    expect(scriptNamed('Hangul')).toBe(SCRIPT_HANGUL);
+  });
+
+  it('resolves a multi-word UCD name verbatim, underscores included', () => {
+    const id = scriptNamed('Old_Italic');
+    expect(id).toBeDefined();
+    expect(scriptOf(0x10300)).toBe(id); // OLD ITALIC LETTER A
+  });
+
+  it('is undefined for a name this build does not recognise', () => {
+    expect(scriptNamed('Bogus')).toBeUndefined();
+    expect(scriptNamed('')).toBeUndefined();
+  });
+
+  it('does not accept the four-letter ISO 15924 alias form -- only the long-form name', () => {
+    expect(scriptNamed('Latn')).toBeUndefined();
+    expect(scriptNamed('Cyrl')).toBeUndefined();
+  });
+
+  it('is case-sensitive, matching the UCD spelling exactly', () => {
+    expect(scriptNamed('latin')).toBeUndefined();
+    expect(scriptNamed('LATIN')).toBeUndefined();
+  });
+
+  it('scriptName is the exact spelling scriptNamed accepts back, for every named constant', () => {
+    for (const [id, expected] of [
+      [SCRIPT_LATIN, 'Latin'],
+      [SCRIPT_CYRILLIC, 'Cyrillic'],
+      [SCRIPT_GREEK, 'Greek'],
+      [SCRIPT_HAN, 'Han'],
+      [SCRIPT_HIRAGANA, 'Hiragana'],
+      [SCRIPT_KATAKANA, 'Katakana'],
+      [SCRIPT_HANGUL, 'Hangul'],
+    ] as const) {
+      expect(scriptName(id)).toBe(expected);
+      expect(scriptNamed(scriptName(id))).toBe(id);
+    }
   });
 });
