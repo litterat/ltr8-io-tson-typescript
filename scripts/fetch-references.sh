@@ -20,10 +20,9 @@ REF_DIR="$REPO_ROOT/.references"
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
 JAVA_PIN="a576b62966b78ce9e4f7f656b679b238c0353b79"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-# The corpus as reorganised for Revision 34: tests/<class>/<layer>/<bucket>/, a reader layer, and
-# RUNNER.md, which is normative for runners. The three behaviours the previous pin deliberately
-# lagged -- UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the identifier profile at the three
-# naming positions -- are implemented, so the pin no longer lags.
+# 233 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. Adds
+# §8.2's refused outcome as a fifth bucket, the whole class2/ tree (schema, link, validate), and
+# §7.7/§9.5 coverage of the identifier grammar and the bidi controls.
 SUITE_PIN="bde7d70048bcb03049069a982d8ae0d9583a382f"
 
 if [ "${1:-}" = "--force" ]; then

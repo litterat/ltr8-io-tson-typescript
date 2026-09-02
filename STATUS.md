@@ -7,27 +7,33 @@ https://tson.io/raw/2026/34/tson-part1-data.md, and Part 2 (schema grammar + typ
 working draft: https://tson.io/raw/2026/34/tson-part2-schema.md
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 179
-vectors, all Class 1.
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 233 subjects
+over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: 179 / 179 vectors passing at the pinned suite commit.** The pin no longer lags
-the corpus: the three behaviours it was held back for — UAX31-R3a-1 bidi marks, ZWNJ/ZWJ
-continuation, and the identifier profile at the three naming positions — are implemented.
+**Conformance: 233 / 233 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
-27 lexer, 29 parser, 20 reader, 14 resolver, 89 vocabulary. `RUNNER.md` in the corpus is normative
-for runners and all six of its rules are implemented: sidecars are parsed with this
-implementation's own parser; subjects are fed as raw bytes — verified directly for the eight
-vectors carrying deliberately malformed UTF-8, which reach the lexer unmodified and are rejected
-by it rather than by a decoder; the error `category` is asserted on every error vector, with the
-mapping layer-aware, since `resolver` at the vocabulary layer and `resolver` at the reader layer
-are different error classes here; a reader-layer subject is parsed cleanly before the read is
-asserted, so a vector that had become a parse error cannot pass for the wrong reason; no position
-is ever asserted; and a synthetic entry's trailing content hash is normalised before comparison.
+Class 1: 31 lexer, 39 parser, 26 reader, 14 resolver, 89 vocabulary. Class 2: 17 schema, 10 link,
+7 validate.
 
-Two skips, both declared and reported: `class2/`, because this processor claims the Class 1
-conformance class (RUNNER.md's ground 2, "declared by conformance class, not per vector"), and
-`proposed/`, which is empty in the pinned checkout. No vector declares `utf-16` or `utf-32`, and
-no vector uses the schema-governed splice yet, though both paths are implemented.
+`RUNNER.md` in the corpus is normative for runners, and every rule it states is implemented.
+Sidecars are parsed with this implementation's own parser. Subjects are fed as raw bytes —
+verified directly for the eight vectors carrying deliberately malformed UTF-8, which reach the
+lexer unmodified and are rejected by it rather than by a decoder. The error `category` is asserted
+on every error vector, with the mapping layer-aware, since `resolver` at the vocabulary layer and
+`resolver` at the reader layer are different error classes here; at the Class 2 schema and link
+layers the category is the phase's, decided by the schema having failed to load rather than by
+whichever internal code fired, and a non-verdict diagnostic — a gap, a bind mismatch, one of the
+five fetch codes — never satisfies an error vector. A reader-layer subject is parsed cleanly
+before the read is asserted, so a vector that had become a parse error cannot pass for the wrong
+reason. §8.2's refusal is asserted as the fifth outcome it is: something was refused, _and_
+nothing was also reported under one of §8.1's four categories. No position is ever asserted. A
+resolver-minted name's content hash is normalised wherever it appears — as an entry's own key,
+inside a body, or in a list of names a sidecar states — not only at the end of a key.
+
+One skip, declared and reported: `proposed/`, which is empty in the pinned checkout. No vector
+declares `utf-16` or `utf-32`. Every `refused` vector states the UTS #39 data version this build
+carries, so the version-mismatch ground never fires here — the comparison runs anyway, because the
+day it does not match is the day it matters.
 
 ## Part 1 — data format (Class 1)
 
@@ -39,10 +45,17 @@ no vector uses the schema-governed splice yet, though both paths are implemented
 - [x] Identifier grammar (§7.7) — the `identifier` production over a token's decoded text, in NFC,
       with UTS #39 §3.1.1.1's joining-control contexts, applied at annotation and type-annotation
       names as a parse error
-- [x] Name hygiene (§8.2) — all three UTS #39 mechanisms over the one Part 1 scope, a record's own
-      field names, enforced by default and refused as a fifth outcome distinct from §8.1's four
-      categories, naming the UTS #39 data version. Relaxation is a `namePolicy` the caller passes
-      in code; nothing is read from the environment
+- [x] Name hygiene (§8.2) — enforced by default and refused as a fifth outcome distinct from
+      §8.1's four categories. Two Part 1 scopes, each seeing only the mechanisms that can mean
+      anything there: a record's own field names see the look-alike rule alone, being lexical
+      rather than `identifier` (§2.5, §7.7), and a type-ref or annotation name sees the two
+      per-name rules but not the look-alike one, a lone name having no scope to be distinct
+      within. §8.2's "Values" paragraph applies to every token a read decodes, where only the
+      restricted-script rule can reach. The UTS #39 data version is stated once per instance on
+      `Tson.processorPolicy`, not repeated in each refusal — a version is constant for the run, and
+      a sender needs the policy before writing rather than after being refused. Relaxation is an
+      `identifierPolicy`/`tokenPolicy` the caller passes in code; nothing is read from the
+      environment
 - [x] Event stream — the Tier 2 pull source
 - [x] Data parser — the Tier 3 AST
 - [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer)
@@ -62,7 +75,11 @@ no vector uses the schema-governed splice yet, though both paths are implemented
 - [x] Schema grammar — schema documents parsed into a faithful AST
 - [x] Name hygiene at the schema layer (§11.4) — the four scopes §11.4 names: one enum's members,
       one record's field names including group labels, one schema's declared names, and the merged
-      namespace at `!!import`, where two schemas each clean alone collide on import. Choice
+      namespace at `!!import`, where two schemas each clean alone collide on import; plus a fifth
+      this implementation adds, a template's own type parameters, which §11.4's list omits though
+      `<T, Т>` is exactly the substitution hazard §8.2 exists to refuse. Within a scope the
+      collision relation runs first and the two per-name rules after, so a pair that is both
+      confusable and individually mixed-script reports as confusable. Choice
       variants are deliberately not a scope; a confusable variant pair is already a confusable pair
       of declared names
 - [x] Subsumption at every governed position (§7.2) — a stray or wrong `!Type` is refused at an
@@ -114,9 +131,17 @@ no vector uses the schema-governed splice yet, though both paths are implemented
       (containment checked after `realpath`); both Node-only, reachable only through that
       separate subpath (`src/source/`, its own `types: ["node"]` project) and never from the
       package's default entry
-- [x] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `hash`, `init-example`; `text`/`json`/`tson`
-      output (the `tson` format via `write()`, never string concatenation); exit codes `0` valid,
-      `1` invalid input, `2` usage error, `70` library gap or fault. Bootstraps its own copy of
+- [x] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `policy`, `hash`, `init-example`;
+      `text`/`json`/`tson` output (the `tson` format via `write()`, never string concatenation);
+      exit codes `0` valid, `1` invalid input (a §8.2 refusal included — the sender still holds the
+      fix), `2` usage error, `69` a schema permanently unobtainable, `75` one temporarily so, `78`
+      a type with no registered binding, `70` library gap or fault, ranked `70 > 78 > 69 > 75 > 1`
+      by who must act first. A run reports `outcome` — `VALID`/`INVALID`/`NOT_CHECKED` — rather
+      than a boolean, so a document whose schema was never fetched is not reported invalid. The
+      §8.2 policy is configurable from the command line (`--identifier-policy`,
+      `--identifier-per-segment`, `--identifier-scripts`, `--token-policy`, `--token-scripts`),
+      stated once per run on the report, and printable with no document in hand via `tson policy`.
+      Bootstraps its own copy of
       meta-kernel/meta.tn/core.tn, embedded at build time from `spec/m/` via a generator script
       under `scripts/`, so `validate --schema`/`compile` work offline with no `SchemaSource`
       configured. `hash` is read-only: it prints the pinned reference rather than rewriting the
@@ -282,21 +307,41 @@ no vector uses the schema-governed splice yet, though both paths are implemented
 
 - **Writing a resolved schema back out puts a value's annotations in a field named
   `annotations`, where §3.1 puts them in front of the value.** `spec/m/*-resolved.tn` writes
-  `type: @alias:type_name token` and `doc => @annotation !type_definition { … }`; this port writes
-  the same annotations as an ordinary `annotations: [ … ]` member of the record, which §8.1's
-  `type_definition`/`type_ref` do not declare. `bundled-schemas-resolve.test.ts` lifts the field
-  into the framing position on both sides so the comparison stays about _which_ annotations a
-  value carries, and says so where it does it.
+  `doc => @annotation !type_definition { … }`; this port writes the same annotations as an
+  ordinary `annotations: [ … ]` member of the `type_definition` record, which §8.1 does not
+  declare. `bundled-schemas-resolve.test.ts` lifts the field into the framing position on both
+  sides so the comparison stays about _which_ annotations a value carries, and says so where it
+  does it.
 
-  The cause is a genuine type mismatch, not an oversight: `bind/binding.ts`'s `annotationsCarrier`
-  is typed against `annotations/index.ts`'s wire `Annotations` (`{ values }`, each value a raw
-  `DataValue`), while `schema/meta` carries resolved annotations (`readonly Annotation[]`, each
-  value a _bound_ host value — a tree `Value` since `schema/annotationReader.ts`). Those are
-  different things, and a `RecordBinding` cannot convert between them: wire→bound needs a reader
-  for the annotation's type, and bound→wire needs an atom encoder, neither of which the carrier
-  hook is handed. Closing it means widening that contract, not rewiring `schema/bindings.ts`.
+  **`type_ref`'s own case is closed.** `type: @alias:type_name token`'s position is `TypeRef`, and
+  `schema/bindings.ts`'s `typeRefAnnotatedBinding` (an `annotated()`-wrapped `typeRefBinding`) now
+  reads and writes exactly that framing, both directions: `fromDataValue`'s `'annotated'` branch
+  recovers a `type_ref` value's own wire annotations into `TypeRef.annotations` on read, and
+  `toDataValue`'s does the inverse on write, so a use-site `@alias` round-trips and
+  `bind-decode.ts`'s "annotated" kind ({@link AnnotatedBinding}, `bind/combinators.ts`'s
+  `annotated()`) is no longer unused outside tests. `RecordField`/`TypeDefinition.annotations`
+  are the same underlying gap and remain open: both are still bound as ordinary
+  `field()`/`arrayOf()` slots (`recordFieldBinding`, `typeDefinitionBinding`), so a
+  `type_definition`'s own `doc => @annotation` still round-trips as an `annotations: [ … ]` field
+  rather than framing.
 
-  Key annotations (§6, `@doc` on a declaration's name) are _not_ affected: they go through
+  The cause for the remaining two positions is a genuine type mismatch, not an oversight:
+  `bind/binding.ts`'s `RecordBinding.annotationsCarrier` is typed against `annotations/index.ts`'s
+  wire `Annotations` (`{ values }`, each value a raw `DataValue`), while `schema/meta` carries
+  resolved annotations (`readonly Annotation[]`, each value a _bound_ host value — a tree `Value`
+  since `schema/annotationReader.ts`). Those are different things, and a `RecordBinding` cannot
+  convert between them through that hook: wire→bound needs a reader for the annotation's type,
+  and bound→wire needs an atom encoder, neither of which the carrier hook is handed.
+  `typeRefAnnotatedBinding` sidesteps this by not using `annotationsCarrier` at all — it wraps the
+  whole position in `annotated()` instead, converting through §4 base type resolution (only
+  correct because a `type_ref`-typed value's annotation arguments this package's own bundled
+  schemas ever carry are bare tokens, per that binding's own doc); the same trick would need
+  checking against `record_field`'s and `type_definition`'s own annotation arguments before it can
+  be reused there without narrowing what it accepts.
+
+  Key annotations (§6, `@doc` on a declaration's name) are a separate carrier
+  (`compiler/schemaResolver.ts`'s `Schema.keyAnnotations`, `link/link.ts`'s
+  `LinkedSchema.keyAnnotations`) and were never affected by this gap; they go through
   `schema/annotationReader.ts` and the compiled readers, never through a binding.
 
 ## Scaffold

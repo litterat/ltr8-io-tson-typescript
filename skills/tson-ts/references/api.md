@@ -44,7 +44,8 @@ interface SchemaGovernedReadOptions extends NestingLimitOptions {
 interface SchemalessReadOptions extends NestingLimitOptions {
   readonly schema?: undefined;
   readonly preserveUnknownTypeRefs?: boolean;
-  readonly namePolicy?: NamePolicy;
+  readonly identifierPolicy?: NamePolicy; // §8.2 over names
+  readonly tokenPolicy?: TokenPolicy; // §8.2 over values; scans nothing by default
 }
 
 interface ValidationResult {
@@ -178,7 +179,8 @@ function createTson(config?: Config): Tson;
 
 interface Config extends NestingLimitOptions {
   readonly schemaSource?: SchemaSource;
-  readonly namePolicy?: NamePolicy;
+  readonly identifierPolicy?: NamePolicy;   // §8.2 over names
+  readonly tokenPolicy?: TokenPolicy;       // §8.2 over values; scans nothing by default
 }
 
 interface Tson {
@@ -189,10 +191,22 @@ interface Tson {
   compile(schema: LinkedSchema): CompiledSchema;
   fetch(reference: string): Promise<Uint8Array>;             // raw bytes only
   preload(references: readonly string[]): Promise<void>;     // fetch+resolve+link+register, in order
+  readonly processorPolicy: ProcessorPolicy;                 // §8.2 policy + UCD version, stated once
   parse/readTree/validate/write                              // bound to this instance's config
 }
 
+interface ProcessorPolicy {
+  readonly identifierPolicy: NamePolicy;
+  readonly tokenPolicy: TokenPolicy;
+  readonly unicodeDataVersion: string;
+}
+
 interface SchemaSource { fetch(reference: string): Promise<Uint8Array> }
+
+// An in-memory source, canonicalizing identity and raising a miss rather than returning undefined.
+function mapSchemaSource(
+  schemas: ReadonlyMap<string, Uint8Array> | Readonly<Record<string, Uint8Array>>,
+): SchemaSource;
 ```
 
 `preload` is idempotent per reference (an already-registered one is never re-fetched), verifies any
@@ -380,9 +394,12 @@ reasoning about their own patterns.
 
 Real, and worth knowing before you write around them:
 
-- **`NamePolicy` and its `with*` helpers are not exported.** `Config.namePolicy` is public, but the
-  type name and `withRestrictionLevel`/`perSegment`/`DEFAULT_NAME_POLICY` are not reachable from any
-  entry point. Write the policy as an object literal (all four fields are required).
+- **`NamePolicy`/`TokenPolicy` and their `with*` helpers are not exported.**
+  `Config.identifierPolicy` and `Config.tokenPolicy` are public, but the type names and
+  `withRestrictionLevel`/`perSegment`/`permitting`/`DEFAULT_NAME_POLICY` are not reachable from any
+  entry point. Write the policy as an object literal (every field is required). `scriptNamed` and
+  `scriptName` _are_ exported, because building a `permittedScripts` combination means resolving a
+  script a caller names as text to the `ScriptId` this build assigns it.
 - **`createDataStream` is not exported**, so `bindReader` — which needs an event source — cannot be
   driven from the published package. Use `@ltr8/tson/bind`'s `fromDataValue`/`fromCoreValue` over a
   parsed AST instead.

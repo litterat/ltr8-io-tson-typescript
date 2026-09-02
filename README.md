@@ -3,8 +3,8 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: both spec parts implemented; 179/179 shared conformance vectors passing at the
-> pinned suite commit.** See
+> **Status: both spec parts implemented; 233/233 shared conformance subjects passing at the
+> pinned suite commit, Class 1 and Class 2.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
@@ -224,12 +224,21 @@ npx serve examples/web-demo/dist # ES modules need http://, not file://
 npx @ltr8/tson-cli init-example .        # writes person.tn + person-data.tn
 npx @ltr8/tson-cli validate person-data.tn --schema person.tn --root person
 npx @ltr8/tson-cli compile person.tn
+npx @ltr8/tson-cli policy                # the [TSON-DATA] §8.2 policy this run would apply
 npx @ltr8/tson-cli hash person.tn        # prints the canonical content hash (§2.2.1)
 ```
 
-`validate`/`compile`/`hash` register `@ltr8/tson/stdlib`'s embedded
-`meta-kernel`/`meta.tn`/`core.tn`, so they work offline with no `SchemaSource` configured. Exit codes: `0` valid, `1`
-invalid input, `2` usage error, `70` library gap or internal fault.
+Five commands: `validate`, `compile`, `policy`, `hash`, `init-example`. `validate`/`compile`/`hash`
+register `@ltr8/tson/stdlib`'s embedded `meta-kernel`/`meta.tn`/`core.tn`, so they work offline with
+no `SchemaSource` configured. `--format json`/`--format tson` report an `outcome` of `VALID`,
+`INVALID` or `NOT_CHECKED` — a document whose schema could not be obtained is `NOT_CHECKED`, not
+`INVALID`, since nothing here read it.
+
+Exit codes, ranked `70 > 78 > 69 > 75 > 1` by who must act first: `0` checked and nothing to
+report, `1` checked and rejected (including a §8.2 name-hygiene refusal), `2` usage error, `69` a
+schema permanently unavailable (refused by policy, absent, or too large), `75` a schema
+temporarily unavailable (unreachable, or it timed out), `78` a type the schema needs with no
+registered binding, `70` a library gap or an internal fault.
 
 ### Resource limits
 
@@ -265,12 +274,12 @@ version 1.
 
 ```bash
 ./scripts/fetch-references.sh   # pinned Java reference + the shared conformance suite
-npm install
+npm ci                          # ci, never install -- see CLAUDE.md's "Build and test"
 npm run typecheck
 npm run lint
 npm run format:check
-npm test                        # unit — 2130 tests
-npm run test:conformance        # 179 shared vectors, at the pinned suite commit
+npm test                        # unit
+npm run test:conformance        # 233 shared subjects, at the pinned suite commit
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 
