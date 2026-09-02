@@ -202,4 +202,55 @@ describe('checkDisjointAssertions (§5.4)', () => {
       checkDisjointAssertions(merged, new Set(), { schemaId: 'https://x/s.tn' });
     }).not.toThrow();
   });
+
+  describe('keyAnnotations (§6): @disjoint written before the declared name', () => {
+    it('throws when the marker is a key annotation only, not a value annotation, and the derived fact is false', () => {
+      // `def()` carries no `annotations` of its own here -- the marker sits only in the
+      // key-position map, exactly as `@disjoint\nshapes => ( circle | square )` resolves.
+      const choice = def({
+        kind: 'choice',
+        variants: [
+          { name: 'text', arguments: [], annotations: [] },
+          { name: 'other', arguments: [], annotations: [] },
+        ],
+      });
+      const merged = new Map([['shapes', { ...choice, disjoint: false }]]);
+      expect(() => {
+        checkDisjointAssertions(merged, new Set(['shapes']), {
+          schemaId: 'https://x/s.tn',
+          keyAnnotations: new Map([['shapes', [{ name: 'disjoint' }]]]),
+        });
+      }).toThrow(TsonSchemaValidationError);
+    });
+
+    it('is silent when the key-annotated assertion is verified (disjoint: true)', () => {
+      const choice = def({ kind: 'choice', variants: [] }, { disjoint: true });
+      const merged = new Map([['shapes', choice]]);
+      expect(() => {
+        checkDisjointAssertions(merged, new Set(['shapes']), {
+          schemaId: 'https://x/s.tn',
+          keyAnnotations: new Map([['shapes', [{ name: 'disjoint' }]]]),
+        });
+      }).not.toThrow();
+    });
+
+    it('does nothing when keyAnnotations is supplied but carries no marker for this name', () => {
+      const choice = def({ kind: 'choice', variants: [] }, { disjoint: false });
+      const merged = new Map([['shapes', choice]]);
+      expect(() => {
+        checkDisjointAssertions(merged, new Set(['shapes']), {
+          schemaId: 'https://x/s.tn',
+          keyAnnotations: new Map([['shapes', [{ name: 'doc', value: 'a shape' }]]]),
+        });
+      }).not.toThrow();
+    });
+
+    it('omitting keyAnnotations entirely checks only the value-position channel, as before', () => {
+      const choice = def({ kind: 'choice', variants: [] }, { disjoint: false });
+      const merged = new Map([['shapes', choice]]);
+      expect(() => {
+        checkDisjointAssertions(merged, new Set(['shapes']), { schemaId: 'https://x/s.tn' });
+      }).not.toThrow();
+    });
+  });
 });

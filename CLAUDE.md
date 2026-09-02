@@ -25,8 +25,9 @@ port is written against:
   port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the three
   live bundled schemas `spec/m/{meta-kernel,meta,core}.tn` plus their `*-resolved.tn` resolver-output
   fixtures.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 179
-  vectors. Tracks `main` so new vectors are picked up.
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 233
+  subjects over `tests/<class>/<layer>/<bucket>/`. **Pinned**, like the Java: a corpus that tracked
+  `main` turned this repo's CI red on an upstream commit with no change here.
 
 Both are required before the conformance project will run. A SessionStart hook fetches them
 automatically in cloud sessions; run the script yourself locally.
@@ -103,8 +104,12 @@ are globals, and importing those names shadows them for the whole file. This is 
 oversight.
 
 **Optionality is `readonly x?: T`**, never `readonly x: T | undefined`. `exactOptionalPropertyTypes`
-is on and the distinction is meaningful. The same rule is why a JSON Pointer at a document root is
-`undefined` rather than `''` — `''` is itself a valid RFC 6901 pointer meaning exactly that.
+is on and the distinction is meaningful. The same rule is why `SchemaLocation.pointer` at a schema
+root is `undefined` rather than `''` — `''` is itself a valid RFC 6901 pointer meaning exactly
+that, and `undefined` there means no schema sub-location at all. `Diagnostic.path` reads the
+opposite way at the _data_ root: `''` **is** the root and is emitted, since the diagnostic really
+is anchored there; `undefined` on that field means the diagnostic isn't anchored in the data at
+all (a schema-only problem, say), not that it sits at the root.
 
 **`STATUS.md` is the only checklist.** Git history is the log.
 
@@ -169,15 +174,24 @@ in conversation rather than silently picking.
 
 ## Build and test
 
+**This list is the CI job, in order.** `.github/workflows/ci.yml` runs exactly these, so a green
+run of all of them locally is what a green run there means -- and a gate missing from this list is
+one nobody runs until CI says so.
+
 ```bash
 ./scripts/fetch-references.sh   # populate .references/ (required for conformance)
 npm ci                          # ci, never install -- see below
 npm run typecheck               # tsc --build
 npm run lint
-npm test                        # unit
-npm run test:conformance        # the 179 shared vectors
+npm run format:check            # prettier --check; `npm run format` writes
 npm run check:lockfile          # every declared peer resolves within the lockfile
+npm run check:unicode           # the tables against the host's own UCD, when the versions match
+npm test                        # unit
+npm run test:conformance        # the shared vectors
 npm run build                   # tsup, ESM + CJS + dts
+npm run check:package           # publint + are-the-types-wrong over both packages
+npm run smoke:cli               # packs, installs into a throwaway project, checks the exit codes
+npm run demo:web                # the browser bundle still builds
 ```
 
 The conformance project skips with a message when `.references/` is absent, rather than failing.
@@ -214,14 +228,16 @@ Discovery is by directory walk and naming convention — there is no manifest. E
 `tests/<class>/<layer>/<bucket>/` that does not end `-expected.tn` is a subject; its sibling
 `<slug>-expected.tn` is a TSON sidecar describing the expected outcome. `<class>` is the spec's own
 conformance class, so a Class 1 processor runs `class1/` and skips `class2/` — that is what the
-directory is for.
+directory is for. **This port runs both**: it implements the schema layer, so a `class2/` vector is
+a vector it must pass, not one it may decline.
 
 The sidecar states its outcome as a **field group** (Part 2 §5.11): the record carries exactly one
-of `valid`, `error` or `schema-document` as a member, and that member's _name_ is the outcome.
+of `valid`, `error`, `refused` or `schema-document` as a member, and that member's _name_ is the
+outcome — `refused` being §8.2's fifth outcome, which is never one of §8.1's four categories.
 There is no `outcome:` field. The same treatment replaced the flat `kind:`/`shape:` discriminators
 inside the parser, resolver and vocabulary payloads.
 
-Six rules the runner must keep:
+The rules the runner must keep:
 
 - **Parse sidecars with our own parser.** The suite expects an implementation to dogfood.
 - **Feed subjects raw bytes**, never a string that has been decoded and re-encoded. Eight vectors
@@ -232,8 +248,20 @@ Six rules the runner must keep:
 - **At the reader layer, parse the subject cleanly first**, then assert the read reports. A reader
   vector exists because no tier below the reader can fail on it, so one that had accidentally
   become a parse error would otherwise pass for the wrong reason.
-- **Report every skip, and skip only for the three legitimate grounds** — an encoding we do not
+- **At the Class 2 schema and link layers the category is the phase's**, not the code's: an error
+  vector there always states `resolver`, because §8.1 makes every error that stops a schema loading
+  a resolver error however value-like the violated rule. Decide it from the schema having failed to
+  load, never by reading whichever internal diagnostic fired.
+- **A non-verdict diagnostic never satisfies an error vector.** A gap, a bind mismatch, or one of
+  the five fetch codes says _could not judge_, not _invalid_; accepting one reports a pass for a
+  vector that never ran. `core/diagnostic.ts`'s own `isVerdict` is the list — do not keep a second.
+- **Assert both halves of a `refused` vector**: something was refused, _and_ nothing was also
+  reported under one of §8.1's four categories.
+- **Report every skip, and skip only for the four legitimate grounds** — an encoding we do not
   read (`utf-16`, `utf-32`; `invalid-utf8` is not one, it must reach the lexer), a `class2/` vector
-  under a Class 1 processor, and anything under `proposed/`. Anything else is a failure.
-- **Normalise a synthetic entry's trailing `_[0-9a-f]{8}` before comparing** (Class 2). §8.2 keys
-  identity on structure, so the spelling is not normative and comparing it tests our own hash.
+  under a Class 1 processor (not this port), anything under `proposed/`, and a `refused` vector
+  naming a UTS #39 data version this build does not carry. Anything else is a failure.
+- **Normalise a resolver-minted name's trailing `_[0-9a-f]{8}` before comparing** (Class 2),
+  wherever it appears — as an entry's own key, inside a body, or in a list of names a sidecar
+  states. §8.2 keys identity on structure, so the spelling is not normative and comparing it tests
+  our own hash.

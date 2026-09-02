@@ -174,11 +174,11 @@ describe('ReadContext.withPosition', () => {
 });
 
 describe('ReadContext.report/reported', () => {
-  it('a diagnostic omits path/schemaPointer at the root, per the undefined-not-empty-string convention', () => {
+  it("a diagnostic carries path: '' at the data root, and omits schemaPointer there (the two fields' contracts differ -- diagnostic.ts's own doc)", () => {
     const receiver = collector();
     const ctx = createReadContext(dummySource(), receiver);
     ctx.report('VALIDATION_ERROR', 'boom');
-    expect(receiver.diagnostics).toEqual([{ code: 'VALIDATION_ERROR', message: 'boom' }]);
+    expect(receiver.diagnostics).toEqual([{ code: 'VALIDATION_ERROR', message: 'boom', path: '' }]);
   });
 
   it('carries path, schema location and expected/actual when present', () => {

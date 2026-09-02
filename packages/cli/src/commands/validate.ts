@@ -1,5 +1,5 @@
 /**
- * `tson validate [--schema <file-or-url>] [--root <name>] <file|-># ...`
+ * `tson validate [--schema <file-or-url>] [--root <name>] [<policy options>] <file|-># ...`
  *
  * With no `--schema`, every file is checked against base syntax and the built-in type vocabulary
  * alone (Class 1) -- `@ltr8/tson`'s schemaless `validate()`. With `--schema`, every file's root
@@ -20,6 +20,14 @@
  * or `process.stdin` for `-`) -- `validate()`'s async overload accepts any `AsyncIterable<Uint8Array>`
  * directly, so this CLI's own memory use stays proportional to nesting depth the same way
  * `CLAUDE.md`'s "streaming is non-negotiable" asks of the library itself, not just of it.
+ *
+ * **[TSON-DATA] §8.2's policy applies to both paths, differently.** `options.policy.identifierPolicy`
+ * governs a schema's own declared names at link time ([TSON-SCHEMA] §11.4, via `stdlibTson`'s own
+ * `Config`) whenever `--schema` is given; `identifierPolicy`/`tokenPolicy` together govern a
+ * schemaless read's own record field names and token values (§8.2's Part 1 scope) as per-call
+ * options to `validate()`. A schema-governed *read* consults neither directly -- a data field
+ * name under a schema inherits the declaration's own verdict, which linking already reached
+ * (`@ltr8/tson/config.ts`'s own note on `Config.identifierPolicy`).
  */
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -32,29 +40,28 @@ import {
   type Diagnostic,
 } from '@ltr8/tson';
 import { UsageError } from '../exit.js';
+import { outcomeOfDiagnostics, outcomeOfFiles, type Outcome } from '../outcome.js';
 import { classifyReadError, isInvalidSchemaError } from '../problem.js';
+import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
 export interface ValidateOptions {
   readonly schemaLocation?: string;
   readonly root?: string;
+  readonly policy: PolicyOptions;
   readonly files: readonly string[];
 }
 
 export interface ValidateFileResult {
   readonly file: string;
-  readonly ok: boolean;
+  readonly outcome: Outcome;
   readonly diagnostics: readonly Diagnostic[];
-  /** This file hit a construct `@ltr8/tson` cannot read yet -- escalates the whole run past `EXIT.INVALID`. */
-  readonly notImplemented?: boolean;
-  /** `--schema` named a document no configured source would supply -- this file was never checked against it. */
-  readonly schemaUnavailable?: boolean;
 }
 
 export interface ValidateRun {
-  readonly ok: boolean;
-  readonly notImplemented: boolean;
-  readonly schemaUnavailable: boolean;
+  readonly outcome: Outcome;
+  /** Stated once for the run, never per file -- [TSON-DATA] §8.2's own verdict cannot differ between two files of one invocation. Mirrors the reference implementation's `ValidationRun.policy`. */
+  readonly policy: ProcessorPolicy;
   readonly files: readonly ValidateFileResult[];
 }
 
@@ -161,17 +168,21 @@ async function readCappedBody(
 }
 
 /**
- * Loads, resolves, links and compiles `location` against the bundled standard library.
+ * Loads, resolves, links and compiles `location` against the bundled standard library, under
+ * `policy`'s own `identifierPolicy` ([TSON-SCHEMA] §11.4).
  *
  * A {@link TsonSchemaFetchError} propagates unchanged rather than becoming a {@link UsageError}:
  * `--schema https://…` naming a document no source would supply is not a usage mistake -- the
  * command line was fine, the schema just could not be obtained -- and {@link runValidate} routes
- * it to a `SCHEMA_UNAVAILABLE` outcome instead. Every other failure here stays usage-shaped: the
- * caller asked this run to validate against a schema that isn't usable, before any data file was
- * even opened.
+ * it to a non-verdict outcome instead. Every other failure here stays usage-shaped: the caller
+ * asked this run to validate against a schema that isn't usable, before any data file was even
+ * opened.
  */
-async function loadCompiledSchema(location: string): Promise<CompiledSchema> {
-  const tson = stdlibTson();
+async function loadCompiledSchema(
+  location: string,
+  policy: PolicyOptions,
+): Promise<CompiledSchema> {
+  const tson = stdlibTson({ identifierPolicy: policy.identifierPolicy });
   let bytes: Uint8Array;
   try {
     bytes = await loadSchemaBytes(location);
@@ -210,37 +221,36 @@ interface SchemaContext {
 async function validateOne(
   file: string,
   context: SchemaContext | undefined,
+  policy: PolicyOptions,
 ): Promise<ValidateFileResult> {
   const source = openSource(file);
   try {
+    // Per-call `identifierPolicy`/`tokenPolicy` matter only on the schemaless path: a
+    // schema-governed read (`context` present) consults neither -- see this module's own top note.
     const result =
       context === undefined
-        ? await validate(source)
+        ? await validate(source, {
+            identifierPolicy: policy.identifierPolicy,
+            tokenPolicy: policy.tokenPolicy,
+          })
         : await validate(source, { schema: context.compiled, root: context.root });
-    // A NOT_IMPLEMENTED diagnostic is not a verdict on the document -- it says this library has no
-    // reader for a construct, so nothing was checked. `validate()` collects it beside the real
-    // ones (with its own code, which is the point), and this run escalates past invalid to a
-    // library-gap fault on the strength of that code, exactly as the `catch` below does for the
-    // same error when it is thrown instead.
-    const notImplemented = result.diagnostics.some((d) => d.code === 'NOT_IMPLEMENTED');
     return {
       file,
-      ok: result.diagnostics.length === 0,
-      ...(notImplemented ? { notImplemented: true } : {}),
+      outcome: outcomeOfDiagnostics(result.diagnostics),
       diagnostics: result.diagnostics,
     };
   } catch (error) {
     const problem = classifyReadError(error);
     if (problem.kind === 'invalid') {
-      return { file, ok: false, diagnostics: [problem.diagnostic] };
-    }
-    if (problem.kind === 'not-implemented') {
       return {
         file,
-        ok: false,
-        notImplemented: true,
-        diagnostics: [{ code: 'NOT_IMPLEMENTED', message: problem.message }],
+        outcome: outcomeOfDiagnostics([problem.diagnostic]),
+        diagnostics: [problem.diagnostic],
       };
+    }
+    if (problem.kind === 'not-implemented') {
+      const diagnostics: Diagnostic[] = [{ code: 'NOT_IMPLEMENTED', message: problem.message }];
+      return { file, outcome: outcomeOfDiagnostics(diagnostics), diagnostics };
     }
     throw problem.error; // an unreadable file, or a bug here -- the caller's job to classify
   }
@@ -254,10 +264,10 @@ async function validateOne(
  * callers.
  *
  * **A `--schema` no configured source would supply is its own outcome, not a usage error.** No
- * file is opened either way, but every requested file comes back marked `schemaUnavailable`
- * rather than the run simply throwing -- the same shape a per-file `NOT_IMPLEMENTED` already
- * takes, so a caller reading `diagnostics` sees one consistent story regardless of how early the
- * run stopped.
+ * file is opened either way, but every requested file comes back `NOT_CHECKED`, carrying the
+ * fetch diagnostic, rather than the run simply throwing -- the same shape a per-file
+ * `NOT_IMPLEMENTED` already takes, so a caller reading `diagnostics` sees one consistent story
+ * regardless of how early the run stopped.
  */
 export async function runValidate(options: ValidateOptions): Promise<ValidateRun> {
   if (options.files.length === 0) {
@@ -280,11 +290,13 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
     throw new UsageError('validate: --root is required when --schema is given');
   }
 
+  const policy = processorPolicyOf(options.policy);
+
   let context: SchemaContext | undefined;
   if (schemaLocation !== undefined && root !== undefined) {
     let compiled: CompiledSchema;
     try {
-      compiled = await loadCompiledSchema(schemaLocation);
+      compiled = await loadCompiledSchema(schemaLocation, options.policy);
     } catch (error) {
       if (!(error instanceof TsonSchemaFetchError)) {
         throw error;
@@ -295,23 +307,17 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
       };
       const files: ValidateFileResult[] = options.files.map((file) => ({
         file,
-        ok: false,
-        schemaUnavailable: true,
+        outcome: outcomeOfDiagnostics([diagnostic]),
         diagnostics: [diagnostic],
       }));
-      return { ok: false, notImplemented: false, schemaUnavailable: true, files };
+      return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, files };
     }
     context = { compiled, root };
   }
 
   const files: ValidateFileResult[] = [];
   for (const file of options.files) {
-    files.push(await validateOne(file, context));
+    files.push(await validateOne(file, context, options.policy));
   }
-  return {
-    ok: files.every((f) => f.ok),
-    notImplemented: files.some((f) => f.notImplemented === true),
-    schemaUnavailable: files.some((f) => f.schemaUnavailable === true),
-    files,
-  };
+  return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, files };
 }

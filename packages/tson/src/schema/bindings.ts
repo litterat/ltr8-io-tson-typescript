@@ -33,9 +33,19 @@
  * edge in this graph resolves eagerly, top to bottom.
  */
 
-import { array, bridge, field, lazy, optional, record, variant } from '../bind/combinators.js';
+import {
+  annotated,
+  array,
+  bridge,
+  field,
+  lazy,
+  optional,
+  record,
+  variant,
+} from '../bind/combinators.js';
 import { registry } from '../bind/registry.js';
 import type {
+  AnnotatedBinding,
   ArrayBinding,
   AtomBinding,
   Binding,
@@ -44,6 +54,8 @@ import type {
   RecordBinding,
   VariantBinding,
 } from '../bind/binding.js';
+import type { Annotations as WireAnnotations } from '../annotations/index.js';
+import type { DataValue } from '../ast/value.js';
 import type { AtomToken } from '../atom/contract.js';
 import type { TokenForm as LexerTokenForm } from '../lexer/token.js';
 import type { PlainDateTime, PlainTime, TsonDecimal } from '../value/types.js';
@@ -54,6 +66,7 @@ import {
   type Sign,
 } from '../base/numberGrammar.js';
 import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
+import { resolveBaseType } from '../base/baseTypeResolver.js';
 import { TsonReadError } from '../core/errors.js';
 
 import type { Decimal, Rational, Unit } from './meta/algebra.js';
@@ -466,8 +479,11 @@ const unitBinding: RecordBinding<Unit> = record<Unit>({
  * `typedef.ts`'s module doc), never itself a `!type-ref`-tagged wire record: annotations arrive
  * through the `@...` prefix a reader captures at the position they annotate, not as an ordinary
  * `{ name, value }` value. Bound here only so {@link annotationsBinding} has an element binding to
- * carry -- see this file's own note on why `TypeRef`/`TypeDefinition`/`RecordField.annotations`
- * are bound as ordinary fields rather than through `RecordBinding.annotationsCarrier`.
+ * carry -- see this file's own note on why `TypeDefinition`/`RecordField.annotations` are bound as
+ * ordinary fields rather than through `RecordBinding.annotationsCarrier`. {@link TypeRef}'s own
+ * `annotations` is different again: it names the wire annotations on the reference *value itself*
+ * (§3.1), so it goes through {@link typeRefAnnotatedBinding}'s `annotated()` wrapper instead of
+ * either mechanism -- see that binding's own doc.
  */
 const annotationBinding: RecordBinding<Annotation> = record<Annotation>({
   fields: [
@@ -499,6 +515,76 @@ const annotationBinding: RecordBinding<Annotation> = record<Annotation>({
 const annotationsBinding: Binding<Annotations> = arrayOf<Annotation>(annotationBinding);
 
 // -------------------------------------------------------------------------------------------
+// A value position's own wire annotations (§3.1) -- what `annotated()` positions decode/encode
+// -------------------------------------------------------------------------------------------
+
+/**
+ * One wire annotation's optional `@name:value` argument, decoded via §4 base type resolution --
+ * the same "no declared type in scope" treatment `metaReader.ts`'s own `decodeBaseValue` gives
+ * meta-kernel's `value` escape hatch, restated here rather than imported from there since
+ * `metaReader.ts` already imports this module (the reverse direction would cycle). A non-token
+ * argument (a nested record/array/map) has no §4 base type to resolve to and is not representable
+ * at this position yet -- annotation arguments this package's own bundled schemas carry are all
+ * bare tokens (`@alias:name`'s identifier, in practice).
+ */
+function annotationArgumentValue(argument: DataValue | undefined): unknown {
+  if (argument === undefined) return undefined;
+  const core = argument.coreValue;
+  if (core.kind !== 'token') return undefined;
+  const base = resolveBaseType(core);
+  switch (base.kind) {
+    case 'null':
+      return null;
+    case 'boolean':
+      return base.value;
+    case 'string':
+      return base.text;
+    case 'number':
+      return base.form.kind === 'integer' || base.form.kind === 'based-integer'
+        ? toExactInteger(base.form)
+        : core.text;
+  }
+}
+
+/**
+ * {@link annotationArgumentValue}'s write-direction inverse: an unquoted token for every scalar
+ * this module's own annotation arguments carry. Mirrors `bind/encode.ts`'s own
+ * `defaultAtomEncoder` -- not a general-purpose value writer, honest about the values this
+ * position actually sees rather than pretending to handle every host value.
+ */
+function annotationArgumentDataValue(value: unknown): DataValue | undefined {
+  if (value === undefined) return undefined;
+  const text =
+    value === null
+      ? 'null'
+      : typeof value === 'string'
+        ? value
+        : typeof value === 'boolean' || typeof value === 'number' || typeof value === 'bigint'
+          ? String(value)
+          : undefined;
+  if (text === undefined) return undefined;
+  return { annotations: [], coreValue: { kind: 'token', text, form: 'unquoted' } };
+}
+
+/** `bind/`'s own wire-annotation carrier (`{ values: readonly ast.Annotation[] }`) turned into this package's own {@link Annotations} (`readonly Annotation[]`, §6/§8.1's local stand-in) -- the read direction every {@link annotated} position over a `type_ref`-typed value needs. */
+function annotationsFromWire(wire: WireAnnotations): Annotations {
+  return wire.values.map((a) => ({
+    name: a.name,
+    ...opt('value', annotationArgumentValue(a.value)),
+  }));
+}
+
+/** {@link annotationsFromWire}'s write-direction inverse. */
+function annotationsToWire(annotations: Annotations): WireAnnotations {
+  return {
+    values: annotations.map((a) => ({
+      name: a.name,
+      ...opt('value', annotationArgumentDataValue(a.value)),
+    })),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
 // TypeRef / TypeArgument -- the one declaration-order cycle
 // -------------------------------------------------------------------------------------------
 
@@ -506,6 +592,15 @@ const annotationsBinding: Binding<Annotations> = arrayOf<Annotation>(annotationB
 // referenced from inside this one via `lazy()`, and TypeScript must know this declaration's type
 // before that reference can resolve (`combinators.ts`'s own `lazy()` doc walks through exactly
 // this "ergonomics cliff").
+//
+// **No `annotations` field slot.** The meta-kernel's own `type_ref => { name, arguments }`
+// (`meta-kernel.tn`) declares no such field -- `TypeRef.annotations` is this package's own
+// addition (see that field's own doc) carrying the wire annotations written on the *value*
+// occupying this position, not a sub-field of the record itself. {@link typeRefAnnotatedBinding}
+// is the position every other binding in this module actually uses for a `type_ref`-typed slot;
+// this record binding builds the two real kernel fields alone; `annotations` is a placeholder
+// here, overwritten by that wrapper on read and ignored (this binding writes only its own two
+// declared fields) on write.
 const typeRefBinding: RecordBinding<TypeRef> = record<TypeRef>({
   fields: [
     field<TypeRef, 'name'>(0, 'name', 'name', identifierBinding),
@@ -515,24 +610,35 @@ const typeRefBinding: RecordBinding<TypeRef> = record<TypeRef>({
       'arguments',
       arrayOf<TypeArgument>(lazy((): Binding<TypeArgument> => typeArgumentBinding)),
     ),
-    field<TypeRef, 'annotations'>(2, 'annotations', 'annotations', annotationsBinding),
   ],
   construct: (slots) => {
-    const [name, args, annotations] = slots as [string, readonly TypeArgument[], Annotations];
-    return { name, arguments: args, annotations };
+    const [name, args] = slots as [string, readonly TypeArgument[]];
+    return { name, arguments: args, annotations: [] };
   },
+});
+
+/**
+ * {@link typeRefBinding} wrapped so a reader/writer at a `type_ref`-typed position recovers the
+ * wire annotations written on the reference *value itself* (§3.1) into {@link TypeRef.annotations}
+ * -- most notably `@alias:name`, attached here when a use site is flattened past a REFERENCE entry
+ * (§8.3: "the alias attaches to the type value, not the `record_field`"), confirmed directly
+ * against `spec/m/meta-kernel-resolved.tn`'s own `type: @alias:field_name identifier`. Every field
+ * slot below that holds a `TypeRef` binds through this wrapper, never through the bare
+ * {@link typeRefBinding} directly -- see that binding's own doc for why it alone cannot carry this.
+ */
+const typeRefAnnotatedBinding: AnnotatedBinding<TypeRef> = annotated<TypeRef>({
+  value: typeRefBinding,
+  construct: (value, annotations) => ({
+    ...(value as TypeRef),
+    annotations: annotationsFromWire(annotations),
+  }),
+  unwrap: (host) => host,
+  annotationsOf: (host) => annotationsToWire(host.annotations),
 });
 
 /** `type_argument.Ref`'s single component is `@Field("name") TypeRef ref` (`TypeArgument.java`) -- the wire name is `name`, the host key `ref`. */
 const typeArgumentRefBinding: RecordBinding<TypeArgumentRef> = record<TypeArgumentRef>({
-  fields: [
-    field<TypeArgumentRef, 'ref'>(
-      0,
-      'name',
-      'ref',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
-  ],
+  fields: [field<TypeArgumentRef, 'ref'>(0, 'name', 'ref', typeRefAnnotatedBinding)],
   construct: (slots) => {
     const [ref] = slots as [TypeRef];
     return { kind: 'ref', ref };
@@ -565,14 +671,7 @@ const typeArgumentBinding: VariantBinding<TypeArgument> = variant(
 // -------------------------------------------------------------------------------------------
 
 const referenceBinding: RecordBinding<Reference> = record<Reference>({
-  fields: [
-    field<Reference, 'target'>(
-      0,
-      'target',
-      'target',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
-  ],
+  fields: [field<Reference, 'target'>(0, 'target', 'target', typeRefAnnotatedBinding)],
   construct: (slots) => {
     const [target] = slots as [TypeRef];
     return { kind: 'reference', target };
@@ -613,12 +712,7 @@ const integerSizeBinding: RecordBinding<IntegerSize> = record<IntegerSize>({
 const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   fields: [
     field<RecordField, 'name'>(0, 'name', 'name', identifierBinding),
-    field<RecordField, 'type'>(
-      1,
-      'type',
-      'type',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
+    field<RecordField, 'type'>(1, 'type', 'type', typeRefAnnotatedBinding),
     field<RecordField, 'state'>(2, 'state', 'state', fieldStateBinding),
     optional<RecordField, 'value'>(3, 'value', 'value', tokenBinding),
     field<RecordField, 'annotations'>(4, 'annotations', 'annotations', annotationsBinding),
@@ -648,12 +742,7 @@ const fieldGroupBinding: RecordBinding<FieldGroup> = record<FieldGroup>({
 
 const tupleElementBinding: RecordBinding<TupleElement> = record<TupleElement>({
   fields: [
-    field<TupleElement, 'elementType'>(
-      0,
-      'element_type',
-      'elementType',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
+    field<TupleElement, 'elementType'>(0, 'element_type', 'elementType', typeRefAnnotatedBinding),
     field<TupleElement, 'state'>(1, 'state', 'state', elementStateBinding),
   ],
   construct: (slots) => {
@@ -685,12 +774,7 @@ const recordBodyBinding: RecordBinding<RecordBody> = record<RecordBody>({
 
 const arrayBodyBinding: RecordBinding<ArrayBody> = record<ArrayBody>({
   fields: [
-    field<ArrayBody, 'elementType'>(
-      0,
-      'element_type',
-      'elementType',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
+    field<ArrayBody, 'elementType'>(0, 'element_type', 'elementType', typeRefAnnotatedBinding),
     field<ArrayBody, 'state'>(1, 'state', 'state', elementStateBinding),
     field<ArrayBody, 'unordered'>(2, 'unordered', 'unordered', booleanBinding),
     field<ArrayBody, 'uniqueItems'>(3, 'unique_items', 'uniqueItems', booleanBinding),
@@ -720,18 +804,8 @@ const arrayBodyBinding: RecordBinding<ArrayBody> = record<ArrayBody>({
 
 const mapBodyBinding: RecordBinding<MapBody> = record<MapBody>({
   fields: [
-    field<MapBody, 'keyType'>(
-      0,
-      'key_type',
-      'keyType',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
-    field<MapBody, 'valueType'>(
-      1,
-      'value_type',
-      'valueType',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
+    field<MapBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
+    field<MapBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
     field<MapBody, 'state'>(2, 'state', 'state', elementStateBinding),
     optional<MapBody, 'minItems'>(3, 'min_items', 'minItems', bigintBinding),
     optional<MapBody, 'maxItems'>(4, 'max_items', 'maxItems', bigintBinding),
@@ -776,7 +850,7 @@ const choiceBodyBinding: RecordBinding<ChoiceBody> = record<ChoiceBody>({
       0,
       'variants',
       'variants',
-      arrayOf<TypeRef>(lazy((): Binding<TypeRef> => typeRefBinding)),
+      arrayOf<TypeRef>(typeRefAnnotatedBinding),
     ),
   ],
   construct: (slots) => {
@@ -1344,12 +1418,7 @@ const positionSlot = {
 
 const typeDefinitionBinding: RecordBinding<TypeDefinition> = record<TypeDefinition>({
   fields: [
-    optional<TypeDefinition, 'source'>(
-      0,
-      'source',
-      'source',
-      lazy((): Binding<TypeRef> => typeRefBinding),
-    ),
+    optional<TypeDefinition, 'source'>(0, 'source', 'source', typeRefAnnotatedBinding),
     field<TypeDefinition, 'kind'>(1, 'kind', 'kind', typeKindBinding),
     field<TypeDefinition, 'parameters'>(
       2,
@@ -1444,6 +1513,7 @@ export {
   annotationBinding,
   annotationsBinding,
   typeRefBinding,
+  typeRefAnnotatedBinding,
   typeArgumentRefBinding,
   typeArgumentValueBinding,
   typeArgumentBinding,
@@ -1535,6 +1605,6 @@ export const metaBindings: BindingRegistry = registry({
   record_field: recordFieldBinding,
   field_group: fieldGroupBinding,
   tuple_element: tupleElementBinding,
-  type_ref: typeRefBinding,
+  type_ref: typeRefAnnotatedBinding,
   type_argument: typeArgumentBinding,
 });

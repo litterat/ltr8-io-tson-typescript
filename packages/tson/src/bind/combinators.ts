@@ -1,9 +1,9 @@
 /**
- * The eleven combinators that author a {@link Binding} graph by hand -- what a Java `DataBinder`
+ * The twelve combinators that author a {@link Binding} graph by hand -- what a Java `DataBinder`
  * derived by reflection, here written directly (see `binding.ts`'s own top comment for the full
- * rationale). `record`/`tuple`/`array`/`map`/`variant`/`bridge`/`lazy`/`field`/`optional` live
- * here; `registry`/`chain` live in `registry.ts` since they build a {@link BindingRegistry}
- * rather than a {@link Binding}.
+ * rationale). `record`/`tuple`/`array`/`map`/`variant`/`bridge`/`lazy`/`field`/`optional`/
+ * `annotated` live here; `registry`/`chain` live in `registry.ts` since they build a
+ * {@link BindingRegistry} rather than a {@link Binding}.
  *
  * Every function below ends by asserting its return value against the `Binding` member it
  * builds. That assertion is deliberate, not a shortcut: {@link BindingBase}'s phantom `[OUT]` key
@@ -13,6 +13,7 @@
  * of having built the object honestly, field by field, immediately above the assertion.
  */
 import type {
+  AnnotatedBinding,
   ArrayBinding,
   ArrayOptions,
   BridgeBinding,
@@ -30,6 +31,7 @@ import type {
   VariantMember,
   InferShape,
 } from './binding.js';
+import type { Annotations } from '../annotations/index.js';
 import type { InferTuple } from './infer.js';
 import { TsonInternalError } from '../core/errors.js';
 
@@ -155,6 +157,29 @@ export function bridge<T, D>(
 ): BridgeBinding<T, D> {
   const binding = { kind: 'bridge', wire, toWire, fromWire };
   return binding as unknown as BridgeBinding<T, D>;
+}
+
+/**
+ * Build an {@link AnnotatedBinding} for a position declared `Annotated<T>` -- the value's own
+ * `value` binding, plus the three closures a reader/writer needs to move between the host box `T`
+ * and the wire-format annotations framing that position (§3.1). `construct`/`unwrap` are the
+ * read/write inverses over the inner value, `annotationsOf` the write-direction counterpart to
+ * what a reader hands `construct` as its own second argument.
+ */
+export function annotated<T>(options: {
+  readonly value: BindingRef<unknown>;
+  readonly construct: (value: unknown, annotations: Annotations) => T;
+  readonly unwrap: (host: T) => unknown;
+  readonly annotationsOf: (host: T) => Annotations;
+}): AnnotatedBinding<T> {
+  const binding = {
+    kind: 'annotated',
+    value: options.value,
+    construct: options.construct,
+    unwrap: options.unwrap,
+    annotationsOf: options.annotationsOf,
+  };
+  return binding as unknown as AnnotatedBinding<T>;
 }
 
 /**

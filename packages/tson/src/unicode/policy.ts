@@ -2,11 +2,13 @@ import { firstConfusableCollision } from './skeleton.js';
 import {
   DEFAULT_RESTRICTION_LEVEL,
   DEFAULT_RESTRICTION_UNIT,
+  NO_PERMITTED_SCRIPTS,
   satisfiesRestrictionLevel,
   type RestrictionLevel,
   type RestrictionUnit,
+  type ScriptCombination,
 } from './restriction-level.js';
-import { identifierStatusAllowed, UTS39_VERSION } from './uts39.js';
+import { identifierStatusAllowed, UTS39_VERSION, type ScriptId } from './uts39.js';
 import { isXidContinue } from './xid.js';
 
 /**
@@ -58,15 +60,44 @@ export interface NamePolicy {
    * for first".
    */
   readonly restrictionUnit: RestrictionUnit;
+  /**
+   * Script combinations mechanism 3 admits over and above {@link restrictionLevel} (default
+   * none) -- UTS #39 §5.2's own device for its Latn+Jpan/Latn+Hanb/Latn+Kore augmented sets,
+   * opened to a caller: a
+   * deployment that knows it is Russian names `[SCRIPT_LATIN, SCRIPT_CYRILLIC]` rather than
+   * dropping `restrictionLevel` and losing the rule everywhere else. {@link "./restriction-level.js"}'s
+   * `satisfiesRestrictionLevel` checks this list **before** `restrictionLevel`'s own rules, so an
+   * admitted combination overrides even `SINGLE_SCRIPT`. Build one with {@link permitting}, which
+   * appends rather than replaces: a policy accumulates the combinations it admits.
+   */
+  readonly permittedScripts: readonly ScriptCombination[];
 }
 
-/** §8.2's defaults: mechanisms 1 and 2 on, mechanism 3 at Highly Restrictive over the whole name. */
+/** §8.2's defaults: mechanisms 1 and 2 on, mechanism 3 at Highly Restrictive over the whole name, no admitted combinations. */
 export const DEFAULT_NAME_POLICY: NamePolicy = {
   skeletonDistinctness: true,
   identifierStatus: true,
   restrictionLevel: DEFAULT_RESTRICTION_LEVEL,
   restrictionUnit: DEFAULT_RESTRICTION_UNIT,
+  permittedScripts: NO_PERMITTED_SCRIPTS,
 };
+
+/**
+ * `policy` with one further script combination admitted (mechanism 3's own relaxation device,
+ * `NamePolicy.permittedScripts`/`TokenPolicy.permittedScripts`'s own doc) -- the narrowest
+ * relaxation available, mirroring the pinned Java reference's `TsonUnicodePolicy.permitting`.
+ * Appends to whatever `policy` already admits rather than replacing it, so a caller building up
+ * several combinations calls this once per combination.
+ *
+ * Generic over `NamePolicy`/`TokenPolicy` alike: both carry `permittedScripts` in the same shape,
+ * and this is the one place that needs to know that.
+ */
+export function permitting<P extends { readonly permittedScripts: readonly ScriptCombination[] }>(
+  policy: P,
+  ...scripts: readonly ScriptId[]
+): P {
+  return { ...policy, permittedScripts: [...policy.permittedScripts, scripts] };
+}
 
 /** `policy` with mechanism 1 (skeleton distinctness) switched on or off. A code decision, never read from the environment (§8.2). */
 export function withSkeletonDistinctness(policy: NamePolicy, enabled: boolean): NamePolicy {
@@ -120,10 +151,19 @@ export function appliesIdentifierProfile(policy: NamePolicy): boolean {
  */
 export interface TokenPolicy {
   readonly restrictionLevel: RestrictionLevel;
+  /**
+   * Script combinations {@link restrictionLevel} admits over and above itself (default none) --
+   * {@link NamePolicy.permittedScripts}'s own doc, the same device on the value surface. Build
+   * one with {@link permitting}.
+   */
+  readonly permittedScripts: readonly ScriptCombination[];
 }
 
-/** §8.2's default for tokens: Unrestricted, so no scan runs at all. */
-export const DEFAULT_TOKEN_POLICY: TokenPolicy = { restrictionLevel: 'UNRESTRICTED' };
+/** §8.2's default for tokens: Unrestricted, so no scan runs at all, and no admitted combinations. */
+export const DEFAULT_TOKEN_POLICY: TokenPolicy = {
+  restrictionLevel: 'UNRESTRICTED',
+  permittedScripts: NO_PERMITTED_SCRIPTS,
+};
 
 /**
  * Builds a {@link TokenPolicy} at `restrictionLevel`.
@@ -147,7 +187,7 @@ export function tokenPolicy(
         'not word separators (§8.2 "Values") -- build a whole-text TokenPolicy instead',
     );
   }
-  return { restrictionLevel };
+  return { restrictionLevel, permittedScripts: NO_PERMITTED_SCRIPTS };
 }
 
 /** Whether `text` satisfies `policy` (default {@link DEFAULT_TOKEN_POLICY}, which checks nothing). */
@@ -155,7 +195,12 @@ export function tokenSatisfiesPolicy(
   text: string,
   policy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): boolean {
-  return satisfiesRestrictionLevel(text, policy.restrictionLevel, 'WHOLE_NAME');
+  return satisfiesRestrictionLevel(
+    text,
+    policy.restrictionLevel,
+    'WHOLE_NAME',
+    policy.permittedScripts,
+  );
 }
 
 /**
@@ -245,10 +290,17 @@ function firstDisallowedIdentifierStatusCharacter(name: string): string | undefi
  * (default {@link DEFAULT_NAME_POLICY}) -- the first mechanism that refuses something, or
  * `undefined` when every name in the scope passes all three.
  *
- * **Per-name mechanisms run first, in `names`' own order**, so the refusal a caller sees for a
- * scope with more than one problem is the earliest one a reader encountered rather than
- * whichever mechanism happens to run last. **Mechanism 1 runs last**, over the whole scope at
- * once, because it is a relation and needs every name collected before it can fire at all.
+ * **Mechanism 1 (skeleton distinctness) runs first, over the whole scope at once**, matching the
+ * pinned Java reference's own `TsonSchemaLinker.checkScope`: "its own collision relation, then
+ * each name's own two rules". It has to see every name before it can fire at all, since it is a
+ * relation rather than a property of one name, which is also why running it first costs nothing
+ * a per-name-first order would have saved. **The per-name mechanisms run second, in `names`' own
+ * order**, so the refusal a caller sees for a scope where mechanism 1 stays silent is the
+ * earliest per-name problem a reader encountered. This ordering matters whenever a pair is both
+ * confusable *and* individually mixed-script -- `'admin'`/Cyrillic `'аdmin'` is exactly that pair,
+ * and reporting it as `restriction-level` rather than `skeleton-distinctness` would name the wrong
+ * remedy: renaming the mixed-script spelling to a single-script one that still collides with
+ * `'admin'` would leave the document refused for a reason the diagnostic never mentioned.
  *
  * This function decides *whether* a scope is refused; it does not itself throw, report, or know
  * the UTS #39 data version -- `reader/schemaless/tree.ts` is the one Part 1 caller, and
@@ -259,10 +311,23 @@ export function nameHygieneRefusal(
   names: Iterable<string>,
   policy: NamePolicy = DEFAULT_NAME_POLICY,
 ): NameHygieneRefusal | undefined {
+  const collected = [...names];
+
+  if (policy.skeletonDistinctness) {
+    const collision = firstConfusableCollision(collected);
+    if (collision !== undefined) {
+      return {
+        mechanism: 'skeleton-distinctness',
+        names: [collision.first, collision.second],
+        detail:
+          `'${collision.second}' is confusable with '${collision.first}' -- the two are ` +
+          'different names that read alike (UTS #39 skeleton), so one of them must be renamed',
+      };
+    }
+  }
+
   const checkProfile = appliesIdentifierProfile(policy);
-  const collected: string[] = [];
-  for (const name of names) {
-    collected.push(name);
+  for (const name of collected) {
     if (checkProfile) {
       const disallowed = firstDisallowedIdentifierStatusCharacter(name);
       if (disallowed !== undefined) {
@@ -276,7 +341,14 @@ export function nameHygieneRefusal(
         };
       }
     }
-    if (!satisfiesRestrictionLevel(name, policy.restrictionLevel, policy.restrictionUnit)) {
+    if (
+      !satisfiesRestrictionLevel(
+        name,
+        policy.restrictionLevel,
+        policy.restrictionUnit,
+        policy.permittedScripts,
+      )
+    ) {
       const unit = policy.restrictionUnit === 'PER_SEGMENT' ? 'each segment of' : 'the whole of';
       return {
         mechanism: 'restriction-level',
@@ -284,18 +356,6 @@ export function nameHygieneRefusal(
         detail:
           `'${name}' does not satisfy UTS #39 §5.2's ${policy.restrictionLevel} restriction ` +
           `level, applied to ${unit} the name`,
-      };
-    }
-  }
-  if (policy.skeletonDistinctness) {
-    const collision = firstConfusableCollision(collected);
-    if (collision !== undefined) {
-      return {
-        mechanism: 'skeleton-distinctness',
-        names: [collision.first, collision.second],
-        detail:
-          `'${collision.second}' is confusable with '${collision.first}' -- the two are ` +
-          'different names that read alike (UTS #39 skeleton), so one of them must be renamed',
       };
     }
   }

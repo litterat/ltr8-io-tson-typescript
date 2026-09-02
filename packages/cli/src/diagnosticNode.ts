@@ -53,7 +53,16 @@ export function diagnosticJson(diagnostic: Diagnostic): Record<string, unknown> 
 
 /** {@link Diagnostic} rendered for `--format text` -- one line, position appended when known. */
 export function diagnosticText(diagnostic: Diagnostic): string {
-  const where = diagnostic.path === undefined ? '' : ` at ${diagnostic.path}`;
+  // `path` is `''` at the data root (a real location, RFC 6901's own spelling of it) and
+  // `undefined` only when the diagnostic isn't anchored in the data at all -- `diagnostic.ts`'s
+  // own doc on the two. Both need their own rendering: `''` interpolated bare would read
+  // `CODE at : message`, so the root gets a phrase instead of the empty pointer.
+  const where =
+    diagnostic.path === undefined
+      ? ''
+      : diagnostic.path === ''
+        ? ' at the document root'
+        : ` at ${diagnostic.path}`;
   const at =
     diagnostic.dataPosition === undefined
       ? ''

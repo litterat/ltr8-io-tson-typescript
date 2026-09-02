@@ -22,10 +22,13 @@
  *
  * **What this module deliberately does not do**, each a documented follow-up rather than a
  * silent gap: constructor-eligibility checking (§2.2.2 — which schemas may declare/govern with
- * `~`), `TypeInhabitance`'s productivity check (§3.4.1 — an entry no finite document can
- * satisfy), and the reference-implementation's richer "walk back to the nearest positioned
- * declaration" error attribution (`referenceValidation.ts`'s own note). None of the four
- * deliverables this work package states depend on any of the three.
+ * `~`), and the reference-implementation's richer "walk back to the nearest positioned
+ * declaration" error attribution (`referenceValidation.ts`'s own note).
+ *
+ * **`TypeInhabitance`'s productivity check** (§3.4.1, §5.10.1 — an entry no finite document can
+ * satisfy) lives in {@link checkEveryEntryIsInhabited} (`typeInhabitance.ts`), run here over
+ * every local entry after reference validation and before `@disjoint` checking, matching the
+ * reference implementation's own placement in `TsonSchemaLinker`.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
@@ -37,6 +40,7 @@ import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { checkDisjointAssertions, computeDisjointness } from './disjointness.js';
 import { checkNameHygiene } from './nameHygiene.js';
 import { validateReferences } from './referenceValidation.js';
+import { checkEveryEntryIsInhabited } from './typeInhabitance.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -173,8 +177,16 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     ...(structureNamespace === undefined ? {} : { structureNamespace }),
     ...(receiver === undefined ? {} : { receiver }),
   });
+  checkEveryEntryIsInhabited(merged, localNames, {
+    schemaId: schema.id,
+    ...(receiver === undefined ? {} : { receiver }),
+  });
   checkDisjointAssertions(merged, localNames, {
     schemaId: schema.id,
+    // §6's name-position channel as well as §3.1's value-position one: `@disjoint` written
+    // before a declared name is the same assertion as one written on its body, and a marker
+    // this check could not see would be a marker nothing ever contradicts.
+    keyAnnotations: schema.keyAnnotations,
     ...(receiver === undefined ? {} : { receiver }),
   });
 

@@ -76,3 +76,15 @@ export { bootstrapMetaKernel } from './schema/bootstrap.js';
 export type { Schema } from './compiler/schemaResolver.js';
 export { linkSchema } from './link/link.js';
 export type { LinkedSchema, LinkDeps } from './link/link.js';
+
+// ── UTS #39 script names -- [TSON-DATA] §8.2 mechanism 3's script-combination admission ────────
+//
+// `NamePolicy`/`TokenPolicy` (`unicode/policy.ts`) are still not exported by name here (a
+// caller configures `Config.identifierPolicy`/`tokenPolicy` with a plain object satisfying their
+// shape, never by importing the interface); `scriptNamed`/`scriptName` are, because building a
+// `permittedScripts` combination at all means resolving a script the caller names as text (e.g.
+// a `--identifier-scripts Latin+Cyrillic` flag) to the {@link ScriptId} this build assigns it,
+// and `unicode/` is not part of this package's public subpath surface for that lookup to live
+// behind instead.
+export { scriptNamed, scriptName } from './unicode/uts39.js';
+export type { ScriptId } from './unicode/uts39.js';

@@ -16,10 +16,11 @@ import {
   type Schema,
   type SchemaResolverDeps,
 } from '../src/compiler/schemaResolver.js';
+import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
-import type { ArrayBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
-import type { Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
+import type { Top, TypeArgument, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
 
 // ── Parsing helper ───────────────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,10 @@ function depsWithReader(): SchemaResolverDeps {
 
 function isRecordBody(body: Top): body is RecordBody {
   return 'fields' in body;
+}
+
+function isArrayBody(body: Top): body is ArrayBody {
+  return 'elementType' in body;
 }
 
 function entryOf(schema: Schema, name: string): TypeDefinition {
@@ -477,6 +482,218 @@ describe('template materialisation (§5.10), end to end through the real Templat
     const doc = document('bad => <T> { v: T<text> }');
     expect(() => resolveSchema(doc, depsWithReader())).toThrow(TsonSchemaValidationError);
   });
+});
+
+// ── A richer reader/structure namespace: application record-forms and `enum` ───────────────
+//
+// `testMetaReader`/`testStructureNamespace` above only ever meet a bare name in `element_type`/
+// `type`. The two describe blocks below need a slot that reads an *application* (§5.10's
+// materialisation closing one first) and a governing meta with `enum`/`enum_set`/`identifier`
+// wired up (§5.10's own VALUE-parameter motivating case) -- so they get their own, richer pair.
+
+function richTypeRefField(record: RecordValue, name: string): TypeRef {
+  const value = fieldOf(record, name)?.coreValue;
+  if (value === undefined) throw new Error(`missing '${name}'`);
+  if (value.kind === 'token') return { name: value.text, arguments: [], annotations: [] };
+  const argsRecord = value as RecordValue;
+  const head = (fieldOf(argsRecord, 'name')?.coreValue as TokenValue).text;
+  const argumentsValue = fieldOf(argsRecord, 'arguments')?.coreValue;
+  const args: TypeArgument[] = [];
+  if (argumentsValue?.kind === 'array') {
+    for (const element of argumentsValue.elements) {
+      const argRecord = element.value.coreValue as RecordValue;
+      const literal = fieldOf(argRecord, 'value')?.coreValue;
+      if (literal !== undefined) {
+        const token = literal as TokenValue;
+        args.push({
+          kind: 'value',
+          value: { text: token.text, form: metaFormOfLexer(token.form) },
+        });
+      } else {
+        args.push({ kind: 'ref', ref: richTypeRefField(argRecord, 'name') });
+      }
+    }
+  }
+  return { name: head, arguments: args, annotations: [] };
+}
+
+function richMetaReader(type: string, value: DataValue): Top {
+  const record = value.coreValue as RecordValue;
+  if (type === 'record') {
+    const fieldsField = fieldOf(record, 'fields')?.coreValue;
+    const fields: RecordField[] = [];
+    if (fieldsField?.kind === 'array') {
+      for (const element of fieldsField.elements) {
+        const fieldRecord = element.value.coreValue as RecordValue;
+        const fname = (fieldOf(fieldRecord, 'name')?.coreValue as TokenValue).text;
+        fields.push({
+          name: fname,
+          type: richTypeRefField(fieldRecord, 'type'),
+          state: 'REQUIRED',
+          annotations: [],
+        });
+      }
+    }
+    return { kind: 'record', supertypes: [], fields, groups: [] } satisfies RecordBody;
+  }
+  if (type === 'array') {
+    return {
+      kind: 'array',
+      elementType: richTypeRefField(record, 'element_type'),
+      state: 'REQUIRED',
+      unordered: false,
+      uniqueItems: false,
+    } satisfies ArrayBody;
+  }
+  if (type === 'enum') {
+    const membersField = fieldOf(record, 'members')?.coreValue;
+    const members: string[] = [];
+    if (membersField?.kind === 'array') {
+      for (const element of membersField.elements) {
+        members.push((element.value.coreValue as TokenValue).text);
+      }
+    }
+    return { kind: 'enum', members } satisfies EnumBody;
+  }
+  throw new Error(`richMetaReader: unhandled constructor '${type}'`);
+}
+
+/**
+ * A structure namespace whose `record.fields[].type`/`array.element_type` are genuinely typed
+ * `type_ref` (unlike `testStructureNamespace()`'s placeholder `any`, which the other describe
+ * blocks in this file don't care about) -- §5.10's `ParameterKinds` walk classifies a parameter
+ * by the slot's *declared* type, so this is the one thing a realistic governing meta must get
+ * right for these two describe blocks. Plus `enum`/`enum_set`/`identifier`, the VALUE-parameter
+ * motivating case's own vocabulary.
+ */
+function richStructureNamespace(): (name: string) => TypeDefinition | undefined {
+  const typeRefType: TypeRef = { name: 'type_ref', arguments: [], annotations: [] };
+  const constructorEntry = (fields: readonly RecordField[]): TypeDefinition => ({
+    kind: 'PRODUCT',
+    parameters: [],
+    constructor: true,
+    supertypes: [],
+    subtypes: [],
+    body: { kind: 'record', supertypes: [], fields, groups: [] },
+    annotations: [],
+  });
+  const extra = new Map<string, TypeDefinition>([
+    [
+      'record',
+      constructorEntry([{ name: 'fields', type: typeRefType, state: 'REQUIRED', annotations: [] }]),
+    ],
+    [
+      'array',
+      constructorEntry([
+        { name: 'element_type', type: typeRefType, state: 'REQUIRED', annotations: [] },
+      ]),
+    ],
+    [
+      'enum',
+      constructorEntry([
+        {
+          name: 'members',
+          type: { name: 'enum_set', arguments: [], annotations: [] },
+          state: 'REQUIRED',
+          annotations: [],
+        },
+      ]),
+    ],
+    [
+      'enum_set',
+      {
+        kind: 'PRODUCT',
+        parameters: [],
+        constructor: true,
+        supertypes: [],
+        subtypes: [],
+        body: {
+          kind: 'array',
+          elementType: { name: 'identifier', arguments: [], annotations: [] },
+          state: 'REQUIRED',
+          unordered: false,
+          uniqueItems: false,
+        },
+        annotations: [],
+      },
+    ],
+    [
+      'identifier',
+      {
+        kind: 'ATOM',
+        parameters: [],
+        constructor: true,
+        supertypes: [],
+        subtypes: [],
+        body: { kind: 'unit' },
+        annotations: [],
+      },
+    ],
+  ]);
+  return (name) => extra.get(name);
+}
+
+function richDeps(): SchemaResolverDeps {
+  return deps({ definitionMetaReader: richMetaReader, metaDefinitions: richStructureNamespace() });
+}
+
+// ── §5.10 parameter kinds: an argument is classified by the parameter it binds ──────────────
+
+describe('§5.10 parameter kinds, end to end through the real schemaResolver', () => {
+  it(
+    "the enum-member motivating case: 'e => <M> !enum { members: [a b M] }' applied as 'e<c>' " +
+      "records source.arguments as a literal, not a namespace reference to a type called 'c'",
+    () => {
+      const doc = document('e => <M> !enum { members: [a b M] } used => e<c>');
+      const schema = resolveSchema(doc, richDeps());
+      expect(entryOf(schema, 'e').parameters).toEqual(['M']);
+      const used = entryOf(schema, 'used');
+      expect(used.kind).toBe('REFERENCE');
+      const target = (used.body as { readonly target: TypeRef }).target;
+      const instantiation = entryOf(schema, target.name);
+      expect(instantiation.source).toEqual({
+        name: 'e',
+        arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
+        annotations: [],
+      });
+      const formName = (instantiation.body as { readonly target: TypeRef }).target.name;
+      const form = entryOf(schema, formName);
+      expect((form.body as EnumBody).members).toEqual(['a', 'b', 'c']);
+    },
+  );
+});
+
+// ── §8.2 synthetic merge: the two lift channels land on one entry ───────────────────────────
+
+describe('§8.2 synthetic merge (SyntheticMerge), end to end through the real schemaResolver', () => {
+  it(
+    "'[box<text>]' written directly and 'wrap<box<text>>' closed through a template merge onto " +
+      'one array entry, not two',
+    () => {
+      const doc = document(
+        'box => <T> { v: T } holder => { items: [box<text>] } wrap => <T> [T] used => wrap<box<text>>',
+      );
+      const schema = resolveSchema(doc, richDeps());
+      // The eagerly-lifted synthetic `[box<text>]` was named from the desugarer.
+      const eagerName = fieldTypeOf(schema, 'holder', 'items').name;
+      // `used => wrap<box<text>>` closes to a REFERENCE instantiation naming the same array form.
+      const usedTarget = (entryOf(schema, 'used').body as { readonly target: TypeRef }).target;
+      const instantiation = entryOf(schema, usedTarget.name);
+      const closedFormRef = (instantiation.body as { readonly target: TypeRef }).target;
+      // One array entry survives the merge, referenced from both places -- not two.
+      expect(closedFormRef.name).toBe(eagerName);
+      expect(schema.entries.has(eagerName)).toBe(true);
+      const form = entryOf(schema, eagerName);
+      if (!isArrayBody(form.body)) throw new Error('unreachable');
+      expect(form.body.elementType.arguments).toEqual([]);
+      const elementTypeName = form.body.elementType.name;
+      // No leftover second entry for the eager (unreduced) spelling of the same form.
+      const arrayEntries = [...schema.entries.values()].filter(
+        (e) => isArrayBody(e.body) && e.body.elementType.name === elementTypeName,
+      );
+      expect(arrayEntries).toHaveLength(1);
+    },
+  );
 });
 
 // ── Small internal-consistency guard ────────────────────────────────────────────────────────

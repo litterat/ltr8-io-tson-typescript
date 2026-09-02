@@ -4,6 +4,7 @@ import {
   DEFAULT_RESTRICTION_UNIT,
   satisfiesRestrictionLevel,
 } from '../../src/unicode/restriction-level.js';
+import { scriptNamed } from '../../src/unicode/uts39.js';
 
 // UTS #39 §5.2's restriction levels and [TSON-DATA] §8.2's unit refinement — two independent
 // axes. Mixed-script names are built from code points, never typed: the whole subject is
@@ -78,5 +79,55 @@ describe('satisfiesRestrictionLevel (UTS #39 §5.2)', () => {
     expect(satisfiesRestrictionLevel('_leading', level, 'PER_SEGMENT')).toBe(true);
     expect(satisfiesRestrictionLevel('trailing_', level, 'PER_SEGMENT')).toBe(true);
     expect(satisfiesRestrictionLevel('a__b', level, 'PER_SEGMENT')).toBe(true);
+  });
+});
+
+describe('satisfiesRestrictionLevel: permittedScripts (§8.2 mechanism 3 admission)', () => {
+  const LATIN = scriptNamed('Latin');
+  const CYRILLIC = scriptNamed('Cyrillic');
+  const GREEK = scriptNamed('Greek');
+  if (LATIN === undefined || CYRILLIC === undefined || GREEK === undefined) {
+    throw new Error('unreachable -- Latin/Cyrillic/Greek are always probed');
+  }
+
+  it('defaults to no admitted combinations, unchanged from before this parameter existed', () => {
+    expect(satisfiesRestrictionLevel('id_' + CYR_P, 'SINGLE_SCRIPT')).toBe(false);
+  });
+
+  it('admits a combination SINGLE_SCRIPT otherwise refuses outright', () => {
+    const text = 'id_' + CYR_P; // Latin + Cyrillic
+    expect(satisfiesRestrictionLevel(text, 'SINGLE_SCRIPT', 'WHOLE_NAME', [])).toBe(false);
+    expect(
+      satisfiesRestrictionLevel(text, 'SINGLE_SCRIPT', 'WHOLE_NAME', [[LATIN, CYRILLIC]]),
+    ).toBe(true);
+  });
+
+  it("admits by containment: a combination naming a superset of the text's scripts still covers it", () => {
+    const text = 'id_' + CYR_P; // Latin + Cyrillic only
+    expect(
+      satisfiesRestrictionLevel(text, 'SINGLE_SCRIPT', 'WHOLE_NAME', [[LATIN, CYRILLIC, GREEK]]),
+    ).toBe(true);
+  });
+
+  it('refuses a combination that does not contain every script the text mixes', () => {
+    const text = HAN + CYR_P; // Han + Cyrillic, nothing Latin about it
+    expect(
+      satisfiesRestrictionLevel(text, 'SINGLE_SCRIPT', 'WHOLE_NAME', [[LATIN, CYRILLIC]]),
+    ).toBe(false);
+  });
+
+  it('is checked ahead of the level -- an admitted combination overrides even SINGLE_SCRIPT', () => {
+    // Cyrillic + Greek is not one of any level's own built-in augmented sets.
+    const text = CYR_P + GREEK_ALPHA;
+    expect(satisfiesRestrictionLevel(text, 'ASCII_ONLY', 'WHOLE_NAME')).toBe(false); // unaffected -- ASCII_ONLY never scans scripts
+    expect(
+      satisfiesRestrictionLevel(text, 'SINGLE_SCRIPT', 'WHOLE_NAME', [[CYRILLIC, GREEK]]),
+    ).toBe(true);
+  });
+
+  it('does not apply at all under a level that scans no scripts in the first place', () => {
+    expect(satisfiesRestrictionLevel(CYR_A + 'dmin', 'UNRESTRICTED', 'WHOLE_NAME', [[LATIN]])).toBe(
+      true,
+    ); // true regardless -- UNRESTRICTED never reaches the admitted-combinations check
   });
 });

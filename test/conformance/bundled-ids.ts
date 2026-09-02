@@ -17,17 +17,28 @@ export const BUNDLED_SCHEMA_IDS = {
 export type BundledSchemaShortName = keyof typeof BUNDLED_SCHEMA_IDS;
 
 /**
- * Resolves a sidecar's short schema name (e.g. `"core.tn"`) to its real, versioned identity.
+ * The corpus's own schemas (`schemas/` under the suite checkout) are named by path under this
+ * prefix — RUNNER.md's "Schema-governed vectors": "a short name that is not one of those three is
+ * the corpus's own schema, named by its path under `schemas/`".
+ */
+const CORPUS_SCHEMA_PREFIX = 'https://tson.io/test-suite/schemas/';
+
+/**
+ * Resolves a sidecar's short schema name to its real identity: one of {@link BUNDLED_SCHEMA_IDS}'s
+ * three revision-stamped entries, or — for any other short name — the corpus's own schema at that
+ * path under `schemas/` (`fixtures/link-money.tn` resolves to
+ * `https://tson.io/test-suite/schemas/fixtures/link-money.tn`).
  *
- * @throws {Error} if `shortName` is not one of {@link BUNDLED_SCHEMA_IDS}'s three entries.
+ * **A rule, not a table.** The three bundled names are listed because their identity carries the
+ * spec revision and nothing in the short name says so; every other short name's identity is
+ * derived, so a new corpus fixture (`schemas/fixtures/*.tn`, the `class2/link/` import-closure
+ * vectors' own topology) never needs a change here.
  */
 export function resolveBundledSchemaId(shortName: string): string {
   if (Object.hasOwn(BUNDLED_SCHEMA_IDS, shortName)) {
     return BUNDLED_SCHEMA_IDS[shortName as BundledSchemaShortName];
   }
-  throw new Error(
-    `unknown schema short name '${shortName}' -- expected one of ${Object.keys(BUNDLED_SCHEMA_IDS).join(', ')}`,
-  );
+  return `${CORPUS_SCHEMA_PREFIX}${shortName}`;
 }
 
 /**
@@ -60,4 +71,21 @@ export function spliceSchemaDirectives(
     insertAt = newline === -1 ? raw.length : newline + 1;
   }
   return raw.slice(0, insertAt) + directives + raw.slice(insertAt);
+}
+
+/**
+ * The data-document counterpart of {@link spliceSchemaDirectives}: splices a single real
+ * `!!schema` directive in, for a `class2/validate/` subject. A data document's header is `!!id?
+ * !!schema?` (`ast/value.ts`'s own `Document`), not the schema-document sequence `!!id? !!meta
+ * !!import*`, so this is a distinct function rather than a call to the other with an empty import
+ * list -- the two headers are different grammars, not one generalising the other.
+ */
+export function spliceSchemaDirective(raw: string, schema: string): string {
+  const directive = `!!schema:"${resolveBundledSchemaId(schema)}"\n`;
+  let insertAt = 0;
+  if (raw.startsWith('!!id:')) {
+    const newline = raw.indexOf('\n');
+    insertAt = newline === -1 ? raw.length : newline + 1;
+  }
+  return raw.slice(0, insertAt) + directive + raw.slice(insertAt);
 }

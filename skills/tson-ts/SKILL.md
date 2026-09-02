@@ -11,10 +11,10 @@ Class 2 (the schema layer) — and passes the shared conformance suite in full.
 
 Two packages, released in lockstep:
 
-| Package          | What it is                                                         |
-| ---------------- | ------------------------------------------------------------------ |
-| `@ltr8/tson`     | the library; subpath entry points, ESM + CJS + `.d.ts`             |
-| `@ltr8/tson-cli` | the `tson` command (`validate`, `compile`, `hash`, `init-example`) |
+| Package          | What it is                                                                   |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `@ltr8/tson`     | the library; subpath entry points, ESM + CJS + `.d.ts`                       |
+| `@ltr8/tson-cli` | the `tson` command (`validate`, `compile`, `policy`, `hash`, `init-example`) |
 
 Source, issues and releases: **https://github.com/litterat/ltr8-io-tson-typescript** (Apache-2.0).
 The reference implementation this is ported from is
@@ -303,18 +303,31 @@ createTson({ maxNestingDepth: 64 }); // every schema it resolves and document it
 §8.2's three name-hygiene mechanisms are on by default (skeleton distinctness, `Identifier_Status`,
 Highly Restrictive over the whole name). Relaxation is a **code decision stated at the call site** —
 never an environment variable, because a security policy read from the environment is ambient
-authority. State it once on the instance:
+authority. State it once on the instance, via `Config.identifierPolicy`:
 
 ```ts
 const tson = createTson({
-  namePolicy: {
+  identifierPolicy: {
     skeletonDistinctness: true,
     identifierStatus: true,
     restrictionLevel: 'ASCII_ONLY', // ASCII_ONLY | SINGLE_SCRIPT | HIGHLY_RESTRICTIVE | …
     restrictionUnit: 'WHOLE_NAME', // or 'PER_SEGMENT' — §8.2's first relaxation to reach for
+    permittedScripts: [], // combinations admitted in addition to the level -- build with `permitting`
   },
 });
 ```
+
+Script combinations are `ScriptId` numbers, not names — `scriptNamed('Latin')` resolves the UCD
+`Script` property's long-form name to one, so `permittedScripts: [[scriptNamed('Latin')!,
+scriptNamed('Cyrillic')!]]` admits that combination in addition to whatever the level already
+allows. `NamePolicy`/`TokenPolicy` themselves are not exported by name — build a plain object
+satisfying `Config.identifierPolicy`/`Config.tokenPolicy`'s shape rather than importing the type.
+
+`Config.tokenPolicy` is the same shape's counterpart over _values_ rather than declared names —
+only the restricted-script mechanism applies there, since a value has no identifier profile to
+violate and no scope to be distinct within; it defaults to `UNRESTRICTED`, so an ordinary read
+scans no values at all. `tson.processorPolicy` reports both policies together with the UCD version
+they were computed against, the same record `tson policy` prints from the command line.
 
 Name hygiene decides **policy, not validity**: it can never make a document invalid, and its verdict
 can change under a routine Unicode data refresh, which is why it is reported apart from the four
@@ -327,35 +340,68 @@ npx @ltr8/tson-cli init-example .                                            # p
 npx @ltr8/tson-cli validate person-data.tn --schema person.tn --root person
 npx @ltr8/tson-cli validate --format json data/*.tn                          # Class 1 only, no schema
 npx @ltr8/tson-cli compile person.tn
+npx @ltr8/tson-cli policy                                                    # the §8.2 policy this run would apply
 npx @ltr8/tson-cli hash person.tn                                            # canonical content hash (§2.2.1)
 ```
 
+`tson --help` lists the five commands; `tson <command> --help` prints that command's own page,
+including the shared policy-flag block below for `validate`/`compile`/`policy`.
+
 |                          |                                                                                                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Commands                 | `validate`, `compile`, `hash`, `init-example`                                                                                                           |
+| Commands                 | `validate`, `compile`, `policy`, `hash`, `init-example`                                                                                                 |
 | `--schema <file-or-url>` | validate only; a local path or an `https://` URL. **Never** a data file's own `!!schema` — honouring that would fetch whatever untrusted content named. |
 | `--root <name>`          | required whenever `--schema` is given; not auto-detected                                                                                                |
-| `--format`               | `text` (default), `json`, `tson`                                                                                                                        |
+| `--format`               | `text` (default), `json`, `tson`, on every command                                                                                                      |
 | `-`                      | reads one data document from stdin (validate, at most once)                                                                                             |
-| Exit codes               | `0` valid · `1` invalid input · `2` usage error · `69` a `--schema` no source would supply · `70` library gap or internal fault                         |
+| Exit codes               | see below, ranked `70 > 78 > 69 > 75 > 1` by who must act first                                                                                         |
 
 `validate`/`compile`/`hash` register the bundled `meta-kernel`/`meta.tn`/`core.tn`, so they work
 offline with no `SchemaSource`. Data files are streamed, never buffered whole. Any argument
 beginning with `-` that is not a known flag is a usage error, never a file name.
 
+| Exit | Meaning                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------- |
+| `0`  | checked, and nothing to report                                                              |
+| `1`  | checked and rejected — includes a §8.2 name-hygiene refusal, since the sender holds the fix |
+| `2`  | usage error                                                                                 |
+| `69` | a schema permanently unavailable — refused by policy, absent, or too large                  |
+| `75` | a schema temporarily unavailable — unreachable, or it did not answer in time                |
+| `78` | a type the schema needs has no registered binding                                           |
+| `70` | a gap in this library, or an internal fault — never a statement about the document          |
+
+### Policy flags
+
+`--identifier-policy <level>`, `--identifier-per-segment`, `--identifier-scripts <A+B>`,
+`--token-policy <level>`, `--token-scripts <A+B>` are shared by `validate`, `compile` and `policy`.
+`<level>` is a UTS #39 §5.2 restriction level (`ascii-only` … `unrestricted`, or the
+`ASCII_ONLY`-style spelling `tson policy` prints, accepted back); `<A+B>` names UCD `Script`
+property long-form names joined by `+` (`Latin+Cyrillic` — never the ISO 15924 alias `Latn`).
+`tson policy [<policy options>]` prints the policy a run under those flags would apply, with no
+document in hand — a generator can conform before writing rather than after being refused, and its
+own JSON/tson `policy` record is exactly what a `validate`/`compile` run of the same flags carries
+as its `policy` field.
+
 ### Machine-readable output
 
 `--format json` is the shape to parse in CI. **Its field names are `snake_case`, unlike the
 library's own `camelCase` `Diagnostic`** — `schema_id`, `schema_pointer`, `data_position`,
-`schema_position` — and every optional field is omitted rather than emitted as `null`:
+`schema_position` — and every optional field is omitted rather than emitted as `null`. The run and
+each file report an `outcome` of `"VALID"`, `"INVALID"` or `"NOT_CHECKED"` — never a plain `valid`
+boolean, so a file whose schema could not be obtained is distinguishable from one that failed:
 
 ```json
 {
-  "valid": false,
+  "outcome": "INVALID",
+  "policy": {
+    "identifier_policy": { "level": "HIGHLY_RESTRICTIVE", "per_segment": false, "permitting": [] },
+    "token_policy": { "level": "UNRESTRICTED", "per_segment": false, "permitting": [] },
+    "unicode_data_version": "16.0"
+  },
   "files": [
     {
       "file": "order.tn",
-      "valid": false,
+      "outcome": "INVALID",
       "diagnostics": [
         {
           "code": "ATOM_CONSTRAINT_VIOLATION",
@@ -373,10 +419,13 @@ library's own `camelCase` `Diagnostic`** — `schema_id`, `schema_pointer`, `dat
 }
 ```
 
-A file may also carry `"not_implemented": true` (a library gap — exit 70, not a verdict on the file)
-or `"schema_unavailable": true` (exit 69 — the file was never checked). `--format tson` is the same
-record written through the library's own writer; `--format text` is one line per diagnostic,
-`CODE at /path (line:column): message`.
+Every `validate`/`compile` run carries `policy` — the same record `tson policy` prints on its own
+— so a report always states what it was judged under. A file whose schema could not be obtained
+carries `"outcome": "NOT_CHECKED"` and a `SCHEMA_*` diagnostic with no `path`/`schema_pointer`
+(nothing was read to place one); a `NOT_IMPLEMENTED` or `BIND_MISMATCH` diagnostic likewise makes
+its file `NOT_CHECKED` rather than `INVALID`. `--format tson` is the same record written through
+the library's own writer; `--format text` is one line per diagnostic, `CODE at /path
+(line:column): message`, or `CODE at the document root: message` when `path` is `""`.
 
 ## Object binding
 
@@ -409,27 +458,27 @@ writeBinding(personBinding, person); // '{ name: "Ada" age: 36 }'
 
 ## Pitfalls
 
-| You wrote                                                        | Problem                                                         | Do this instead                                              |
-| ---------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
-| `readTree(text)` with a `string`                                 | every read takes bytes                                          | `new TextEncoder().encode(text)`, or a stream                |
-| `TextDecoder` → re-encode before reading                         | destroys the malformed-UTF-8 cases the format rejects           | feed the raw bytes through untouched                         |
-| `catch (e) { if (e instanceof TsonLexError) }` around `readTree` | `readTree` wraps everything in `TsonReadError`                  | check `e.cause`, or use `parse` for the narrow error         |
-| Expecting `validate` to throw on a syntax error                  | it collects; an empty `diagnostics` is the only "valid"         | check `result.diagnostics.length`                            |
-| Matching diagnostic `message` text                               | messages are not API                                            | switch on `code`                                             |
-| `readTree(bytes)` with a custom `!type`                          | schemaless reads resolve built-ins only                         | pass `{ schema, root }`                                      |
-| `tson.resolveSchema(a); tson.resolveSchema(a)`                   | registering twice under one identity is a caller error          | resolve once, or build a fresh instance                      |
-| `resolveSchema` expecting it to fetch an `!!import`              | resolution never fetches, by design                             | `await tson.preload([...])` first, in dependency order       |
-| `createTson()` then a schema-governed read                       | a fresh instance's registry is **empty**                        | `standardLibrary()`, or register the kernel yourself         |
-| `httpSchemaSource({})`                                           | no `allowHosts` means nothing is permitted                      | name the hosts explicitly                                    |
-| Trusting a data file's own `!!schema` to pick a schema           | that reference is attacker-controlled                           | name the schema at the call site                             |
-| Treating `'missing'` and `'absent'` as the same                  | `absent` was written (`_`/`null`); `missing` is a failed lookup | discriminate on `kind`                                       |
-| `as`/`asString` where a conversion was meant                     | casts do not convert                                            | `asInt`/`asLong`/`asDouble`                                  |
-| `NAME_HYGIENE_REFUSED` treated as "invalid document"             | it is policy, a fifth outcome                                   | report it separately; relax `namePolicy` in code if intended |
-| Relaxing name policy from an env var                             | ambient authority, invisible at the call site                   | pass `namePolicy` explicitly                                 |
-| A hand-written or truncated `?sha256=`                           | pins are verified                                               | `sha256Hex` + `withSha256Pin`                                |
-| Importing `@ltr8/tson/source` in browser code                    | Node-only (`node:fs`, `fetch`, `node:path`)                     | supply your own structural `SchemaSource`                    |
-| `import { standardLibrary } from '@ltr8/tson'`                   | it is its own subpath, on purpose                               | `'@ltr8/tson/stdlib'`                                        |
-| `!!id` pinned to a different spec revision than the library      | revisions are not compatible                                    | match the library's `0.<revision>.x`                         |
+| You wrote                                                                                   | Problem                                                                                           | Do this instead                                                    |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `readTree(text)` with a `string`                                                            | every read takes bytes                                                                            | `new TextEncoder().encode(text)`, or a stream                      |
+| `TextDecoder` → re-encode before reading                                                    | destroys the malformed-UTF-8 cases the format rejects                                             | feed the raw bytes through untouched                               |
+| `catch (e) { if (e instanceof TsonLexError) }` around `readTree`                            | `readTree` wraps everything in `TsonReadError`                                                    | check `e.cause`, or use `parse` for the narrow error               |
+| Expecting `validate` to throw on a syntax error                                             | it collects; an empty `diagnostics` is the only "valid"                                           | check `result.diagnostics.length`                                  |
+| Matching diagnostic `message` text                                                          | messages are not API                                                                              | switch on `code`                                                   |
+| `readTree(bytes)` with a custom `!type`                                                     | schemaless reads resolve built-ins only                                                           | pass `{ schema, root }`                                            |
+| `tson.resolveSchema(a); tson.resolveSchema(a)`                                              | registering twice under one identity is a caller error                                            | resolve once, or build a fresh instance                            |
+| `resolveSchema` expecting it to fetch an `!!import`                                         | resolution never fetches, by design                                                               | `await tson.preload([...])` first, in dependency order             |
+| `createTson()` then a schema-governed read                                                  | a fresh instance's registry is **empty**                                                          | `standardLibrary()`, or register the kernel yourself               |
+| `httpSchemaSource({})`                                                                      | no `allowHosts` means nothing is permitted                                                        | name the hosts explicitly                                          |
+| Trusting a data file's own `!!schema` to pick a schema                                      | that reference is attacker-controlled                                                             | name the schema at the call site                                   |
+| Treating `'missing'` and `'absent'` as the same                                             | `absent` was written (`_`/`null`); `missing` is a failed lookup                                   | discriminate on `kind`                                             |
+| `as`/`asString` where a conversion was meant                                                | casts do not convert                                                                              | `asInt`/`asLong`/`asDouble`                                        |
+| `CONFUSABLE_NAMES`/`RESTRICTED_CHARACTER`/`RESTRICTED_SCRIPT` treated as "invalid document" | each is policy, a fifth outcome (`isVerdict` is still `true` for it, just not a validity verdict) | report it separately; relax `identifierPolicy` in code if intended |
+| Relaxing name policy from an env var                                                        | ambient authority, invisible at the call site                                                     | pass `identifierPolicy`/`tokenPolicy` explicitly                   |
+| A hand-written or truncated `?sha256=`                                                      | pins are verified                                                                                 | `sha256Hex` + `withSha256Pin`                                      |
+| Importing `@ltr8/tson/source` in browser code                                               | Node-only (`node:fs`, `fetch`, `node:path`)                                                       | supply your own structural `SchemaSource`                          |
+| `import { standardLibrary } from '@ltr8/tson'`                                              | it is its own subpath, on purpose                                                                 | `'@ltr8/tson/stdlib'`                                              |
+| `!!id` pinned to a different spec revision than the library                                 | revisions are not compatible                                                                      | match the library's `0.<revision>.x`                               |
 
 ## Reference files
 

@@ -37,11 +37,11 @@ const CYR_CAP_A = cp(0x0410);
 /**
  * `aec`'s whole-Cyrillic look-alike (а U+0430, е U+0435, с U+0441) -- unlike `CYR_A + 'dmin'`,
  * every character here shares one script, so mechanism 3 (§8.2's restriction level) is silent on
- * either spelling by itself and only mechanism 1 (skeleton distinctness) tells the pair apart.
- * `nameHygieneRefusal`'s own per-scope ordering (`unicode/policy.ts`) runs the per-name
- * mechanisms first and skeleton distinctness last, so a genuinely mixed-script pair like
- * `CYR_A + 'dmin'` gets refused by mechanism 3 before mechanism 1 ever sees it -- this pair is
- * what isolates mechanism 1 for a test that wants to assert its own message/mechanism.
+ * either spelling by itself: mechanism 1 (skeleton distinctness) is the only rule that tells this
+ * particular pair apart. Useful as a control alongside `CYR_A + 'dmin'` (which trips *both*
+ * mechanism 1 and mechanism 3, and — `nameHygieneRefusal` running skeleton distinctness first over
+ * the whole scope, matching the reference's `checkScope` — is reported as mechanism 1 regardless)
+ * for a test that wants a pair mechanism 3 never sees at all.
  */
 const AEC_CYRILLIC = cp(0x0430, 0x0435, 0x0441);
 
@@ -149,6 +149,21 @@ describe('checkNameHygiene: the declared names of one schema', () => {
     ]);
     expect(() => linkSchema(s)).not.toThrow();
   });
+
+  it('reports skeleton distinctness, not restriction level, for a pair that trips both -- §8.2s own order', () => {
+    // Latin 'admin' and Cyrillic-'а' 'аdmin': the two collide under UTS #39 skeleton, and 'аdmin'
+    // alone also fails the default whole-name restriction level, being mixed-script within one
+    // word. The shared conformance corpus's `class2/schema/refused/two-declared-names-that-read
+    // -alike` vector is exactly this pair and expects `skeleton-distinctness` -- the pinned Java
+    // reference's `TsonSchemaLinker.checkScope` runs its own collision relation before either
+    // name's per-name rules, and `nameHygieneRefusal` matches that order.
+    const s = schema('https://x/s.tn', [
+      ['admin', def(RECORD)],
+      [CYR_A + 'dmin', def(RECORD)],
+    ]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(refused.mechanism).toBe('skeleton-distinctness');
+  });
 });
 
 describe('checkNameHygiene: the field names of one record', () => {
@@ -164,8 +179,12 @@ describe('checkNameHygiene: the field names of one record', () => {
     // Mechanism 1 never fires on an identical repeated name (`unicode/skeleton.ts`'s own rule);
     // an outright duplicate is a different rule's concern, not this module's, and this scope
     // must stay silent about it rather than misreport it as a confusable pair.
+    // The fields point at a separate entry, not at `rec` itself: a required self-reference is
+    // uninhabited (§5.10.1) and would fail this link for a reason that has nothing to do with
+    // the field names under test.
     const s = schema('https://x/s.tn', [
-      ['rec', def(record([field('admin', ref('rec')), field('admin', ref('rec'))]))],
+      ['leaf', def(RECORD)],
+      ['rec', def(record([field('admin', ref('leaf')), field('admin', ref('leaf'))]))],
     ]);
     expect(() => linkSchema(s)).not.toThrow();
   });
@@ -203,10 +222,11 @@ describe('checkNameHygiene: choice variants are not a scope of their own', () =>
     ]);
     const diagnostics = collector();
     const linked = linkSchema(s, { receiver: diagnostics });
-    // Mechanism 3 answers first: the pair is mixed-script, so the second name is refused for
-    // its scripts before the two are ever compared as skeletons. Which mechanism fires is not
-    // this test's subject -- where it is reported is.
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
+    // Mechanism 1 answers first: `nameHygieneRefusal` checks skeleton distinctness over the whole
+    // namespace scope before either name's own per-name rules run, so the confusable pair is
+    // caught there and mechanism 3 never gets a turn. Which mechanism fires is not this test's
+    // subject -- where it is reported is.
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['CONFUSABLE_NAMES']);
     // Reported against the declared name that collided, not against `either`.
     expect(diagnostics.diagnostics[0]?.schemaPointer).toBe(`/${CYR_A}dmin`);
     expect(linked.entries.size).toBe(3);
@@ -286,10 +306,11 @@ describe('checkNameHygiene: the rule never fires on a lone name', () => {
     // segment inside an otherwise-Latin name (`unicode/policy.ts`'s own `id_пользователя`
     // example).
     const s = schema('https://x/s.tn', [
+      ['leaf', def(RECORD)],
       [
         'rec',
         def(
-          record([field('id_' + cp(0x043f), ref('rec')), field('url_' + cp(0x0430), ref('rec'))]),
+          record([field('id_' + cp(0x043f), ref('leaf')), field('url_' + cp(0x0430), ref('leaf'))]),
         ),
       ],
     ]);
@@ -335,7 +356,8 @@ describe('checkNameHygiene: reporting', () => {
     ]);
     const diagnostics = collector();
     const linked = linkSchema(s, { receiver: diagnostics });
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
+    // Mechanism 1 answers first over the namespace scope -- see the choice-variants test above.
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['CONFUSABLE_NAMES']);
     expect(diagnostics.diagnostics[0]?.message).toContain(UTS39_VERSION);
     expect(diagnostics.diagnostics[0]?.schemaId).toBe('https://x/s.tn');
     expect(linked.entries.size).toBe(2);
