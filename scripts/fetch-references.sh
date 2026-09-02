@@ -18,13 +18,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REF_DIR="$REPO_ROOT/.references"
 
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
-JAVA_PIN="66222ac26ddf2e5364abc1aca000f61c04237d54"
+JAVA_PIN="a576b62966b78ce9e4f7f656b679b238c0353b79"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
 # The corpus as reorganised for Revision 34: tests/<class>/<layer>/<bucket>/, a reader layer, and
 # RUNNER.md, which is normative for runners. The three behaviours the previous pin deliberately
 # lagged -- UAX31-R3a-1 bidi marks, ZWNJ/ZWJ continuation, and the identifier profile at the three
 # naming positions -- are implemented, so the pin no longer lags.
-SUITE_PIN="c5b4c55f7232218f6482349e6c49e14259268921"
+SUITE_PIN="bde7d70048bcb03049069a982d8ae0d9583a382f"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"
