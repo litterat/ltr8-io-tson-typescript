@@ -64,13 +64,14 @@ import {
   TsonReadError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import type { CoreValue, DataValue, TokenValue } from '../ast/value.js';
+import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
 import type { TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
+import { inferOne, type Kind } from './parameterKinds.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -130,6 +131,21 @@ export interface TemplateMaterialiserDeps {
    * ordinary case for a hand-built test.
    */
   readonly generatedNames?: ReadonlySet<string>;
+
+  /**
+   * The governing meta's own entries — where a slot's declared type is read from when
+   * classifying a template's parameters by use (§5.10, `parameterKinds.ts`). Needed only for the
+   * *on-demand* half of that classification: an application closed during resolution's own
+   * driving loop (a composition supertype or a refinement source, before the batch pass in
+   * `setParameterKinds` has run) infers its one template's kinds in isolation, memoised per head
+   * since a template is typically applied more than once.
+   *
+   * Omitted means no parameter-kind classification is available for an on-demand closing: its
+   * arguments close exactly as §12.1's own token-shape rule classified them at parse time,
+   * unreclassified. A caller that also never calls {@link TemplateMaterialiser.setParameterKinds}
+   * gets that behaviour throughout — the ordinary shape for a hand-built test.
+   */
+  readonly metaTypes?: DefinitionGetter;
 }
 
 /** Where an application this pass cannot close is reported, entry by entry. */
@@ -187,6 +203,26 @@ export interface TemplateMaterialiser {
    * carries none.
    */
   syntheticNames(): ReadonlySet<string>;
+
+  /**
+   * Supplies §5.10's parameter kinds for the whole namespace, once `schemaResolver.ts`'s own
+   * batch pass (`parameterKinds.ts`'s `inferAll`) has computed them — every declaration has
+   * resolved, so every slot's declared type is available, and nothing has closed yet. An
+   * application closed *before* this is called (the on-demand half, reached from a composition
+   * supertype or refinement source during resolution's own driving loop) classifies its own
+   * template in isolation instead, through {@link TemplateMaterialiserDeps.metaTypes} — see this
+   * module's own `byParameterKind`.
+   */
+  setParameterKinds(kinds: ReadonlyMap<string, ReadonlyMap<string, Kind>>): void;
+
+  /**
+   * The name `head`'s binding record derives once every application inside `fields` is closed —
+   * `syntheticMerge.ts`'s own question, over the exact fields an eagerly lifted synthetic's
+   * declaration wrote. Reads this materialiser's own memo (every application in `fields` must
+   * already have been closed by {@link materialise} for this to answer correctly), so this is
+   * meaningless to call before that pass has run.
+   */
+  closedFormName(head: string, fields: readonly RecordField[]): string;
 }
 
 /**
@@ -232,10 +268,73 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   const minted: MintedNames = createMintedNames();
 
+  /**
+   * §5.10's parameter kinds, by entry name then parameter name — empty until
+   * {@link TemplateMaterialiser.setParameterKinds} supplies `schemaResolver.ts`'s own batch
+   * pass's result. An application closed before that point classifies as it always did.
+   */
+  let parameterKinds: ReadonlyMap<string, ReadonlyMap<string, Kind>> = new Map();
+
+  /**
+   * The same question answered one template at a time, for an application closed before the
+   * batch pass could run — a composition supertype or a refinement source, both of which close
+   * during resolution's own driving loop. Memoised because a template is typically applied more
+   * than once.
+   */
+  const kindsOnDemand = new Map<string, ReadonlyMap<string, Kind>>();
+
   /** The first few links of the closing chain, for the depth guard's own message. */
   function chain(): string {
     const shown = [...closing].slice(0, 4);
     return shown.join(' -> ') + (closing.size > shown.length ? ' -> ...' : '');
+  }
+
+  /**
+   * The arguments reclassified by the kind of the parameter each binds (§5.10).
+   *
+   * §12.1 decides an argument's channel by the shape of the token that spells it, so an unquoted
+   * non-numeric argument always arrives as a reference. That is the right default with nothing
+   * else known, but once a parameter's kind is inferred, the position is known before
+   * substitution rather than after: `e<c>` against `e => <M> !enum { members: [a b M] }` records
+   * `value: c`, so nothing downstream asks the namespace for a type called `c`.
+   *
+   * Only a bare reference converts — one carrying arguments is an application, which no value
+   * parameter could bind (§5.10 confines value parameters to scalars), and is left for the
+   * position to refuse.
+   */
+  function byParameterKind(
+    head: string,
+    template: TypeDefinition,
+    parameters: readonly string[],
+    args: readonly TypeArgument[],
+  ): readonly TypeArgument[] {
+    let kinds = parameterKinds.get(head);
+    if (kinds === undefined) {
+      if (deps.metaTypes === undefined) {
+        return args; // no batch pass and nothing to infer with on demand -- classify as parsed
+      }
+      let onDemand = kindsOnDemand.get(head);
+      if (onDemand === undefined) {
+        onDemand = inferOne(template, deps.metaTypes);
+        kindsOnDemand.set(head, onDemand);
+      }
+      kinds = onDemand;
+    }
+    if (kinds.size === 0) {
+      return args;
+    }
+    return args.map((argument, i): TypeArgument => {
+      const parameter = parameters[i];
+      if (
+        argument.kind === 'ref' &&
+        argument.ref.arguments.length === 0 &&
+        parameter !== undefined &&
+        kinds.get(parameter) === 'VALUE'
+      ) {
+        return { kind: 'value', value: { text: argument.ref.name, form: 'UNQUOTED' } };
+      }
+      return argument;
+    });
   }
 
   /** Each parameter of the applied signature against the argument applied for it, in order. */
@@ -282,7 +381,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * The entry name a fully-bound application denotes, creating the entry on first sight, or
    * `undefined` when the head names nothing in scope.
    */
-  function instantiate(head: string, args: readonly TypeArgument[]): string | undefined {
+  function instantiate(head: string, rawArgs: readonly TypeArgument[]): string | undefined {
     const template = deps.namespaceDefinitions(head);
     if (template === undefined) {
       return undefined; // unresolved head -- the linker's verdict, not this pass's
@@ -294,13 +393,18 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           'takes none (§5.10); drop the argument list',
       );
     }
-    if (parameters.length !== args.length) {
+    if (parameters.length !== rawArgs.length) {
       throw new TsonSchemaValidationError(
         `'${head}' takes ${String(parameters.length)} type argument${parameters.length === 1 ? '' : 's'} ` +
-          `(${parameters.join(', ')}), but ${String(args.length)} ${args.length === 1 ? 'was' : 'were'} ` +
+          `(${parameters.join(', ')}), but ${String(rawArgs.length)} ${rawArgs.length === 1 ? 'was' : 'were'} ` +
           'applied (§5.10)',
       );
     }
+    // §5.10's parameter kinds, applied before the application is named: a bare reference bound to
+    // a VALUE parameter reclassifies to a literal here, so the name and every downstream `source`
+    // record what the parameter always meant rather than what the argument's own token shape
+    // suggested at parse time.
+    const args = byParameterKind(head, template, parameters, rawArgs);
     const name = ofApplication(head, args);
     if (aliasClosing.has(name)) {
       throw new TsonSchemaValidationError(
@@ -611,6 +715,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     },
     syntheticNames(): ReadonlySet<string> {
       return new Set(synthetics);
+    },
+    setParameterKinds(kinds: ReadonlyMap<string, ReadonlyMap<string, Kind>>): void {
+      parameterKinds = kinds;
+    },
+    closedFormName(head: string, fields: readonly RecordField[]): string {
+      const wire = closeApplications({ kind: 'record', fields });
+      return ofBinding(head, wire.kind === 'record' ? wire.fields : []);
     },
   };
 }

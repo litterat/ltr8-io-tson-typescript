@@ -5,11 +5,12 @@ import {
   type TemplateMaterialiserDeps,
 } from '../src/compiler/templates.js';
 import { createHeldBody } from '../src/compiler/heldBody.js';
-import { heldRecord } from '../src/compiler/wireForm.js';
+import { heldRecord, refValue } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
+import { inferAll } from '../src/compiler/parameterKinds.js';
 import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/errors.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
-import type { ArrayBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
+import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type {
   Reference,
   Top,
@@ -120,6 +121,7 @@ interface HarnessOverrides {
   /** Build a materialiser with no reader at all, rather than falling back to {@link testMetaReader}. */
   readonly omitReader?: boolean;
   readonly generatedNames?: TemplateMaterialiserDeps['generatedNames'];
+  readonly metaTypes?: TemplateMaterialiserDeps['metaTypes'];
 }
 
 function harness(overrides: HarnessOverrides = {}): {
@@ -141,6 +143,7 @@ function harness(overrides: HarnessOverrides = {}): {
       ? {}
       : { definitionMetaReader: overrides.definitionMetaReader ?? testMetaReader }),
     ...(overrides.generatedNames === undefined ? {} : { generatedNames: overrides.generatedNames }),
+    ...(overrides.metaTypes === undefined ? {} : { metaTypes: overrides.metaTypes }),
   };
   return { namespace, published, materialiser: createTemplateMaterialiser(deps) };
 }
@@ -919,5 +922,254 @@ describe('materialise (the whole-schema batch pass)', () => {
     expect(thrownBy(() => materialiser.materialise(entries))).toBeInstanceOf(
       TsonSchemaValidationError,
     );
+  });
+});
+
+// ── §5.10 parameter kinds reclassify an argument before naming (byParameterKind) ────────────
+
+describe('an argument bound to a VALUE parameter is reclassified before the application is named', () => {
+  /** `e => <M> !enum { members: [a b M] }` -- §5.10's own motivating case for a VALUE parameter. */
+  function enumTemplate(): TypeDefinition {
+    return {
+      kind: 'PRODUCT',
+      parameters: ['M'],
+      constructor: false,
+      supertypes: [],
+      subtypes: [],
+      body: createHeldBody({
+        annotations: [],
+        typeRef: 'enum',
+        coreValue: {
+          kind: 'record',
+          fields: [
+            {
+              name: 'members',
+              value: {
+                value: {
+                  annotations: [],
+                  coreValue: {
+                    kind: 'array',
+                    elements: (['a', 'b', 'M'] as const).map((text) => ({
+                      value: {
+                        annotations: [],
+                        coreValue: { kind: 'token', text, form: 'unquoted' },
+                      },
+                    })),
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      annotations: [],
+    };
+  }
+
+  /** `testMetaReader` plus the one constructor these tests close through that it does not bind. */
+  function enumAwareMetaReader(type: string, value: DataValue): Top {
+    if (type !== 'enum') {
+      return testMetaReader(type, value);
+    }
+    const record = value.coreValue as RecordValue;
+    const membersField = record.fields.find((f) => f.name === 'members')?.value.value.coreValue;
+    const members: string[] = [];
+    if (membersField?.kind === 'array') {
+      for (const element of membersField.elements) {
+        members.push((element.value.coreValue as TokenValue).text);
+      }
+    }
+    return { kind: 'enum', members } satisfies EnumBody;
+  }
+
+  /** Just enough of the governing meta's own vocabulary for `enum.members` to resolve to a set of `identifier`. */
+  function metaTypesFor(): (name: string) => TypeDefinition | undefined {
+    const vocabRecord = (fields: readonly { name: string; type: string }[]): TypeDefinition => ({
+      kind: 'PRODUCT',
+      parameters: [],
+      constructor: true,
+      supertypes: [],
+      subtypes: [],
+      body: {
+        kind: 'record',
+        supertypes: [],
+        groups: [],
+        fields: fields.map((f) => field(f.name, { name: f.type, arguments: [], annotations: [] })),
+      },
+      annotations: [],
+    });
+    const meta = new Map<string, TypeDefinition>([
+      ['enum', vocabRecord([{ name: 'members', type: 'enum_set' }])],
+      [
+        'enum_set',
+        {
+          kind: 'PRODUCT',
+          parameters: [],
+          constructor: true,
+          supertypes: [],
+          subtypes: [],
+          body: {
+            kind: 'array',
+            elementType: { name: 'identifier', arguments: [], annotations: [] },
+            state: 'REQUIRED',
+            unordered: false,
+            uniqueItems: false,
+          },
+          annotations: [],
+        },
+      ],
+      [
+        'identifier',
+        {
+          kind: 'ATOM',
+          parameters: [],
+          constructor: true,
+          supertypes: [],
+          subtypes: [],
+          body: { kind: 'unit' },
+          annotations: [],
+        },
+      ],
+    ]);
+    return (name) => meta.get(name);
+  }
+
+  it('on demand (no batch pass): closing `e<c>` with `metaTypes` supplied infers the kind itself', () => {
+    const { namespace, materialiser } = harness({
+      definitionMetaReader: enumAwareMetaReader,
+      metaTypes: metaTypesFor(),
+    });
+    namespace.set('e', enumTemplate());
+    const name = materialiser.closeApplication({
+      name: 'e',
+      arguments: [ref('c')],
+      annotations: [],
+    });
+    const instantiation = namespace.get(name);
+    if (instantiation === undefined) throw new Error('unreachable');
+    // `c` is recorded as the enum member it always meant, not a namespace reference to a type
+    // called `c` that does not exist.
+    expect(instantiation.source).toEqual({
+      name: 'e',
+      arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
+      annotations: [],
+    });
+    const formName = (instantiation.body as { readonly target: TypeRef }).target.name;
+    const form = namespace.get(formName);
+    if (form === undefined || !('members' in form.body)) throw new Error('unreachable');
+    expect(form.body.members).toEqual(['a', 'b', 'c']);
+  });
+
+  it('the batch pass (`setParameterKinds`) classifies just as the on-demand path does', () => {
+    const { namespace, materialiser } = harness({
+      definitionMetaReader: enumAwareMetaReader,
+      metaTypes: metaTypesFor(),
+    });
+    namespace.set('e', enumTemplate());
+    materialiser.setParameterKinds(
+      inferAll(namespace, new Set(namespace.keys()), metaTypesFor(), {
+        report(name): void {
+          throw new Error(`unexpected report for '${name}'`);
+        },
+      }),
+    );
+    const name = materialiser.closeApplication({
+      name: 'e',
+      arguments: [ref('c')],
+      annotations: [],
+    });
+    const instantiation = namespace.get(name);
+    expect(instantiation?.source).toEqual({
+      name: 'e',
+      arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
+      annotations: [],
+    });
+  });
+
+  it('with no `metaTypes` and no batch pass, an argument keeps its parsed reference channel (no regression)', () => {
+    const { namespace, materialiser } = harness({ definitionMetaReader: enumAwareMetaReader });
+    namespace.set('e', enumTemplate());
+    const name = materialiser.closeApplication({
+      name: 'e',
+      arguments: [ref('c')],
+      annotations: [],
+    });
+    const instantiation = namespace.get(name);
+    expect(instantiation?.source).toEqual({
+      name: 'e',
+      arguments: [ref('c')],
+      annotations: [],
+    });
+  });
+});
+
+// ── closedFormName: the name a binding record derives with its applications closed ─────────
+
+describe('closedFormName', () => {
+  it('agrees with the name a directly-written, already-closed form would derive', () => {
+    const { materialiser } = harness();
+    const fields: RecordField[] = [
+      {
+        name: 'element_type',
+        type: { name: 'text', arguments: [], annotations: [] },
+        state: 'REQUIRED',
+        annotations: [],
+      },
+    ];
+    // No application inside `fields` to close, so this is exactly `ofBinding('array', fields)` --
+    // the base case the merge pass falls back to when nothing needs reducing.
+    const bindingFields = fields.map((f) => ({
+      name: f.name,
+      value: { value: { annotations: [], coreValue: refValue(f.type) } },
+    }));
+    expect(materialiser.closedFormName('array', bindingFields)).toBe(
+      materialiser.closedFormName('array', bindingFields),
+    );
+  });
+
+  it('reduces a nested application to the entry it denotes before deriving the name (§8.2)', () => {
+    const { namespace, materialiser } = harness();
+    namespace.set(
+      'box',
+      recordTemplate(['T'], {
+        kind: 'record',
+        supertypes: [],
+        groups: [],
+        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+      }),
+    );
+    // `[box<text>]` written directly: an array binding whose `element_type` slot holds the
+    // still-open application `box<text>`, exactly as `desugar.ts` would write it before this
+    // pass runs (see `wireForm.ts`'s own `refValue` for the record form an application takes).
+    const bindingFields = [
+      {
+        name: 'element_type',
+        value: {
+          value: {
+            annotations: [],
+            coreValue: refValue({ name: 'box', arguments: [ref('text')], annotations: [] }),
+          },
+        },
+      },
+    ];
+    const closedName = materialiser.closedFormName('array', bindingFields);
+    // Closing `box<text>` first, exactly as `close` would when reached through an ordinary field.
+    const boxedTextName = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('text')],
+      annotations: [],
+    });
+    const directName = materialiser.closedFormName('array', [
+      {
+        name: 'element_type',
+        value: {
+          value: {
+            annotations: [],
+            coreValue: { kind: 'token', text: boxedTextName, form: 'unquoted' },
+          },
+        },
+      },
+    ]);
+    expect(closedName).toBe(directName);
   });
 });

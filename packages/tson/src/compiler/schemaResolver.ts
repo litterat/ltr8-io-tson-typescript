@@ -63,7 +63,9 @@ import { desugar, lifted, type DesugarFailureReporter } from './desugar.js';
 import { createHeldBody } from './heldBody.js';
 import { heldEmptyRecord } from './wireForm.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
+import { inferAll } from './parameterKinds.js';
 import { flattenSchema } from './referenceFlattener.js';
+import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syntheticMerge.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -217,7 +219,11 @@ export function resolveSchema(
     ...(positions === undefined ? {} : { positions }),
   });
   const declarations = desugared.body.declarations;
-  const generated = lifted(document, desugared);
+  // Mutable, not the plain `ReadonlySet` `lifted` returns: the synthetic merge below removes an
+  // eagerly lifted name and adds the closed name it merged onto, so this set stays the current
+  // truth for the rest of this function (in particular the `@synthetic` key-marker loop near the
+  // end, which asks it per entry).
+  const generated = new Set(lifted(document, desugared));
 
   // Local-vs-import collisions, up front (local names are already unique -- SchemaMap dedupes them).
   for (const name of declarations.keys()) {
@@ -290,6 +296,7 @@ export function resolveSchema(
     publish: (name, definition) => namespace.set(name, definition),
     definitionMetaReader: deps.definitionMetaReader,
     generatedNames: generated,
+    metaTypes: deps.metaDefinitions,
   });
 
   resolverBox.current = createDefinitionResolver({
@@ -315,6 +322,30 @@ export function resolveSchema(
   for (const name of declarations.keys()) {
     beforeMaterialise.set(name, requiredGet(namespace, name, 'resolveSchema'));
   }
+
+  // §5.10's parameter kinds, inferred by use, before anything closes: an argument is "read by the
+  // position it lands in", and once a parameter's kind is known that position is known at the
+  // application rather than after substitution. Here because it needs every declaration resolved
+  // (a slot's declared type comes from the constructor's own vocabulary) and nothing yet closed.
+  const unkinded = new Set<string>();
+  materialiser.setParameterKinds(
+    inferAll(namespace, new Set(declarations.keys()), deps.metaDefinitions, {
+      report(name, error): void {
+        if (receiver === undefined) {
+          throw error;
+        }
+        unkinded.add(name);
+        const declaration = declarations.get(name);
+        receiver.report(schemaProblem(id, name, error, declaration && positions?.get(declaration)));
+      },
+    }),
+  );
+  // Condemned on the same terms as a declaration that failed to resolve: the verdict is in, and
+  // closing an application of a template whose parameters cannot be classified only reports the
+  // consequence -- the substituted body failing its constructor's vocabulary -- against whichever
+  // entry happened to apply it.
+  condemn(unkinded, beforeMaterialise, namespace);
+
   const materialiseReporter: MaterialisationFailureReporter | undefined =
     receiver === undefined
       ? undefined
@@ -332,6 +363,30 @@ export function resolveSchema(
   const mintedSynthetic = materialised.synthetics;
   for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
   for (const [name, definition] of instantiations) namespace.set(name, definition);
+
+  // §8.2's merge, at the moment that section names -- "identity settles after Pass 2, when
+  // references have resolved". A form the desugar phase lifted with an application in one of its
+  // slots was named before that application had an entry to be named for; every application is
+  // closed now, so it re-derives to the name the other channel already gave the same form.
+  const merged = syntheticRenames(declarations, generated, materialiser);
+  if (merged.size > 0) {
+    rewriteSynthetics(resolvedLocals, merged);
+    rewriteSynthetics(instantiations, merged);
+    for (const [from, to] of merged) {
+      // Dropped where the other channel already published the form, moved where it did not: the
+      // eager name was this schema's only one for it, and an entry nothing names is not an entry.
+      const eager = resolvedLocals.get(from);
+      resolvedLocals.delete(from);
+      namespace.delete(from);
+      generated.delete(from);
+      generated.add(to);
+      if (!namespace.has(to) && eager !== undefined) {
+        resolvedLocals.set(to, eager);
+      }
+    }
+    for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
+    for (const [name, definition] of instantiations) namespace.set(name, definition);
+  }
 
   // §8.3, last because it needs everything above already in the namespace: a type position naming
   // a REFERENCE entry is rewritten to the end of its chain and keeps the author's own name as
@@ -363,11 +418,18 @@ export function resolveSchema(
       receiver.report(schemaProblem(id, name, e, positions?.get(declaration)));
       nameAnnotations = [];
     }
-    entries.set(name, requiredGet(resolvedLocals, name, 'resolveSchema'));
-    if (generated.has(name)) {
-      keyAnnotations.set(name, SYNTHETIC);
+    // A merged form is keyed by the name it merged onto, and contributes nothing at all where
+    // that name belongs to the materialised half -- the entry is there, marked, and this is its
+    // old key.
+    const key = merged.get(name) ?? name;
+    if (!resolvedLocals.has(key)) {
+      continue;
+    }
+    entries.set(key, requiredGet(resolvedLocals, key, 'resolveSchema'));
+    if (generated.has(key)) {
+      keyAnnotations.set(key, SYNTHETIC);
     } else if (nameAnnotations.length > 0) {
-      keyAnnotations.set(name, nameAnnotations);
+      keyAnnotations.set(key, nameAnnotations);
     }
   }
   // An entry the materialiser minted has no declared name to carry author annotations from; the
@@ -512,6 +574,30 @@ function unresolvedPlaceholder(
     ...(position === undefined ? {} : { position }),
     annotations: [],
   };
+}
+
+/**
+ * Replaces each named entry with {@link unresolvedPlaceholder}, keeping its position and its type
+ * parameters -- the same treatment a declaration that failed to resolve gets, applied to a
+ * template whose verdict is already in (§5.10's parameter-kind classification, today the only
+ * caller).
+ *
+ * **Both maps, because the two halves are read by different phases**: `templates.ts`'s own
+ * `materialise` walks `resolvedLocals`, while an application's head is looked up through
+ * `namespaceGetter` over `namespace`. Leaving one behind would close applications against the
+ * condemned template through whichever map was missed.
+ */
+function condemn(
+  names: ReadonlySet<string>,
+  resolvedLocals: Map<string, TypeDefinition>,
+  namespace: Map<string, TypeDefinition>,
+): void {
+  for (const name of names) {
+    const condemned = requiredGet(resolvedLocals, name, 'condemn');
+    const placeholder = unresolvedPlaceholder(condemned.position, condemned.parameters);
+    resolvedLocals.set(name, placeholder);
+    namespace.set(name, placeholder);
+  }
 }
 
 /** A declaration's own declared type parameters -- mirrors `desugar.ts`'s own (unexported) `typeParamsOf`. */
