@@ -4,7 +4,8 @@ import {
   createTemplateMaterialiser,
   type TemplateMaterialiserDeps,
 } from '../src/compiler/templates.js';
-import { createHeldBody, heldRecord } from '../src/compiler/heldBody.js';
+import { createHeldBody } from '../src/compiler/heldBody.js';
+import { heldRecord } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
 import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/errors.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';

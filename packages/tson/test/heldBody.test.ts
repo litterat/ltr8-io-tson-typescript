@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { createHeldBody } from '../src/compiler/heldBody.js';
 import {
   argumentOf,
-  createHeldBody,
   defaultAnnotationValueEncoder,
   heldEmptyRecord,
   heldRecord,
   isApplication,
-  metaRefValue,
+  refValue as metaRefValue,
   typeRefOf,
-} from '../src/compiler/heldBody.js';
+} from '../src/compiler/wireForm.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { RecordValue } from '../src/ast/value.js';
 
