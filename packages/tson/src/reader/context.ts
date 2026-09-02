@@ -323,7 +323,7 @@ function makeContext(
       const diagnostic: Diagnostic = {
         code,
         message,
-        ...(path === '' ? {} : { path }),
+        path,
         ...(schemaAnchor === undefined ? {} : { schemaId: schemaAnchor.schemaId }),
         ...(schemaPointer === undefined || schemaPointer === '' ? {} : { schemaPointer }),
         ...(expected === undefined ? {} : { expected }),

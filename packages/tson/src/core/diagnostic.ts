@@ -178,13 +178,20 @@ export interface SchemaLocation {
  * in the *schema* (`schemaId` + `schemaPointer`), and what was wrong. One record serves both
  * data-side and schema-side problems so a caller has a single thing to render.
  *
- * `path` is `undefined` rather than `''` at the document root, for the same reason
- * {@link SchemaLocation.pointer} is.
+ * **`path` and {@link SchemaLocation.pointer} read `''` differently, because the two questions
+ * they answer are different.** `pointer` answers "is there a schema sub-location at all?", and a
+ * diagnostic with none is not somehow located at the schema's root -- it has no schema location,
+ * which is what `undefined` there means. `path` answers "where in the data did this happen?", and
+ * a diagnostic about the document root has an answer to that question: RFC 6901 spells the root
+ * `''`, and a root-level diagnostic (a type mismatch on the whole document, say) states it rather
+ * than omitting the field. `path` is `undefined` only for a diagnostic not anchored in the data at
+ * all -- a schema-only problem (resolution, linking) that never reached a document to place a
+ * pointer into.
  */
 export interface Diagnostic {
   readonly code: DiagnosticCode;
   readonly message: string;
-  /** RFC 6901 pointer into the data document, or `undefined` at its root. */
+  /** RFC 6901 pointer into the data document -- `''` at its root, `undefined` when the diagnostic is not anchored in the data at all. */
   readonly path?: string;
   /** Canonical id of the schema in scope, when one is. */
   readonly schemaId?: string;

@@ -514,9 +514,12 @@ describe("§7.2's subsumption rule: a data type-ref at a typed position is verif
 describe('gaps this gate leaves open', () => {
   it('locates a root-level atom problem in the data but not in the schema', () => {
     // `compile.ts` hands `buildAtomReader` no `SchemaLocation`, so an atom anchors none of its
-    // own: inside a record it inherits the record's (asserted above -- `/reading/label` and
-    // friends), but read as the document root it has no enclosing anchor to inherit and the
-    // diagnostic carries no `schemaId`/`schemaPointer` at all.
+    // own on the *schema* side: inside a record it inherits the record's (asserted above --
+    // `/reading/label` and friends), but read as the document root it has no enclosing anchor to
+    // inherit and the diagnostic carries no `schemaId`/`schemaPointer` at all. The *data* side is
+    // different: the root value is what failed, so `path` is `''` -- the root's own RFC 6901
+    // pointer, and a real location, not an absence (`core/diagnostic.ts`'s own doc on why `path`
+    // and `schemaPointer` read an empty string oppositely).
     const result = validate(compiled, 'int32', bytes('99999999999'));
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]).toMatchObject({
@@ -524,9 +527,9 @@ describe('gaps this gate leaves open', () => {
       expected: '>= -2147483648 and <= 2147483647',
       actual: '99999999999',
       dataPosition: { line: 1, column: 1, offset: 0 },
+      path: '',
     });
     expect(result.diagnostics[0]?.schemaId).toBeUndefined();
     expect(result.diagnostics[0]?.schemaPointer).toBeUndefined();
-    expect(result.diagnostics[0]?.path).toBeUndefined();
   });
 });

@@ -38,10 +38,11 @@
  *
  * Ported from the reference implementation's `TsonSchemaLinker.checkNames`
  * (`tson-compiler/.../TsonSchemaLinker.java`); see that method's own comment for the exhaustive
- * rationale. This module states only what differs in the port: the per-name and per-scope
+ * rationale. This module states only what differs in the port: the per-scope and per-name
  * checks are not two passes here because `unicode/policy.ts`'s own `nameHygieneRefusal` already
- * does both in one pass per scope (per-name mechanisms first, in order; skeleton distinctness
- * last, once the whole scope is collected) — see that function's own doc.
+ * does both in one pass per scope — skeleton distinctness first, over the whole scope at once,
+ * then the per-name mechanisms in order, matching `checkScope`'s own "its own collision relation,
+ * then each name's own two rules" — see that function's own doc.
  */
 import { diagnosticCodeForMechanism } from '../core/diagnostic.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
