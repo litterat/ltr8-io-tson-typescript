@@ -83,7 +83,10 @@ function pickReader(options: ReadTreeOptions | undefined): TypeReader<Value> {
       ? {}
       : { preserveUnknownTypeRefs: options.preserveUnknownTypeRefs }),
     ...(options?.maxNestingDepth === undefined ? {} : { maxNestingDepth: options.maxNestingDepth }),
-    ...(options?.namePolicy === undefined ? {} : { namePolicy: options.namePolicy }),
+    ...(options?.identifierPolicy === undefined
+      ? {}
+      : { identifierPolicy: options.identifierPolicy }),
+    ...(options?.tokenPolicy === undefined ? {} : { tokenPolicy: options.tokenPolicy }),
   });
 }
 

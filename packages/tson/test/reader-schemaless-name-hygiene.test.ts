@@ -12,18 +12,18 @@ import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import {
   DEFAULT_NAME_POLICY,
   perSegment,
-  withIdentifierStatus,
-  withRestrictionLevel,
   withSkeletonDistinctness,
   type NamePolicy,
 } from '../src/unicode/policy.js';
 import type { RecordNode, Value } from '../src/tree/nodes.js';
 
 /**
- * `reader/schemaless/tree.ts`'s wiring of [TSON-DATA] §8.2's name-hygiene policy over "the field
- * names of one record" -- §8.2's one Part 1 scope. Follows `reader-schemaless-tree.test.ts`'s own
- * local `readFail`/`readCollect` convention rather than importing it, since that module's copy
- * takes no `namePolicy` parameter.
+ * `reader/schemaless/tree.ts`'s wiring of [TSON-DATA] §8.2's name-hygiene policy over its two
+ * Part 1 scopes: a record's own field names (mechanism 1 only -- lexical, not `identifier`), and
+ * a type-ref or annotation name (mechanisms 2 and 3 only -- a lone `identifier` position, no
+ * scope for mechanism 1 to relate). Follows `reader-schemaless-tree.test.ts`'s own local
+ * `readFail`/`readCollect` convention rather than importing it, since that module's copy takes no
+ * `identifierPolicy` parameter.
  */
 
 function cp(...points: number[]): string {
@@ -49,14 +49,14 @@ const ID_POLZOVATELYA =
     0x044f,
   );
 
-function readFail(text: string, namePolicy?: NamePolicy): Value {
-  const options = namePolicy === undefined ? {} : { namePolicy };
+function readFail(text: string, identifierPolicy?: NamePolicy): Value {
+  const options = identifierPolicy === undefined ? {} : { identifierPolicy };
   return runSync(schemalessTreeReader(options).read(bodyContextOver(text)));
 }
 
-function readCollect(text: string, namePolicy?: NamePolicy) {
+function readCollect(text: string, identifierPolicy?: NamePolicy) {
   const { ctx, diagnostics } = collectingContextOver(text);
-  const options = namePolicy === undefined ? {} : { namePolicy };
+  const options = identifierPolicy === undefined ? {} : { identifierPolicy };
   const value = runSync(schemalessTreeReader(options).read(ctx));
   return { value, diagnostics: diagnostics.diagnostics };
 }
@@ -72,30 +72,19 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
     expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
   });
 
-  it('a lone id_пользователя field is not refused by mechanism 1 (never fires alone) but is refused by mechanism 3s default whole-name unit, and is admitted once the unit is per-segment', () => {
+  it('a lone id_пользователя field is not refused at all -- mechanism 1 never fires alone, and mechanisms 2/3 do not run over a field-name scope in the first place', () => {
+    // Contrast `unicode/policy.test.ts`'s own coverage of `id_пользователя`: over an
+    // `identifier` scope (a type-ref/annotation name, or a schema-layer name) this same text
+    // is refused by mechanism 3's default whole-name unit. A `field-name` is lexical, not
+    // `identifier` (§2.5, §7.7), so that mechanism never applies here at all -- not even to
+    // relax, since there is nothing this scope was checking against it to begin with.
     const text = `{ "${ID_POLZOVATELYA}": 1 }`;
-    expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
-    let refused: TsonNameHygieneRefusedError | undefined;
-    try {
-      readFail(text);
-    } catch (error) {
-      refused = error as TsonNameHygieneRefusedError;
-    }
-    // Mechanism 1 never fires on a lone name: the refusal above is mechanism 3's, not 1's.
-    expect(refused?.mechanism).toBe('restriction-level');
-
-    expect(() => readFail(text, perSegment(DEFAULT_NAME_POLICY))).not.toThrow();
+    expect(() => readFail(text)).not.toThrow();
   });
 
-  it('refuses a name carrying an Identifier_Status=Restricted character (mechanism 2)', () => {
+  it('a lone field name carrying an Identifier_Status=Restricted character is not refused -- mechanism 2 does not run over a field-name scope', () => {
     const text = `{ "${RESTRICTED}": 1 }`;
-    let refused: TsonNameHygieneRefusedError | undefined;
-    try {
-      readFail(text);
-    } catch (error) {
-      refused = error as TsonNameHygieneRefusedError;
-    }
-    expect(refused?.mechanism).toBe('identifier-status');
+    expect(() => readFail(text)).not.toThrow();
   });
 
   it('names the UTS #39 data version in the refusal (§8.2)', () => {
@@ -107,8 +96,12 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
       refused = error as TsonNameHygieneRefusedError;
     }
     expect(refused).toBeInstanceOf(TsonNameHygieneRefusedError);
+    // The version rides on the thrown error, and is stated once per instance on
+    // `Tson.processorPolicy` -- it is deliberately *not* repeated inside the message. A version is
+    // constant for the run, so a copy in every refusal is waste, and it says what refused you
+    // rather than what would be accepted.
     expect(refused?.uts39Version).toBe(UTS39_VERSION);
-    expect(refused?.message).toContain(UTS39_VERSION);
+    expect(refused?.message).not.toContain(UTS39_VERSION);
   });
 
   it('a fail-fast refusal is a fifth outcome -- never a TsonReadError, TsonLexError, or TsonParseError (§8.1)', () => {
@@ -124,28 +117,20 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
     }
   });
 
-  it('a collecting read reports NAME_HYGIENE_REFUSED as a diagnostic, and still builds the record', () => {
+  it('a collecting read reports CONFUSABLE_NAMES as a diagnostic, and still builds the record', () => {
     const text = `{ admin: 1, "${CYR_A}dmin": 2 }`;
     const { value, diagnostics } = readCollect(text);
-    expect(diagnostics.map((d) => d.code)).toEqual(['NAME_HYGIENE_REFUSED']);
+    expect(diagnostics.map((d) => d.code)).toEqual(['CONFUSABLE_NAMES']);
     expect((value as RecordNode).fields.size).toBe(2);
   });
 
-  it('a relaxed policy admits each of the three mechanisms', () => {
-    // Single-script each, so only mechanism 1 sees this pair (mechanism 3 alone would admit it).
+  it('relaxing mechanism 1 admits what the default policy refuses -- the only mechanism this scope ever applies', () => {
+    // Single-script each, so only mechanism 1 sees this pair (mechanism 3 alone would admit it,
+    // and does not run over a field-name scope regardless -- see this describe block's other
+    // cases).
     const skeletonPair = `{ aec: 1, "${cp(0x0430, 0x0435, 0x0441)}": 2 }`;
     expect(() =>
       readFail(skeletonPair, withSkeletonDistinctness(DEFAULT_NAME_POLICY, false)),
-    ).not.toThrow();
-
-    const restrictedChar = `{ "${RESTRICTED}": 1 }`;
-    expect(() =>
-      readFail(restrictedChar, withIdentifierStatus(DEFAULT_NAME_POLICY, false)),
-    ).not.toThrow();
-
-    const mixedScript = `{ "${ID_POLZOVATELYA}": 1 }`;
-    expect(() =>
-      readFail(mixedScript, withRestrictionLevel(DEFAULT_NAME_POLICY, 'MINIMALLY_RESTRICTIVE')),
     ).not.toThrow();
   });
 
@@ -153,5 +138,82 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
     // Same confusable pair, but as map keys rather than record field names.
     const text = `{ "admin" => 1, "${CYR_A}dmin" => 2 }`;
     expect(() => readFail(text)).not.toThrow();
+  });
+});
+
+describe('schemalessTreeReader -- name hygiene (§8.2), the type-ref/annotation-name scope', () => {
+  it('refuses a mixed-script annotation name under mechanism 3s default whole-name unit', () => {
+    const text = `@${ID_POLZOVATELYA} "x"`;
+    let refused: TsonNameHygieneRefusedError | undefined;
+    try {
+      readFail(text);
+    } catch (error) {
+      refused = error as TsonNameHygieneRefusedError;
+    }
+    expect(refused?.mechanism).toBe('restriction-level');
+  });
+
+  it('refuses a mixed-script type-ref name the same way', () => {
+    const text = `!${ID_POLZOVATELYA} "x"`;
+    expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
+  });
+
+  it('refuses an annotation name carrying an Identifier_Status=Restricted character (mechanism 2)', () => {
+    const text = `@${RESTRICTED} "x"`;
+    let refused: TsonNameHygieneRefusedError | undefined;
+    try {
+      readFail(text);
+    } catch (error) {
+      refused = error as TsonNameHygieneRefusedError;
+    }
+    expect(refused?.mechanism).toBe('identifier-status');
+  });
+
+  it('refuses a type-ref name carrying an Identifier_Status=Restricted character the same way', () => {
+    const text = `!${RESTRICTED} "x"`;
+    let refused: TsonNameHygieneRefusedError | undefined;
+    try {
+      readFail(text);
+    } catch (error) {
+      refused = error as TsonNameHygieneRefusedError;
+    }
+    expect(refused?.mechanism).toBe('identifier-status');
+  });
+
+  it('mechanism 1 never applies here -- two annotation names confusable with each other, but never compared, are each judged alone', () => {
+    // `aec`/whole-Cyrillic-`аес` is the pair `link-nameHygiene.test.ts` uses to isolate mechanism
+    // 1 over a real scope; here each name is a lone annotation with nothing to be distinct from,
+    // so neither is refused (each is single-script and Identifier_Status=Allowed on its own).
+    // Annotation names, not type-refs, so the assertion isolates name hygiene from
+    // `typeRefCheck.ts`'s unrelated UNKNOWN_TYPE_REF rule.
+    const text = `{ a: @aec "1", b: @${cp(0x0430, 0x0435, 0x0441)} "2" }`;
+    expect(() => readFail(text)).not.toThrow();
+  });
+
+  it('a relaxed policy admits a mixed-script annotation name once the unit is per-segment', () => {
+    const text = `@${ID_POLZOVATELYA} "x"`;
+    expect(() => readFail(text, perSegment(DEFAULT_NAME_POLICY))).not.toThrow();
+  });
+
+  it('checks a nested annotation values own annotation name too (§3.1s recursive value)', () => {
+    const text = `@outer:@${ID_POLZOVATELYA} "x"`;
+    expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
+  });
+
+  it('a collecting read reports exactly one RESTRICTED_SCRIPT diagnostic for one bad name', () => {
+    const text = `@${ID_POLZOVATELYA} "x"`;
+    const { diagnostics } = readCollect(text);
+    expect(diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
+  });
+
+  it('names the UTS #39 data version in the refusal, same as the field-name scope', () => {
+    const text = `@${ID_POLZOVATELYA} "x"`;
+    let refused: TsonNameHygieneRefusedError | undefined;
+    try {
+      readFail(text);
+    } catch (error) {
+      refused = error as TsonNameHygieneRefusedError;
+    }
+    expect(refused?.uts39Version).toBe(UTS39_VERSION);
   });
 });

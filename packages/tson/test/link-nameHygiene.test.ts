@@ -45,17 +45,26 @@ const CYR_CAP_A = cp(0x0410);
  */
 const AEC_CYRILLIC = cp(0x0430, 0x0435, 0x0441);
 
+/** A single mixed-script name -- Latin `id_` plus Cyrillic `пользователя` -- refused by mechanism 3s default whole-name unit alone, with nothing else in its scope for mechanism 1 to relate it to. */
+const ID_POLZOVATELYA =
+  'id_' +
+  cp(0x043f, 0x043e, 0x043b, 0x044c, 0x0437, 0x043e, 0x0432, 0x0430, 0x0442, 0x0435, 0x043b, 0x044f);
+
 function ref(name: string): TypeRef {
   return { name, arguments: [], annotations: [] };
 }
 
 function def(
   body: Top,
-  options: { readonly supertypes?: readonly string[]; readonly subtypes?: readonly string[] } = {},
+  options: {
+    readonly supertypes?: readonly string[];
+    readonly subtypes?: readonly string[];
+    readonly parameters?: readonly string[];
+  } = {},
 ): TypeDefinition {
   return {
     kind: 'PRODUCT',
-    parameters: [],
+    parameters: options.parameters ?? [],
     constructor: false,
     supertypes: options.supertypes ?? [],
     subtypes: options.subtypes ?? [],
@@ -181,10 +190,56 @@ describe('checkNameHygiene: choice variants are not a scope of their own', () =>
     ]);
     const diagnostics = collector();
     const linked = linkSchema(s, { receiver: diagnostics });
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['NAME_HYGIENE_REFUSED']);
+    // Mechanism 3 answers first: the pair is mixed-script, so the second name is refused for
+    // its scripts before the two are ever compared as skeletons. Which mechanism fires is not
+    // this test's subject -- where it is reported is.
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
     // Reported against the declared name that collided, not against `either`.
     expect(diagnostics.diagnostics[0]?.schemaPointer).toBe(`/${CYR_A}dmin`);
     expect(linked.entries.size).toBe(3);
+  });
+});
+
+describe("checkNameHygiene: a template's own type parameters (this implementation's own scope, not in §11.4's text)", () => {
+  // Both parameters referenced by the body's own fields, so a policy relaxation is what admits
+  // the schema and not the unrelated `TsonSchemaValidationError` `validateReferences` (run after
+  // this check) would otherwise raise over a declared-but-unused parameter (§5.10).
+  const usingBothParameters = record([field('a', ref('A')), field('b', ref(CYR_CAP_A))]);
+
+  it('refuses two type parameters that read alike', () => {
+    const s = schema('https://x/s.tn', [
+      ['box', def(usingBothParameters, { parameters: ['A', CYR_CAP_A] })],
+    ]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(refused.mechanism).toBe('skeleton-distinctness');
+    expect(refused.message).toContain('type parameters');
+  });
+
+  it('refuses a single mixed-script type parameter under mechanism 3', () => {
+    const s = schema('https://x/s.tn', [
+      [
+        'box',
+        def(record([field('v', ref(ID_POLZOVATELYA))]), { parameters: [ID_POLZOVATELYA] }),
+      ],
+    ]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(refused.mechanism).toBe('restriction-level');
+    expect(refused.message).toContain('type parameters');
+  });
+
+  it('leaves an entry with no type parameters unaffected', () => {
+    const s = schema('https://x/s.tn', [['box', def(RECORD, { parameters: [] })]]);
+    expect(() => linkSchema(s)).not.toThrow();
+  });
+
+  it('the policy is relaxable over this scope the same way as the others', () => {
+    const s = schema('https://x/s.tn', [
+      ['box', def(usingBothParameters, { parameters: ['A', CYR_CAP_A] })],
+    ]);
+    expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError);
+    expect(() =>
+      linkSchema(s, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
+    ).not.toThrow();
   });
 });
 
@@ -229,7 +284,7 @@ describe('checkNameHygiene: the rule never fires on a lone name', () => {
       ],
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError); // the default whole-name level refuses one of them
-    expect(() => linkSchema(s, { namePolicy: perSegment(DEFAULT_NAME_POLICY) })).not.toThrow();
+    expect(() => linkSchema(s, { identifierPolicy: perSegment(DEFAULT_NAME_POLICY) })).not.toThrow();
   });
 });
 
@@ -241,7 +296,7 @@ describe('checkNameHygiene: the policy is relaxable by the caller, and enforced 
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError);
     expect(() =>
-      linkSchema(s, { namePolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
+      linkSchema(s, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
     ).not.toThrow();
   });
 });
@@ -261,14 +316,14 @@ describe('checkNameHygiene: reporting', () => {
     }
   });
 
-  it('reports NAME_HYGIENE_REFUSED through a receiver, naming the UTS #39 version, and linking still completes', () => {
+  it('reports a refusal through a receiver, naming the UTS #39 version, and linking still completes', () => {
     const s = schema('https://x/s.tn', [
       ['admin', def(RECORD)],
       [CYR_A + 'dmin', def(RECORD)],
     ]);
     const diagnostics = collector();
     const linked = linkSchema(s, { receiver: diagnostics });
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['NAME_HYGIENE_REFUSED']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
     expect(diagnostics.diagnostics[0]?.message).toContain(UTS39_VERSION);
     expect(diagnostics.diagnostics[0]?.schemaId).toBe('https://x/s.tn');
     expect(linked.entries.size).toBe(2);

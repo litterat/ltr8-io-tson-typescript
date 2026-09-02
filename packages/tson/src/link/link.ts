@@ -117,7 +117,7 @@ export interface LinkDeps {
    * (meta.tn and core.tn included, once resolved the normal way rather than through the
    * bootstrap route) has no such restriction and may take a caller's own policy.
    */
-  readonly namePolicy?: NamePolicy;
+  readonly identifierPolicy?: NamePolicy;
 }
 
 /**
@@ -132,7 +132,7 @@ export interface LinkDeps {
  */
 export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const { resolveImport, structureNamespace, receiver } = deps;
-  const namePolicy = deps.namePolicy ?? DEFAULT_NAME_POLICY;
+  const identifierPolicy = deps.identifierPolicy ?? DEFAULT_NAME_POLICY;
 
   const origins = new Map<string, string>();
   let merged = mergeImports(schema.imports, resolveImport, origins);
@@ -164,7 +164,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
 
   checkNameHygiene(merged, {
     schemaId: schema.id,
-    namePolicy,
+    identifierPolicy,
     ...(receiver === undefined ? {} : { receiver }),
   });
 

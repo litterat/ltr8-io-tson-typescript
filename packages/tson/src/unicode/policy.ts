@@ -6,7 +6,7 @@ import {
   type RestrictionLevel,
   type RestrictionUnit,
 } from './restriction-level.js';
-import { identifierStatusAllowed } from './uts39.js';
+import { identifierStatusAllowed, UTS39_VERSION } from './uts39.js';
 import { isXidContinue } from './xid.js';
 
 /**
@@ -158,6 +158,30 @@ export function tokenSatisfiesPolicy(
   return satisfiesRestrictionLevel(text, policy.restrictionLevel, 'WHOLE_NAME');
 }
 
+/**
+ * §8.2's "Values" paragraph, applied to `text` (default {@link DEFAULT_TOKEN_POLICY}, which
+ * checks nothing): `undefined` when `text` satisfies `policy`, else prose a caller composes into
+ * a refusal message.
+ *
+ * **Restricted-script is the only rule this can fire** — {@link TokenPolicy}'s own doc explains
+ * why mechanisms 1 and 2 have no equivalent on the value surface, so unlike
+ * {@link nameHygieneRefusal} there is no mechanism to name, no scope to collect, and no `names`
+ * array to return; one text, one rule, one detail string.
+ *
+ * **The returned string never names `text` itself.** The detail is composed without the token so
+ * that whatever a caller wraps it in states the token exactly as many times as that wrapper
+ * writes it -- one refused token, named once. A detail that opened by naming the token would read
+ * twice in any message that also named it, and the only way to be sure that never happens is for
+ * this half not to hold the text at all.
+ */
+export function tokenHygieneRefusal(
+  text: string,
+  policy: TokenPolicy = DEFAULT_TOKEN_POLICY,
+): string | undefined {
+  if (tokenSatisfiesPolicy(text, policy)) return undefined;
+  return `does not satisfy UTS #39 §5.2's ${policy.restrictionLevel} restriction level (§8.2 "Values")`;
+}
+
 // -------------------------------------------------------------------------------------------
 // Applying a NamePolicy over a scope
 // -------------------------------------------------------------------------------------------
@@ -180,13 +204,35 @@ export interface NameHygieneRefusal {
   readonly detail: string;
 }
 
-/** The first character of `name` that is `XID_Continue` but not `Identifier_Status=Allowed`, or `undefined` when every such character is allowed. */
+/** ZWNJ (U+200C) and ZWJ (U+200D) -- see this function's own note on why they are excluded here. */
+const ZWNJ = 0x200c;
+const ZWJ = 0x200d;
+
+/**
+ * The first character of `name` that is `XID_Continue` but not `Identifier_Status=Allowed`, or
+ * `undefined` when every such character is allowed.
+ *
+ * **ZWNJ and ZWJ are excluded from this scan, matching the pinned Java reference's own
+ * `IdentifierParser.hygiene`** (`tson-compiler/.../atom/IdentifierParser.java`). Both are
+ * `Identifier_Status=Restricted`, so a naive scan would refuse them everywhere, but §7.7 rule 2
+ * already carves the exception UTS #39 §3.1.1.1 defines: a joiner is admitted only where it has a
+ * shaping effect (a Persian compound, an Indic conjunct) and refused everywhere else --
+ * `unicode/identifier-profile.ts`'s `isIdentifierText` enforces exactly that as a matter of
+ * **form**, ahead of this mechanism, for every name this function is ever handed (a type-ref,
+ * annotation, or schema-layer name all pass through `isIdentifierText` first). So by the time a
+ * joiner reaches this scan it has already been proven to sit in a permitted context, and
+ * mechanism 2 has nothing further to say about it -- treating it as a restricted character here
+ * would refuse the very names §7.7 rule 2 exists to admit (`کتاب‌ها`, `ക്‍ക`). `-` is excluded for
+ * the same reason as ever: it is this profile's own extension, not an identifier character
+ * Unicode assigns a status to, and {@link isXidContinue} already excludes it.
+ */
 function firstDisallowedIdentifierStatusCharacter(name: string): string | undefined {
   for (const character of name) {
     const codePoint = character.codePointAt(0);
     // `character` iterates `name` code point by code point (see `skeleton.ts`'s own identical
     // note), so this is always defined; kept total rather than asserted.
     if (codePoint === undefined) continue;
+    if (codePoint === ZWNJ || codePoint === ZWJ) continue;
     if (isXidContinue(codePoint) && !identifierStatusAllowed(codePoint)) {
       return character;
     }
@@ -254,4 +300,59 @@ export function nameHygieneRefusal(
     }
   }
   return undefined;
+}
+
+// -------------------------------------------------------------------------------------------
+// The stated-once processor policy
+// -------------------------------------------------------------------------------------------
+
+/**
+ * What this processor's own Unicode configuration does to a document's fate: the two policies
+ * §8.2 defines (over names and over values) and the UTS #39 data version they were computed
+ * against -- the port of the pinned Java reference's `TsonUnicodeProcessorPolicy`, reachable here
+ * off {@link "../config.js"}'s `Tson.processorPolicy`.
+ *
+ * **Why this exists as a value at all**, rather than being folded into each refusal: §8.2's three
+ * rules read data the Unicode Consortium does not freeze, so the same bytes may be accepted by
+ * one deployment and refused by another, and that divergence is legitimate but must not be
+ * unexplainable. A `Diagnostic` is the wrong carrier for the explanation, for three reasons this
+ * type exists to fix:
+ *
+ * - **Cardinality.** The version is constant for the life of a `Tson` instance; twenty refusals
+ *   in one document would otherwise carry twenty copies of a string that cannot differ between
+ *   them.
+ * - **Time.** A per-diagnostic copy arrives only on failure, after a sender has already written
+ *   the document. What a sender needs in order not to fail is the same fact *before* it writes --
+ *   which is what asking for this value up front, with no document in hand, gives it.
+ * - **Direction.** A version says what refused a document; it does not say what would be
+ *   accepted. `16.0` is not actionable the way `ASCII_ONLY` is.
+ *
+ * **The two policies are not interchangeable.** {@link ProcessorPolicy.identifierPolicy} governs
+ * declared names, record field names, type-refs and annotation names, where all three of §8.2's
+ * mechanisms apply; {@link ProcessorPolicy.tokenPolicy} governs values, where only the
+ * restricted-script rule can (`TokenPolicy`'s own doc). A deployment that has relaxed one has said
+ * nothing about the other, which is why both are stated together rather than one standing in for
+ * the pair.
+ */
+export interface ProcessorPolicy {
+  /** The policy applied to names -- `Config.identifierPolicy`. */
+  readonly identifierPolicy: NamePolicy;
+  /** The policy applied to token values -- `Config.tokenPolicy`. */
+  readonly tokenPolicy: TokenPolicy;
+  /** The UCD release {@link identifierPolicy}/{@link tokenPolicy} were computed against. */
+  readonly unicodeDataVersion: string;
+}
+
+/**
+ * Builds a {@link ProcessorPolicy} from `identifierPolicy`/`tokenPolicy` (each defaulting to its
+ * own §8.2 default), stamped with this build's own {@link "./uts39.js"} `UTS39_VERSION`.
+ *
+ * The version is not a parameter: it is a property of the tables compiled into this library, not
+ * a choice a caller makes, so there is nothing to pass for it.
+ */
+export function processorPolicy(
+  identifierPolicy: NamePolicy = DEFAULT_NAME_POLICY,
+  tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
+): ProcessorPolicy {
+  return { identifierPolicy, tokenPolicy, unicodeDataVersion: UTS39_VERSION };
 }
