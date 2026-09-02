@@ -24,7 +24,13 @@
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
-import { TsonSchemaFetchError, validate, type CompiledSchema, type Diagnostic } from '@ltr8/tson';
+import {
+  diagnosticCodeForFetch,
+  TsonSchemaFetchError,
+  validate,
+  type CompiledSchema,
+  type Diagnostic,
+} from '@ltr8/tson';
 import { UsageError } from '../exit.js';
 import { classifyReadError, isInvalidSchemaError } from '../problem.js';
 import { stdlibTson } from '../stdlib.js';
@@ -283,7 +289,10 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
       if (!(error instanceof TsonSchemaFetchError)) {
         throw error;
       }
-      const diagnostic: Diagnostic = { code: 'SCHEMA_UNAVAILABLE', message: error.message };
+      const diagnostic: Diagnostic = {
+        code: diagnosticCodeForFetch(error.reason),
+        message: error.message,
+      };
       const files: ValidateFileResult[] = options.files.map((file) => ({
         file,
         ok: false,

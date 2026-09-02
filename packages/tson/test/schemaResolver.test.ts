@@ -28,8 +28,8 @@ function parse(header: string, declarations: string): SchemaDocument {
 }
 
 /** The common case: one meta, no imports, `!!id` present -- every declaration text is the caller's own. */
-function document(declarations: string, id = 'https://example.com/s.tn1'): SchemaDocument {
-  return parse(`!!id:"${id}" !!meta:"https://example.com/m.tn1"`, declarations);
+function document(declarations: string, id = 'https://example.com/s.tn'): SchemaDocument {
+  return parse(`!!id:"${id}" !!meta:"https://example.com/m.tn"`, declarations);
 }
 
 // ── A minimal hand-rolled reader for `record`/`array` binding records ──────────────────────────
@@ -164,14 +164,14 @@ function fieldTypeOf(schema: Schema, name: string, field: string): TypeRef {
 
 describe('!!id and header handling', () => {
   it('throws TsonSchemaValidationError when !!id is absent', () => {
-    const doc = parse('!!meta:"https://example.com/m.tn1"', 'x => { v: text }');
+    const doc = parse('!!meta:"https://example.com/m.tn"', 'x => { v: text }');
     expect(() => resolveSchema(doc, deps())).toThrow(TsonSchemaValidationError);
   });
 
   it('carries !!id/!!meta/!!import straight through to the result', () => {
     const doc = parse(
-      '!!id:"https://example.com/s.tn1" !!meta:"https://example.com/m.tn1" ' +
-        '!!import:"https://example.com/i.tn1"',
+      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
+        '!!import:"https://example.com/i.tn"',
       'x => { v: text }',
     );
     const schema = resolveSchema(
@@ -179,13 +179,13 @@ describe('!!id and header handling', () => {
       deps({
         resolveImport: (): ImportedSchema => ({
           entries: new Map(),
-          originOf: () => 'https://example.com/i.tn1',
+          originOf: () => 'https://example.com/i.tn',
         }),
       }),
     );
-    expect(schema.id).toBe('https://example.com/s.tn1');
-    expect(schema.meta).toBe('https://example.com/m.tn1');
-    expect(schema.imports).toEqual(['https://example.com/i.tn1']);
+    expect(schema.id).toBe('https://example.com/s.tn');
+    expect(schema.meta).toBe('https://example.com/m.tn');
+    expect(schema.imports).toEqual(['https://example.com/i.tn']);
     expect(schema.bootstrap).toBe(false);
   });
 });
@@ -241,15 +241,15 @@ describe('!!import merging into the type-name namespace', () => {
       ],
     ]);
     const doc = parse(
-      '!!id:"https://example.com/s.tn1" !!meta:"https://example.com/m.tn1" ' +
-        '!!import:"https://example.com/i.tn1"',
+      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
+        '!!import:"https://example.com/i.tn"',
       'child => base & { y: text }',
     );
     const schema = resolveSchema(
       doc,
       deps({
         resolveImport: (uri): ImportedSchema => {
-          expect(uri).toBe('https://example.com/i.tn1');
+          expect(uri).toBe('https://example.com/i.tn');
           return { entries: imported, originOf: () => uri };
         },
       }),
@@ -275,8 +275,8 @@ describe('!!import merging into the type-name namespace', () => {
       ],
     ]);
     const doc = parse(
-      '!!id:"https://example.com/s.tn1" !!meta:"https://example.com/m.tn1" ' +
-        '!!import:"https://example.com/i.tn1"',
+      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
+        '!!import:"https://example.com/i.tn"',
       'base => { x: text }',
     );
     expect(() =>
@@ -291,8 +291,8 @@ describe('!!import merging into the type-name namespace', () => {
 
   it('reports TsonNotImplementedError for a document that writes !!import with no loader supplied', () => {
     const doc = parse(
-      '!!id:"https://example.com/s.tn1" !!meta:"https://example.com/m.tn1" ' +
-        '!!import:"https://example.com/i.tn1"',
+      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
+        '!!import:"https://example.com/i.tn"',
       'x => { v: text }',
     );
     expect(() => resolveSchema(doc, deps())).toThrow(TsonNotImplementedError);
@@ -359,7 +359,7 @@ describe('positive classification of a failed declaration', () => {
     expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
   });
 
-  it('reports SCHEMA_UNAVAILABLE for a TsonSchemaFetchError the structure namespace throws', () => {
+  it('reports the code belonging to the fetch reason for a TsonSchemaFetchError the structure namespace throws', () => {
     // Injected through `metaDefinitions` rather than `definitionMetaReader`: the latter's own
     // caller (`definitionResolver.ts`'s `bindAtomInstance`) already folds an unrecognised error
     // from that particular seam into `TsonNotImplementedError`, so a fetch failure can only reach
@@ -373,7 +373,7 @@ describe('positive classification of a failed declaration', () => {
         metaDefinitions: (name) => {
           if (name === 'something') {
             throw new TsonSchemaFetchError(
-              'https://example.com/unreachable.tn1',
+              'https://example.com/unreachable.tn',
               'not-permitted',
               'no configured source would supply this schema',
             );
@@ -384,7 +384,7 @@ describe('positive classification of a failed declaration', () => {
       { receiver },
     );
     expect(receiver.diagnostics).toHaveLength(1);
-    expect(receiver.diagnostics[0]?.code).toBe('SCHEMA_UNAVAILABLE');
+    expect(receiver.diagnostics[0]?.code).toBe('SCHEMA_NOT_PERMITTED');
     expect(receiver.diagnostics[0]?.schemaPointer).toBe('/bad');
     expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
   });
