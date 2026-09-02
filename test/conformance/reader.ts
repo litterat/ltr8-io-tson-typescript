@@ -22,11 +22,11 @@ import type { TsonDecimal } from '../../packages/tson/src/value/types.js';
 import type { ExpectedReaderAtom, ExpectedReaderValue } from './sidecar.js';
 
 /**
- * Reads `subject`'s raw bytes through the real schemaless tree reader (§2, §4). Throws
- * {@link TsonReadError} exactly as {@link readTree} does, uncaught, for a reader-layer `error`
- * vector — see RUNNER.md rule 3a: the caller (`runner.test.ts`) parses the subject cleanly with
- * the real Tier 3 parser first, so a throw reaching here is the reader's own verdict, not a
- * mis-attributed parse failure.
+ * Reads `subject`'s raw bytes through the real schemaless tree reader (§2, §4). Throws, uncaught,
+ * exactly as {@link readTree} does: {@link TsonReadError} for a reader-layer `error` vector, or
+ * `core/errors.ts`'s `TsonNameHygieneRefusedError` for a `refused` one (§8.2) — see RUNNER.md
+ * rule 3a: the caller (`runner.test.ts`) parses the subject cleanly with the real Tier 3 parser
+ * first, so a throw reaching here is the reader's own verdict, not a mis-attributed parse failure.
  */
 export function readSchemaless(subject: Uint8Array): Value {
   return readTree(subject);

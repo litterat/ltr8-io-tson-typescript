@@ -43,6 +43,7 @@ import {
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
+import { diagnosticCodeForFetch } from '../core/diagnostic.js';
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
@@ -59,7 +60,8 @@ import type {
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { desugar, lifted, type DesugarFailureReporter } from './desugar.js';
-import { createHeldBody, heldEmptyRecord } from './heldBody.js';
+import { createHeldBody } from './heldBody.js';
+import { heldEmptyRecord } from './wireForm.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
 import { flattenSchema } from './referenceFlattener.js';
 
@@ -556,7 +558,7 @@ function schemaProblem(
 function schemaProblemCode(error: ReportableSchemaError): Diagnostic['code'] {
   if (error instanceof TsonBindMismatchError) return 'BIND_MISMATCH';
   if (error instanceof TsonNotImplementedError) return 'NOT_IMPLEMENTED';
-  if (error instanceof TsonSchemaFetchError) return 'SCHEMA_UNAVAILABLE';
+  if (error instanceof TsonSchemaFetchError) return diagnosticCodeForFetch(error.reason);
   return 'SCHEMA_ERROR';
 }
 

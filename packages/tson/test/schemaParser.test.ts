@@ -20,7 +20,7 @@ function thrownBy(text: string): unknown {
   throw new Error(`expected parsing '${text}' to throw, but it completed`);
 }
 
-const META = '!!meta:"https://example.com/m.tn1"';
+const META = '!!meta:"https://example.com/m.tn"';
 
 /** Wraps `body` as a declaration's type-def and returns just that `TypeDef`. */
 function typeDefOf(body: string): TypeDef {
@@ -36,7 +36,7 @@ describe('schema document header (§2.2)', () => {
   it('parses !!meta alone', () => {
     const doc = parse(`${META} { x => uuid }`);
     expect(doc.id).toBeUndefined();
-    expect(doc.meta).toBe('https://example.com/m.tn1');
+    expect(doc.meta).toBe('https://example.com/m.tn');
     expect(doc.imports).toEqual([]);
   });
 
@@ -47,7 +47,7 @@ describe('schema document header (§2.2)', () => {
         `{ x => uuid }`,
     );
     expect(doc.id).toBe('https://example.com/task.tn');
-    expect(doc.meta).toBe('https://example.com/m.tn1');
+    expect(doc.meta).toBe('https://example.com/m.tn');
     expect(doc.imports).toEqual(['https://example.com/a.tn', 'https://example.com/b.tn']);
   });
 

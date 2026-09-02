@@ -56,7 +56,7 @@ describe('contentStart (§2.2.1)', () => {
 
 describe('sha256Hex', () => {
   it('hashes only the bytes past the first line, matching a cross-check via node:crypto', async () => {
-    const doc = bytes('!!id:"https://example.com/s.tn1"\n{ a: 1 }');
+    const doc = bytes('!!id:"https://example.com/s.tn"\n{ a: 1 }');
     const contentOnly = doc.subarray(contentStart(doc));
     const expected = createHash('sha256').update(contentOnly).digest('hex');
     expect(await sha256Hex(doc)).toBe(expected);

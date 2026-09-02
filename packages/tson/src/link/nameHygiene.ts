@@ -16,6 +16,14 @@
  *   `fields` list before this module ever sees it, so no separate handling is needed) are each
  *   entry's own scope, checked once per entry in `merged`.
  *
+ * **A fifth scope, not in §11.4's text at all: a template's own type parameters**
+ * (`TypeDefinition.parameters`), checked over every entry that declares any. This is this
+ * implementation's own choice, not the spec's — the reference implementation's
+ * `SPEC-FEEDBACK.md` #5 records it as an open proposal, reasoning that a parameter is a name and
+ * `<T, Т>` (Latin/Cyrillic) is exactly the substitution hazard §8.2 exists to refuse, whether or
+ * not §11.4 happens to enumerate the position. All three mechanisms apply here exactly as they do
+ * for the other schema-layer scopes.
+ *
  * **Choice variants are deliberately not a fourth scope.** A variant is a reference to a
  * declared name (§5.4), so two confusable variants are two confusable entries in the namespace
  * scope above and are already caught there — a check over a choice's own `variants` list could
@@ -35,6 +43,7 @@
  * does both in one pass per scope (per-name mechanisms first, in order; skeleton distinctness
  * last, once the whole scope is collected) — see that function's own doc.
  */
+import { diagnosticCodeForMechanism } from '../core/diagnostic.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonNameHygieneRefusedError } from '../core/errors.js';
 import {
@@ -58,7 +67,7 @@ export interface CheckNameHygieneOptions {
    * Highly Restrictive over the whole name — matching §8.2's own defaults, the same default
    * `reader/schemaless/tree.ts` applies to its own Part 1 scope.
    */
-  readonly namePolicy?: NamePolicy;
+  readonly identifierPolicy?: NamePolicy;
   /**
    * Where a refusal is reported, letting every other entry still be checked. Omitted means
    * fail-fast: the first refusal throws {@link TsonNameHygieneRefusedError} — never {@link
@@ -81,9 +90,9 @@ export function checkNameHygiene(
   options: CheckNameHygieneOptions,
 ): void {
   const { schemaId, receiver } = options;
-  const namePolicy = options.namePolicy ?? DEFAULT_NAME_POLICY;
+  const identifierPolicy = options.identifierPolicy ?? DEFAULT_NAME_POLICY;
 
-  const namespaceRefusal = nameHygieneRefusal(merged.keys(), namePolicy);
+  const namespaceRefusal = nameHygieneRefusal(merged.keys(), identifierPolicy);
   if (namespaceRefusal !== undefined) {
     const at = namespaceRefusal.names[namespaceRefusal.names.length - 1] ?? '';
     const message =
@@ -95,14 +104,28 @@ export function checkNameHygiene(
 
   for (const [name, def] of merged) {
     const scope = entryScope(def);
-    if (scope === undefined) continue;
-    const refusal = nameHygieneRefusal(scope.names, namePolicy);
-    if (refusal === undefined) continue;
-    const message =
-      `'${name}' has ${scope.noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
-      `([TSON-SCHEMA] §11.4's ${scope.noun} scope): ${refusal.detail} (computed against UTS #39 ` +
-      `version ${UTS39_VERSION})`;
-    reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
+    if (scope !== undefined) {
+      const refusal = nameHygieneRefusal(scope.names, identifierPolicy);
+      if (refusal !== undefined) {
+        const message =
+          `'${name}' has ${scope.noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
+          `([TSON-SCHEMA] §11.4's ${scope.noun} scope): ${refusal.detail} (computed against ` +
+          `UTS #39 version ${UTS39_VERSION})`;
+        reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
+      }
+    }
+    if (def.parameters.length > 0) {
+      const refusal = nameHygieneRefusal(def.parameters, identifierPolicy);
+      if (refusal !== undefined) {
+        const message =
+          `'${name}' has its own type parameters refused under [TSON-DATA] §8.2's ` +
+          `name-hygiene policy (this implementation's own scope, not in [TSON-SCHEMA] §11.4's ` +
+          `text -- a parameter is a name and the substitution hazard §8.2 exists to refuse ` +
+          `applies to it the same as any other declared name): ${refusal.detail} (computed ` +
+          `against UTS #39 version ${UTS39_VERSION})`;
+        reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
+      }
+    }
   }
 }
 
@@ -145,7 +168,7 @@ function reportOrThrow(
     });
   }
   receiver.report({
-    code: 'NAME_HYGIENE_REFUSED',
+    code: diagnosticCodeForMechanism(refusal.mechanism),
     message,
     schemaId,
     schemaPointer: `/${pointerName}`,

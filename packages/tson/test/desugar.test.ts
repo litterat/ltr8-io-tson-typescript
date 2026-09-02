@@ -4,18 +4,14 @@ import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/
 import { fromString, runSync } from '../src/io/bytes.js';
 import { position, type Position } from '../src/core/position.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
-import {
-  desugar,
-  internalName,
-  lifted,
-  type DesugarFailureReporter,
-} from '../src/compiler/desugar.js';
+import { desugar, lifted, type DesugarFailureReporter } from '../src/compiler/desugar.js';
+import { ofBinding as internalName } from '../src/compiler/derivedName.js';
 import type { Declaration, SchemaDocument } from '../src/ast/schema/document.js';
 import type { Instance } from '../src/ast/schema/fields.js';
 import type { TypeRef } from '../src/ast/schema/typeref.js';
 import type { CoreValue, RecordField } from '../src/ast/value.js';
 
-const META = '!!meta:"https://example.com/m.tn1"';
+const META = '!!meta:"https://example.com/m.tn"';
 
 /** Parses `{ ${declarations} }` as a complete schema document body. */
 function parse(declarations: string): SchemaDocument {

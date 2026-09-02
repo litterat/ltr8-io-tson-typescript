@@ -5,12 +5,14 @@ import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonLexError,
+  TsonNameHygieneRefusedError,
   TsonParseError,
   TsonReadError,
   TsonUnsupportedDocumentError,
 } from '../../packages/tson/src/core/errors.js';
 import { parseDocument as parseDataDocument } from '../../packages/tson/src/compiler/dataParser.js';
 import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
+import { UTS39_VERSION } from '../../packages/tson/src/unicode/uts39.js';
 
 import { spliceSchemaDirectives } from './bundled-ids.js';
 import { lexTokens } from './lexer.js';
@@ -20,7 +22,6 @@ import { resolveBaseValue } from './resolver.js';
 import { readVocabularyValue } from './vocabulary.js';
 import {
   type Category,
-  type Encoding,
   type LexerSidecar,
   type ParserSidecar,
   type ReaderSidecar,
@@ -115,10 +116,16 @@ describe.skipIf(!suitePresent)(
   },
 );
 
-/** Reads just {@link SidecarSummary.encoding}, swallowing any parse failure -- see {@link registerVectors}. */
-function bestEffortEncoding(vector: Vector): Encoding | undefined {
+/**
+ * Reads just the {@link SidecarSummary}, swallowing any parse failure -- {@link registerVectors}
+ * needs `encoding` (rule 5's first skip ground) and, for a `refused` vector, `refusedUnicode`
+ * (rule 5's fourth skip ground) before it knows whether to register the vector at all. A malformed
+ * sidecar still surfaces as a genuine failure: the real, unguarded parse happens inside the
+ * registered `it` itself.
+ */
+function bestEffortSidecarSummary(vector: Vector): SidecarSummary | undefined {
   try {
-    return peekSidecarSummary(readFileSync(vector.sidecarPath)).encoding;
+    return peekSidecarSummary(readFileSync(vector.sidecarPath));
   } catch {
     return undefined;
   }
@@ -144,15 +151,30 @@ function registerVectors(vectors: readonly Vector[]): void {
     // Rule 5, skip ground 1: skip, don't fail, an `encoding: utf-16`/`utf-32` vector -- an
     // implementation gap (§9.1 permits the encodings; nothing here reads them), never a
     // conformance failure. `invalid-utf8` is not skipped either way: it must be fed to the real
-    // lexer and rejected there. `bestEffortEncoding` re-parses the sidecar in isolation
+    // lexer and rejected there. `bestEffortSidecarSummary` re-parses the sidecar in isolation
     // (swallowing any failure) purely to decide registration; the real, unguarded parse happens
     // inside the registered `it` below, so a malformed sidecar still shows up as a genuine
     // failure rather than a silent skip. `it.skip` keeps the skip visible in test output, per
     // rule 5's own "MUST report what it skipped and why".
-    const encoding = bestEffortEncoding(vector);
-    const skip = encoding === 'utf-16' || encoding === 'utf-32';
+    const summary = bestEffortSidecarSummary(vector);
+    const encodingSkip = summary?.encoding === 'utf-16' || summary?.encoding === 'utf-32';
+    // Rule 5, skip ground 4: skip, don't fail or silently pass, a `refused` vector whose
+    // `unicode` field names a UTS #39 data version this implementation does not carry -- §8.2
+    // says two conforming implementations may legitimately disagree on a refusal, and the data
+    // version is the only thing that explains it, so an implementation at a different version has
+    // no verdict to give. A vector at *this* implementation's own version (`UTS39_VERSION`) is
+    // never skippable on this ground.
+    const versionMismatch =
+      summary?.outcome === 'refused' &&
+      summary.refusedUnicode !== undefined &&
+      summary.refusedUnicode !== UTS39_VERSION;
+    const skip = encodingSkip || versionMismatch;
     const register = skip ? it.skip : it;
-    register(vector.name, () => {
+    const name = versionMismatch
+      ? `${vector.name} (skipped: computed against UTS #39 data for Unicode ` +
+        `${summary.refusedUnicode}; this implementation carries ${UTS39_VERSION})`
+      : vector.name;
+    register(name, () => {
       // Rule 1: feed the subject's raw bytes, never a decoded-then-re-encoded string -- several
       // vectors (malformed UTF-8 among them) only exist as raw bytes.
       const subjectBytes = readFileSync(vector.subjectPath);
@@ -293,6 +315,10 @@ function checkReaderVector(vector: Vector, subject: Uint8Array, sidecar: ReaderS
     assertReaderValueMatches(sidecar.value, readSchemaless(subject));
     return;
   }
+  if (sidecar.outcome === 'refused') {
+    checkRefusedReaderVector(vector, subject, sidecar);
+    return;
+  }
   // Rule 3a: parse the subject cleanly first, so the failure asserted below is genuinely the
   // reader's own verdict -- a vector that had accidentally become a parse error must not pass
   // here for the wrong reason.
@@ -300,6 +326,52 @@ function checkReaderVector(vector: Vector, subject: Uint8Array, sidecar: ReaderS
   expect(() => readSchemaless(subject)).toThrow(
     errorClassForCategory(vector, requireCategory(vector, sidecar)),
   );
+}
+
+/**
+ * Rule 3d: "a `refused` vector is a fifth, distinct outcome, never one of the four categories...
+ * A runner must assert both halves: something was refused, *and* nothing was also reported as one
+ * of §8.1's four categories."
+ *
+ * The document is not malformed -- §8.2's own text is "refused by this processor", not invalid --
+ * so, mirroring rule 3a, the subject must parse cleanly first: a vector that had accidentally
+ * become a parse error would otherwise pass here for the wrong reason.
+ *
+ * The second half is asserted explicitly, not merely relied on: {@link TsonNameHygieneRefusedError}
+ * extends the library's base error class directly (see its own doc comment, `core/errors.ts`),
+ * never {@link TsonReadError} or any of the other family classes an `error`-outcome reader vector
+ * can throw, so `instanceof` against every one of them answers `false` structurally. Checking that
+ * here is what makes rule 3d's second half a runner assertion rather than an assumption about the
+ * library's class hierarchy.
+ */
+function checkRefusedReaderVector(
+  vector: Vector,
+  subject: Uint8Array,
+  sidecar: ReaderSidecar,
+): void {
+  if (sidecar.refused === undefined) {
+    throw new Error(`${vector.name}: a 'refused' reader-layer vector must declare its mechanism`);
+  }
+  runSync(parseDataDocument(fromBytes(subject)));
+
+  let thrown: unknown;
+  try {
+    readSchemaless(subject);
+  } catch (error) {
+    thrown = error;
+  }
+
+  // First half: something was refused, under the mechanism the vector names.
+  expect(thrown).toBeInstanceOf(TsonNameHygieneRefusedError);
+  const refusal = thrown as TsonNameHygieneRefusedError;
+  expect(refusal.mechanism).toBe(sidecar.refused.mechanism);
+
+  // Second half: nothing was also reported as one of §8.1's four categories.
+  expect(refusal).not.toBeInstanceOf(TsonLexError);
+  expect(refusal).not.toBeInstanceOf(TsonParseError);
+  expect(refusal).not.toBeInstanceOf(TsonReadError);
+  expect(refusal).not.toBeInstanceOf(TsonAtomParseError);
+  expect(refusal).not.toBeInstanceOf(TsonAtomValidationError);
 }
 
 // ── Resolver-layer vectors ───────────────────────────────────────────────

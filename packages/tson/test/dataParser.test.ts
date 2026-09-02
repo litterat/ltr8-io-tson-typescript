@@ -253,10 +253,10 @@ describe('type references (§3.2)', () => {
 describe('document header (§2.2)', () => {
   it('both !!id and !!schema', () => {
     const d = doc(
-      '!!id:"https://example.com/orders/1042.tn1"\n!!schema:"https://example.com/order.tn1"\nAlice\n',
+      '!!id:"https://example.com/orders/1042.tn"\n!!schema:"https://example.com/order.tn"\nAlice\n',
     );
-    expect(d.id).toBe('https://example.com/orders/1042.tn1');
-    expect(d.schema).toBe('https://example.com/order.tn1');
+    expect(d.id).toBe('https://example.com/orders/1042.tn');
+    expect(d.schema).toBe('https://example.com/order.tn');
     expect(d.root.coreValue).toEqual({ kind: 'token', text: 'Alice', form: 'unquoted' });
   });
 
@@ -269,16 +269,16 @@ describe('document header (§2.2)', () => {
   });
 
   it('a schema-directive on a record field, not the document header', () => {
-    const d = doc('{ x: !!schema:"https://example.com/s.tn1" !t 1 }');
+    const d = doc('{ x: !!schema:"https://example.com/s.tn" !t 1 }');
     const field = defined(
       (d.root.coreValue as { kind: 'record'; fields: readonly { value: { schemaRef?: string } }[] })
         .fields[0],
     );
-    expect(field.value.schemaRef).toBe('https://example.com/s.tn1');
+    expect(field.value.schemaRef).toBe('https://example.com/s.tn');
   });
 
   it('!!meta routes through TsonUnsupportedDocumentError, never reaching this layer as a Document', () => {
-    expect(() => doc('!!meta:"https://example.com/m.tn1"\n{}')).toThrow(
+    expect(() => doc('!!meta:"https://example.com/m.tn"\n{}')).toThrow(
       TsonUnsupportedDocumentError,
     );
   });

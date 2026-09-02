@@ -28,6 +28,8 @@
  */
 import { TsonAtomParseError, TsonAtomValidationError, TsonWriteError } from '../core/errors.js';
 import { createUriParser } from '../atom/network/uri.js';
+import { isNfc } from '../unicode/nfc.js';
+import { isUnquotedTokenContinue, isUnquotedTokenStart } from '../unicode/token-profile.js';
 
 /** Where an {@link Emitter}'s text goes, one chunk at a time -- the port of Java's `Appendable`. */
 export type TextSink = (chunk: string) => void;
@@ -57,7 +59,19 @@ export interface Emitter {
   endRecord(): void;
   beginMap(): void;
   endMap(): void;
-  /** `name:` -- inserts the inter-element separator itself; the value follows directly. */
+  /**
+   * `name:` -- inserts the inter-element separator itself; the value follows directly.
+   *
+   * A field name is lexical, not identifier-constrained (§2.5: "any token the production
+   * admits names a field"), so `name` is written unquoted whenever its exact text survives
+   * that round trip and quoted otherwise -- {@link canWriteFieldNameUnquoted} is the exact
+   * predicate. The spec leaves the choice of spelling to the writer wherever both are legal;
+   * this implementation always prefers unquoted and falls back to quoted only where unquoted
+   * would not re-read as `name` itself. The case this exists for: `_id` cannot be spelled
+   * unquoted at all, because a token-initial `_` is the absent sentinel (§2.9), not a token
+   * character (§7.1) -- an unquoted `_id` lexes as `_` followed by a separate `id` token, not
+   * as one field name.
+   */
   field(name: string): void;
   /** Call before writing a map entry's key (itself a full data-value, §2.6). */
   beforeMapEntry(): void;
@@ -223,6 +237,89 @@ function escapeMultiLineContent(line: string): string {
   return out;
 }
 
+const CODE_POINT_FULL_STOP = 0x2e;
+const CODE_POINT_HYPHEN = 0x2d;
+const CODE_POINT_PLUS = 0x2b;
+
+/** `.`, `-`, `+` -- the three token-profile extension characters that trigger compound-token lookahead at a token boundary (§7.2.4). */
+function isBoundarySign(codePoint: number): boolean {
+  return (
+    codePoint === CODE_POINT_FULL_STOP ||
+    codePoint === CODE_POINT_HYPHEN ||
+    codePoint === CODE_POINT_PLUS
+  );
+}
+
+/**
+ * Whether `name` can be written as an unquoted token and read back as the field name `name`,
+ * unchanged -- the predicate {@link createEmitter}'s `field` applies to choose between an
+ * unquoted and a quoted spelling. Field names are lexical (§2.5): `field-name = unquoted-token
+ * / single-line-token`, with no identifier constraint, so the question is purely "does this
+ * text lex back to one unquoted token equal to itself", answered against §7.1's profile and
+ * §7.2's lexer rather than §7.7's identifier grammar.
+ *
+ * Checked in order, each a distinct way an unquoted spelling stops meaning `name`:
+ *
+ * 1. **Empty.** `unquoted-token = unquoted-start *unquoted-char` (§7.1) requires at least one
+ *    character; there is no empty unquoted token to write.
+ * 2. **First character not a token-start character**, `XID_Start ∪ Nd ∪ { - + . }` (§7.1). This
+ *    is what excludes a token-initial `_`: underscore is `XID_Continue` but not `XID_Start`,
+ *    and is reserved to the absent sentinel (§2.9) -- `_id` unquoted lexes as the absent token
+ *    `_` followed by a second, separate token `id`, never as one field name.
+ * 3. **A lone boundary sign.** `.`, `-`, and `+` reach the token profile only to serve the
+ *    number grammar, and the lexer's own compound-token lookahead (§7.2.4) requires the
+ *    character immediately after one to already be in the continuation set before it will
+ *    start an unquoted token at all: with nothing (or something else) after it, `.` and `+`
+ *    are lexer errors and `-` is the special subtraction token -- never a field-name token. A
+ *    name that is exactly `.`, `-`, or `+`, or that starts with one followed by a
+ *    non-continuation character, therefore fails here.
+ * 4. **A later character outside the continuation set**, `XID_Continue ∪ { - + . }` (§7.1).
+ * 5. **Two adjacent `.` characters anywhere.** The lexer's termination rule (§7.2 rule 3) stops
+ *    an unquoted token before a run of consecutive dots, emitting a separate range token
+ *    instead (§7.2.4) -- `a..b` would round-trip as `a`, `..`, `b`, not one field name.
+ * 6. **Not NFC-normalized.** An unquoted token that isn't NFC in the source text is a lexer
+ *    error (§7.2.1); only a quoted token is exempt from that requirement.
+ *
+ * Every legal identifier passes every check (§7.1: "every identifier is a well-formed unquoted
+ * token"), so this only ever chooses quoting for spellings identifiers already couldn't use.
+ */
+/** `text`'s code points, decoded the way `for...of` already does -- one entry per Unicode scalar value, surrogate pairs included, never a lone UTF-16 unit. */
+function toCodePoints(text: string): number[] {
+  const codePoints: number[] = [];
+  for (const character of text) {
+    const codePoint = character.codePointAt(0);
+    // `character` is one code point yielded by iterating `text`, so `codePointAt(0)` is always
+    // defined; the guard keeps this total without asserting.
+    if (codePoint !== undefined) codePoints.push(codePoint);
+  }
+  return codePoints;
+}
+
+function canWriteFieldNameUnquoted(name: string): boolean {
+  const codePoints = toCodePoints(name);
+  if (codePoints.length === 0) return false;
+
+  const first = codePoints[0];
+  if (first === undefined || !isUnquotedTokenStart(first)) return false;
+
+  if (isBoundarySign(first)) {
+    const second = codePoints[1];
+    if (second === undefined || !isUnquotedTokenContinue(second)) return false;
+  }
+
+  for (let i = 1; i < codePoints.length; i += 1) {
+    const codePoint = codePoints[i];
+    if (codePoint === undefined || !isUnquotedTokenContinue(codePoint)) return false;
+  }
+  for (let i = 0; i + 1 < codePoints.length; i += 1) {
+    if (codePoints[i] === CODE_POINT_FULL_STOP && codePoints[i + 1] === CODE_POINT_FULL_STOP) {
+      return false;
+    }
+  }
+
+  return isNfc(name);
+}
+
 /** Validates a directive argument against the same URI grammar the reader enforces (§3.3). */
 function validateDirectiveUri(name: string, uri: string): void {
   try {
@@ -299,7 +396,13 @@ export function createEmitter(sink: TextSink): Emitter {
     },
     field: (name: string) => {
       beforeElement();
-      emit(name);
+      if (canWriteFieldNameUnquoted(name)) {
+        emit(name);
+      } else {
+        emit('"');
+        emit(escapeSingleLine(name));
+        emit('"');
+      }
       emit(': ');
     },
     beforeMapEntry: () => {

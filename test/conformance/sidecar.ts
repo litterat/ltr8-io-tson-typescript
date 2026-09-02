@@ -20,18 +20,31 @@ import type { DataValue, ScopedValue } from '../../packages/tson/src/ast/value.j
  * schemas file-for-file.
  *
  * **The outcome is a field group (Part 2 §5.11), not a flat `outcome:` field.** The sidecar
- * record carries exactly one of `valid: {…}` / `error: {…}` / `schema-document: _` as a member,
- * and that member's *name* is the outcome — there is no separate field that could disagree with
- * the payload beside it. {@link soleMember} is the one place that reads a group generically;
- * every other group in these schemas (`core_value`, `base_value`, `number_form`, `atom_value`,
- * `reader_value`, `reader_atom`) reduces through it too.
+ * record carries exactly one of `valid: {…}` / `error: {…}` / `schema-document: _` /
+ * `refused: {…}` as a member, and that member's *name* is the outcome — there is no separate
+ * field that could disagree with the payload beside it. `refused` is [TSON-DATA] §8.1's fifth
+ * outcome (§8.2's name-hygiene policy): a document it names is neither valid nor one of §8.1's
+ * four error categories, which is why it is its own member of this group rather than a fifth
+ * `category`. {@link soleMember} is the one place that reads a group generically; every other
+ * group in these schemas (`core_value`, `base_value`, `number_form`, `atom_value`, `reader_value`,
+ * `reader_atom`) reduces through it too.
  */
 
 /** The suite's four §8.1 error categories, asserted on an `outcome: error` vector. */
 export type Category = 'lexer' | 'parser' | 'resolver' | 'validation';
 
-/** The three outcomes a sidecar's outcome group may name. Not every layer uses all three. */
-export type Outcome = 'valid' | 'error' | 'schema-document';
+/** The five outcomes a sidecar's outcome group may name. Not every layer uses all five. */
+export type Outcome = 'valid' | 'error' | 'schema-document' | 'refused';
+
+/**
+ * Which of [TSON-DATA] §8.2's three name-hygiene mechanisms refused a document
+ * (`sidecar-common.tn`'s `hygiene_mechanism`). A local, self-contained vocabulary rather than an
+ * import of `core/errors.ts`'s identically-shaped `NameHygieneMechanism` -- this module states
+ * every one of its own vocabularies independently of the implementation under test (see
+ * {@link Category}), so a sidecar's meaning does not depend on the production type it happens to
+ * be checked against.
+ */
+export type HygieneMechanism = 'skeleton-distinctness' | 'identifier-status' | 'restriction-level';
 
 /**
  * A vector's declared non-UTF-8 encoding. Absent means UTF-8. Only `invalid-utf8` is fed to
@@ -263,12 +276,25 @@ export type ExpectedReaderValue =
   | { readonly kind: 'atom'; readonly atom: ExpectedReaderAtom }
   | { readonly kind: 'absent' };
 
+/**
+ * The payload of a `refused` outcome (`sidecar-common.tn`'s `vector_refusal`): which mechanism
+ * refused the document, and the UTS #39 data version it was computed against (RUNNER.md rule 5's
+ * fourth skip ground compares this against the implementation's own {@link
+ * ../../packages/tson/src/unicode/uts39.js!UTS39_VERSION}).
+ */
+export interface ExpectedRefusal {
+  readonly mechanism: HygieneMechanism;
+  readonly unicode: string;
+}
+
 export interface ReaderSidecar extends CommonSidecarFields {
-  readonly outcome: 'valid' | 'error';
+  readonly outcome: 'valid' | 'error' | 'refused';
   /** Present iff `outcome === 'error'`. Always `resolver` at this layer (see `reader-sidecar.tn`). */
   readonly category?: Category;
   /** Present iff `outcome === 'valid'`. */
   readonly value?: ExpectedReaderValue;
+  /** Present iff `outcome === 'refused'` -- §8.1's fifth outcome, distinct from `error`. */
+  readonly refused?: ExpectedRefusal;
 }
 
 // ── Shared low-level reduction helpers: generic DataValue -> named field lookup ─────────────
@@ -373,6 +399,30 @@ function toCategory(text: string, context: string): Category {
   throw new Error(
     `${context}: unknown §8.1 category '${text}', expected one of (${CATEGORIES.join(', ')})`,
   );
+}
+
+const HYGIENE_MECHANISMS: readonly HygieneMechanism[] = [
+  'skeleton-distinctness',
+  'identifier-status',
+  'restriction-level',
+];
+
+function toHygieneMechanism(text: string, context: string): HygieneMechanism {
+  if ((HYGIENE_MECHANISMS as readonly string[]).includes(text)) {
+    return text as HygieneMechanism;
+  }
+  throw new Error(
+    `${context}: unknown §8.2 hygiene mechanism '${text}', expected one of ` +
+      `(${HYGIENE_MECHANISMS.join(', ')})`,
+  );
+}
+
+function toExpectedRefusal(dv: DataValue, context: string): ExpectedRefusal {
+  const fields = recordFields(dv, context);
+  return {
+    mechanism: toHygieneMechanism(requiredText(fields, 'mechanism', context), context),
+    unicode: requiredText(fields, 'unicode', context),
+  };
 }
 
 /** Parses `raw` with the real Tier 3 parser and returns its root record's fields. */
@@ -732,7 +782,7 @@ function toExpectedReaderValue(dv: DataValue): ExpectedReaderValue {
 
 // ── Public per-layer parse functions ─────────────────────────────────────────────────────────
 
-const OUTCOME_KINDS = ['valid', 'error', 'schema-document'] as const;
+const OUTCOME_KINDS = ['valid', 'error', 'schema-document', 'refused'] as const;
 
 /**
  * A sidecar record's outcome group, reduced generically: the present member's name plus its
@@ -839,7 +889,7 @@ export function parseVocabularySidecar(raw: Uint8Array): VocabularySidecar {
 export function parseReaderSidecar(raw: Uint8Array): ReaderSidecar {
   const fields = parseSidecarBody(raw);
   const common = toCommonFields(fields);
-  const { outcome, payload } = outcomeMember(fields, ['valid', 'error']);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error', 'refused']);
   if (outcome === 'error') {
     const payloadFields = recordFields(payload, 'reader sidecar.error');
     return {
@@ -849,6 +899,13 @@ export function parseReaderSidecar(raw: Uint8Array): ReaderSidecar {
         requiredText(payloadFields, 'category', 'reader sidecar.error'),
         'reader sidecar.error',
       ),
+    };
+  }
+  if (outcome === 'refused') {
+    return {
+      ...common,
+      outcome,
+      refused: toExpectedRefusal(payload, 'reader sidecar.refused'),
     };
   }
   const payloadFields = recordFields(payload, 'reader sidecar.valid');
@@ -864,6 +921,15 @@ export interface SidecarSummary {
   readonly encoding?: Encoding;
   readonly meta?: string;
   readonly import?: readonly string[];
+  /**
+   * Present iff `outcome === 'refused'`: the UTS #39 data version the vector was computed
+   * against. Surfaced here, ahead of any layer-specific parse, because `registerVectors`
+   * (`runner.test.ts`) needs it to decide whether to register the vector at all -- RUNNER.md
+   * rule 5's fourth skip ground, "a `refused` vector whose `unicode` field names a UTS #39 data
+   * version the implementation does not carry" -- the same way it already uses {@link encoding}
+   * for rule 5's first ground.
+   */
+  readonly refusedUnicode?: string;
 }
 
 /**
@@ -888,10 +954,19 @@ export function peekSidecarSummary(raw: Uint8Array): SidecarSummary {
         (present.length === 0 ? 'none' : present.join(', ')),
     );
   }
+  const refusedUnicode =
+    outcome === 'refused'
+      ? requiredText(
+          recordFields(requireField(fields, 'refused', 'sidecar'), 'sidecar.refused'),
+          'unicode',
+          'sidecar.refused',
+        )
+      : undefined;
   return {
     outcome,
     ...(common.encoding !== undefined ? { encoding: common.encoding } : {}),
     ...(common.meta !== undefined ? { meta: common.meta } : {}),
     ...(common.import !== undefined ? { import: common.import } : {}),
+    ...(refusedUnicode !== undefined ? { refusedUnicode } : {}),
   };
 }

@@ -1,3 +1,5 @@
+import type { NameHygieneMechanism } from '../unicode/policy.js';
+import type { SchemaFetchReason } from './errors.js';
 import type { Position } from './position.js';
 
 /**
@@ -37,22 +39,120 @@ export type DiagnosticCode =
   | 'NOT_IMPLEMENTED'
   /** A schema type and its registered binding disagree about the type's fields. */
   | 'BIND_MISMATCH'
-  /**
-   * A schema reference (`!!import`, `!!meta`, or `!!schema`) that no configured source would
-   * supply. Not a verdict on the schema itself: the reference was never obtained, so whether it
-   * would have resolved is unknown -- unlike `SCHEMA_ERROR`, which means the schema *was*
-   * obtained and is wrong.
-   */
-  | 'SCHEMA_UNAVAILABLE'
-  /**
-   * [TSON-DATA] §8.2's name-hygiene policy refused a name -- §8.1's "fifth outcome", carried on a
-   * `Diagnostic` only for a *collecting* read's own record (`DiagnosticsCollector.diagnostics`).
-   * A fail-fast read never throws a `Diagnostic` bearing this code: it throws
-   * `core/errors.ts`'s own `TsonNameHygieneRefusedError` instead, which is deliberately not
-   * reconstructible from a `DiagnosticCode` alone, because §8.1 requires this outcome to be
-   * unmistakable for one of the four categories the rest of this union enumerates.
-   */
-  | 'NAME_HYGIENE_REFUSED';
+  // -- A schema was not obtained: one code per reason ---------------------------------------
+  //
+  // None of these five is a verdict on anything. A schema reference (`!!import`, `!!meta`, or
+  // `!!schema`) named a document no configured source would supply, so it was never obtained and
+  // never read -- unlike `SCHEMA_ERROR`, which means the schema *was* obtained and is wrong.
+  //
+  // Why a fetch failed is a routing question, and a code is what a consumer routes on -- the same
+  // reason §8.2's three refusal codes below are three codes rather than one code beside a
+  // `mechanism` field. A reason carried as a field is a second carrier for one fact, free to
+  // disagree with the first.
+  //
+  // One code per reason rather than a permanent/transient pair, because consumers partition them
+  // differently: a command line by whether a rerun could help, an HTTP surface by whose doing it
+  // was. A code encoding one partition strands the other. `SchemaFetchReason` (`core/errors.ts`)
+  // is the throwing channel's vocabulary and the sole input to {@link diagnosticCodeForFetch}, so
+  // the two channels cannot disagree.
+
+  /** Policy refused it: not an allowed host, not a legal identity, or no pin where one is required. */
+  | 'SCHEMA_NOT_PERMITTED'
+  /** The location was reached and does not have it. */
+  | 'SCHEMA_NOT_FOUND'
+  /** The location could not be reached, or answered with something other than a document. */
+  | 'SCHEMA_UNREACHABLE'
+  /** The location did not answer in time. */
+  | 'SCHEMA_TIMEOUT'
+  /** The location answered with more bytes than a schema document is allowed to be. */
+  | 'SCHEMA_TOO_LARGE'
+  // -- [TSON-DATA] §8.2's name hygiene: one code per mechanism -------------------------------
+  //
+  // §8.1's "fifth outcome", carried on a `Diagnostic` only for a *collecting* read's own record
+  // (`DiagnosticsCollector.diagnostics`). A fail-fast read never throws a `Diagnostic` bearing one
+  // of these: it throws `core/errors.ts`'s own `TsonNameHygieneRefusedError` instead, which is
+  // deliberately not reconstructible from a `DiagnosticCode` alone, because §8.1 requires this
+  // outcome to be unmistakable for one of the four categories the rest of this union enumerates.
+  //
+  // Three codes, one per mechanism, rather than one code beside a `mechanism` field, for the
+  // reason the five `SCHEMA_*` codes above give: the mechanism is what a consumer routes on.
+  //
+  // A refusal *is* a verdict ({@link isVerdict}) -- the processor looked and declined, and the
+  // sender holds the fix -- though not a validity one.
+
+  /** Two names in one scope reduce to one UTS #39 skeleton (mechanism 1). */
+  | 'CONFUSABLE_NAMES'
+  /** A name carries a character outside the identifier profile (mechanism 2). */
+  | 'RESTRICTED_CHARACTER'
+  /** A name does not satisfy the configured UTS #39 §5.2 restriction level (mechanism 3). */
+  | 'RESTRICTED_SCRIPT';
+
+/**
+ * The code a fetch failure reports, one per {@link SchemaFetchReason}.
+ *
+ * The throwing channel (`TsonSchemaFetchError.reason`) and the reporting channel (this union) name
+ * the same fact, so they resolve through one function rather than two parallel `switch`es that can
+ * drift apart.
+ */
+export function diagnosticCodeForFetch(reason: SchemaFetchReason): DiagnosticCode {
+  switch (reason) {
+    case 'not-permitted':
+      return 'SCHEMA_NOT_PERMITTED';
+    case 'not-found':
+      return 'SCHEMA_NOT_FOUND';
+    case 'transport':
+      return 'SCHEMA_UNREACHABLE';
+    case 'timeout':
+      return 'SCHEMA_TIMEOUT';
+    case 'too-large':
+      return 'SCHEMA_TOO_LARGE';
+  }
+}
+
+/** The code a §8.2 refusal reports, one per {@link NameHygieneMechanism}. */
+export function diagnosticCodeForMechanism(mechanism: NameHygieneMechanism): DiagnosticCode {
+  switch (mechanism) {
+    case 'skeleton-distinctness':
+      return 'CONFUSABLE_NAMES';
+    case 'identifier-status':
+      return 'RESTRICTED_CHARACTER';
+    case 'restriction-level':
+      return 'RESTRICTED_SCRIPT';
+  }
+}
+
+/** The codes that assert nothing about the document -- see {@link isVerdict}. */
+const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
+  'NOT_IMPLEMENTED',
+  'BIND_MISMATCH',
+  'SCHEMA_NOT_PERMITTED',
+  'SCHEMA_NOT_FOUND',
+  'SCHEMA_UNREACHABLE',
+  'SCHEMA_TIMEOUT',
+  'SCHEMA_TOO_LARGE',
+] satisfies DiagnosticCode[]);
+
+/**
+ * Whether `code` is a verdict on the document -- **the document was checked, and this is what
+ * checking found**.
+ *
+ * The seven that are not say so for three different reasons: `NOT_IMPLEMENTED` that this library
+ * could not check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five
+ * `SCHEMA_*` codes that no schema was obtained to check against. None of them asserts anything
+ * about the document, which is exactly what a caller routing on the answer needs to know -- and
+ * why a plain `valid: boolean` cannot carry the answer: it conflates *was this checked* with *did
+ * it pass*.
+ *
+ * A §8.2 name-hygiene refusal **is** a verdict, though not a validity one: the processor looked
+ * and declined, and the sender holds the fix.
+ *
+ * Stated here so no consumer keeps its own copy of the set. Two already would -- the CLI's exit
+ * code and its report outcome -- and a private copy each is how two consumers come to disagree
+ * about one diagnostic.
+ */
+export function isVerdict(code: DiagnosticCode): boolean {
+  return !NON_VERDICT.has(code);
+}
 
 /**
  * Where in a schema a problem was found: the schema's canonical id, a JSON Pointer into it,

@@ -63,10 +63,6 @@ import {
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import type { Position } from '../core/position.js';
-import type { TokenForm } from '../lexer/token.js';
-import { tryParseNumber, type NumberForm } from '../base/numberGrammar.js';
-import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
-import type { TsonDecimal } from '../value/types.js';
 import type { Declaration, SchemaDocument, SchemaMap } from '../ast/schema/document.js';
 import type {
   FieldDef,
@@ -86,14 +82,23 @@ import type {
   TypeDef,
 } from '../ast/schema/typedef.js';
 import type { ElementType, GenericRef, TypeArg, TypeRef } from '../ast/schema/typeref.js';
-import type {
-  Annotation,
-  CoreValue,
-  RecordField,
-  RecordValue,
-  ScopedValue,
-  TokenValue,
-} from '../ast/value.js';
+import type { CoreValue, RecordField, RecordValue, ScopedValue, TokenValue } from '../ast/value.js';
+import { canonicalBinding, ofBinding } from './derivedName.js';
+import { createMintedNames, type MintedNames } from './mintedNames.js';
+import {
+  ARGUMENTS,
+  FIELDS,
+  GROUPS,
+  MEMBERS,
+  NAME,
+  RECORD,
+  STATE,
+  TYPE,
+  VALUE,
+  nameField,
+  scoped,
+  tokenValue,
+} from './wireForm.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -152,6 +157,7 @@ export function desugar(
     imported,
     local: document.body.declarations,
     injected: new Map<string, Declaration>(),
+    minted: createMintedNames(),
     reporter: options.reporter,
     currentParameters: [],
   };
@@ -191,37 +197,6 @@ export function lifted(original: SchemaDocument, desugared: SchemaDocument): Rea
   return names;
 }
 
-/**
- * `head_arg_arg_hash` — §8.2's own recommendation for an internal name, "a readable head plus a
- * structural hash". The readable half is what a diagnostic shows; the hash separates forms the
- * readable half spells alike.
- *
- * **The name is derived from the resolved binding record, not from the spelling that produced
- * it.** That is the one identity rule for internal entries: one entry per distinct concrete form,
- * schema-wide, so `[T; 3]` and `[T; 3..3]` collapse onto the same entry.
- *
- * **The hash is this implementation's own business, not a conformance point.** [TSON-SCHEMA]'s
- * own bundled fixtures spell it as the literal placeholder `xxhash` for exactly this reason — "the
- * spelling of the hash is an implementation's own business... the placeholder keeps the hash value
- * non-normative". What *is* load-bearing is determinism: the same binding record, on the same
- * host, on any run, produces the same suffix, since an entry name becomes part of a schema's
- * canonical form and therefore its content hash (§2.2.1) — an importing schema reaches an
- * *imported* entry by deriving the identical name for the identical form.
- *
- * Exported so a later resolution phase (materialising a template application into the concrete
- * form it always described) can derive the same name for a binding record it builds itself —
- * sharing this one function is what makes a form written directly and the same form arriving
- * through materialisation dedupe against each other.
- */
-export function internalName(head: string, fields: readonly RecordField[]): string {
-  const readable: string[] = [head];
-  for (const field of fields) {
-    appendReadable(readable, field.value.value.coreValue);
-  }
-  const hash = fnv1a32(canonicalRendering(head, fields));
-  return `${readable.join('')}_${hash.toString(16).padStart(8, '0')}`;
-}
-
 // ── The pass ─────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -236,6 +211,11 @@ interface DesugarContext {
   readonly local: ReadonlyMap<string, Declaration>;
   /** Declarations synthesised for sugar forms encountered during the walk, keyed by their derived name, insertion order preserved. */
   readonly injected: Map<string, Declaration>;
+  /**
+   * §8.2's freshness MUST over the names this pass mints, one instance for this whole desugar
+   * phase — see `mintedNames.ts`'s own doc on why one phase gets exactly one instance.
+   */
+  readonly minted: MintedNames;
   readonly reporter: DesugarFailureReporter | undefined;
   /**
    * The type parameters of the declaration currently being walked, empty outside a template. A
@@ -405,7 +385,7 @@ function referenceTypeDefPass(typeDef: ReferenceTypeDef, context: DesugarContext
     return instanceOf(
       {
         head: REFERENCE,
-        fields: [{ name: TARGET, value: scopedValue(refValueOf(typeDef.ref)) }],
+        fields: [{ name: TARGET, value: scoped(refValueOf(typeDef.ref)) }],
         applicationSlots: new Map(),
       },
       typeDef.typeParams,
@@ -558,28 +538,16 @@ const ARRAY = 'array';
 const MAP = 'map';
 const TUPLE = 'tuple';
 const CHOICE = 'choice';
-const RECORD = 'record';
 const REFERENCE = 'reference';
 
 const ELEMENT_TYPE = 'element_type';
 const KEY_TYPE = 'key_type';
 const VALUE_TYPE = 'value_type';
-const STATE = 'state';
 const MIN_ITEMS = 'min_items';
 const MAX_ITEMS = 'max_items';
 const ELEMENTS = 'elements';
 const VARIANTS = 'variants';
-
-const FIELDS = 'fields';
-const GROUPS = 'groups';
-const MEMBERS = 'members';
-const FIELD_NAME = 'name';
-const TYPE = 'type';
 const TARGET = 'target';
-
-const NAME = 'name';
-const ARGUMENTS = 'arguments';
-const VALUE = 'value';
 
 /**
  * A declaration-level container as the binding record it denotes, or `undefined` when a position
@@ -715,16 +683,16 @@ function shownRef(ref: TypeRef): string {
 function tupleBinding(positions: readonly TuplePosition[]): Binding {
   const elements: ScopedValue[] = positions.map((position) => {
     const members: RecordField[] = [
-      { name: ELEMENT_TYPE, value: scopedValue(refValueOf(position.typeRef)) },
+      { name: ELEMENT_TYPE, value: scoped(refValueOf(position.typeRef)) },
     ];
     if (position.optional) {
       members.push(nameField(STATE, 'OPTIONAL'));
     }
-    return scopedValue(recordValue(members));
+    return scoped(recordValue(members));
   });
   return {
     head: TUPLE,
-    fields: [{ name: ELEMENTS, value: scopedValue(arrayValue(elements)) }],
+    fields: [{ name: ELEMENTS, value: scoped(arrayValue(elements)) }],
     applicationSlots: new Map(),
   };
 }
@@ -739,10 +707,10 @@ function tupleBinding(positions: readonly TuplePosition[]): Binding {
  * what the names *resolve* to, after reference flattening, which this phase has no answer to.
  */
 function choiceBinding(variants: readonly TypeRef[]): Binding {
-  const members: ScopedValue[] = variants.map((variant) => scopedValue(refValueOf(variant)));
+  const members: ScopedValue[] = variants.map((variant) => scoped(refValueOf(variant)));
   return {
     head: CHOICE,
-    fields: [{ name: VARIANTS, value: scopedValue(arrayValue(members)) }],
+    fields: [{ name: VARIANTS, value: scoped(arrayValue(members)) }],
     applicationSlots: new Map(),
   };
 }
@@ -776,26 +744,26 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
       // A group's members are ordinary OPTIONAL fields of the record; the group itself records
       // only their names and its own state (§5.11).
       fields.push(
-        scopedWithAnnotations(
+        scoped(
           recordValue([
-            nameField(FIELD_NAME, member.name),
-            { name: TYPE, value: scopedValue(refValueOf(member.typeRef)) },
+            nameField(NAME, member.name),
+            { name: TYPE, value: scoped(refValueOf(member.typeRef)) },
             nameField(STATE, 'OPTIONAL'),
           ]),
           member.annotations,
         ),
       );
-      members.push(scopedValue(tokenValue(member.name, 'unquoted')));
+      members.push(scoped(tokenValue(member.name, 'unquoted')));
     }
-    const groupFields: RecordField[] = [{ name: MEMBERS, value: scopedValue(arrayValue(members)) }];
+    const groupFields: RecordField[] = [{ name: MEMBERS, value: scoped(arrayValue(members)) }];
     if (entry.optional) {
       groupFields.push(nameField(STATE, 'OPTIONAL'));
     }
-    groups.push(scopedWithAnnotations(recordValue(groupFields), entry.annotations));
+    groups.push(scoped(recordValue(groupFields), entry.annotations));
   }
-  const binding: RecordField[] = [{ name: FIELDS, value: scopedValue(arrayValue(fields)) }];
+  const binding: RecordField[] = [{ name: FIELDS, value: scoped(arrayValue(fields)) }];
   if (groups.length > 0) {
-    binding.push({ name: GROUPS, value: scopedValue(arrayValue(groups)) });
+    binding.push({ name: GROUPS, value: scoped(arrayValue(groups)) });
   }
   return { head: RECORD, fields: binding, applicationSlots: new Map() };
 }
@@ -836,16 +804,16 @@ function recordFieldValue(field: FieldDef, parameters: readonly string[]): Scope
     parameters,
   );
   const members: RecordField[] = [
-    nameField(FIELD_NAME, field.name),
-    { name: TYPE, value: scopedValue(refValueOf(field.type.typeRef)) },
+    nameField(NAME, field.name),
+    { name: TYPE, value: scoped(refValueOf(field.type.typeRef)) },
   ];
   if (resolved.state !== 'REQUIRED') {
     members.push(nameField(STATE, resolved.state));
   }
   if (resolved.value !== undefined) {
-    members.push({ name: VALUE, value: scopedValue(resolved.value) });
+    members.push({ name: VALUE, value: scoped(resolved.value) });
   }
-  return scopedWithAnnotations(recordValue(members), field.annotations);
+  return scoped(recordValue(members), field.annotations);
 }
 
 /** The five `field_state` (§8.1) spellings a resolved field can carry. */
@@ -1044,13 +1012,13 @@ function hoist(binding: Binding, context: DesugarContext): TypeRef {
   const parameters = parametersIn(binding, context.currentParameters);
   if (parameters.length === 0) {
     const name = bindingName(binding);
-    inject(name, () => instanceOf(binding), context);
+    inject(name, binding, () => instanceOf(binding), context);
     return { kind: 'simpleRef', name };
   }
   const renamed = positionalNames(binding, parameters);
   const normalised = rename(binding, parameters, renamed);
   const name = bindingName(normalised);
-  inject(name, () => instanceOf(normalised, renamed), context);
+  inject(name, normalised, () => instanceOf(normalised, renamed), context);
   return {
     kind: 'genericRef',
     name,
@@ -1063,16 +1031,31 @@ function hoist(binding: Binding, context: DesugarContext): TypeRef {
   };
 }
 
-function inject(name: string, build: () => Instance, context: DesugarContext): void {
-  if (context.imported.has(name) || context.injected.has(name)) {
+/**
+ * Injects `declaration` under `name`, unless the same form already claimed it — §8.2's freshness
+ * MUST, decided rather than assumed (`mintedNames.ts`'s own doc). `binding` is the form `name` was
+ * derived from, canonically rendered here for {@link MintedNames.claim} to compare against
+ * whatever that name was first claimed with; a mismatch is a genuine 32-bit hash collision between
+ * two distinct forms; TS's own `claim` throws for that rather than silently overwriting the
+ * earlier declaration.
+ */
+function inject(
+  name: string,
+  binding: Binding,
+  build: () => Instance,
+  context: DesugarContext,
+): void {
+  if (context.imported.has(name)) {
     return;
   }
-  context.injected.set(name, {
-    nameAnnotations: [],
-    name,
-    typeDefAnnotations: [],
-    typeDef: build(),
-  });
+  if (context.minted.claim(name, canonicalBinding(binding.head, binding.fields))) {
+    context.injected.set(name, {
+      nameAnnotations: [],
+      name,
+      typeDefAnnotations: [],
+      typeDef: build(),
+    });
+  }
 }
 
 /**
@@ -1242,14 +1225,10 @@ function shownElement(element: ElementType): string {
 }
 
 // ── Wire-value builders ──────────────────────────────────────────────────────────────────────
-
-function nameField(name: string, text: string): RecordField {
-  return { name, value: scopedValue(tokenValue(text, 'unquoted')) };
-}
-
-function tokenValue(text: string, form: TokenForm): TokenValue {
-  return { kind: 'token', text, form };
-}
+//
+// `nameField`/`scoped`/`tokenValue` are `wireForm.ts`'s own — see this module's import list.
+// `recordValue`/`arrayValue` are small local conveniences over the two `CoreValue` shapes this
+// phase builds most, not part of that shared vocabulary.
 
 function recordValue(fields: readonly RecordField[]): RecordValue {
   return { kind: 'record', fields };
@@ -1257,20 +1236,6 @@ function recordValue(fields: readonly RecordField[]): RecordValue {
 
 function arrayValue(elements: readonly ScopedValue[]): CoreValue {
   return { kind: 'array', elements };
-}
-
-/** A bare value in a field or element position — no schema directive, no annotations, no type-ref of its own. */
-function scopedValue(value: CoreValue): ScopedValue {
-  return { value: { annotations: [], coreValue: value } };
-}
-
-/**
- * The same, carrying the annotations written on the construct it stands for. §6 puts a field's
- * own annotations on its resolved record, and a held body reaches that through the wire value, so
- * they travel here rather than being re-attached after the fact.
- */
-function scopedWithAnnotations(value: CoreValue, annotations: readonly Annotation[]): ScopedValue {
-  return { value: { annotations, coreValue: value } };
 }
 
 /**
@@ -1284,7 +1249,7 @@ function refSlot(
   fields: RecordField[],
   applicationSlots: Map<string, TypeRef>,
 ): void {
-  fields.push({ name: slot, value: scopedValue(refValueOf(ref)) });
+  fields.push({ name: slot, value: scoped(refValueOf(ref)) });
   if (ref.kind !== 'simpleRef') {
     applicationSlots.set(slot, ref);
   }
@@ -1293,14 +1258,14 @@ function refSlot(
 /**
  * What a `type_ref`-typed slot holds: a bare token for a plain name, `type_ref`'s record form for
  * an application. **One spelling per shape, produced in one place** — a slot written two ways is
- * a slot two phases disagree about, and {@link internalName} hashes what is written, so a second
- * spelling of one reference would split one type across two entries.
+ * a slot two phases disagree about, and `derivedName.ts`'s own `ofBinding` hashes what is
+ * written, so a second spelling of one reference would split one type across two entries.
  *
  * This is the AST-layer half of that one spelling — it operates on `ast/schema/typeref.js`'s own
- * (unresolved) `TypeRef`, since desugaring runs before resolution. `compiler/heldBody.ts`'s own
- * `metaRefValue` is the resolved-layer twin, over `schema/meta`'s `TypeRef` — a held composition/
- * refinement template's fields are already resolved by the time they are held, so that function
- * cannot reuse this one, but both spell the shape identically by construction (see its own doc).
+ * (unresolved) `TypeRef`, since desugaring runs before resolution. `wireForm.ts`'s own `refValue`
+ * is the resolved-layer twin, over `schema/meta`'s `TypeRef` — a held composition/refinement
+ * template's fields are already resolved by the time they are held, so that function cannot reuse
+ * this one, but both spell the shape identically by construction (see its own doc).
  */
 function refValueOf(ref: TypeRef): CoreValue {
   if (ref.kind === 'simpleRef') {
@@ -1324,14 +1289,14 @@ function refValueOf(ref: TypeRef): CoreValue {
 function refRecordOf(generic: GenericRef): RecordValue {
   const args: ScopedValue[] = generic.args.map((argument) => {
     if (argument.kind === 'value') {
-      return scopedValue(recordValue([{ name: VALUE, value: scopedValue(argument.value) }]));
+      return scoped(recordValue([{ name: VALUE, value: scoped(argument.value) }]));
     }
     const inner = argument.ref;
     if (inner.kind === 'genericRef') {
-      return scopedValue(recordValue([{ name: NAME, value: scopedValue(refRecordOf(inner)) }]));
+      return scoped(recordValue([{ name: NAME, value: scoped(refRecordOf(inner)) }]));
     }
     if (inner.kind === 'simpleRef') {
-      return scopedValue(recordValue([nameField(NAME, inner.name)]));
+      return scoped(recordValue([nameField(NAME, inner.name)]));
     }
     throw new TsonInternalError(
       'a type argument reference may only ever be a simpleRef or genericRef by this point in the walk',
@@ -1339,231 +1304,14 @@ function refRecordOf(generic: GenericRef): RecordValue {
   });
   return recordValue([
     nameField(NAME, generic.name),
-    { name: ARGUMENTS, value: scopedValue(arrayValue(args)) },
+    { name: ARGUMENTS, value: scoped(arrayValue(args)) },
   ]);
 }
 
 // ── Internal names (§8.2) ────────────────────────────────────────────────────────────────────
 
 function bindingName(binding: Binding): string {
-  return internalName(binding.head, binding.fields);
-}
-
-/** The readable half of a derived name: every scalar the binding record holds, in order, under `_`. */
-function appendReadable(out: string[], value: CoreValue): void {
-  switch (value.kind) {
-    case 'token':
-      out.push('_', numericTextOf(value.text, value.form === 'unquoted'));
-      break;
-    case 'record':
-      value.fields.forEach((field) => {
-        appendReadable(out, field.value.value.coreValue);
-      });
-      break;
-    case 'array':
-      value.elements.forEach((element) => {
-        appendReadable(out, element.value.coreValue);
-      });
-      break;
-    case 'map':
-    case 'empty-brace':
-    case 'absent':
-      out.push('_v');
-      break;
-  }
-}
-
-/**
- * The binding record rendered as one string, structurally and injectively: every value shape is
- * written under its own tag, nested records and arrays recurse, and each piece of author text is
- * written length-first (`4:text`), so no arrangement of delimiters inside a token can spell a
- * different record. Two renderings are equal exactly when the binding records are.
- */
-function canonicalRendering(head: string, fields: readonly RecordField[]): string {
-  const out: string[] = ['A'];
-  appendText(out, head);
-  appendFields(out, fields);
-  return out.join('');
-}
-
-function appendFields(out: string[], fields: readonly RecordField[]): void {
-  out.push('(');
-  for (const field of fields) {
-    out.push('f');
-    appendText(out, field.name);
-    appendValue(out, field.value.value.coreValue);
-  }
-  out.push(')');
-}
-
-function appendValue(out: string[], value: CoreValue): void {
-  switch (value.kind) {
-    case 'token':
-      out.push('v');
-      appendText(out, value.form);
-      appendNumberAware(out, value.text, value.form === 'unquoted');
-      break;
-    case 'record':
-      out.push('r');
-      appendFields(out, value.fields);
-      break;
-    case 'array':
-      out.push('a(');
-      value.elements.forEach((element) => {
-        appendValue(out, element.value.coreValue);
-      });
-      out.push(')');
-      break;
-    case 'map':
-    case 'empty-brace':
-    case 'absent':
-      out.push('?');
-      break;
-  }
-}
-
-/**
- * Length-first, so concatenation stays unambiguous whatever the text contains.
- *
- * Exported alongside {@link fnv1a32}/{@link canonicalNumber} so `templates.ts`'s own
- * instantiation-name rendering (§8.2, over a template application's arguments rather than a
- * binding record's fields) can share the same length-prefixed, numerically-aware encoding rather
- * than growing a second one that might quietly disagree with this one about what one form's
- * canonical text is.
- */
-export function appendText(out: string[], text: string): void {
-  out.push(`${String(text.length)}:${text}`);
-}
-
-/**
- * A token's contribution to the hashed rendering, with §4.3's numeric equivalence applied
- * ({@link canonicalNumber}). A number writes its base-type kind and its canonical magnitude as two
- * fields where anything else writes its text as one; every field being length-prefixed, no
- * token's own text can be mistaken for a tagged number.
- */
-function appendNumberAware(out: string[], text: string, unquoted: boolean): void {
-  const canonical = canonicalNumber(text, unquoted);
-  if (canonical !== undefined) {
-    appendText(out, canonical.kind);
-  }
-  appendText(out, canonical === undefined ? text : canonical.text);
-}
-
-/**
- * A 32-bit FNV-1a hash of `text`, rendered as 8 lowercase hex digits. Deterministic by
- * construction — `String.charCodeAt`, `Math.imul` and `>>> 0` are all specified exactly by
- * ECMA-262, so this is stable across hosts and across runs on the same input, which is what a
- * synthetic entry name needs (see {@link internalName}'s own note on why the exact algorithm
- * otherwise doesn't matter).
- */
-export function fnv1a32(text: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-// ── §4.3's numeric equivalence, applied where an entry's identity is derived ────────────────────
-
-/**
- * A number's identity: the base-type `kind` it resolves to (`'#i'` integer, `'#f'` float, `'#s'`
- * special), and the one `text` every spelling of its magnitude reduces to.
- */
-export interface CanonicalNumber {
-  readonly kind: string;
-  readonly text: string;
-}
-
-/**
- * [TSON-DATA] §4.3's numeric equivalence, applied where an entry's identity is derived: radix,
- * digit separators and a redundant sign fall away (`255`/`0xFF`/`0b1111_1111`/`+255`), and a
- * float's written scale does too (`.5`/`0.5`, `1.0`/`1e0`) — without this, two spellings of one
- * number would mint two entries for one type, and §5.4 would then admit a choice whose "distinct"
- * variants are actually the same type twice.
- *
- * **The base type itself never falls away**: `1` is an integer and `1.0` a float under §4's own
- * resolution order, so `kind` keeps them apart even though one magnitude covers both.
- *
- * `undefined` when `text` is not a number and identity should use the text as written — including
- * every quoted token, since §4.4 makes a quoted token never a number.
- */
-export function canonicalNumber(text: string, unquoted: boolean): CanonicalNumber | undefined {
-  if (!unquoted) {
-    return undefined;
-  }
-  const form = tryParseNumber(text);
-  if (form === undefined) {
-    return undefined;
-  }
-  switch (form.kind) {
-    case 'integer':
-    case 'based-integer':
-      return { kind: '#i', text: toExactInteger(form).toString() };
-    case 'float':
-      return { kind: '#f', text: floatText(form) };
-    case 'special-value':
-      return { kind: '#s', text: specialText(form) };
-  }
-}
-
-/** `text` reduced to its canonical spelling where it is a number, and returned unchanged where it is not. */
-function numericTextOf(text: string, unquoted: boolean): string {
-  const canonical = canonicalNumber(text, unquoted);
-  return canonical === undefined ? text : canonical.text;
-}
-
-/**
- * One spelling per magnitude whether it was written with a scale or an exponent — `1.0`, `1.00`
- * and `1e0` are one number, so trailing zeros are stripped before the text is taken. The point is
- * then put back where stripping removed it: without it a float reads as `box_float64_1` beside an
- * integer argument's own `box_int32_1`, two readable halves that differ only in their hash.
- */
-function floatText(form: Extract<NumberForm, { kind: 'float' }>): string {
-  const text = decimalPlainString(toExactDecimal(form));
-  return text.includes('.') ? text : `${text}.0`;
-}
-
-/** An exact decimal, stripped of trailing zeros, rendered as a plain (never scientific) string. */
-function decimalPlainString(decimal: TsonDecimal): string {
-  let unscaled = decimal.unscaled;
-  let exponent = decimal.exponent;
-  const negative = unscaled < 0n;
-  if (negative) {
-    unscaled = -unscaled;
-  }
-  if (unscaled === 0n) {
-    return '0';
-  }
-  while (unscaled % 10n === 0n) {
-    unscaled /= 10n;
-    exponent += 1;
-  }
-  const digits = unscaled.toString();
-  let out: string;
-  if (exponent >= 0) {
-    out = digits + '0'.repeat(exponent);
-  } else {
-    const fractionDigits = -exponent;
-    out =
-      digits.length > fractionDigits
-        ? `${digits.slice(0, digits.length - fractionDigits)}.${digits.slice(digits.length - fractionDigits)}`
-        : `0.${'0'.repeat(fractionDigits - digits.length)}${digits}`;
-  }
-  return negative ? `-${out}` : out;
-}
-
-/**
- * `.nan`, `.inf`, `.infinity` are one value each, and a `+` on either infinity spelling is
- * redundant — §4.3's special values carry the same equivalence the magnitudes do. `.nan` is never
- * signed by the grammar, so it needs no sign case of its own.
- */
-function specialText(form: Extract<NumberForm, { kind: 'special-value' }>): string {
-  if (form.special === 'nan') {
-    return 'nan';
-  }
-  return form.sign === 'minus' ? '-inf' : 'inf';
+  return ofBinding(binding.head, binding.fields);
 }
 
 // ── Small shared helpers ─────────────────────────────────────────────────────────────────────

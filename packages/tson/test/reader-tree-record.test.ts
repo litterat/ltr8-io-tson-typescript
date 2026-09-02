@@ -107,6 +107,16 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     });
   });
 
+  it('a stated-absent OPTIONAL field (§2.9) is present as an AbsentNode, distinct from one never written', () => {
+    const r = reader([field('name', 'text', 'REQUIRED'), field('age', 'int32', 'OPTIONAL')]);
+    const stated = runSync(r.read(bodyContextOver('{ name: "Ada" age: _ }')));
+    const omitted = runSync(r.read(bodyContextOver('{ name: "Ada" }')));
+    if (stated.kind !== 'record' || omitted.kind !== 'record') throw new Error('unreachable');
+    expect(stated.fields.has('age')).toBe(true);
+    expect(stated.fields.get('age')).toEqual({ kind: 'absent', annotations: { values: [] } });
+    expect(omitted.fields.has('age')).toBe(false);
+  });
+
   it('reports TYPE_MISMATCH and yields an AbsentNode when no shape matches', () => {
     const r = reader([field('name', 'text', 'REQUIRED'), field('age', 'int32', 'REQUIRED')]);
     const { ctx, diagnostics } = collectingContextOver('"not a record"');

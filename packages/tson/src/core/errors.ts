@@ -278,7 +278,11 @@ export class TsonNotImplementedError extends TsonError {
 /**
  * An invariant this library guarantees has been broken.
  *
- * Never reachable from any document, however malformed. Seeing one is a bug here.
+ * Never reachable from any document, however malformed. Seeing one is a bug here — or in a
+ * dependency this instance was configured with that broke its own contract, e.g. a {@link
+ * SchemaSource} (`config.ts`) resolving to something other than the `Uint8Array` it declares:
+ * that is a fault in the caller's source, not a verdict on a document, and reporting it as a
+ * schema failure would let the wrong implementation "work" by silently misclassifying the bug.
  */
 export class TsonInternalError extends TsonError {
   override readonly name = 'TsonInternalError';

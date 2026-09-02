@@ -235,7 +235,7 @@ describe('name hygiene reaches the facade (§8.2)', () => {
     // cannot tell apart. Mechanism 1 is a relation, so it fires on the pair, never on either
     // name alone.
     const result = validate(bytesOf('{ aec: 1  аес: 2 }'));
-    expect(result.diagnostics.map((d) => d.code)).toEqual(['NAME_HYGIENE_REFUSED']);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['CONFUSABLE_NAMES']);
   });
 
   it('leaves an ordinary record alone', () => {
@@ -244,7 +244,7 @@ describe('name hygiene reaches the facade (§8.2)', () => {
 
   it('honours a relaxed policy, which is a code decision and never ambient', () => {
     const result = validate(bytesOf('{ aec: 1  аес: 2 }'), {
-      namePolicy: { ...DEFAULT_NAME_POLICY, skeletonDistinctness: false },
+      identifierPolicy: { ...DEFAULT_NAME_POLICY, skeletonDistinctness: false },
     });
     expect(result.diagnostics).toEqual([]);
   });

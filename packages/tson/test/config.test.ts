@@ -11,10 +11,21 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { createTson, type SchemaSource } from '../src/config.js';
+import { createTson, mapSchemaSource, type SchemaSource } from '../src/config.js';
+import {
+  DEFAULT_NAME_POLICY,
+  DEFAULT_TOKEN_POLICY,
+  tokenPolicy,
+  withRestrictionLevel,
+} from '../src/unicode/policy.js';
+import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
 import { linkSchema } from '../src/link/link.js';
-import { TsonSchemaFetchError, TsonSchemaValidationError } from '../src/core/errors.js';
+import {
+  TsonInternalError,
+  TsonSchemaFetchError,
+  TsonSchemaValidationError,
+} from '../src/core/errors.js';
 
 const SPEC = fileURLToPath(new URL('../../../spec/m/', import.meta.url));
 
@@ -170,5 +181,124 @@ describe('createTson: preload against a configured schemaSource', () => {
     };
     const tson = createTson({ schemaSource: source });
     await expect(tson.preload([tamperedId])).rejects.toThrow();
+  });
+});
+
+describe('createTson: a SchemaSource resolving to a non-Uint8Array is a fault, not a fetch failure', () => {
+  it('throws TsonInternalError -- never TsonSchemaFetchError -- naming the reference', async () => {
+    const source = {
+      // A source violating its own declared contract: resolves to `undefined` instead of
+      // throwing TsonSchemaFetchError. Cast past the type system the same way a loosely-typed
+      // or plain-JS caller would reach this at runtime.
+      fetch: () => Promise.resolve(undefined),
+    } as unknown as SchemaSource;
+    const tson = createTson({ schemaSource: source });
+    await expect(tson.fetch('https://example.com/a.tn')).rejects.toBeInstanceOf(TsonInternalError);
+    await expect(tson.fetch('https://example.com/a.tn')).rejects.not.toBeInstanceOf(
+      TsonSchemaFetchError,
+    );
+    await expect(tson.fetch('https://example.com/a.tn')).rejects.toThrow(/a\.tn/u);
+  });
+
+  it('preload surfaces the same fault rather than reporting the schema unavailable', async () => {
+    const source = {
+      fetch: () => Promise.resolve(null),
+    } as unknown as SchemaSource;
+    const tson = createTson({ schemaSource: source });
+    await expect(tson.preload(['https://example.com/a.tn'])).rejects.toBeInstanceOf(
+      TsonInternalError,
+    );
+  });
+});
+
+describe('mapSchemaSource: a SchemaSource over an in-memory table (port of TsonSchemaSource.ofMap)', () => {
+  it('serves an entry by its exact key', async () => {
+    const source = mapSchemaSource(new Map([['https://example.com/a.tn', bytesOf('a')]]));
+    await expect(source.fetch('https://example.com/a.tn')).resolves.toEqual(bytesOf('a'));
+  });
+
+  it('accepts a plain Record as well as a Map', async () => {
+    const source = mapSchemaSource({ 'https://example.com/a.tn': bytesOf('a') });
+    await expect(source.fetch('https://example.com/a.tn')).resolves.toEqual(bytesOf('a'));
+  });
+
+  it('matches by canonical identity: a ?sha256= pin and a scheme difference both still find the entry', async () => {
+    const source = mapSchemaSource(new Map([['http://example.com/a.tn', bytesOf('a')]]));
+    await expect(source.fetch('https://example.com/a.tn?sha256=deadbeef')).resolves.toEqual(
+      bytesOf('a'),
+    );
+  });
+
+  it('a miss throws TsonSchemaFetchError with reason not-found, distinct from no-source-configured', async () => {
+    const source = mapSchemaSource(new Map());
+    const error: unknown = await source
+      .fetch('https://example.com/missing.tn')
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TsonSchemaFetchError);
+    expect(error).toMatchObject({
+      reason: 'not-found',
+      schemaId: 'https://example.com/missing.tn',
+    });
+  });
+
+  it('a syntactically illegal reference at fetch time is not-permitted, not not-found', async () => {
+    const source = mapSchemaSource(new Map([['https://example.com/a.tn', bytesOf('a')]]));
+    const error: unknown = await source.fetch('not a uri at all').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TsonSchemaFetchError);
+    expect(error).toMatchObject({ reason: 'not-permitted' });
+  });
+
+  it('two keys canonicalizing to the same identity with identical bytes are accepted', () => {
+    expect(() =>
+      mapSchemaSource(
+        new Map([
+          ['http://example.com/a.tn', bytesOf('a')],
+          ['https://example.com/a.tn', bytesOf('a')],
+        ]),
+      ),
+    ).not.toThrow();
+  });
+
+  it('two keys canonicalizing to the same identity with different bytes are refused at construction', () => {
+    expect(() =>
+      mapSchemaSource(
+        new Map([
+          ['http://example.com/a.tn', bytesOf('a')],
+          ['https://example.com/a.tn', bytesOf('b')],
+        ]),
+      ),
+    ).toThrow(TsonSchemaValidationError);
+  });
+
+  it("used as a Tson instance's schemaSource, a miss surfaces through fetch/preload as usual", async () => {
+    const tson = createTson({
+      schemaSource: mapSchemaSource(new Map([['https://example.com/a.tn', bytesOf('a')]])),
+    });
+    await expect(tson.fetch('https://example.com/missing.tn')).rejects.toMatchObject({
+      reason: 'not-found',
+    });
+  });
+});
+
+describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
+  it('reports both policies and the UCD release they were computed against', () => {
+    const tson = createTson();
+    expect(tson.processorPolicy.identifierPolicy).toEqual(DEFAULT_NAME_POLICY);
+    expect(tson.processorPolicy.tokenPolicy).toEqual(DEFAULT_TOKEN_POLICY);
+    expect(tson.processorPolicy.unicodeDataVersion).toBe(UTS39_VERSION);
+  });
+
+  it('carries the policies the instance was configured with, not the defaults', () => {
+    const identifierPolicy = withRestrictionLevel(DEFAULT_NAME_POLICY, 'ASCII_ONLY');
+    const token = tokenPolicy('SINGLE_SCRIPT');
+    const tson = createTson({ identifierPolicy, tokenPolicy: token });
+    expect(tson.processorPolicy.identifierPolicy).toEqual(identifierPolicy);
+    expect(tson.processorPolicy.tokenPolicy).toEqual(token);
+  });
+
+  it('is answerable with no document in hand -- a sender needs the policy before writing', () => {
+    // The whole point of stating it on the instance: nothing has been read, and there is still an
+    // answer. A version discoverable only from a refusal arrives one round trip too late.
+    expect(createTson().processorPolicy.unicodeDataVersion).toBe(UTS39_VERSION);
   });
 });

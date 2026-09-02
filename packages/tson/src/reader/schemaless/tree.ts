@@ -79,8 +79,17 @@ import type {
 } from '../../ast/value.js';
 import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/nodes.js';
 import { absentNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
+import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
 import { toNfc } from '../../unicode/nfc.js';
-import { nameHygieneRefusal, DEFAULT_NAME_POLICY, type NamePolicy } from '../../unicode/policy.js';
+import {
+  DEFAULT_NAME_POLICY,
+  DEFAULT_TOKEN_POLICY,
+  nameHygieneRefusal,
+  tokenHygieneRefusal,
+  type NamePolicy,
+  type TokenPolicy,
+} from '../../unicode/policy.js';
+import { firstConfusableCollision } from '../../unicode/skeleton.js';
 import { UTS39_VERSION } from '../../unicode/uts39.js';
 import { deepEqual } from '../tree/equality.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
@@ -97,15 +106,35 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    */
   readonly preserveUnknownTypeRefs?: boolean;
   /**
-   * [TSON-DATA] §8.2's name-hygiene policy, applied over each record's own field names (§8.2's
-   * one Part 1 scope) once per record, after its fields are read. Defaults to
-   * {@link DEFAULT_NAME_POLICY} -- mechanisms 1 and 2 enforced, mechanism 3 at Highly Restrictive
-   * over the whole name -- matching §8.2's own defaults. Relaxing any of the three is this
-   * field's job (`unicode/policy.ts`'s own `with*` functions build a relaxed value); §8.2 forbids
-   * relaxing one silently, e.g. from an environment variable, which is exactly what passing a
-   * policy explicitly here is not.
+   * [TSON-DATA] §8.2's name-hygiene policy. Two independent scopes read from it at this layer:
+   * each record's own field names (§8.2's one Part 1 scope over a *name*, checked once per
+   * record after its fields are read -- see {@link reportNameHygiene} for why field names see
+   * mechanism 1 only), and every type-ref/annotation name as it is pulled off the event stream
+   * (checked once each, as they are lexically `identifier`, §7.4/§7.7 -- see
+   * `checkIdentifierHygiene` in this module). Defaults to {@link DEFAULT_NAME_POLICY} -- mechanism
+   * 3 at Highly Restrictive over the whole name -- matching §8.2's own defaults. Relaxing any of
+   * the three is this field's job (`unicode/policy.ts`'s own `with*` functions build a relaxed
+   * value); §8.2 forbids relaxing one silently, e.g. from an environment variable, which is
+   * exactly what passing a policy explicitly here is not.
    */
-  readonly namePolicy?: NamePolicy;
+  readonly identifierPolicy?: NamePolicy;
+  /**
+   * [TSON-DATA] §8.2's "Values" paragraph: the policy applied to every token this reader decodes
+   * as a value -- a record field's value, an array element, a map key or its value, and (nested,
+   * recursively) an annotation's own value. Defaults to {@link DEFAULT_TOKEN_POLICY}, Unrestricted,
+   * so an ordinary read scans nothing. Distinct from {@link identifierPolicy}: a value has no
+   * identifier profile and no scope to be distinct within, so only the restricted-script rule
+   * (mechanism 3) ever applies here -- see `unicode/policy.ts`'s own {@link TokenPolicy} doc.
+   *
+   * **Never checked against a field name, type-ref, or annotation name.** Those are `identifier`
+   * positions governed by {@link identifierPolicy} alone (`checkIdentifierHygiene`,
+   * {@link reportNameHygiene}); this field governs the positions that are not names at all. The
+   * pinned Java reference checks both surfaces together at its own event-source layer, where the
+   * four text-bearing event kinds are not yet told apart (`TokenPolicyEventSource`'s own doc); this
+   * reader already dispatches on event kind before either check runs, so the two surfaces are kept
+   * separate here rather than merged incidentally.
+   */
+  readonly tokenPolicy?: TokenPolicy;
 }
 
 /**
@@ -118,9 +147,11 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
 export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}): TypeReader<Value> {
   const preserve = options.preserveUnknownTypeRefs ?? false;
   const limit = maxNestingDepthOf(options);
-  const namePolicy = options.namePolicy ?? DEFAULT_NAME_POLICY;
+  const identifierPolicy = options.identifierPolicy ?? DEFAULT_NAME_POLICY;
+  const tokenPolicy = options.tokenPolicy ?? DEFAULT_TOKEN_POLICY;
   return {
-    read: (ctx: ReadContext): Task<Value> => readNode(ctx, preserve, limit, namePolicy, 0),
+    read: (ctx: ReadContext): Task<Value> =>
+      readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, 0),
   };
 }
 
@@ -131,7 +162,13 @@ export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}):
 // to hand back an `Annotations` directly rather than a bare `readonly Annotation[]`.
 // ---------------------------------------------------------------------------------------------
 
-function* readStructuralAnnotations(ctx: ReadContext, limit: number, depth = 0): Task<Annotations> {
+function* readStructuralAnnotations(
+  ctx: ReadContext,
+  limit: number,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
+  depth = 0,
+): Task<Annotations> {
   const first = yield* ctx.peek();
   if (first.kind !== 'annotation-start') {
     return EMPTY_ANNOTATIONS;
@@ -141,13 +178,14 @@ function* readStructuralAnnotations(ctx: ReadContext, limit: number, depth = 0):
     const start = yield* ctx.peek();
     if (start.kind !== 'annotation-start') break;
     yield* ctx.next();
+    checkIdentifierHygiene(ctx, start.name, identifierPolicy);
     let value: DataValue | undefined;
     const afterStart = yield* ctx.peek();
     if (afterStart.kind !== 'annotation-end') {
       // One level deeper: an annotation's value is a data value, so `@a:@a:@a:...` is a real
       // descent even though it opens no brace or bracket, and it is the one this stack has no
       // path step to count (§9.1). Unbounded, it exhausted the host stack out of `readTree`.
-      value = yield* readStructuralDataValue(ctx, limit, depth + 1);
+      value = yield* readStructuralDataValue(ctx, limit, identifierPolicy, tokenPolicy, depth + 1);
     }
     yield* ctx.next(); // annotation-end
     values.push(value === undefined ? { name: start.name } : { name: start.name, value });
@@ -155,7 +193,13 @@ function* readStructuralAnnotations(ctx: ReadContext, limit: number, depth = 0):
   return { values };
 }
 
-function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): Task<DataValue> {
+function* readStructuralDataValue(
+  ctx: ReadContext,
+  limit: number,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
+  depth = 0,
+): Task<DataValue> {
   if (depth >= limit) {
     throw new TsonReadError({
       code: 'TYPE_MISMATCH',
@@ -165,14 +209,21 @@ function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): T
       actual: 'deeper',
     });
   }
-  const annotations = yield* readStructuralAnnotations(ctx, limit, depth);
-  let typeRef: string | undefined;
-  const peeked = yield* ctx.peek();
-  if (peeked.kind === 'type-ref') {
-    yield* ctx.next();
-    typeRef = peeked.name;
-  }
-  const coreValue = yield* readStructuralCoreValue(ctx, limit, depth);
+  const annotations = yield* readStructuralAnnotations(
+    ctx,
+    limit,
+    identifierPolicy,
+    tokenPolicy,
+    depth,
+  );
+  const typeRef = yield* readTypeRefName(ctx, identifierPolicy);
+  const coreValue = yield* readStructuralCoreValue(
+    ctx,
+    limit,
+    identifierPolicy,
+    tokenPolicy,
+    depth,
+  );
   return {
     annotations: annotations.values,
     ...(typeRef !== undefined ? { typeRef } : {}),
@@ -183,6 +234,8 @@ function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): T
 function* readStructuralScopedValue(
   ctx: ReadContext,
   limit: number,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
   depth: number,
 ): Task<ScopedValue> {
   const peeked = yield* ctx.peek();
@@ -191,11 +244,17 @@ function* readStructuralScopedValue(
     yield* ctx.next();
     schemaRef = peeked.uri;
   }
-  const value = yield* readStructuralDataValue(ctx, limit, depth);
+  const value = yield* readStructuralDataValue(ctx, limit, identifierPolicy, tokenPolicy, depth);
   return { ...(schemaRef !== undefined ? { schemaRef } : {}), value };
 }
 
-function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number): Task<CoreValue> {
+function* readStructuralCoreValue(
+  ctx: ReadContext,
+  limit: number,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
+  depth: number,
+): Task<CoreValue> {
   const e = yield* ctx.next();
   switch (e.kind) {
     case 'record-start': {
@@ -205,7 +264,13 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
         if (fieldName.kind !== 'field-name') {
           throw new TsonInternalError(`expected field-name, got '${fieldName.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
+        const value = yield* readStructuralScopedValue(
+          ctx,
+          limit,
+          identifierPolicy,
+          tokenPolicy,
+          depth + 1,
+        );
         fields.push({ name: fieldName.name, value });
       }
       yield* ctx.next(); // record-end
@@ -214,12 +279,24 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
     case 'map-start': {
       const entries: AstMapEntry[] = [];
       while ((yield* ctx.peek()).kind !== 'map-end') {
-        const key = yield* readStructuralDataValue(ctx, limit, depth + 1);
+        const key = yield* readStructuralDataValue(
+          ctx,
+          limit,
+          identifierPolicy,
+          tokenPolicy,
+          depth + 1,
+        );
         const arrow = yield* ctx.next();
         if (arrow.kind !== 'map-arrow') {
           throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
+        const value = yield* readStructuralScopedValue(
+          ctx,
+          limit,
+          identifierPolicy,
+          tokenPolicy,
+          depth + 1,
+        );
         entries.push({ key, value });
       }
       yield* ctx.next(); // map-end
@@ -228,12 +305,15 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
     case 'array-start': {
       const elements: ScopedValue[] = [];
       while ((yield* ctx.peek()).kind !== 'array-end') {
-        elements.push(yield* readStructuralScopedValue(ctx, limit, depth + 1));
+        elements.push(
+          yield* readStructuralScopedValue(ctx, limit, identifierPolicy, tokenPolicy, depth + 1),
+        );
       }
       yield* ctx.next(); // array-end
       return { kind: 'array', elements };
     }
     case 'token':
+      checkTokenHygiene(ctx, e.text, tokenPolicy);
       return { kind: 'token', text: e.text, form: e.form };
     case 'absent':
       return { kind: 'absent' };
@@ -244,12 +324,113 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
   }
 }
 
-/** Consumes an optional leading `type-ref` (§3.2), returning its name -- the second half of a data-value's `annotation* type-ref?` framing, kept (not discarded) because both the node's own `typeRef` and `checkTypeRef`'s dispatch need it. */
-function* readTypeRefName(ctx: ReadContext): Task<string | undefined> {
+/**
+ * Consumes an optional leading `type-ref` (§3.2), returning its name -- the second half of a
+ * data-value's `annotation* type-ref?` framing, kept (not discarded) because both the node's own
+ * `typeRef` and `checkTypeRef`'s dispatch need it. Checks the name against `identifierPolicy` via
+ * {@link checkIdentifierHygiene} the moment it is consumed -- this function, together with
+ * {@link readStructuralAnnotations}, is the whole of where this reader ever pulls a `type-ref` or
+ * `annotation-start` event, so between the two of them every such name in the document is judged
+ * exactly once.
+ */
+function* readTypeRefName(
+  ctx: ReadContext,
+  identifierPolicy: NamePolicy,
+): Task<string | undefined> {
   const peeked = yield* ctx.peek();
   if (peeked.kind !== 'type-ref') return undefined;
   yield* ctx.next();
+  checkIdentifierHygiene(ctx, peeked.name, identifierPolicy);
   return peeked.name;
+}
+
+/**
+ * [TSON-DATA] §8.2's restricted-character and restricted-script rules (mechanisms 2 and 3) over
+ * one type-ref or annotation name -- the `identifier` position §7.4 marks (§7.6: `type-ref = "!"
+ * identifier`, `annotation = "@" identifier`), checked the moment this reader consumes the event
+ * that carries it.
+ *
+ * **Mechanism 1 (skeleton distinctness) cannot apply here and none is disabled to get that**:
+ * it is a relation over a scope, and a lone name has no scope to be distinct within
+ * (`unicode/skeleton.ts`'s own note). Calling {@link nameHygieneRefusal} with a single-element
+ * name array already cannot produce a `'skeleton-distinctness'` result -- collision detection
+ * needs two names -- so passing `identifierPolicy` through unmodified still checks only mechanisms 2
+ * and 3, with no extra flag to thread or override.
+ *
+ * Ports the reference implementation's `DefaultTsonReadContext.checkNameHygiene`
+ * (`tson-compiler/.../DefaultTsonReadContext.java`), which runs this same pair of rules on every
+ * freshly-pulled `TypeRef`/`AnnotationStart` event and *never* on one replayed from a rewound
+ * lookahead, so one name is judged exactly once even across a dispatcher that peeks past
+ * annotations to decide what to read next. **This reader has no lookahead of its own** -- unlike
+ * `reader/bind.ts`'s variant dispatch, nothing in this module ever calls `reader/contracts.ts`'s
+ * `lookingAhead`, so every `ctx.next()` this file issues consumes a genuinely fresh event and
+ * this function is reached from exactly the two sites that ever consume a `type-ref` or
+ * `annotation-start` event ({@link readTypeRefName}, {@link readStructuralAnnotations}) --
+ * exactly-once falls out of never replaying at all, rather than needing a fresh-vs-replayed
+ * branch the way the reference implementation's shared, lookahead-capable context does.
+ */
+function checkIdentifierHygiene(
+  ctx: ReadContext,
+  name: string,
+  identifierPolicy: NamePolicy,
+): void {
+  const refusal = nameHygieneRefusal([name], identifierPolicy);
+  if (refusal === undefined) return;
+  const message =
+    `the name '${name}' is refused under [TSON-DATA] §8.2's name-hygiene policy: ` + refusal.detail;
+  try {
+    ctx.report(
+      diagnosticCodeForMechanism(refusal.mechanism),
+      message,
+      'a name this processor will accept',
+      `'${name}'`,
+    );
+  } catch (thrown) {
+    throw new TsonNameHygieneRefusedError(message, {
+      mechanism: refusal.mechanism,
+      names: refusal.names,
+      uts39Version: UTS39_VERSION,
+      cause: thrown,
+    });
+  }
+}
+
+/**
+ * [TSON-DATA] §8.2's "Values" paragraph, over `text` -- the decoded text of one token this reader
+ * has just pulled off the stream, before anything below this point (an atom parser, §4 base
+ * resolution) has looked at it. Checked at every site this module ever consumes a `token` event
+ * ({@link readNode}'s own leaf case, and {@link readStructuralCoreValue}'s, for a value nested
+ * inside an annotation), so a token is judged exactly once regardless of which of the two pulled
+ * it -- the same never-replayed guarantee {@link checkIdentifierHygiene} relies on, since neither
+ * function's caller ever rewinds past a `token` event either.
+ *
+ * **Restricted-script only.** {@link tokenHygieneRefusal} can return only that one rule -- see its
+ * own doc and `unicode/policy.ts`'s {@link TokenPolicy} doc for why mechanisms 1 and 2 have
+ * nothing to check on a value.
+ *
+ * Reported/thrown exactly the way {@link checkIdentifierHygiene} is -- see that function's own
+ * note, and {@link reportNameHygiene}'s, on why a fail-fast refusal here surfaces as
+ * {@link TsonNameHygieneRefusedError} rather than {@link TsonReadError}.
+ */
+function checkTokenHygiene(ctx: ReadContext, text: string, tokenPolicy: TokenPolicy): void {
+  const detail = tokenHygieneRefusal(text, tokenPolicy);
+  if (detail === undefined) return;
+  const message = `the token '${text}' is refused under [TSON-DATA] §8.2's "Values" token policy: ${detail}`;
+  try {
+    ctx.report(
+      diagnosticCodeForMechanism('restriction-level'),
+      message,
+      'a token this processor will accept',
+      `'${text}'`,
+    );
+  } catch (thrown) {
+    throw new TsonNameHygieneRefusedError(message, {
+      mechanism: 'restriction-level',
+      names: [text],
+      uts39Version: UTS39_VERSION,
+      cause: thrown,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -299,7 +480,8 @@ function* readNode(
   ctx: ReadContext,
   preserve: boolean,
   limit: number,
-  namePolicy: NamePolicy,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
   depth: number,
 ): Task<Value> {
   if (depth >= limit) {
@@ -316,17 +498,44 @@ function* readNode(
       actual: 'deeper',
     });
   }
-  const annotations = yield* readStructuralAnnotations(ctx, limit);
-  const typeRefName = yield* readTypeRefName(ctx);
+  const annotations = yield* readStructuralAnnotations(ctx, limit, identifierPolicy, tokenPolicy);
+  const typeRefName = yield* readTypeRefName(ctx, identifierPolicy);
   const peeked = yield* ctx.peek();
   const match = checkTypeRef(ctx, typeRefName, peeked, preserve);
   switch (peeked.kind) {
     case 'record-start':
-      return yield* readRecord(ctx, typeRefName, annotations, preserve, limit, namePolicy, depth);
+      return yield* readRecord(
+        ctx,
+        typeRefName,
+        annotations,
+        preserve,
+        limit,
+        identifierPolicy,
+        tokenPolicy,
+        depth,
+      );
     case 'map-start':
-      return yield* readMap(ctx, typeRefName, annotations, preserve, limit, namePolicy, depth);
+      return yield* readMap(
+        ctx,
+        typeRefName,
+        annotations,
+        preserve,
+        limit,
+        identifierPolicy,
+        tokenPolicy,
+        depth,
+      );
     case 'array-start':
-      return yield* readArray(ctx, typeRefName, annotations, preserve, limit, namePolicy, depth);
+      return yield* readArray(
+        ctx,
+        typeRefName,
+        annotations,
+        preserve,
+        limit,
+        identifierPolicy,
+        tokenPolicy,
+        depth,
+      );
     case 'empty-brace':
       yield* ctx.next();
       return recordNode(new Map(), typeRefName, annotations);
@@ -335,6 +544,7 @@ function* readNode(
       return absentNode(typeRefName, annotations);
     case 'token':
       yield* ctx.next();
+      checkTokenHygiene(ctx, peeked.text, tokenPolicy);
       return leaf(ctx, peeked, typeRefName, match, annotations);
     default:
       throw new TsonInternalError(`unexpected event where a value was expected: '${peeked.kind}'`);
@@ -352,7 +562,8 @@ function* readRecord(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
-  namePolicy: NamePolicy,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // record-start
@@ -382,11 +593,18 @@ function* readRecord(
           `'${fieldName}' stated again`,
         );
     }
-    const value = yield* readNode(ctx.field(fieldName), preserve, limit, namePolicy, depth + 1);
+    const value = yield* readNode(
+      ctx.field(fieldName),
+      preserve,
+      limit,
+      identifierPolicy,
+      tokenPolicy,
+      depth + 1,
+    );
     fields.set(fieldName, value);
   }
   yield* ctx.next(); // record-end
-  reportNameHygiene(ctx, fields.keys(), namePolicy);
+  reportNameHygiene(ctx, fields.keys(), identifierPolicy);
   return recordNode(fields, typeRefName, annotations);
 }
 
@@ -397,9 +615,21 @@ function* readRecord(
  * occurrence as fields arrived; this is the different rule that two *distinct* names read alike,
  * and mechanism 1 needs the whole set collected before it can see a collision at all).
  *
+ * **Skeleton distinctness only -- mechanisms 2 and 3 never run over this scope.** A `field-name`
+ * is `unquoted-token / single-line-token` (§2.5, §7.4), lexical rather than `identifier` (§7.7),
+ * so it carries no identifier profile and no restriction level to be judged against in the first
+ * place; only mechanism 1's look-alike relation applies, because two *values* that happen to read
+ * alike are exactly the confusion §8.2 exists to catch, whatever grammar rule produced them. This
+ * matches the reference implementation's `SchemalessTreeReader.reportConfusableFields`
+ * (`tson-compiler/.../reader/SchemalessTreeReader.java`), which calls only
+ * `ConfusableNames.firstCollision` here -- never `IdentifierParser.hygiene` or a restriction-level
+ * check. (A type-ref or annotation name, by contrast, sits on an `identifier` position and is
+ * checked by `checkIdentifierHygiene`, this module's own port of the reference's
+ * `DefaultTsonReadContext.checkNameHygiene`.)
+ *
  * **A refusal is a fifth outcome, not one of §8.1's four error categories** -- reported through
  * `ctx.report` so a *collecting* read gets the ordinary `Diagnostic` shape (path, position, the
- * new `NAME_HYGIENE_REFUSED` code) in its list exactly like every other finding, but a *fail-fast*
+ * its own §8.2 refusal code) in its list exactly like every other finding, but a *fail-fast*
  * read must not surface it as {@link TsonReadError}: that class is what a caller (a conformance
  * runner among them) tests to recognise §8.1's resolver category, and a policy refusal is
  * explicitly not one. `ctx.report` synchronously throws only when its receiver is fail-fast
@@ -412,25 +642,31 @@ function* readRecord(
 function reportNameHygiene(
   ctx: ReadContext,
   fieldNames: Iterable<string>,
-  namePolicy: NamePolicy,
+  identifierPolicy: NamePolicy,
 ): void {
-  const refusal = nameHygieneRefusal(fieldNames, namePolicy);
-  if (refusal === undefined) return;
+  if (!identifierPolicy.skeletonDistinctness) return;
+  const collision = firstConfusableCollision(fieldNames);
+  if (collision === undefined) return;
   // §8.2 "on detection": reported at the second occurrence's position, in the manner of §2.6's
-  // duplicate-key diagnostic -- `names` ends with the offending name for every mechanism (the
-  // one name itself for mechanisms 2/3, `collision.second` for mechanism 1).
-  const at = refusal.names[refusal.names.length - 1] ?? '';
+  // duplicate-key diagnostic.
+  const at = collision.second;
   const message =
     `this record's field names are refused under [TSON-DATA] §8.2's name-hygiene policy: ` +
-    `${refusal.detail} (computed against UTS #39 version ${UTS39_VERSION})`;
+    `'${collision.second}' is confusable with '${collision.first}' -- the two are different ` +
+    `names that read alike (UTS #39 skeleton), so one of them must be renamed`;
   try {
     ctx
       .field(at)
-      .report('NAME_HYGIENE_REFUSED', message, 'field names §8.2 can tell apart', `'${at}'`);
+      .report(
+        diagnosticCodeForMechanism('skeleton-distinctness'),
+        message,
+        'field names §8.2 can tell apart',
+        `'${at}'`,
+      );
   } catch (thrown) {
     throw new TsonNameHygieneRefusedError(message, {
-      mechanism: refusal.mechanism,
-      names: refusal.names,
+      mechanism: 'skeleton-distinctness',
+      names: [collision.first, collision.second],
       uts39Version: UTS39_VERSION,
       cause: thrown,
     });
@@ -443,7 +679,8 @@ function* readArray(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
-  namePolicy: NamePolicy,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // array-start
@@ -455,7 +692,14 @@ function* readArray(
       yield* ctx.next();
     }
     elements.push(
-      yield* readNode(ctx.index(elements.length), preserve, limit, namePolicy, depth + 1),
+      yield* readNode(
+        ctx.index(elements.length),
+        preserve,
+        limit,
+        identifierPolicy,
+        tokenPolicy,
+        depth + 1,
+      ),
     );
   }
   yield* ctx.next(); // array-end
@@ -474,7 +718,8 @@ function* readMap(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
-  namePolicy: NamePolicy,
+  identifierPolicy: NamePolicy,
+  tokenPolicy: TokenPolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // map-start
@@ -489,7 +734,7 @@ function* readMap(
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
-    const key = yield* readNode(ctx, preserve, limit, namePolicy, depth + 1);
+    const key = yield* readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, depth + 1);
     if (key.kind === 'absent') {
       // §2.9: the absent sentinel states that a position carries no value, and a map key is a
       // position that must. The map-entry production admits any value in key position, so this
@@ -530,7 +775,8 @@ function* readMap(
       ctx.field(keySegment(key)),
       preserve,
       limit,
-      namePolicy,
+      identifierPolicy,
+      tokenPolicy,
       depth + 1,
     );
     entries.push({ key, value });

@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { fromString, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import {
+  TsonBindMismatchError,
   TsonInternalError,
+  TsonMissingBindingError,
   TsonNotImplementedError,
   TsonReadError,
   TsonSchemaValidationError,
@@ -19,7 +21,7 @@ import type { RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type { Top, TypeDefinition } from '../src/schema/meta/typedef.js';
 import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 
-const META = '!!meta:"https://example.com/m.tn1"';
+const META = '!!meta:"https://example.com/m.tn"';
 
 function parse(declarations: string): SchemaDocument {
   return runSync(parseSchemaDocument(fromString(`${META} { ${declarations} }`)));
@@ -678,6 +680,75 @@ describe('annotations (§6)', () => {
     });
     const resolved = resolveOne(resolver, doc, 't');
     expect(resolved.annotations).toEqual([{ name: 'doc', value: 'hello' }]);
+  });
+
+  // Direct port of `e33b2942`'s `DefinitionResolver.java:422-425` diff, onto this function's own
+  // twin: `bindAtomInstance` (same file) already had this two-way catch; `bindAnnotationValue`'s
+  // catch-all used to relabel both as `TsonNotImplementedError` (`NOT_IMPLEMENTED`) instead of
+  // surfacing them as themselves (`BIND_MISMATCH`).
+  it('propagates TsonMissingBindingError from the annotation value reader as itself, not TsonNotImplementedError', () => {
+    const doc = parse('t => @doc:"hello" { x: token }');
+    const { resolver, structure } = harness({
+      annotationValueReader: () => {
+        throw new TsonMissingBindingError("no binding registered for 'doc'");
+      },
+    });
+    structure.set('doc', {
+      kind: 'ATOM',
+      parameters: [],
+      constructor: false,
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'unit' },
+      annotations: [],
+    });
+    const error = thrownBy(() => resolveOne(resolver, doc, 't'));
+    expect(error).toBeInstanceOf(TsonMissingBindingError);
+    expect((error as Error).message).toContain("'t'");
+  });
+
+  it('propagates TsonBindMismatchError from the annotation value reader as itself, not TsonNotImplementedError', () => {
+    const doc = parse('t => @doc:"hello" { x: token }');
+    const { resolver, structure } = harness({
+      annotationValueReader: () => {
+        throw new TsonBindMismatchError("'doc' and its binding disagree about its fields");
+      },
+    });
+    structure.set('doc', {
+      kind: 'ATOM',
+      parameters: [],
+      constructor: false,
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'unit' },
+      annotations: [],
+    });
+    const error = thrownBy(() => resolveOne(resolver, doc, 't'));
+    // TsonMissingBindingError extends TsonBindMismatchError, so this also guards against the
+    // fix over-matching: a plain TsonBindMismatchError must not become a TsonMissingBindingError.
+    expect(error).toBeInstanceOf(TsonBindMismatchError);
+    expect(error).not.toBeInstanceOf(TsonMissingBindingError);
+    expect((error as Error).message).toContain("'t'");
+  });
+
+  it('still relabels every other failure as TsonNotImplementedError (the catch-all is unchanged for anything else)', () => {
+    const doc = parse('t => @doc:"hello" { x: token }');
+    const { resolver, structure } = harness({
+      annotationValueReader: () => {
+        throw new Error('some unrelated failure');
+      },
+    });
+    structure.set('doc', {
+      kind: 'ATOM',
+      parameters: [],
+      constructor: false,
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'unit' },
+      annotations: [],
+    });
+    const error = thrownBy(() => resolveOne(resolver, doc, 't'));
+    expect(error).toBeInstanceOf(TsonNotImplementedError);
   });
 });
 

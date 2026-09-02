@@ -34,11 +34,11 @@
  *
  * **Identity (§8.2).** An instantiation entry is keyed on the flattened application recorded in
  * `source`, so two `box<text>` anywhere land on one entry. The derived name is built by
- * {@link internalName} from the application itself, which is what makes that dedup fall out of
- * naming rather than needing a second table — and, per this work package's own brief, is why
- * {@link internalName} takes no dependency on iteration order: it is a pure function of a head
+ * `derivedName.ts`'s own `ofApplication` from the application itself, which is what makes that
+ * dedup fall out of naming rather than needing a second table: it is a pure function of a head
  * and an argument list, nothing else, so the same application derives the same name whichever
- * declaration happens to reach it first.
+ * declaration happens to reach it first. `mintedNames.ts`'s own instance below decides §8.2's
+ * freshness MUST over every name this materialiser mints.
  *
  * **Knot-tying.** The memo entry is registered *before* the body is substituted, so a recursive
  * application reached during substitution (`tree<T>` inside `tree`, which becomes `tree<text>`
@@ -64,15 +64,12 @@ import {
   TsonReadError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import type { CoreValue, DataValue, RecordValue, ScopedValue, TokenValue } from '../ast/value.js';
-import type { Token, TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
-import {
-  appendText,
-  canonicalNumber,
-  fnv1a32,
-  internalName as formInternalName,
-} from './desugar.js';
-import { isApplication, typeRefOf, type HeldBody } from './heldBody.js';
+import type { CoreValue, DataValue, TokenValue } from '../ast/value.js';
+import type { TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
+import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
+import { createMintedNames, type MintedNames } from './mintedNames.js';
+import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
+import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
@@ -228,6 +225,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
 
   const generated = deps.generatedNames ?? new Set<string>();
 
+  /**
+   * §8.2's freshness MUST over the names this materialiser mints, one instance for this whole
+   * materialisation phase — see `mintedNames.ts`'s own doc on why one phase gets exactly one
+   * instance, never one shared with `desugar.ts`'s own.
+   */
+  const minted: MintedNames = createMintedNames();
+
   /** The first few links of the closing chain, for the depth guard's own message. */
   function chain(): string {
     const shown = [...closing].slice(0, 4);
@@ -297,7 +301,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           'applied (§5.10)',
       );
     }
-    const name = internalName(head, args);
+    const name = ofApplication(head, args);
     if (aliasClosing.has(name)) {
       throw new TsonSchemaValidationError(
         `'${head}<...>' is a reference template whose own body applies it again, so composing it never ` +
@@ -306,6 +310,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           'field can carry it',
       );
     }
+    // §8.2's freshness MUST, decided rather than assumed -- covers both branches below, since
+    // either an application closed here for the first time or one already built/under
+    // construction must be *this* application, not another that happens to derive the same name.
+    minted.claim(name, canonicalApplication(head, args));
     if (materialised.has(name) || closing.has(name)) {
       return name; // already built, or under construction -- the knot-tying case
     }
@@ -475,7 +483,11 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // names the entry its inner form became, and a form closed here has to agree with it or
     // `[[pixel; 3]; 3]` written out and `grid<pixel, 3>` closed would be two entries for one type.
     const fields = closed.wire.kind === 'record' ? closed.wire.fields : [];
-    const formName = formInternalName(target, fields);
+    const formName = ofBinding(target, fields);
+    // §8.2's freshness MUST: the desugar phase mints from the same rendering when a form is
+    // written out directly, so a genuine mismatch here is a real 32-bit collision, never the
+    // ordinary "already built" case below.
+    minted.claim(formName, canonicalBinding(target, fields));
     if (deps.namespaceDefinitions(formName) !== undefined) {
       return formName; // already built, here or by the desugar phase -- one entry per form, schema-wide
     }
@@ -508,7 +520,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   ): string {
     const substituted = substitute(open.application.coreValue, head, template.parameters, bindings);
     const closed = closeApplications(substituted);
-    const target = closed.kind === 'record' ? fieldOf(closed, 'target') : undefined;
+    const target = closed.kind === 'record' ? field(closed, 'target') : undefined;
     if (target?.kind !== 'token') {
       throw new TsonInternalError(
         `'${head}<...>' is an alias whose target did not close to a name -- heldBody.ts writes ` +
@@ -521,7 +533,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
 
   /**
    * Every application still written in `type_ref`'s record form, closed to a bare reference to
-   * the entry it denotes — the inverse of the shape `heldBody.ts`'s `metaRefValue` writes when a
+   * the entry it denotes — the inverse of the shape `wireForm.ts`'s `refValue` writes when a
    * slot holds one. Runs on the wire value rather than on the body read from it because the
    * *name* {@link closeHeldTemplate} derives depends on it.
    */
@@ -650,16 +662,6 @@ function instantiationOf(
   };
 }
 
-/** `{ name: ...  target: ... }`'s own `target` member, by name — `undefined` when absent. */
-function fieldOf(record: RecordValue, name: string): CoreValue | undefined {
-  return record.fields.find((f) => f.name === name)?.value.value.coreValue;
-}
-
-/** The same scoped value carrying a rewritten core value — annotations and type-ref kept as written. */
-function rescope(original: ScopedValue, rewritten: CoreValue): ScopedValue {
-  return { ...original, value: { ...original.value, coreValue: rewritten } };
-}
-
 /** One definition with every application inside it closed, `source` and whatever its body carries alike. */
 function mapRefs(definition: TypeDefinition, map: (ref: TypeRef) => TypeRef): TypeDefinition {
   return {
@@ -717,76 +719,6 @@ export function mapBodyRefs(body: Top, map: (ref: TypeRef) => TypeRef): Top {
 }
 
 // ── Instantiation names (§8.2) ───────────────────────────────────────────────────────────────
-
-/**
- * `head_arg_arg_hash` — §8.2's own recommendation for an internal name, "a readable head plus a
- * structural hash", built the same way `desugar.ts`'s own `internalName` builds one for a
- * synthetic form, but over a template *application*'s argument list rather than a binding
- * record's fields — the two are genuinely different shapes (a `TypeArgument` list here, a
- * `RecordField` list there), so this is its own rendering rather than a second call into that
- * one.
- *
- * **Deterministic and iteration-order-independent by construction**, per this work package's own
- * requirement: this is a pure function of `head` and `args` alone, sharing `desugar.ts`'s own
- * `appendText`/`fnv1a32`/`canonicalNumber` (§4.3's numeric equivalence: `255`/`0xFF` are one
- * argument, `1`/`1.0` stay two) so the same application, closed from any declaration in any
- * order, derives the same name — which is what makes two `box<text>` anywhere in a schema land on
- * one entry (§8.2), and is why an entry name generated here is safe to fold into a schema's
- * canonical form and its content hash.
- *
- * The hash itself is this port's own business, exactly as `desugar.ts`'s own note says of its
- * twin: nothing downstream compares it against the reference implementation's `String.hashCode`
- * rendering, only against itself, on this host, across runs.
- */
-function internalName(head: string, args: readonly TypeArgument[]): string {
-  const readable: string[] = [head];
-  const canonical: string[] = ['A'];
-  appendText(canonical, head);
-  canonical.push('(');
-  for (const argument of args) {
-    if (argument.kind === 'ref') {
-      readable.push('_', argument.ref.name);
-      canonical.push('r');
-      appendRef(canonical, argument.ref);
-    } else {
-      readable.push('_', numericTextOf(argument.value));
-      canonical.push('v');
-      appendText(canonical, argument.value.form);
-      appendNumberAware(canonical, argument.value);
-    }
-  }
-  canonical.push(')');
-  const hash = fnv1a32(canonical.join(''));
-  return `${readable.join('')}_${hash.toString(16).padStart(8, '0')}`;
-}
-
-function appendRef(out: string[], ref: TypeRef): void {
-  out.push('n');
-  appendText(out, ref.name);
-  out.push('(');
-  for (const argument of ref.arguments) {
-    if (argument.kind === 'ref') {
-      out.push('r');
-      appendRef(out, argument.ref);
-    } else {
-      appendText(out, argument.value.form);
-      appendNumberAware(out, argument.value);
-    }
-  }
-  out.push(')');
-}
-
-/** A value argument's readable segment, with §4.3's numeric equivalence applied. */
-function numericTextOf(token: Token): string {
-  const canonical = canonicalNumber(token.text, token.form === 'UNQUOTED');
-  return canonical === undefined ? token.text : canonical.text;
-}
-
-/** A value argument's contribution to the hashed rendering: a number writes its base-type kind and its canonical magnitude as two fields where anything else writes its text as one. */
-function appendNumberAware(out: string[], token: Token): void {
-  const canonical = canonicalNumber(token.text, token.form === 'UNQUOTED');
-  if (canonical !== undefined) {
-    appendText(out, canonical.kind);
-  }
-  appendText(out, canonical === undefined ? token.text : canonical.text);
-}
+//
+// `derivedName.ts`'s own `ofApplication`/`canonicalApplication` do the rendering; this module's
+// only remaining business is calling them and claiming the result through `mintedNames.ts`.
