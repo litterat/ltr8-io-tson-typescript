@@ -193,9 +193,7 @@ describe('createTson: a SchemaSource resolving to a non-Uint8Array is a fault, n
       fetch: () => Promise.resolve(undefined),
     } as unknown as SchemaSource;
     const tson = createTson({ schemaSource: source });
-    await expect(tson.fetch('https://example.com/a.tn')).rejects.toBeInstanceOf(
-      TsonInternalError,
-    );
+    await expect(tson.fetch('https://example.com/a.tn')).rejects.toBeInstanceOf(TsonInternalError);
     await expect(tson.fetch('https://example.com/a.tn')).rejects.not.toBeInstanceOf(
       TsonSchemaFetchError,
     );
@@ -226,16 +224,21 @@ describe('mapSchemaSource: a SchemaSource over an in-memory table (port of TsonS
 
   it('matches by canonical identity: a ?sha256= pin and a scheme difference both still find the entry', async () => {
     const source = mapSchemaSource(new Map([['http://example.com/a.tn', bytesOf('a')]]));
-    await expect(
-      source.fetch('https://example.com/a.tn?sha256=deadbeef'),
-    ).resolves.toEqual(bytesOf('a'));
+    await expect(source.fetch('https://example.com/a.tn?sha256=deadbeef')).resolves.toEqual(
+      bytesOf('a'),
+    );
   });
 
   it('a miss throws TsonSchemaFetchError with reason not-found, distinct from no-source-configured', async () => {
     const source = mapSchemaSource(new Map());
-    const error: unknown = await source.fetch('https://example.com/missing.tn').catch((e: unknown) => e);
+    const error: unknown = await source
+      .fetch('https://example.com/missing.tn')
+      .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TsonSchemaFetchError);
-    expect(error).toMatchObject({ reason: 'not-found', schemaId: 'https://example.com/missing.tn' });
+    expect(error).toMatchObject({
+      reason: 'not-found',
+      schemaId: 'https://example.com/missing.tn',
+    });
   });
 
   it('a syntactically illegal reference at fetch time is not-permitted, not not-found', async () => {
@@ -267,7 +270,7 @@ describe('mapSchemaSource: a SchemaSource over an in-memory table (port of TsonS
     ).toThrow(TsonSchemaValidationError);
   });
 
-  it('used as a Tson instance\'s schemaSource, a miss surfaces through fetch/preload as usual', async () => {
+  it("used as a Tson instance's schemaSource, a miss surfaces through fetch/preload as usual", async () => {
     const tson = createTson({
       schemaSource: mapSchemaSource(new Map([['https://example.com/a.tn', bytesOf('a')]])),
     });

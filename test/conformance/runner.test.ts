@@ -344,7 +344,11 @@ function checkReaderVector(vector: Vector, subject: Uint8Array, sidecar: ReaderS
  * here is what makes rule 3d's second half a runner assertion rather than an assumption about the
  * library's class hierarchy.
  */
-function checkRefusedReaderVector(vector: Vector, subject: Uint8Array, sidecar: ReaderSidecar): void {
+function checkRefusedReaderVector(
+  vector: Vector,
+  subject: Uint8Array,
+  sidecar: ReaderSidecar,
+): void {
   if (sidecar.refused === undefined) {
     throw new Error(`${vector.name}: a 'refused' reader-layer vector must declare its mechanism`);
   }

@@ -1039,7 +1039,12 @@ function hoist(binding: Binding, context: DesugarContext): TypeRef {
  * two distinct forms; TS's own `claim` throws for that rather than silently overwriting the
  * earlier declaration.
  */
-function inject(name: string, binding: Binding, build: () => Instance, context: DesugarContext): void {
+function inject(
+  name: string,
+  binding: Binding,
+  build: () => Instance,
+  context: DesugarContext,
+): void {
   if (context.imported.has(name)) {
     return;
   }

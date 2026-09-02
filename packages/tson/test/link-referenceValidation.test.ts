@@ -133,7 +133,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   });
 });
 
-describe('validateReferences: a Data body\'s own references() contract (§4.1)', () => {
+describe("validateReferences: a Data body's own references() contract (§4.1)", () => {
   function brokenDataBody(returning: unknown): Top {
     // Violates Data.references()'s "never null/undefined -- return [] for none" contract on
     // purpose: `references` is present (so the "omitted means none" branch does not apply) but

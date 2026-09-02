@@ -61,7 +61,7 @@ describe('ofBinding', () => {
     expect(name).not.toContain('путь');
   });
 
-  it('a `.` in a numeric literal changes the readable spelling, not the two forms\' identity', () => {
+  it("a `.` in a numeric literal changes the readable spelling, not the two forms' identity", () => {
     // §4.3's numeric equivalence is unaffected by sanitisation: `1.0`'s readable half loses the
     // `.` (not XID_Continue) but the canonical rendering -- and so the structural hash -- is the
     // one thing that decides identity, and it goes through NumericIdentity first either way.

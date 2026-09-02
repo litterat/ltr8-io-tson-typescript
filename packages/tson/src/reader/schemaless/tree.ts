@@ -209,9 +209,21 @@ function* readStructuralDataValue(
       actual: 'deeper',
     });
   }
-  const annotations = yield* readStructuralAnnotations(ctx, limit, identifierPolicy, tokenPolicy, depth);
+  const annotations = yield* readStructuralAnnotations(
+    ctx,
+    limit,
+    identifierPolicy,
+    tokenPolicy,
+    depth,
+  );
   const typeRef = yield* readTypeRefName(ctx, identifierPolicy);
-  const coreValue = yield* readStructuralCoreValue(ctx, limit, identifierPolicy, tokenPolicy, depth);
+  const coreValue = yield* readStructuralCoreValue(
+    ctx,
+    limit,
+    identifierPolicy,
+    tokenPolicy,
+    depth,
+  );
   return {
     annotations: annotations.values,
     ...(typeRef !== undefined ? { typeRef } : {}),
@@ -267,7 +279,13 @@ function* readStructuralCoreValue(
     case 'map-start': {
       const entries: AstMapEntry[] = [];
       while ((yield* ctx.peek()).kind !== 'map-end') {
-        const key = yield* readStructuralDataValue(ctx, limit, identifierPolicy, tokenPolicy, depth + 1);
+        const key = yield* readStructuralDataValue(
+          ctx,
+          limit,
+          identifierPolicy,
+          tokenPolicy,
+          depth + 1,
+        );
         const arrow = yield* ctx.next();
         if (arrow.kind !== 'map-arrow') {
           throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
@@ -315,7 +333,10 @@ function* readStructuralCoreValue(
  * `annotation-start` event, so between the two of them every such name in the document is judged
  * exactly once.
  */
-function* readTypeRefName(ctx: ReadContext, identifierPolicy: NamePolicy): Task<string | undefined> {
+function* readTypeRefName(
+  ctx: ReadContext,
+  identifierPolicy: NamePolicy,
+): Task<string | undefined> {
   const peeked = yield* ctx.peek();
   if (peeked.kind !== 'type-ref') return undefined;
   yield* ctx.next();
@@ -348,12 +369,15 @@ function* readTypeRefName(ctx: ReadContext, identifierPolicy: NamePolicy): Task<
  * exactly-once falls out of never replaying at all, rather than needing a fresh-vs-replayed
  * branch the way the reference implementation's shared, lookahead-capable context does.
  */
-function checkIdentifierHygiene(ctx: ReadContext, name: string, identifierPolicy: NamePolicy): void {
+function checkIdentifierHygiene(
+  ctx: ReadContext,
+  name: string,
+  identifierPolicy: NamePolicy,
+): void {
   const refusal = nameHygieneRefusal([name], identifierPolicy);
   if (refusal === undefined) return;
   const message =
-    `the name '${name}' is refused under [TSON-DATA] §8.2's name-hygiene policy: ` +
-    refusal.detail;
+    `the name '${name}' is refused under [TSON-DATA] §8.2's name-hygiene policy: ` + refusal.detail;
   try {
     ctx.report(
       diagnosticCodeForMechanism(refusal.mechanism),

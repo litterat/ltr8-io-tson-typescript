@@ -165,7 +165,10 @@ export function heldRecord(
   encodeAnnotation: AnnotationValueEncoder = defaultAnnotationValueEncoder,
 ): DataValue {
   const fields = body.fields.map((f) => {
-    const members: RecordField[] = [nameField(NAME, f.name), { name: TYPE, value: scoped(refValue(f.type)) }];
+    const members: RecordField[] = [
+      nameField(NAME, f.name),
+      { name: TYPE, value: scoped(refValue(f.type)) },
+    ];
     if (f.state !== 'REQUIRED') {
       members.push(nameField(STATE, f.state));
     }
@@ -197,7 +200,10 @@ export function heldRecord(
   if (body.supertypes.length > 0) {
     binding.push({
       name: SUPERTYPES,
-      value: scoped({ kind: 'array', elements: body.supertypes.map((s: string) => scoped(tokenValue(s))) }),
+      value: scoped({
+        kind: 'array',
+        elements: body.supertypes.map((s: string) => scoped(tokenValue(s))),
+      }),
     });
   }
   binding.push({ name: FIELDS, value: scoped({ kind: 'array', elements: fields }) });
@@ -235,7 +241,10 @@ export function refValue(ref: TypeRef): CoreValue {
   });
   return {
     kind: 'record',
-    fields: [nameField(NAME, ref.name), { name: ARGUMENTS, value: scoped({ kind: 'array', elements: args }) }],
+    fields: [
+      nameField(NAME, ref.name),
+      { name: ARGUMENTS, value: scoped({ kind: 'array', elements: args }) },
+    ],
   };
 }
 
@@ -286,6 +295,8 @@ export function argumentOf(argument: RecordValue): TypeArgument {
     throw new TsonInternalError("a type_argument record form always carries 'name' or 'value'");
   }
   const ref =
-    name.kind === 'token' ? { name: name.text, arguments: [], annotations: [] } : typeRefOf(name as RecordValue);
+    name.kind === 'token'
+      ? { name: name.text, arguments: [], annotations: [] }
+      : typeRefOf(name as RecordValue);
   return { kind: 'ref', ref };
 }

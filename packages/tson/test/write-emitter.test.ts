@@ -102,9 +102,12 @@ describe('§2.5/§7.1/§7.2/§2.9 field-name quoting -- unquoted only where it s
     expect(field('first name')).toBe('{ "first name": 1 }');
   });
 
-  it.each(['.', '-', '+'])('a lone boundary sign %j is quoted -- alone it is never an unquoted token (§7.2.4)', (sign) => {
-    expect(field(sign)).toBe(`{ "${sign}": 1 }`);
-  });
+  it.each(['.', '-', '+'])(
+    'a lone boundary sign %j is quoted -- alone it is never an unquoted token (§7.2.4)',
+    (sign) => {
+      expect(field(sign)).toBe(`{ "${sign}": 1 }`);
+    },
+  );
 
   it('a sign immediately followed by a continuation character stays unquoted', () => {
     expect(field('-abc')).toBe('{ -abc: 1 }');

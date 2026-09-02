@@ -136,7 +136,7 @@ export function mapSchemaSource(
     if (existing !== undefined && !bytesEqual(existing, bytes)) {
       throw new TsonSchemaValidationError(
         `mapSchemaSource: '${reference}' and an earlier key both canonicalize to '${identity}' ` +
-          'but name different bytes -- a scheme or ?sha256= pin is not part of a schema\'s ' +
+          "but name different bytes -- a scheme or ?sha256= pin is not part of a schema's " +
           'identity (§2.2.1), so keys differing only in those name one schema and cannot both ' +
           'be served',
       );
@@ -253,9 +253,10 @@ function limitOf(config: Config): NestingLimitOptions {
 }
 
 /** {@link Config.identifierPolicy} and {@link Config.tokenPolicy}, as the fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, two fields over. */
-function policyOptionsOf(
-  config: Config,
-): { readonly identifierPolicy?: NamePolicy; readonly tokenPolicy?: TokenPolicy } {
+function policyOptionsOf(config: Config): {
+  readonly identifierPolicy?: NamePolicy;
+  readonly tokenPolicy?: TokenPolicy;
+} {
   return {
     ...(config.identifierPolicy === undefined ? {} : { identifierPolicy: config.identifierPolicy }),
     ...(config.tokenPolicy === undefined ? {} : { tokenPolicy: config.tokenPolicy }),
@@ -461,7 +462,7 @@ export function createTson(config: Config = {}): Tson {
       throw new TsonInternalError(
         `the SchemaSource fetching '${reference}' resolved to ` +
           `${bytes === null ? 'null' : typeof bytes} instead of a Uint8Array -- a SchemaSource ` +
-          "signals \"cannot supply this\" only by throwing TsonSchemaFetchError; anything else " +
+          'signals "cannot supply this" only by throwing TsonSchemaFetchError; anything else ' +
           'is a fault in that source. If this source is a plain map lookup, mapSchemaSource(...) ' +
           'is that lookup done to contract',
       );

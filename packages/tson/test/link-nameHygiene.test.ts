@@ -48,7 +48,20 @@ const AEC_CYRILLIC = cp(0x0430, 0x0435, 0x0441);
 /** A single mixed-script name -- Latin `id_` plus Cyrillic `пользователя` -- refused by mechanism 3s default whole-name unit alone, with nothing else in its scope for mechanism 1 to relate it to. */
 const ID_POLZOVATELYA =
   'id_' +
-  cp(0x043f, 0x043e, 0x043b, 0x044c, 0x0437, 0x043e, 0x0432, 0x0430, 0x0442, 0x0435, 0x043b, 0x044f);
+  cp(
+    0x043f,
+    0x043e,
+    0x043b,
+    0x044c,
+    0x0437,
+    0x043e,
+    0x0432,
+    0x0430,
+    0x0442,
+    0x0435,
+    0x043b,
+    0x044f,
+  );
 
 function ref(name: string): TypeRef {
   return { name, arguments: [], annotations: [] };
@@ -217,10 +230,7 @@ describe("checkNameHygiene: a template's own type parameters (this implementatio
 
   it('refuses a single mixed-script type parameter under mechanism 3', () => {
     const s = schema('https://x/s.tn', [
-      [
-        'box',
-        def(record([field('v', ref(ID_POLZOVATELYA))]), { parameters: [ID_POLZOVATELYA] }),
-      ],
+      ['box', def(record([field('v', ref(ID_POLZOVATELYA))]), { parameters: [ID_POLZOVATELYA] })],
     ]);
     const refused = refusalOf(() => linkSchema(s));
     expect(refused.mechanism).toBe('restriction-level');
@@ -284,7 +294,9 @@ describe('checkNameHygiene: the rule never fires on a lone name', () => {
       ],
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError); // the default whole-name level refuses one of them
-    expect(() => linkSchema(s, { identifierPolicy: perSegment(DEFAULT_NAME_POLICY) })).not.toThrow();
+    expect(() =>
+      linkSchema(s, { identifierPolicy: perSegment(DEFAULT_NAME_POLICY) }),
+    ).not.toThrow();
   });
 });
 
