@@ -3,10 +3,24 @@ import { describe, expect, it } from 'vitest';
 import { validateReferences } from '../src/link/referenceValidation.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonBindMismatchError, TsonSchemaValidationError } from '../src/core/errors.js';
-import type { Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import type { RecordField } from '../src/schema/meta/bodies.js';
+import type { Token, Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
 
 function ref(name: string, args: TypeRef['arguments'] = []): TypeRef {
   return { name, arguments: args, annotations: [] };
+}
+
+function token(text: string, form: Token['form'] = 'UNQUOTED'): Token {
+  return { text, form };
+}
+
+function field(
+  name: string,
+  type: TypeRef,
+  state: RecordField['state'],
+  value?: Token,
+): RecordField {
+  return { name, type, state, annotations: [], ...(value === undefined ? {} : { value }) };
 }
 
 function def(
@@ -395,5 +409,242 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).toThrow();
+  });
+});
+
+describe('validateReferences: field values (§5.2)', () => {
+  const point = def({ kind: 'record', supertypes: [], fields: [], groups: [] });
+  const status = def({ kind: 'enum', members: ['UP', 'DOWN'] });
+  const int = def({ kind: 'integer_type' });
+
+  it('rejects a default on a record-typed field', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['point', point],
+      [
+        'odd',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('p', ref('point'), 'REQUIRED_DEFAULT', token('3'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/is declared 'point', which is a record, so it cannot have a default/u);
+  });
+
+  it('rejects a fixed value on an array-typed field, naming "fixed value" rather than "default"', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['text', text],
+      [
+        'arr',
+        def({
+          kind: 'array',
+          elementType: ref('text'),
+          state: 'REQUIRED',
+          unordered: false,
+          uniqueItems: false,
+        }),
+      ],
+      [
+        'odd',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('a', ref('arr'), 'REQUIRED_FIXED', token('x'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/cannot have a fixed value/u);
+  });
+
+  it('rejects a default on a choice-typed field', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['text', text],
+      ['int', int],
+      ['choice', def({ kind: 'choice', variants: [ref('text'), ref('int')] })],
+      [
+        'odd',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('c', ref('choice'), 'REQUIRED_DEFAULT', token('x'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/is a choice/u);
+  });
+
+  it('accepts a default naming a real member of the field’s declared enum', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['status', status],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('state', ref('status'), 'REQUIRED_DEFAULT', token('UP'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
+  it('rejects a default naming something that is not a member of the field’s declared enum', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['status', status],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('state', ref('status'), 'REQUIRED_DEFAULT', token('SIDEWAYS'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/not a value of that type/u);
+  });
+
+  it('rejects a fixed value that is not shaped like the field’s declared atom type', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['int', int],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('n', ref('int'), 'REQUIRED_FIXED', token('not-a-number'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/not a value of that type/u);
+  });
+
+  it('skips a field whose own type names one of the enclosing template’s parameters', () => {
+    const merged = new Map<string, TypeDefinition>([
+      [
+        'box',
+        def(
+          {
+            kind: 'record',
+            supertypes: [],
+            fields: [field('v', ref('T'), 'REQUIRED_DEFAULT', token('T'))],
+            groups: [],
+          },
+          { parameters: ['T'] },
+        ),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
+  it('skips a field whose declared type is itself still open (a template, not yet applied)', () => {
+    const merged = new Map<string, TypeDefinition>([
+      [
+        'box',
+        def(
+          {
+            kind: 'record',
+            supertypes: [],
+            fields: [field('v', ref('T'), 'REQUIRED')],
+            groups: [],
+          },
+          { parameters: ['T'] },
+        ),
+      ],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [
+            field(
+              'b',
+              ref('box', [{ kind: 'ref', ref: ref('text') }]),
+              'REQUIRED_DEFAULT',
+              token('x'),
+            ),
+          ],
+          groups: [],
+        }),
+      ],
+      ['text', text],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
+  it("rejects a default on a field declared 'void' (unit's own non-scalar instance)", () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['void', def({ kind: 'unit' })],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('v', ref('void'), 'REQUIRED_DEFAULT', token('x'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/the void type/u);
+  });
+
+  it("accepts a default on unit's scalar, non-'void' instance without checking the value’s shape", () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['token', def({ kind: 'unit' })],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('t', ref('token'), 'REQUIRED_DEFAULT', token('anything at all'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
+  it('quotes the echoed value in the message when it was written quoted', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['point', point],
+      [
+        'odd',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('p', ref('point'), 'REQUIRED_DEFAULT', token('hi', 'SINGLE_LINE_QUOTED'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/"hi"/u);
   });
 });

@@ -27,16 +27,24 @@
  * namespace here, so re-checking it costs work but never a false diagnostic.
  */
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
-import { TsonBindMismatchError, TsonSchemaValidationError } from '../core/errors.js';
-import { isDataBody } from './bodyKind.js';
+import {
+  TsonAtomParseError,
+  TsonAtomValidationError,
+  TsonBindMismatchError,
+  TsonSchemaValidationError,
+} from '../core/errors.js';
+import { isDataBody, type NonDataTop } from './bodyKind.js';
+import { atomParserFor, isScalarBody } from '../atom/forType.js';
+import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import type {
   ArrayBody,
   ChoiceBody,
   MapBody,
   RecordBody,
+  RecordField,
   TupleBody,
 } from '../schema/meta/bodies.js';
-import type { TypeArgument, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
+import type { Token, TypeArgument, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -211,6 +219,7 @@ function validateBody(
       }
       for (const field of r.fields) {
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
+        checkFieldValue(entryName, field, namespace, ownParameters);
       }
       for (const group of r.groups) {
         for (const member of group.members) {
@@ -287,6 +296,135 @@ function validateBody(
     case 'extern':
       return; // no type reference of their own to validate
   }
+}
+
+// ── Field values (§5.2) ──────────────────────────────────────────────────────────────────────
+
+/**
+ * §5.2's "a fixed or default value is available on a scalar-typed field and nowhere else",
+ * checked against `field`'s own *resolved* type -- which is why this runs here rather than in
+ * `compiler/fieldModifiers.ts`'s own `resolveFieldModifiers` (that table answers before a field's
+ * type is even known; see its own doc). Mirrors the reference implementation's own
+ * `TsonSchemaLinker.checkFieldValue`.
+ *
+ * **Atoms and enums only, and the rest is not silently blessed.** A field typed by a record,
+ * container or choice needs a compiled reader to check a value against, and compilation happens
+ * after linking, so those are left for `compile.ts`'s own construction-time read (`STATUS.md`
+ * tracks nothing extra here: a non-scalar default is caught below regardless, before any reader
+ * is ever built).
+ *
+ * **A field whose own type is one of `ownParameters` is skipped by construction.** A held body is
+ * not read as this vocabulary at all, so the only parametric field reaching this function has
+ * already been substituted by materialisation and is checked against the concrete type it was
+ * closed with.
+ */
+function checkFieldValue(
+  entryName: string,
+  field: RecordField,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  ownParameters: readonly string[],
+): void {
+  if (field.value === undefined || ownParameters.includes(field.type.name)) {
+    return;
+  }
+  const target = namespace.get(field.type.name);
+  // An unresolved reference is already reported by validateTypeRef, above; a target that is still
+  // open (or an application of one) has no single body to check against until materialisation
+  // closes it. A held body (no `kind` of its own) is excluded by the parameters check just above,
+  // kept here too as a defensive no-op; a `Data` body is not a type at all, already rejected as
+  // this field's own type reference by `validateTypeRef`; and a `reference`-bodied target should
+  // not occur -- §8.3 flattens a type position past one -- so skipping is the right answer if it
+  // ever does: the chain end is what would have to be checked, not the hop.
+  if (
+    target === undefined ||
+    target.parameters.length > 0 ||
+    field.type.arguments.length > 0 ||
+    !('kind' in target.body) ||
+    isDataBody(target.body) ||
+    target.body.kind === 'reference'
+  ) {
+    return;
+  }
+  const body = target.body;
+  const value = field.value;
+  if (!isScalarBody(field.type.name, body)) {
+    throw notAScalarType(entryName, field, value, body);
+  }
+  const parser = atomParserFor(field.type.name, body);
+  if (parser === undefined) {
+    return; // scalar but unchecked here -- see `atom/forType.ts`'s own top note
+  }
+  try {
+    parser.read({ text: value.text, form: lexerFormOfMeta(value.form) });
+  } catch (e: unknown) {
+    if (!(e instanceof TsonAtomParseError || e instanceof TsonAtomValidationError)) {
+      throw e;
+    }
+    // The field's two halves are what the author has to reconcile, so both are named, in the
+    // order they are written, and the value is echoed as the schema spells it -- quoted if it was
+    // quoted, so the author reads back their own line rather than a normalisation of it. The
+    // atom's own message follows: it already states the rule and cites the section, so nothing
+    // here restates it.
+    throw new TsonSchemaValidationError(
+      `'${entryName}': field '${field.name}' is declared '${field.type.name}', but its ` +
+        `${field.state === 'REQUIRED_DEFAULT' ? 'default' : 'fixed value'} ${asWritten(value)} is ` +
+        `not a value of that type -- ${e.message}. §5.2 makes a field's fixed or default value a ` +
+        "value of the field's own declared type",
+    );
+  }
+}
+
+/**
+ * §5.2's "Which fields may carry a value" -- only a scalar-typed field may, and the verdict is
+ * about the field rather than about the token: §12.1 admits only a bare token after `~`/`=`
+ * (writing `~ [...]` or `~ { ... }` is a syntax error, not another value), so for a non-scalar
+ * field there is no better token to suggest.
+ */
+function notAScalarType(
+  entryName: string,
+  field: RecordField,
+  value: Token,
+  body: NonDataTop,
+): Error {
+  return new TsonSchemaValidationError(
+    `'${entryName}': field '${field.name}' is declared '${field.type.name}', which is ` +
+      `${describeBody(body)}, so it cannot have ` +
+      `${field.state === 'REQUIRED_DEFAULT' ? 'a default' : 'a fixed value'} -- ${asWritten(value)} ` +
+      'is a token, and §5.2 admits only a bare token there. A fixed or default value is ' +
+      'available on a field typed by an atom or an enum, and nowhere else: drop the modifier, or ' +
+      'declare the field with a scalar type',
+  );
+}
+
+/** What a non-scalar body is, for the message -- named the way an author would name it, not by class. */
+function describeBody(body: NonDataTop): string {
+  switch (body.kind) {
+    case 'array':
+      return 'an array';
+    case 'map':
+      return 'a map';
+    case 'tuple':
+      return 'a tuple';
+    case 'record':
+      return 'a record';
+    case 'choice':
+      return 'a choice';
+    case 'reference':
+      return 'an alias';
+    case 'unit':
+      return 'the void type'; // reached only when isScalarBody already refused this same name
+    case 'unknown_type':
+      return 'the unknown type, which is every type rather than a token shape';
+    case 'extern':
+      return 'an external type';
+    default:
+      return 'not a scalar type';
+  }
+}
+
+/** A token echoed the way the schema spells it, so a quoted value is visibly quoted in the message. */
+function asWritten(token: Token): string {
+  return token.form === 'UNQUOTED' ? token.text : `"${token.text}"`;
 }
 
 // ── Type references ──────────────────────────────────────────────────────────────────────────
