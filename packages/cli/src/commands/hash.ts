@@ -17,15 +17,16 @@
 import { readFile } from 'node:fs/promises';
 import { sha256Hex, withSha256Pin, TsonSchemaValidationError } from '@ltr8/tson/identity';
 import { readIdDirective } from '../idDirective.js';
+import { outcomeOfFiles, type Outcome } from '../outcome.js';
 import { describeError } from '../problem.js';
 
 export interface HashFileResult {
   readonly file: string;
-  readonly ok: boolean;
+  readonly outcome: Outcome;
   readonly id?: string;
   readonly contentHash?: string;
   readonly pinnedReference?: string;
-  /** Why `ok` is `false` -- a content problem (no line terminator on an otherwise-openable file). */
+  /** Why `outcome` is `'INVALID'` -- a content problem (no line terminator on an otherwise-openable file). Never `'NOT_CHECKED'`: an unreadable file throws past this result entirely rather than becoming one. */
   readonly problem?: string;
 }
 
@@ -38,14 +39,14 @@ async function hashOne(file: string): Promise<HashFileResult> {
   const id = readIdDirective(bytes)?.id;
   return {
     file,
-    ok: true,
+    outcome: 'VALID',
     ...(id === undefined ? {} : { id, pinnedReference: withSha256Pin(id, contentHash) }),
     contentHash,
   };
 }
 
 export interface HashRun {
-  readonly ok: boolean;
+  readonly outcome: Outcome;
   readonly files: readonly HashFileResult[];
 }
 
@@ -62,11 +63,11 @@ export async function runHash(files: readonly string[]): Promise<HashRun> {
       // document was never read, and reporting that as "invalid" would tell a caller their file
       // was bad when nothing had been checked.
       if (error instanceof TsonSchemaValidationError) {
-        results.push({ file, ok: false, problem: describeError(error) });
+        results.push({ file, outcome: 'INVALID', problem: describeError(error) });
         continue;
       }
       throw error; // an unreadable file -- the caller's job to classify as a usage failure
     }
   }
-  return { ok: results.every((r) => r.ok), files: results };
+  return { outcome: outcomeOfFiles(results.map((r) => r.outcome)), files: results };
 }

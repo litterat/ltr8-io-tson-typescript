@@ -118,21 +118,19 @@ describe('an unobtainable schema (exit 69): a --schema no configured source woul
       ]);
       expect(code).toBe(69);
       const parsed = JSON.parse(io.stdout()) as {
-        valid: boolean;
+        outcome: string;
         files: readonly {
           file: string;
-          valid: boolean;
-          schema_unavailable?: boolean;
+          outcome: string;
           diagnostics: readonly { code: string }[];
         }[];
       };
-      expect(parsed.valid).toBe(false);
+      expect(parsed.outcome).toBe('NOT_CHECKED');
       // Every requested file is accounted for -- none was actually opened, but none is silently
       // dropped from the report either.
       expect(parsed.files.map((f) => f.file)).toEqual(['a.tn', 'b.tn']);
       for (const file of parsed.files) {
-        expect(file.valid).toBe(false);
-        expect(file.schema_unavailable).toBe(true);
+        expect(file.outcome).toBe('NOT_CHECKED');
         expect(file.diagnostics).toHaveLength(1);
         expect(file.diagnostics[0]?.code).toBe('SCHEMA_NOT_FOUND');
       }
