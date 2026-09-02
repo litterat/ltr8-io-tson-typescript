@@ -27,7 +27,7 @@
  * namespace here, so re-checking it costs work but never a false diagnostic.
  */
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
-import { TsonSchemaValidationError } from '../core/errors.js';
+import { TsonBindMismatchError, TsonSchemaValidationError } from '../core/errors.js';
 import { isDataBody } from './bodyKind.js';
 import type {
   ArrayBody,
@@ -64,7 +64,8 @@ export interface ValidateReferencesOptions {
  * Validates every reference in `merged` — every declared `source`, every `supertypes`/`subtypes`
  * entry, every field/element/key/value/variant type, every held template's applications, and
  * every declared parameter's actual use (§5.10) — reporting (or throwing) a
- * {@link TsonSchemaValidationError} per entry that fails.
+ * {@link TsonSchemaValidationError} per entry that fails, or a {@link TsonBindMismatchError} when
+ * a `Data` body breaks its own `references()` contract (see {@link validateBody}).
  */
 export function validateReferences(
   merged: ReadonlyMap<string, TypeDefinition>,
@@ -75,7 +76,7 @@ export function validateReferences(
     try {
       validateEntry(name, def, merged, structureNamespace);
     } catch (e: unknown) {
-      if (!(e instanceof TsonSchemaValidationError)) {
+      if (!isReportableLinkError(e)) {
         throw e;
       }
       if (receiver === undefined) {
@@ -86,15 +87,28 @@ export function validateReferences(
   }
 }
 
+/**
+ * The exception types a failing entry is ever reported under here. `TsonBindMismatchError`
+ * covers a `Data` body's broken `references()` contract -- the reading application's own
+ * mistake, not the schema's, but still located at the entry it was found on -- classified
+ * `BIND_MISMATCH` by {@link linkProblem} rather than lumped in with `SCHEMA_ERROR`, mirroring
+ * `compiler/schemaResolver.ts`'s own `isReportable`/`schemaProblemCode` pattern.
+ */
+type ReportableLinkError = TsonSchemaValidationError | TsonBindMismatchError;
+
+function isReportableLinkError(e: unknown): e is ReportableLinkError {
+  return e instanceof TsonSchemaValidationError || e instanceof TsonBindMismatchError;
+}
+
 /** One entry's link-time failure as a {@link Diagnostic}, located at that entry's own declaration. */
 function linkProblem(
   schemaId: string,
   name: string,
   def: TypeDefinition,
-  error: TsonSchemaValidationError,
+  error: ReportableLinkError,
 ): Diagnostic {
   return {
-    code: 'SCHEMA_ERROR',
+    code: error instanceof TsonBindMismatchError ? 'BIND_MISMATCH' : 'SCHEMA_ERROR',
     message: error.message,
     schemaId,
     schemaPointer: `/${name}`,
@@ -160,9 +174,28 @@ function validateBody(
   if (isDataBody(body)) {
     // A body describing something other than a data value, whose own type references (if any)
     // are declared rather than discovered (`Data.references()`, `schema/meta/typedef.ts`'s own
-    // note).
-    for (const reference of body.references?.() ?? []) {
-      validateTypeRef(reference, namespace, ownParameters, entryName, ` (!${body.kind})`);
+    // note). An omitted `references` method is the ordinary case (a body naming none) and is
+    // simply skipped -- but a `references` method that *exists* and returns `null`/`undefined`
+    // instead of an array is a broken contract, not "no references": it usually means an
+    // implementation reading an OPTIONAL bound component straight through, which the binder
+    // hands to the constructor as `undefined` for an omitted field without normalising it to an
+    // empty array. Naming it here, rather than iterating it unguarded, is the fix -- iterating it
+    // would throw a bare `TypeError` out of the schema pipeline, which every channel above reads
+    // as a fault in this library rather than in the caller's own `Data` implementation.
+    if (body.references !== undefined) {
+      const references: unknown = body.references();
+      if (references === undefined || references === null) {
+        throw new TsonBindMismatchError(
+          `'${entryName}' (!${body.kind}): references() returned ${
+            references === null ? 'null' : 'undefined'
+          } instead of an array -- return [] for a body that names no types. This usually means ` +
+            'an OPTIONAL bound component read directly: the binder hands an omitted field to the ' +
+            'constructor as undefined and does not normalise it to an empty array',
+        );
+      }
+      for (const reference of references as readonly TypeRef[]) {
+        validateTypeRef(reference, namespace, ownParameters, entryName, ` (!${body.kind})`);
+      }
     }
     return;
   }

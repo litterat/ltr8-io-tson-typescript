@@ -87,13 +87,12 @@ import type {
   DefinitionMetaReader,
   SourceBodyEncoder,
 } from './resolverTypes.js';
+import { createHeldBody, type HeldBody } from './heldBody.js';
 import {
-  createHeldBody,
   defaultAnnotationValueEncoder as defaultHeldAnnotationEncoder,
   heldEmptyRecord,
   heldRecord,
-  type HeldBody,
-} from './heldBody.js';
+} from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
 import { resolveFieldModifiers } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
@@ -1521,6 +1520,12 @@ function bindAnnotationValue(
           `'${annotationName}' names -- ${e.message}`,
         { cause: e },
       );
+    }
+    if (e instanceof TsonMissingBindingError) {
+      throw new TsonMissingBindingError(`'${declaration}': ${e.message}`, { cause: e });
+    }
+    if (e instanceof TsonBindMismatchError) {
+      throw new TsonBindMismatchError(`'${declaration}': ${e.message}`, { cause: e });
     }
     throw new TsonNotImplementedError(
       `'${declaration}': failed to bind the value of annotation '@${annotationName}' via the compiled ` +

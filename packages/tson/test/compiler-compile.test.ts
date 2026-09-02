@@ -95,6 +95,10 @@ describe('compile -- cycles resolve by tying the knot', () => {
             annotations: { values: [] },
             fields: new Map([
               ['value', { kind: 'atom', value: 'b', typeRef: 'text', annotations: { values: [] } }],
+              // The innermost `next: _` states an absent value rather than omitting the field
+              // (§2.9): distinct from the outer `next`, which the document never mentions at all
+              // and so does not appear in its own `fields` map.
+              ['next', { kind: 'absent', annotations: { values: [] } }],
             ]),
           },
         ],

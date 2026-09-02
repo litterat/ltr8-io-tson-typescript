@@ -214,8 +214,16 @@ export interface UnknownType {
  * other reference (§9: "a slot holding a type reference MUST be typed `type_ref`," which is
  * what lets it participate in flattening and identity). Declared rather than discovered — a
  * payload's shape alone says nothing about which of its components are references — and
- * optional here because a body naming none is the ordinary case; omitting it means "none",
- * mirroring the Java original's own empty-list default.
+ * optional here because a body naming none is the ordinary case; omitting the method entirely
+ * means "none", mirroring the Java original's own empty-list default.
+ *
+ * **A method that is present must never return `null`/`undefined` — return `[]` for a body
+ * that names no types.** The case to watch is an implementation returning an OPTIONAL bound
+ * component directly: a binder hands an omitted field to the constructor as `undefined` and
+ * does not normalise it to an empty array, so `references()` inherits that `undefined`.
+ * `link/referenceValidation.ts` reports a body that breaks this as `TsonBindMismatchError`
+ * naming the entry, since it is the reading application's mistake rather than anything about
+ * the schema.
  *
  * An entry whose body is a `Data` is not a type: naming one where a type is expected is a
  * resolver error checked at schema load (§4.1) — a fact about how this shape is *used*, not

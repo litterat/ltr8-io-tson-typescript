@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { validateReferences } from '../src/link/referenceValidation.js';
 import { collector } from '../src/core/diagnostic.js';
-import { TsonSchemaValidationError } from '../src/core/errors.js';
+import { TsonBindMismatchError, TsonSchemaValidationError } from '../src/core/errors.js';
 import type { Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
 
 function ref(name: string, args: TypeRef['arguments'] = []): TypeRef {
@@ -130,6 +130,66 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).not.toThrow();
+  });
+});
+
+describe('validateReferences: a Data body\'s own references() contract (§4.1)', () => {
+  function brokenDataBody(returning: unknown): Top {
+    // Violates Data.references()'s "never null/undefined -- return [] for none" contract on
+    // purpose: `references` is present (so the "omitted means none" branch does not apply) but
+    // answers with something other than an array, e.g. an OPTIONAL bound component read straight
+    // through by a caller's own class.
+    return { kind: 'operation', references: () => returning } as unknown as Top;
+  }
+
+  it('names the entry and throws TsonBindMismatchError when references() returns undefined', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['op', def(brokenDataBody(undefined), { kind: 'DATA' })],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(TsonBindMismatchError);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/'op'.*references\(\) returned undefined/u);
+  });
+
+  it('names the entry and throws TsonBindMismatchError when references() returns null', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['op', def(brokenDataBody(null), { kind: 'DATA' })],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/'op'.*references\(\) returned null/u);
+  });
+
+  it('reports BIND_MISMATCH (not SCHEMA_ERROR) through a receiver', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['op', def(brokenDataBody(undefined), { kind: 'DATA' })],
+    ]);
+    const diagnostics = collector();
+    validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
+    expect(diagnostics.diagnostics).toHaveLength(1);
+    expect(diagnostics.diagnostics[0]?.code).toBe('BIND_MISMATCH');
+  });
+
+  it('an omitted references() method (the ordinary case) is simply treated as no references', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['op', def({ kind: 'operation' }, { kind: 'DATA' })],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
+  it('a well-behaved references() still has its named types validated', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['text', text],
+      ['op', def(brokenDataBody([ref('nowhere')]), { kind: 'DATA' })],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).toThrow(/unresolved reference 'nowhere'/u);
   });
 });
 

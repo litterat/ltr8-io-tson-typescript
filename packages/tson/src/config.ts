@@ -51,9 +51,14 @@
  * every dependency *first*, in order, so that by the time a schema referencing them is resolved,
  * `resolveImport` finds each one already registered and never needs to suspend.
  */
-import { TsonSchemaFetchError, TsonSchemaValidationError } from './core/errors.js';
+import {
+  TsonInternalError,
+  TsonSchemaFetchError,
+  TsonSchemaValidationError,
+} from './core/errors.js';
 import type { NestingLimitOptions } from './core/limits.js';
-import type { NamePolicy } from './unicode/policy.js';
+import { processorPolicy } from './unicode/policy.js';
+import type { NamePolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
 import { verifyContentHash } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
@@ -78,10 +83,115 @@ import { write, type WriteOptions } from './facade/write.js';
 import type { AsyncByteSource } from './facade/byteSource.js';
 import type { Value } from './tree/nodes.js';
 
-/** Where a schema document's raw bytes come from, given the reference as written in a `!!schema`/`!!import`/`!!meta` directive -- satisfied by `@ltr8/tson/source`'s `httpSchemaSource`/`fileSchemaSource`, or by anything else with a matching `fetch` method (a test double, an in-memory map). Never imported by this module -- see `source/index.ts`'s own top note on why the two shipped implementations stay behind that separate, Node-only subpath. */
+/** Where a schema document's raw bytes come from, given the reference as written in a `!!schema`/`!!import`/`!!meta` directive -- satisfied by `@ltr8/tson/source`'s `httpSchemaSource`/`fileSchemaSource`, by {@link mapSchemaSource}, or by anything else with a matching `fetch` method (a test double). Never imported by this module -- see `source/index.ts`'s own top note on why the two Node-only shipped implementations stay behind that separate subpath. */
 export interface SchemaSource {
-  /** Fetches `reference`'s schema document's raw bytes, or throws {@link TsonSchemaFetchError}. */
+  /**
+   * Fetches `reference`'s schema document's raw bytes, or throws {@link TsonSchemaFetchError}.
+   *
+   * **The only way to say "cannot supply this."** Throwing anything else -- or resolving to
+   * something other than a `Uint8Array`, `null`/`undefined` included -- is a fault in this
+   * implementation, not an unavailable schema, and every caller treats it as one
+   * (`createTson`'s own `fetchReference` guards this). A raw map lookup (`(id) =>
+   * schemas.get(id)`) is the natural first thing to write here and resolves to `undefined` on a
+   * miss instead of throwing -- {@link mapSchemaSource} is that lookup done to contract.
+   */
   fetch(reference: string): Promise<Uint8Array>;
+}
+
+/**
+ * A {@link SchemaSource} over schema documents already held in memory, keyed by identity --
+ * what `schemas.get.bind(schemas)`/`(id) => schemas[id]` mean and do not do. Port of the
+ * reference implementation's `TsonSchemaSource.ofMap` (`TsonSchemaSource.java:97-127`).
+ *
+ * **Matches by canonical identity, not by the string a document happened to write.** Each key
+ * is canonicalized once here (via {@link canonicalizeIdentity}, §2.2.1: scheme and query
+ * stripped) and every lookup likewise, so a reference carrying a `?sha256=` pin finds the entry
+ * registered without one, and `http://`/`https://` spellings of one identity are one entry. A
+ * raw `Map`/`Record` lookup matches none of those -- the second half of the trap this exists to
+ * close, since it fails only for the references that pin, which are the ones a deployment that
+ * cares about integrity writes.
+ *
+ * Two keys canonicalizing to the same identity are accepted only when their bytes are
+ * identical (a schema registered twice under, say, an `http://` and an `https://` spelling);
+ * otherwise construction throws {@link TsonSchemaValidationError} naming the colliding identity,
+ * since two different documents cannot both answer for one identity.
+ *
+ * **A miss is {@link TsonSchemaFetchError} with reason `'not-found'`**, distinct from
+ * {@link Tson.fetch}'s own `'not-permitted'` when no source is configured at all: this source
+ * has somewhere to look and looked, and the answer is that this table does not hold that
+ * identity.
+ *
+ * The input is copied at construction, so what this source serves cannot change under a
+ * registry already reading from it.
+ */
+export function mapSchemaSource(
+  schemas: ReadonlyMap<string, Uint8Array> | Readonly<Record<string, Uint8Array>>,
+): SchemaSource {
+  const entries: Iterable<readonly [string, Uint8Array]> =
+    schemas instanceof Map ? schemas : Object.entries(schemas);
+  const byIdentity = new Map<string, Uint8Array>();
+  for (const [reference, bytes] of entries) {
+    const identity = canonicalizeIdentity(reference);
+    const existing = byIdentity.get(identity);
+    if (existing !== undefined && !bytesEqual(existing, bytes)) {
+      throw new TsonSchemaValidationError(
+        `mapSchemaSource: '${reference}' and an earlier key both canonicalize to '${identity}' ` +
+          'but name different bytes -- a scheme or ?sha256= pin is not part of a schema\'s ' +
+          'identity (§2.2.1), so keys differing only in those name one schema and cannot both ' +
+          'be served',
+      );
+    }
+    byIdentity.set(identity, bytes);
+  }
+  const served = new Map(byIdentity);
+  return {
+    // Not `async` -- a map lookup has no I/O to await, and this library's own eslint
+    // configuration flags an `async` method that never does. Every path still returns a real
+    // `Promise` rather than throwing synchronously (`Promise.reject`, not `throw`), so a direct
+    // caller of `fetch` sees the same all-failures-are-a-rejection contract `httpSchemaSource`/
+    // `fileSchemaSource` present, whether or not it happens to be awaited from inside another
+    // `async` function.
+    fetch(reference: string): Promise<Uint8Array> {
+      let identity: string;
+      try {
+        identity = canonicalizeIdentity(reference);
+      } catch (e) {
+        // Refused rather than reported as a miss: nothing was looked for, because there is no
+        // identity to look for.
+        return Promise.reject(
+          new TsonSchemaFetchError(
+            reference,
+            'not-permitted',
+            `'${reference}' is not a legal schema identity: ${errorMessage(e)}`,
+            { cause: e },
+          ),
+        );
+      }
+      const bytes = served.get(identity);
+      if (bytes === undefined) {
+        return Promise.reject(
+          new TsonSchemaFetchError(
+            reference,
+            'not-found',
+            `mapSchemaSource has no entry for '${reference}' (identity '${identity}')`,
+          ),
+        );
+      }
+      return Promise.resolve(bytes);
+    },
+  };
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /** Configures a {@link Tson}. Every field is optional; an empty `{}` builds an instance with no schema source and an empty registry. */
@@ -116,7 +226,17 @@ export interface Config extends NestingLimitOptions {
    * The meta-kernel's own bootstrap is deliberately outside its reach: that link is pinned to the
    * default, so relaxing a policy here can never change whether the kernel itself loads.
    */
-  readonly namePolicy?: NamePolicy;
+  readonly identifierPolicy?: NamePolicy;
+
+  /**
+   * [TSON-DATA] §8.2's policy over *values* -- the token profile a read applies to every
+   * token it decodes.
+   *
+   * Defaults to unrestricted, so an ordinary read scans nothing. Only the restricted-script
+   * rule ever applies here: a value has no identifier profile to violate, and no scope to be
+   * distinct within, so the other two mechanisms have nothing to say about one.
+   */
+  readonly tokenPolicy?: TokenPolicy;
 }
 
 /**
@@ -132,9 +252,14 @@ function limitOf(config: Config): NestingLimitOptions {
   return config.maxNestingDepth === undefined ? {} : { maxNestingDepth: config.maxNestingDepth };
 }
 
-/** {@link Config.namePolicy}, as the `{ namePolicy }` fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, one field over. */
-function namePolicyOptionOf(config: Config): { readonly namePolicy?: NamePolicy } {
-  return config.namePolicy === undefined ? {} : { namePolicy: config.namePolicy };
+/** {@link Config.identifierPolicy} and {@link Config.tokenPolicy}, as the fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, two fields over. */
+function policyOptionsOf(
+  config: Config,
+): { readonly identifierPolicy?: NamePolicy; readonly tokenPolicy?: TokenPolicy } {
+  return {
+    ...(config.identifierPolicy === undefined ? {} : { identifierPolicy: config.identifierPolicy }),
+    ...(config.tokenPolicy === undefined ? {} : { tokenPolicy: config.tokenPolicy }),
+  };
 }
 
 function requireRegistered(
@@ -180,7 +305,7 @@ function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
   bytes: Uint8Array,
   limit: NestingLimitOptions,
-  namePolicy: NamePolicy | undefined,
+  identifierPolicy: NamePolicy | undefined,
 ): LinkedSchema {
   const document = runSync(parseSchemaDocument(fromBytes(bytes), limit));
   const id = document.id;
@@ -207,11 +332,47 @@ function resolveAgainstRegistry(
   return linkSchema(resolved, {
     structureNamespace: governingMeta.entries,
     resolveImport,
-    ...(namePolicy === undefined ? {} : { namePolicy }),
+    ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
   });
 }
 
-/** A {@link createTson} instance: the flat front door, plus a schema registry keyed by canonical identity (§2.2.1). */
+/**
+ * A {@link createTson} instance: the flat front door, plus a schema registry keyed by canonical
+ * identity (§2.2.1).
+ *
+ * **Concurrency contract.** JS has one thread, so there is no analogue to a reference
+ * implementation's "safe from any number of threads" -- the real question here is overlapping
+ * *async* operations on one event loop, i.e. two calls in flight at once with an `await` between
+ * them.
+ *
+ * - **Reading is safe to overlap.** {@link parse}/{@link readTree}/{@link validate}/{@link write}
+ *   and {@link compile} only read `schemas`/`config`; nothing they do mutates this instance, so
+ *   any number of them may be in flight together, including two resolving the same not-yet-cached
+ *   compiled meta (`compiledMetaFor`'s `WeakMap` memo): the worst a race there costs is compiling
+ *   it twice, never a wrong or torn result.
+ * - **Registering is not covered the same way.** {@link register}/{@link resolveSchema}/
+ *   {@link preload} mutate the registry, and each one assumes nothing else is registering into it
+ *   at the same moment. Fetch, resolve, link, and register everything a read will need *before*
+ *   starting reads against it, exactly as this module's own top note recommends -- do not treat
+ *   "the registry is a `Map`" as license to grow it from concurrent callers.
+ * - **One narrow, known, and accepted race inside {@link preload} itself:** it checks
+ *   `schemas.has(canonical)`, then `await`s a fetch, then `schemas.set(canonical, linked)` --
+ *   a real await boundary between the check and the write. Two overlapping `preload()` calls
+ *   naming the same identity (or `preload` racing a direct `resolveSchema()` call for it) can
+ *   both pass the check, both fetch and resolve, and the second `.set()` silently wins,
+ *   discarding the first `LinkedSchema` object. This is harmless rather than corrupting --
+ *   {@link register} has no duplicate check at all, so registering the same identity twice is
+ *   simply idempotent by design here, unlike a reference implementation that treats any duplicate
+ *   registration as a strict error regardless of a race -- but the discarded object does take an
+ *   entry in the `compiledMetaFor` `WeakMap` memo with it, keyed by the object identity that lost.
+ *   Avoid it by not calling `preload`/`resolveSchema` for one identity from more than one place
+ *   at a time, the same discipline the "registering is not covered" rule above already asks for.
+ * - **No `DataBindContext`-shaped hazard exists to warn about.** A reference implementation's
+ *   bind registry is mutable after construction and warns against adding to a live one; this
+ *   port's `bind/registry.ts` builds an immutable `Map` from a fixed table once and exposes only
+ *   `get` -- there is no `register`/mutation method for a race to reach, by construction rather
+ *   than by discipline.
+ */
 export interface Tson {
   readonly config: Config;
   /** Every registered schema, keyed by canonical identity -- read-only; use {@link register}/{@link resolveSchema}/{@link preload} to add to it. */
@@ -238,8 +399,24 @@ export interface Tson {
    * for -- both regardless of whether {@link HttpSchemaSourceOptions.requireContentHashPin}-style
    * policy required a pin to be *present*, since verifying one that *is* declared is unconditional.
    * A reference already registered is left alone (idempotent) and never re-fetched.
+   *
+   * See {@link Tson}'s own top note on this instance's concurrency contract -- in particular the
+   * narrow, known race between this method's own has-check and its later write when two calls
+   * name the same not-yet-registered identity.
    */
   preload(references: readonly string[]): Promise<void>;
+
+  /**
+   * The [TSON-DATA] §8.2 policy this instance judges under, and the UCD release it was computed
+   * against -- stated once for the instance rather than repeated on every refusal.
+   *
+   * Three reasons it belongs here and not on a diagnostic. **Cardinality**: the version is
+   * constant for the life of the instance, so a copy inside every refusal is waste. **Time**: a
+   * sender needs the policy *before* writing a document, not after being refused one. And
+   * **direction**: a version says what refused you, where a level says what would be accepted --
+   * only the second is actionable.
+   */
+  readonly processorPolicy: ProcessorPolicy;
 
   parse(source: Uint8Array, options?: NestingLimitOptions): ParsedDocument;
   parse(source: AsyncByteSource, options?: NestingLimitOptions): Promise<ParsedDocument>;
@@ -254,7 +431,7 @@ export interface Tson {
 export function createTson(config: Config = {}): Tson {
   const schemas = new Map<string, LinkedSchema>();
   const limit = limitOf(config);
-  const namePolicyOption = namePolicyOptionOf(config);
+  const policyOptions = policyOptionsOf(config);
 
   function register(schema: LinkedSchema): void {
     schemas.set(canonicalizeIdentity(schema.id), schema);
@@ -262,7 +439,7 @@ export function createTson(config: Config = {}): Tson {
 
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {
     const bytes = typeof source === 'string' ? encodeUtf8(source) : source;
-    const linked = resolveAgainstRegistry(schemas, bytes, limit, config.namePolicy);
+    const linked = resolveAgainstRegistry(schemas, bytes, limit, config.identifierPolicy);
     register(linked);
     return linked;
   }
@@ -275,7 +452,21 @@ export function createTson(config: Config = {}): Tson {
         `cannot fetch schema '${reference}': this Tson instance has no schemaSource configured`,
       );
     }
-    return config.schemaSource.fetch(reference);
+    const bytes: unknown = await config.schemaSource.fetch(reference);
+    if (!(bytes instanceof Uint8Array)) {
+      // Deliberately not a TsonSchemaFetchError -- a source signals "cannot supply this" only
+      // by throwing one, so treating a wrong return type as a fetch failure would make the wrong
+      // spelling "work" and misreport a fault in this instance's own configuration as a verdict
+      // on the document that named the schema. See TsonInternalError's own doc.
+      throw new TsonInternalError(
+        `the SchemaSource fetching '${reference}' resolved to ` +
+          `${bytes === null ? 'null' : typeof bytes} instead of a Uint8Array -- a SchemaSource ` +
+          "signals \"cannot supply this\" only by throwing TsonSchemaFetchError; anything else " +
+          'is a fault in that source. If this source is a plain map lookup, mapSchemaSource(...) ' +
+          'is that lookup done to contract',
+      );
+    }
+    return bytes;
   }
 
   async function preload(references: readonly string[]): Promise<void> {
@@ -286,7 +477,7 @@ export function createTson(config: Config = {}): Tson {
       }
       const bytes = await fetchReference(reference);
       await verifyContentHash(bytes, reference);
-      const linked = resolveAgainstRegistry(schemas, bytes, limit, config.namePolicy);
+      const linked = resolveAgainstRegistry(schemas, bytes, limit, config.identifierPolicy);
       const declared = canonicalizeIdentity(linked.id);
       if (declared !== canonical) {
         throw new TsonSchemaValidationError(
@@ -306,20 +497,21 @@ export function createTson(config: Config = {}): Tson {
     compile: compileCore,
     fetch: fetchReference,
     preload,
-    // Bound to this instance's limit (and, for a schemaless tree read, its namePolicy) rather
+    processorPolicy: processorPolicy(config.identifierPolicy, config.tokenPolicy),
+    // Bound to this instance's limit (and, for a schemaless tree read, its two Unicode policies) rather
     // than passed through bare, so `tson.parse(bytes)`/`tson.readTree(bytes)`/`tson.validate(bytes)`
     // obey the policy the instance was configured with. A caller's own per-call options still
     // win: they are spread after the instance's.
     //
-    // `namePolicyOption` is spread into `readTree`/`validate` only -- `parse`'s own options are
+    // `policyOptions` is spread into `readTree`/`validate` only -- `parse`'s own options are
     // `NestingLimitOptions` alone (it produces a parsed *document*, not a schemaless tree, and
     // has no record-scope name-hygiene check of its own to configure).
     parse: ((source: never, options?: NestingLimitOptions) =>
       parse(source, { ...limit, ...options })) as Tson['parse'],
     readTree: ((source: never, options?: ReadTreeOptions) =>
-      readTree(source, { ...limit, ...namePolicyOption, ...options })) as Tson['readTree'],
+      readTree(source, { ...limit, ...policyOptions, ...options })) as Tson['readTree'],
     validate: ((source: never, options?: ReadTreeOptions) =>
-      validate(source, { ...limit, ...namePolicyOption, ...options })) as Tson['validate'],
+      validate(source, { ...limit, ...policyOptions, ...options })) as Tson['validate'],
     write,
   };
 }

@@ -172,9 +172,12 @@ export function recordTreeReader(
     }
   }
 
-  /** The value a field takes when the document explicitly wrote `_` at it -- differs from omission only for `REQUIRED_DEFAULT` (§5.2). */
+  /** The value a field takes when the document explicitly wrote `_` at it -- differs from omission for `OPTIONAL` (§2.9: present with an absent value, distinct from never written) and for `REQUIRED_DEFAULT` (§5.2). */
   function valueForStatedAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
+    if (schema.state === 'OPTIONAL') {
+      return absentNode();
+    }
     if (schema.state === 'REQUIRED_DEFAULT') {
       ctx
         .schemaField(schema.name)
