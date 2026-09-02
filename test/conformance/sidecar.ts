@@ -65,6 +65,12 @@ export interface CommonSidecarFields {
   readonly meta?: string;
   /** Short bundled-schema names for the subject's own `!!import` entries, in order. */
   readonly import?: readonly string[];
+  /**
+   * A short bundled-schema name for the subject's own `!!schema` target (`class2/validate/`'s own
+   * `spliced_header`, `schemas/sidecar-common.tn`) -- governs a *data*-document subject, where
+   * {@link meta}/{@link import} govern a schema-document one.
+   */
+  readonly schema?: string;
 }
 
 // ── Lexer layer ──────────────────────────────────────────────────────────────────────────────
@@ -436,6 +442,7 @@ function toCommonFields(fields: Map<string, DataValue>): CommonSidecarFields {
   const description = requiredText(fields, 'description', 'sidecar');
   const encoding = optionalText(fields, 'encoding') as Encoding | undefined;
   const meta = optionalText(fields, 'meta');
+  const schema = optionalText(fields, 'schema');
   const importField = fields.get('import');
   const importNames =
     importField === undefined
@@ -446,6 +453,7 @@ function toCommonFields(fields: Map<string, DataValue>): CommonSidecarFields {
     description,
     ...(encoding !== undefined ? { encoding } : {}),
     ...(meta !== undefined ? { meta } : {}),
+    ...(schema !== undefined ? { schema } : {}),
     ...(importNames !== undefined ? { import: importNames } : {}),
   };
 }
@@ -913,6 +921,176 @@ export function parseReaderSidecar(raw: Uint8Array): ReaderSidecar {
   return { ...common, outcome, value };
 }
 
+// ── Class 2: schema layer (`schemas/schema-sidecar.tn`) ─────────────────────────────────────
+
+/**
+ * The payload of a `class2/schema/` `valid` outcome: [TSON-SCHEMA] §8's resolved output, in its
+ * own text form (`schema_valid.resolved`, a multi-line token). Left as raw text rather than
+ * modelled field by field for the reason `schema-sidecar.tn`'s own `@doc` gives: modelling it
+ * here would restate meta.tn inside this schema, leaving two statements of one shape free to
+ * drift apart. `test/conformance/resolvedForm.ts` reads it back through this implementation's own
+ * meta.tn-governed reader.
+ */
+export interface SchemaSidecar extends CommonSidecarFields {
+  readonly outcome: 'valid' | 'error' | 'refused';
+  /** Present iff `outcome === 'error'`. Always `resolver` at this layer (RUNNER.md rule 3b). */
+  readonly category?: Category;
+  /** Present iff `outcome === 'valid'`: the resolved schema, in [TSON-SCHEMA] §8's own text form. */
+  readonly resolved?: string;
+  /** Present iff `outcome === 'refused'` -- §8.1's fifth outcome, distinct from `error`. */
+  readonly refused?: ExpectedRefusal;
+}
+
+/** Parses a class2/schema-layer sidecar (`schemas/schema-sidecar.tn`). */
+export function parseSchemaSidecar(raw: Uint8Array): SchemaSidecar {
+  const fields = parseSidecarBody(raw);
+  const common = toCommonFields(fields);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error', 'refused']);
+  if (outcome === 'error') {
+    const payloadFields = recordFields(payload, 'schema sidecar.error');
+    return {
+      ...common,
+      outcome,
+      category: toCategory(
+        requiredText(payloadFields, 'category', 'schema sidecar.error'),
+        'schema sidecar.error',
+      ),
+    };
+  }
+  if (outcome === 'refused') {
+    return { ...common, outcome, refused: toExpectedRefusal(payload, 'schema sidecar.refused') };
+  }
+  const payloadFields = recordFields(payload, 'schema sidecar.valid');
+  const resolved = requiredText(payloadFields, 'resolved', 'schema sidecar.valid');
+  return { ...common, outcome, resolved };
+}
+
+// ── Class 2: link layer (`schemas/link-sidecar.tn`) ─────────────────────────────────────────
+
+/** A choice entry and the disjointness [TSON-SCHEMA] §5.4 derives for it (`link-sidecar.tn`'s `disjointness`). */
+export interface ExpectedDisjointness {
+  readonly name: string;
+  readonly value: boolean;
+}
+
+/** A named entry and the entries §8.2's `subtypes` index must list under it (`link-sidecar.tn`'s `subtyping`). */
+export interface ExpectedSubtyping {
+  readonly name: string;
+  readonly subtypes: readonly string[];
+}
+
+/** The payload of a `class2/link/` `valid` outcome (`link-sidecar.tn`'s `link_valid`). Each list is optional: a vector states only what it is about. */
+export interface LinkValid {
+  readonly binds?: readonly string[];
+  readonly disjoint?: readonly ExpectedDisjointness[];
+  readonly subtypes?: readonly ExpectedSubtyping[];
+}
+
+export interface LinkSidecar extends CommonSidecarFields {
+  readonly outcome: 'valid' | 'error';
+  /** Present iff `outcome === 'error'`. Always `resolver` at this layer (RUNNER.md rule 3b). */
+  readonly category?: Category;
+  /** Present iff `outcome === 'valid'`. */
+  readonly valid?: LinkValid;
+}
+
+function toExpectedDisjointness(dv: DataValue): ExpectedDisjointness {
+  const fields = recordFields(dv, 'disjointness');
+  return {
+    name: requiredText(fields, 'name', 'disjointness'),
+    value: boolText(requireField(fields, 'value', 'disjointness'), 'disjointness.value'),
+  };
+}
+
+function toExpectedSubtyping(dv: DataValue): ExpectedSubtyping {
+  const fields = recordFields(dv, 'subtyping');
+  return {
+    name: requiredText(fields, 'name', 'subtyping'),
+    subtypes: arrayElements(
+      requireField(fields, 'subtypes', 'subtyping'),
+      'subtyping.subtypes',
+    ).map((el) => tokenText(el.value, 'subtyping.subtypes entry')),
+  };
+}
+
+/** `dv` is a `link_valid` record (`link-sidecar.tn`): every field OPTIONAL, a vector stating only what it is about. */
+function toLinkValid(dv: DataValue): LinkValid {
+  const fields = recordFields(dv, 'link sidecar.valid');
+  const bindsField = fields.get('binds');
+  const binds =
+    bindsField === undefined || isAbsent(bindsField)
+      ? undefined
+      : arrayElements(bindsField, 'binds').map((el) => tokenText(el.value, 'binds entry'));
+  const disjointField = fields.get('disjoint');
+  const disjoint =
+    disjointField === undefined || isAbsent(disjointField)
+      ? undefined
+      : arrayElements(disjointField, 'disjoint').map((el) => toExpectedDisjointness(el.value));
+  const subtypesField = fields.get('subtypes');
+  const subtypes =
+    subtypesField === undefined || isAbsent(subtypesField)
+      ? undefined
+      : arrayElements(subtypesField, 'subtypes').map((el) => toExpectedSubtyping(el.value));
+  return {
+    ...(binds !== undefined ? { binds } : {}),
+    ...(disjoint !== undefined ? { disjoint } : {}),
+    ...(subtypes !== undefined ? { subtypes } : {}),
+  };
+}
+
+/** Parses a class2/link-layer sidecar (`schemas/link-sidecar.tn`). */
+export function parseLinkSidecar(raw: Uint8Array): LinkSidecar {
+  const fields = parseSidecarBody(raw);
+  const common = toCommonFields(fields);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error']);
+  if (outcome === 'error') {
+    const payloadFields = recordFields(payload, 'link sidecar.error');
+    return {
+      ...common,
+      outcome,
+      category: toCategory(
+        requiredText(payloadFields, 'category', 'link sidecar.error'),
+        'link sidecar.error',
+      ),
+    };
+  }
+  return { ...common, outcome, valid: toLinkValid(payload) };
+}
+
+// ── Class 2: validate layer (`schemas/validate-sidecar.tn`) ─────────────────────────────────
+
+export interface ValidateSidecar extends CommonSidecarFields {
+  readonly outcome: 'valid' | 'error';
+  /** Present iff `outcome === 'error'`. */
+  readonly category?: Category;
+  /**
+   * Present iff `outcome === 'error'` and the vector turns on it. `""` (the root's own RFC 6901
+   * pointer) is a stated claim, distinct from omission -- see `validate-sidecar.tn`'s own doc.
+   */
+  readonly path?: string;
+}
+
+/** Parses a class2/validate-layer sidecar (`schemas/validate-sidecar.tn`). `valid` carries nothing (written `_`). */
+export function parseValidateSidecar(raw: Uint8Array): ValidateSidecar {
+  const fields = parseSidecarBody(raw);
+  const common = toCommonFields(fields);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error']);
+  if (outcome === 'valid') {
+    return { ...common, outcome };
+  }
+  const payloadFields = recordFields(payload, 'validate sidecar.error');
+  const path = optionalText(payloadFields, 'path');
+  return {
+    ...common,
+    outcome,
+    category: toCategory(
+      requiredText(payloadFields, 'category', 'validate sidecar.error'),
+      'validate sidecar.error',
+    ),
+    ...(path !== undefined ? { path } : {}),
+  };
+}
+
 // ── Cross-layer summary (used by discovery and the write/ round-trip harness) ───────────────
 
 /** The handful of common facts a caller needs before it knows (or cares) which layer a sidecar belongs to. */
@@ -921,6 +1099,8 @@ export interface SidecarSummary {
   readonly encoding?: Encoding;
   readonly meta?: string;
   readonly import?: readonly string[];
+  /** A short bundled-schema name for the subject's own `!!schema` target -- `class2/validate/`'s own splice target; see {@link CommonSidecarFields.schema}. */
+  readonly schema?: string;
   /**
    * Present iff `outcome === 'refused'`: the UTS #39 data version the vector was computed
    * against. Surfaced here, ahead of any layer-specific parse, because `registerVectors`
@@ -966,6 +1146,7 @@ export function peekSidecarSummary(raw: Uint8Array): SidecarSummary {
     outcome,
     ...(common.encoding !== undefined ? { encoding: common.encoding } : {}),
     ...(common.meta !== undefined ? { meta: common.meta } : {}),
+    ...(common.schema !== undefined ? { schema: common.schema } : {}),
     ...(common.import !== undefined ? { import: common.import } : {}),
     ...(refusedUnicode !== undefined ? { refusedUnicode } : {}),
   };

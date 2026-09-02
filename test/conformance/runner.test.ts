@@ -14,31 +14,43 @@ import { parseDocument as parseDataDocument } from '../../packages/tson/src/comp
 import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
 import { UTS39_VERSION } from '../../packages/tson/src/unicode/uts39.js';
 
-import { spliceSchemaDirectives } from './bundled-ids.js';
+import { spliceSchemaDirective, spliceSchemaDirectives } from './bundled-ids.js';
+import { checkLinkVector } from './link.js';
 import { lexTokens } from './lexer.js';
 import { parseDocument } from './parser.js';
 import { assertReaderValueMatches, readSchemaless } from './reader.js';
 import { resolveBaseValue } from './resolver.js';
+import { checkSchemaVector } from './schema.js';
+import { checkValidateVector } from './validate.js';
 import { readVocabularyValue } from './vocabulary.js';
 import {
   type Category,
   type LexerSidecar,
+  type LinkSidecar,
   type ParserSidecar,
   type ReaderSidecar,
   type ResolverSidecar,
+  type SchemaSidecar,
   type SidecarSummary,
+  type ValidateSidecar,
   type VocabularySidecar,
   parseLexerSidecar,
+  parseLinkSidecar,
   parseParserSidecar,
   parseReaderSidecar,
   parseResolverSidecar,
+  parseSchemaSidecar,
+  parseValidateSidecar,
   parseVocabularySidecar,
   peekSidecarSummary,
 } from './sidecar.js';
 import {
+  CLASS2_LAYERS,
   LAYERS,
   SUITE_TESTS_ROOT,
+  type Class2Layer,
   type Vector,
+  discoverClass2Vectors,
   discoverProposedVectors,
   discoverVectors,
   suiteAvailable,
@@ -70,23 +82,20 @@ describe.skipIf(!suitePresent)(
   () => {
     for (const layer of LAYERS) {
       describe(layer, () => {
-        registerVectors(discoverVectors(layer));
+        registerVectors(discoverVectors(layer), checkVector);
       });
     }
 
-    // Rule 5, skip ground 2: "a class2/ vector under a Class 1 processor. Declared by
-    // conformance class, not per vector." This project claims only [TSON-DATA]'s Class 1 (see
-    // CLAUDE.md: "the data-format processor") -- `discoverVectors`/`discoverProposedVectors` never
-    // walk `class2/` at all, so there is nothing to enumerate or skip one vector at a time. This
-    // is the single declaration that ground exists and is being taken, kept visible in test output
-    // the same way an actual per-vector skip is (`it.skip`).
-    it.skip(
-      'class2/: this processor claims the Class 1 conformance class only -- RUNNER.md skip ground 2, ' +
-        '"declared by conformance class, not per vector"',
-      () => {
-        /* declaration only -- see the comment above */
-      },
-    );
+    // Class 2: STATUS.md's Part 2 (schema resolution, linking, Class 2 compilation) is fully
+    // implemented in production code, reachable through `createTson()`, so this processor's
+    // conformance claim now covers `class2/` too -- rule 5's second skip ground ("a class2/
+    // vector under a Class 1 processor... declared by conformance class, not per vector") no
+    // longer applies here, since this is not a Class 1-only processor.
+    for (const layer of CLASS2_LAYERS) {
+      describe(`class2/${layer}`, () => {
+        registerVectors(discoverClass2Vectors(layer), checkClass2Vector);
+      });
+    }
 
     // Rule: "A runner SHOULD execute [proposed/ vectors] and MUST report them separately. They
     // never count toward a conformance claim, and failing one is not a defect: it means an
@@ -109,7 +118,7 @@ describe.skipIf(!suitePresent)(
       for (const [layer, vectors] of proposedByLayer) {
         if (vectors.length === 0) continue;
         describe(layer, () => {
-          registerVectors(vectors);
+          registerVectors(vectors, checkVector);
         });
       }
     });
@@ -123,7 +132,7 @@ describe.skipIf(!suitePresent)(
  * sidecar still surfaces as a genuine failure: the real, unguarded parse happens inside the
  * registered `it` itself.
  */
-function bestEffortSidecarSummary(vector: Vector): SidecarSummary | undefined {
+function bestEffortSidecarSummary(vector: Vector<string>): SidecarSummary | undefined {
   try {
     return peekSidecarSummary(readFileSync(vector.sidecarPath));
   } catch {
@@ -132,21 +141,34 @@ function bestEffortSidecarSummary(vector: Vector): SidecarSummary | undefined {
 }
 
 /**
- * Splices a schema-governed vector's real `!!meta`/`!!import` directives in, per
- * `bundled-ids.ts`. A no-op for every vector as of this writing -- no vector's sidecar declares
- * `meta` yet -- kept general ahead of the first one that does.
+ * Splices a schema-governed vector's real `!!meta`/`!!import`/`!!schema` directives in, per
+ * `bundled-ids.ts`. `meta`/`import` govern a schema-document subject (`class2/schema/` and
+ * `class2/link/`); `schema` governs a data-document subject (`class2/validate/`) -- the two
+ * headers are different grammars, so exactly one of the two splice functions ever applies, never
+ * both. A no-op for every Class 1 vector, none of which declares either field yet.
  */
 function resolveSchemaDirectives(subject: Uint8Array, summary: SidecarSummary): Uint8Array {
-  if (summary.meta === undefined) {
+  const { meta, schema } = summary;
+  if (meta === undefined && schema === undefined) {
     return subject;
   }
   const raw = new TextDecoder('utf-8', { fatal: true }).decode(subject);
-  const spliced = spliceSchemaDirectives(raw, summary.meta, summary.import ?? []);
+  let spliced: string;
+  if (meta !== undefined) {
+    spliced = spliceSchemaDirectives(raw, meta, summary.import ?? []);
+  } else if (schema !== undefined) {
+    spliced = spliceSchemaDirective(raw, schema);
+  } else {
+    throw new Error('unreachable: checked above that meta or schema is present');
+  }
   return new TextEncoder().encode(spliced);
 }
 
 /** One `it` per vector in `vectors`, registered under whatever `describe` block is currently open. */
-function registerVectors(vectors: readonly Vector[]): void {
+function registerVectors<L extends string>(
+  vectors: readonly Vector<L>[],
+  check: (vector: Vector<L>, subject: Uint8Array, sidecarRaw: Uint8Array) => void,
+): void {
   for (const vector of vectors) {
     // Rule 5, skip ground 1: skip, don't fail, an `encoding: utf-16`/`utf-32` vector -- an
     // implementation gap (§9.1 permits the encodings; nothing here reads them), never a
@@ -181,12 +203,35 @@ function registerVectors(vectors: readonly Vector[]): void {
       const sidecarRaw = readFileSync(vector.sidecarPath);
       const summary = peekSidecarSummary(sidecarRaw);
       const subject = resolveSchemaDirectives(subjectBytes, summary);
-      checkVector(vector, subject, sidecarRaw);
+      check(vector, subject, sidecarRaw);
     });
   }
 }
 
-/** Dispatches to the layer-specific parse-sidecar + check pair. */
+/** Dispatches to the Class 2 layer-specific parse-sidecar + check pair. */
+function checkClass2Vector(
+  vector: Vector<Class2Layer>,
+  subject: Uint8Array,
+  sidecarRaw: Uint8Array,
+): void {
+  switch (vector.layer) {
+    case 'schema':
+      checkSchemaVector(vector, subject, parseSchemaSidecar(sidecarRaw) satisfies SchemaSidecar);
+      return;
+    case 'link':
+      checkLinkVector(vector, subject, parseLinkSidecar(sidecarRaw) satisfies LinkSidecar);
+      return;
+    case 'validate':
+      checkValidateVector(
+        vector,
+        subject,
+        parseValidateSidecar(sidecarRaw) satisfies ValidateSidecar,
+      );
+      return;
+  }
+}
+
+/** Dispatches to the Class 1 layer-specific parse-sidecar + check pair. */
 function checkVector(vector: Vector, subject: Uint8Array, sidecarRaw: Uint8Array): void {
   switch (vector.layer) {
     case 'lexer':

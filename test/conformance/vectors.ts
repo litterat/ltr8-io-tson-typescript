@@ -17,14 +17,27 @@ export type Layer = 'lexer' | 'parser' | 'reader' | 'resolver' | 'vocabulary';
 export const LAYERS: readonly Layer[] = ['lexer', 'parser', 'reader', 'resolver', 'vocabulary'];
 
 /**
+ * A Class 2 processing layer — `tests/class2/<layer>/`. Its own pipeline-stage vocabulary,
+ * distinct from {@link Layer} the same way the reference implementation's `Class2ConformanceSuiteTest`
+ * splits from `ConformanceSuiteTest`: a Class 2 vector is about a phase boundary (did this schema
+ * resolve, did it link, does this document validate against it), not one of Class 1's five stages.
+ */
+export type Class2Layer = 'schema' | 'link' | 'validate';
+
+/** Every Class 2 layer, in the order the runner reports them. */
+export const CLASS2_LAYERS: readonly Class2Layer[] = ['schema', 'link', 'validate'];
+
+/**
  * One conformance vector: a subject `.tn` file paired with its sidecar.
  *
  * Discovered purely by directory walk and naming convention — there is no manifest. See
- * {@link discoverVectors}.
+ * {@link discoverVectors}. Generic over which layer vocabulary it belongs to ({@link Layer} for
+ * Class 1, {@link Class2Layer} for Class 2) so both share this one shape and {@link walkLayerRoot}
+ * without either layer union naming a value that only makes sense for the other.
  */
-export interface Vector {
+export interface Vector<L extends string = Layer> {
   /** The conformance layer this vector belongs to. */
-  readonly layer: Layer;
+  readonly layer: L;
   /** The bucket directory name (`valid`, `invalid`, or `schema-document` under `parser`). */
   readonly bucket: string;
   /** The vector's stable slug, e.g. `escape-basic`. */
@@ -78,12 +91,12 @@ const EXPECTED_SUFFIX = '-expected.tn';
  * under `root` (`valid`, `invalid`, and — `parser` only — `schema-document`); a layer directory
  * that does not exist yields no vectors rather than throwing.
  */
-function walkLayerRoot(
+function walkLayerRoot<L extends string>(
   root: string,
-  layer: Layer,
+  layer: L,
   namePrefix: string,
   proposed: boolean,
-): Vector[] {
+): Vector<L>[] {
   if (!existsSync(root)) {
     return [];
   }
@@ -93,7 +106,7 @@ function walkLayerRoot(
     .map((entry) => entry.name)
     .sort();
 
-  const vectors: Vector[] = [];
+  const vectors: Vector<L>[] = [];
   for (const bucket of buckets) {
     const bucketDir = `${root}/${bucket}`;
     const subjects = readdirSync(bucketDir, { withFileTypes: true })
@@ -147,4 +160,15 @@ export function discoverProposedVectors(layer: Layer): Vector[] {
 /** {@link discoverVectors} over every layer in {@link LAYERS}, concatenated in layer order. */
 export function discoverAllVectors(): Vector[] {
   return LAYERS.flatMap((layer) => discoverVectors(layer));
+}
+
+/**
+ * Every vector for one Class 2 layer under `tests/class2/<layer>/` — the corpus's own
+ * `schema`/`link`/`validate` buckets (`valid`/`invalid`/`refused` directory names, all handled
+ * structurally by {@link walkLayerRoot} already). RUNNER.md's second skip ground ("a `class2/`
+ * vector under a Class 1 processor") no longer applies: this port claims Class 2 too, and this is
+ * the discovery half of that claim.
+ */
+export function discoverClass2Vectors(layer: Class2Layer): Vector<Class2Layer>[] {
+  return walkLayerRoot(`${SUITE_TESTS_ROOT}/class2/${layer}`, layer, `class2/${layer}`, false);
 }
