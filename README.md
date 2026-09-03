@@ -294,6 +294,10 @@ See [CLAUDE.md](CLAUDE.md) for the design constraints and conventions,
 original got right, the eight things it got wrong, and the same material generalised for porting TSON
 to another language. Read it before starting one.
 
+[IDIOM-DEBT.md](IDIOM-DEBT.md) is where this port is shaped by the Java reference rather than by
+TypeScript, and why each of those is deliberately held while the reference is still moving. Read it
+before "fixing" anything it lists.
+
 ## Related
 
 - [ltr8-io-tson-java](https://github.com/litterat/ltr8-io-tson-java) — the reference implementation

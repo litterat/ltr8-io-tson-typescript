@@ -113,6 +113,12 @@ all (a schema-only problem, say), not that it sits at the root.
 
 **`STATUS.md` is the only checklist.** Git history is the log.
 
+**Java-shaped code is held on purpose while the reference moves.** `IDIOM-DEBT.md` registers every
+place this port mirrors the Java rather than TypeScript, and states the trigger that ends each
+hold. Structural parity is worth more than idiom until `ltr8-io-tson-java` settles: a port shaped
+like its reference takes an upstream change by reading a diff. Check that file before re-idiomising
+anything, and add to it rather than to `STATUS.md` when a new divergence is worth holding.
+
 ## Spec feedback
 
 This port is the spec's second implementation, and the first in a language without the JDK's value
