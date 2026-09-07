@@ -1,14 +1,25 @@
 /**
- * Parses and validates against meta.tn's `binary` constructor (§5.3's four binary atoms, RFC
- * 4648) -- the port of `atom/BinaryParser.java`. One factory, not one per encoding: each
- * encoding's decode algorithm is genuinely different, but that is the same shape of branching
- * {@link createIntegerParser} already does on `size.signed` and {@link createFloatParser} already
- * does on `format`, not a reason to fork the module (`BinaryParser.java`'s own Javadoc makes the
- * same call, after an earlier version of that file tried the four-class split).
+ * Parses and validates against meta.tn's `binary` constructor's encoding-parameterised octet
+ * value space -- the port of `atom/BytesParser.java`. `!bytes` is Part 1's one binary annotation
+ * and its spelling is base64 (§5.3): an alphabet is a *spelling* of an octet sequence, not a kind
+ * of value, and a schemaless document has no schema to carry a selector, so `!bytes` fixes one
+ * alphabet and offers no override. `base64url`/`base32`/`hex` are not Part 1 vocabulary and are
+ * never registered as type annotations (`reader/schemaless/vocabulary.ts` registers `bytes`
+ * alone) -- but this factory stays parameterised over `constraints.encoding` rather than
+ * collapsing to base64 alone, because the same octet value space carries a schema-selectable
+ * `encoding` facet under a schema ([TSON-SCHEMA] §5.5, §9): the other three alphabets remain live
+ * decoders here, reachable by that explicit selector, for a schema-governed read to hand a
+ * selector to.
+ *
+ * One factory, not one per encoding: each encoding's decode algorithm is genuinely different, but
+ * that is the same shape of branching {@link createIntegerParser} already does on `size.signed`
+ * and {@link createFloatParser} already does on `format`, not a reason to fork the module
+ * (`BytesParser.java`'s own Javadoc makes the same call, after an earlier version of that file
+ * tried the four-class split).
  *
  * Hex has no dedicated module here the way base64/base32 do (`base64.ts`/`base32.ts`) -- RFC 4648
  * §8's base16 alphabet is a direct nibble-to-hex-digit mapping with no bit-accumulation state to
- * carry between characters, so it stays inline, mirroring `BinaryParser.java`'s own
+ * carry between characters, so it stays inline, mirroring `BytesParser.java`'s own
  * `decodeHex`/`HexFormat` use (the one encoding the JDK covers natively, so Java never wrote a
  * standalone class for it either).
  */
@@ -63,10 +74,11 @@ function encodeHex(data: Uint8Array): string {
 }
 
 /**
- * Builds the `AtomType` for one fully-parameterised `binary` instance -- e.g. `base64 => !binary
- * BASE64` is `createBinaryParser('base64', { kind: 'binary', encoding: 'BASE64' })`. See
- * {@link createIntegerParser} for why `typeRef` is required explicitly rather than derived from
- * `encoding` the way `BinaryParser.java`'s own `typeName()` derives it.
+ * Builds the `AtomType` for one fully-parameterised `binary` instance -- e.g. Part 1's `bytes` is
+ * `createBinaryParser('bytes', { kind: 'binary', encoding: 'BASE64' })`, the only instance
+ * `reader/schemaless/vocabulary.ts` registers. See {@link createIntegerParser} for why `typeRef`
+ * is required explicitly rather than derived from `encoding` the way `BytesParser.java`'s own
+ * `typeName()` derives it.
  */
 export function createBinaryParser(typeRef: string, constraints: BinaryType): AtomType<Uint8Array> {
   function validate(value: Uint8Array, text: string): void {

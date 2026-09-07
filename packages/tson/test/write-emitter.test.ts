@@ -68,7 +68,7 @@ describe('§2.5/§2.6/§2.7 separation -- a single space before every element, n
   });
 });
 
-describe('§2.5/§7.1/§7.2/§2.9 field-name quoting -- unquoted only where it survives the round trip', () => {
+describe('§2.5/§7.7 field names -- an identifier, written unquoted, or no legal spelling at all', () => {
   function field(name: string): string {
     return emit((out) => {
       out.beginRecord();
@@ -82,59 +82,40 @@ describe('§2.5/§7.1/§7.2/§2.9 field-name quoting -- unquoted only where it s
     expect(field('name')).toBe('{ name: 1 }');
   });
 
-  it('a digit-led name that is a legal token but not an identifier stays unquoted (§2.5: field names are lexical)', () => {
-    expect(field('42x')).toBe('{ 42x: 1 }');
+  it('a hyphen is identifier-continue, so a hyphenated name is written unquoted (§7.7)', () => {
+    expect(field('content-type')).toBe('{ content-type: 1 }');
   });
 
-  it('a name starting with _ is quoted -- token-initial _ is the absent sentinel (§2.9), not a token character (§7.1)', () => {
-    expect(field('_id')).toBe('{ "_id": 1 }');
-  });
-
-  it('a name that is exactly _ is quoted, the same way', () => {
-    expect(field('_')).toBe('{ "_": 1 }');
-  });
-
-  it('an empty name is quoted -- unquoted-token has no empty spelling (§7.1)', () => {
-    expect(field('')).toBe('{ "": 1 }');
-  });
-
-  it('a name containing a space is quoted -- space is outside the token profile', () => {
-    expect(field('first name')).toBe('{ "first name": 1 }');
-  });
-
-  it.each(['.', '-', '+'])(
-    'a lone boundary sign %j is quoted -- alone it is never an unquoted token (§7.2.4)',
-    (sign) => {
-      expect(field(sign)).toBe(`{ "${sign}": 1 }`);
-    },
-  );
-
-  it('a sign immediately followed by a continuation character stays unquoted', () => {
-    expect(field('-abc')).toBe('{ -abc: 1 }');
-    expect(field('+abc')).toBe('{ +abc: 1 }');
-    expect(field('.5abc')).toBe('{ .5abc: 1 }');
-  });
-
-  it('two adjacent dots force quoting -- the lexer terminates before a run of dots (§7.2 rule 3)', () => {
-    expect(field('a..b')).toBe('{ "a..b": 1 }');
-    expect(field('..')).toBe('{ "..": 1 }');
-  });
-
-  it('a name that is not NFC-normalized is quoted -- an unquoted token must already be NFC (§7.2.1)', () => {
-    const decomposed = 'é'; // "é" spelled as e + combining acute accent, not the precomposed U+00E9
-    expect(field(decomposed)).toBe(`{ "${decomposed}": 1 }`);
-  });
-
-  it('an already-precomposed name stays unquoted', () => {
+  it('an already-precomposed non-ASCII name stays unquoted -- every identifier is a well-formed unquoted token (§7.1)', () => {
     expect(field('é')).toBe('{ é: 1 }');
   });
 
-  it('a keyword-shaped name stays unquoted -- a field name is lexical, not identifier-constrained (§2.5)', () => {
+  it('a keyword-shaped name stays unquoted -- §7.7 excludes nothing by name', () => {
     expect(field('true')).toBe('{ true: 1 }');
+    expect(field('null')).toBe('{ null: 1 }');
   });
 
-  it('a quoted spelling still escapes exactly as quotedString would', () => {
-    expect(field('a"b')).toBe('{ "a\\"b": 1 }');
+  it('a name that is not NFC-normalized is written in NFC -- that is the text identity compares (§7.7)', () => {
+    const decomposed = 'é'; // "é" spelled as e + combining acute accent, not the precomposed U+00E9
+    expect(field(decomposed)).toBe('{ é: 1 }');
+  });
+
+  // §2.5: a field name is an identifier at every layer, and quoting is relief from what the
+  // unquoted form cannot spell rather than a wider name set -- so each of these has no legal
+  // spelling, and writing one quoted would produce a document this port's own parser rejects.
+  it.each([
+    ['42x', 'digit-led: a digit is not XID_Start (§7.7)'],
+    ['_id', 'token-initial _ is XID_Continue only, never XID_Start'],
+    ['_', 'the absent sentinel is not a name (§2.9)'],
+    ['', 'identifier-start requires a code point'],
+    ['first name', 'space is outside the identifier grammar'],
+    ['.', 'a boundary sign is not identifier-continue'],
+    ['-', 'a lone hyphen has no identifier-start'],
+    ['+', 'a boundary sign is not identifier-continue'],
+    ['a..b', 'a full stop is not identifier-continue'],
+  ])('%j is refused outright, not quoted -- %s', (name) => {
+    expect(() => field(name)).toThrow(TsonWriteError);
+    expect(() => field(name)).toThrow(/is not an identifier, so it names no field/);
   });
 });
 
@@ -142,7 +123,7 @@ describe('§3.1 annotations', () => {
   it('a valueless annotation carries its own trailing space (§3.1: the boundary rule)', () => {
     const text = emit((out) => {
       out.annotation('deprecated');
-      out.nullValue();
+      out.unquotedToken('null');
     });
     expect(text).toBe('@deprecated null');
   });
@@ -193,7 +174,7 @@ describe('§2.2/§3.3 header directives', () => {
   it('documentId writes !!id:"<uri>" terminated by a newline, first', () => {
     const text = emit((out) => {
       out.documentId('https://example.com/doc.tn');
-      out.nullValue();
+      out.unquotedToken('null');
     });
     expect(text).toBe('!!id:"https://example.com/doc.tn"\nnull');
   });
@@ -201,7 +182,7 @@ describe('§2.2/§3.3 header directives', () => {
   it('schemaRef writes !!schema:"<uri>" terminated by a newline', () => {
     const text = emit((out) => {
       out.schemaRef('https://example.com/schema.tn');
-      out.nullValue();
+      out.unquotedToken('null');
     });
     expect(text).toBe('!!schema:"https://example.com/schema.tn"\nnull');
   });
@@ -258,6 +239,24 @@ describe('§7.2.2 single-line quoted strings -- minimal escaping', () => {
     });
     expect(text).toBe('"héllo 世界"');
   });
+
+  // §7.2.2: a single-line token admits any character from U+0020 upward EXCEPT the quotation
+  // mark, the backslash, and NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR -- "these three MAY be
+  // included via their escape sequences". A single-line token is genuinely single-line, so a raw
+  // one would end it, and the lexer refuses each of them unescaped.
+  it.each([
+    ['NEL', '\u0085', '\\u0085'],
+    ['LINE SEPARATOR', '\u2028', '\\u2028'],
+    ['PARAGRAPH SEPARATOR', '\u2029', '\\u2029'],
+  ])(
+    '%s is escaped, not written raw -- it is a line terminator (§7.2.2)',
+    (_name, raw, escaped) => {
+      const text = emit((out) => {
+        out.quotedString(`a${raw}b`);
+      });
+      expect(text).toBe(`"a${escaped}b"`);
+    },
+  );
 });
 
 describe('§7.2.3 multi-line strings -- closing delimiter at column 0, so no indentation is stripped on read back', () => {
@@ -291,17 +290,17 @@ describe('§7.2.3 multi-line strings -- closing delimiter at column 0, so no ind
 });
 
 describe('leaf tokens', () => {
-  it('null and absent are distinct spellings', () => {
-    expect(
-      emit((out) => {
-        out.nullValue();
-      }),
-    ).toBe('null');
+  it("'_' is the only absence spelling (§2.9, §4.4); 'null' is an ordinary unquoted token", () => {
     expect(
       emit((out) => {
         out.absentValue();
       }),
     ).toBe('_');
+    expect(
+      emit((out) => {
+        out.unquotedToken('null');
+      }),
+    ).toBe('null');
   });
 
   it('booleanValue writes true/false unquoted', () => {

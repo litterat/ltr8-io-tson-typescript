@@ -53,14 +53,19 @@ import { fromBytes, runSync } from '../io/bytes.js';
 import type { CoreValue, DataValue } from '../ast/value.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Instance } from '../ast/schema/fields.js';
+import type { TypeRef } from '../ast/schema/typeref.js';
+import { toCoreValue } from '../bind/encode.js';
 import { createDefinitionResolver } from '../compiler/definitionResolver.js';
-import type { DefinitionGetter, DefinitionMetaReader } from '../compiler/resolverTypes.js';
+import { createDefinitionMetaReader } from './metaReader.js';
+import type { DefinitionGetter } from '../compiler/resolverTypes.js';
 import { desugar } from '../compiler/desugar.js';
 import { flattenSchema } from '../compiler/referenceFlattener.js';
 import { parseSchemaDocument } from '../compiler/schemaParser.js';
 import type { Schema } from '../compiler/schemaResolver.js';
 import type { ArrayBody, EnumBody, MapBody } from './meta/bodies.js';
 import type { Top, TypeDefinition } from './meta/typedef.js';
+import { defaultAtomEncoder } from '../write/bindingWriter.js';
+import { topBinding } from './bindings.js';
 
 /** Parses and resolves meta-kernel's own source text (see this module's own doc). */
 export function bootstrapMetaKernel(source: Uint8Array): Schema {
@@ -98,72 +103,135 @@ export function bootstrapMetaKernel(source: Uint8Array): Schema {
 }
 
 /**
- * A `DefinitionMetaReader` that always throws -- the first pass below only ever calls
- * `DefinitionResolver#resolve` on a non-`Instance` declaration, so `bindAtomInstance` can never
- * actually be reached from here (every `Instance` is filtered out and resolved through
- * {@link instanceBody} directly, in the second pass, never through the generic resolver at all).
- * A loud failure if that assumption is ever wrong is safer than silently handing the resolver a
- * reader that could return something meaningless.
+ * The name a declaration's own head resolves EAGERLY -- the one entry that must already be in the
+ * map before this declaration can be resolved at all, or `undefined` where the head names none.
+ *
+ * A refinement's source, a construction's first supertype, an instance's constructor and a plain
+ * reference's target are each read at resolution time; every other name a body mentions (a field's
+ * declared type, an element type) is a reference resolved later, not now. That distinction is what
+ * makes the ordering below a finite walk over an acyclic relation rather than a topological sort
+ * of the whole self-referential kernel: no type refines, composes with, constructs from or aliases
+ * itself.
  */
-const NEVER_CALLED: DefinitionMetaReader = (type) => {
-  throw new TsonInternalError(
-    `'${type}': meta-kernel's own bootstrap resolves every Instance declaration through instanceBody ` +
-      'directly -- this reader should never be called',
-  );
-};
+function eagerSourceName(typeDef: Declaration['typeDef']): string | undefined {
+  switch (typeDef.kind) {
+    case 'atomRefinement':
+      return typeDef.target;
+    case 'instance':
+      return typeDef.value.typeRef;
+    case 'referenceTypeDef':
+      return simpleRefName(typeDef.ref);
+    case 'structuralTypeDef':
+      switch (typeDef.body.kind) {
+        case 'refinedDef':
+          return simpleRefName(typeDef.body.target);
+        case 'constructionDef':
+          return simpleRefName(typeDef.body.supertypes[0]);
+        case 'recordDef':
+          return undefined;
+      }
+  }
+}
 
-/** Meta-kernel governs itself, so it has no separate structure namespace to fall back to -- the first pass never reaches a constructor-application `Instance` at all, the one place a structure namespace is ever consulted. */
-const EMPTY_META_DEFINITIONS: DefinitionGetter = () => undefined;
+/** `ref`'s own name where it is a bare or generic reference, and `undefined` for the bracket, brace and paren forms, which name a container rather than an entry. */
+function simpleRefName(ref: TypeRef): string | undefined {
+  return ref.kind === 'simpleRef' || ref.kind === 'genericRef' ? ref.name : undefined;
+}
 
+/**
+ * Meta-kernel's declarations, resolved in DEPENDENCY order rather than source order.
+ *
+ * Source order does not suffice and the kernel says why: `non_negative_integer => !integer ^ { min: 0 }`
+ * refines `integer`, which is itself `integer => !integer_type {}` -- an instance whose kind is
+ * transferred from a constructor declared elsewhere. Ordering by declaration KIND does not suffice
+ * either, for the same pair from the other side: it puts every instance after every refinement, so
+ * a refinement OF an instance is resolved while its source is still pending and
+ * `resolveAtomRefinement` reports the source as undeclared (§3.3.1).
+ *
+ * So each declaration waits for the one entry its head names ({@link eagerSourceName}), and a
+ * sweep that resolves at least one declaration is repeated until none is left or none can move. A
+ * declaration whose head names something the document does not declare at all is not waiting for
+ * anything and resolves immediately; anything still pending when the sweeps stop is resolved in
+ * source order regardless, so a genuine cycle or a genuinely undeclared source reaches the
+ * resolver and is reported as the error it is, rather than being silently dropped here.
+ */
 function resolveEntries(document: SchemaDocument): Map<string, TypeDefinition> {
   const entries = new Map<string, TypeDefinition>();
+  const governing: DefinitionGetter = (name) => entries.get(name);
   const resolver = createDefinitionResolver({
-    definitionMetaReader: NEVER_CALLED,
-    metaDefinitions: EMPTY_META_DEFINITIONS,
-    namespaceDefinitions: (name) => entries.get(name),
+    // Meta-kernel governs itself, so its own accumulating map is both the type-name namespace
+    // and the structure namespace a constructor application is read against. The kernel's one
+    // atom refinement (`non_negative_integer => !integer ^ { min: 0 }`) reaches the meta reader
+    // for `integer_type`, which the dependency ordering below has already resolved by then.
+    definitionMetaReader: createDefinitionMetaReader(governing),
+    metaDefinitions: governing,
+    namespaceDefinitions: governing,
+    // §5.7: an atom refinement merges onto its source's wire record before binding, and the
+    // kernel has one of its own -- `non_negative_integer => !integer ^ { min: 0 }`. A `Binding`
+    // here is bidirectional by construction, so the merge runs through `bind/encode.ts` rather
+    // than through a writer the resolver would otherwise have to hold.
+    encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
   });
-  const instances: Declaration[] = [];
 
-  for (const declaration of document.body.declarations.values()) {
-    if (declaration.typeDef.kind === 'instance') {
-      // Deferred to the second pass: an Instance's own kind is transferred from its target, which
-      // (e.g. "enum", declared long after "boolean" uses it) may not be resolved yet in source order.
-      instances.push(declaration);
-      continue;
-    }
-    entries.set(declaration.name, resolver.resolve(declaration));
-  }
+  const declarations = [...document.body.declarations.values()];
+  const declared = new Set(declarations.map((declaration) => declaration.name));
 
-  for (const declaration of instances) {
-    if (declaration.typeDef.kind !== 'instance') {
-      throw new TsonInternalError(
-        `'${declaration.name}': expected an Instance in the deferred second pass`,
-      );
+  const ready = (declaration: Declaration): boolean => {
+    const source = eagerSourceName(declaration.typeDef);
+    if (source === undefined || source === declaration.name) return true;
+    return !declared.has(source) || entries.has(source);
+  };
+
+  let pending = declarations;
+  for (;;) {
+    const deferred: Declaration[] = [];
+    for (const declaration of pending) {
+      if (ready(declaration)) resolveInto(entries, resolver, declaration);
+      else deferred.push(declaration);
     }
-    const instance = declaration.typeDef;
-    const targetName = requireTypeRef(instance.value, declaration.name);
-    const target = entries.get(targetName);
-    if (target === undefined) {
-      continue; // unreachable against the real, bundled fixture -- see instanceBody's own doc
-    }
-    const body = instanceBody(instance, targetName);
-    if (body === undefined) {
-      continue; // an unrecognised target -- see instanceBody's own doc on why this is not an error here
-    }
-    // §5.5: constructor application transfers only the target's kind; no supertypes, no
-    // parameters -- this is construction, not composition or refinement.
-    entries.set(declaration.name, {
-      source: { name: targetName, arguments: [], annotations: [] },
-      kind: target.kind,
-      parameters: [],
-      constructor: false,
-      supertypes: [],
-      subtypes: [],
-      body,
-      annotations: [],
-    });
+    if (deferred.length === 0) return entries;
+    if (deferred.length === pending.length) break;
+    pending = deferred;
   }
+  for (const declaration of pending) resolveInto(entries, resolver, declaration);
   return entries;
+}
+
+/**
+ * Resolves one declaration into `entries`.
+ *
+ * An `Instance` takes its own route: §5.5's constructor application transfers only the target's
+ * kind -- no supertypes, no parameters -- and {@link instanceBody} builds that body directly from
+ * the kernel's own vocabulary, which is why the generic resolver is handed {@link NEVER_CALLED}
+ * as its meta reader. An instance whose target is unrecognised, or not yet resolved after every
+ * sweep, is left out rather than guessed at; `instanceBody`'s own doc says why that is not an
+ * error here.
+ */
+function resolveInto(
+  entries: Map<string, TypeDefinition>,
+  resolver: ReturnType<typeof createDefinitionResolver>,
+  declaration: Declaration,
+): void {
+  if (declaration.typeDef.kind !== 'instance') {
+    entries.set(declaration.name, resolver.resolve(declaration));
+    return;
+  }
+  const instance = declaration.typeDef;
+  const targetName = requireTypeRef(instance.value, declaration.name);
+  const target = entries.get(targetName);
+  if (target === undefined) return;
+  const body = instanceBody(instance, targetName);
+  if (body === undefined) return;
+  entries.set(declaration.name, {
+    source: { name: targetName, arguments: [], annotations: [] },
+    kind: target.kind,
+    parameters: [],
+    constructor: false,
+    supertypes: [],
+    subtypes: [],
+    body,
+    annotations: [],
+  });
 }
 
 function requireTypeRef(value: DataValue, declarationName: string): string {
@@ -207,11 +275,12 @@ export function instanceBody(instance: Instance, target: string): Top | undefine
       return { kind: 'regex_type', spec: RFC_9485 };
     case 'enum':
       return toEnumBody(instance.value);
-    // Emitted by desugar.ts above, never written by hand in the fixture. array and set differ
-    // only in the defaults set tightens (§5.7): ordered/duplicating vs unordered/unique.
+    // `array` is emitted by desugar.ts above; `set_type` is written by hand in the kernel too
+    // (`integer_member_set`, `enum_set`). They differ only in the defaults `set_type` tightens
+    // (§5.7): ordered/duplicating vs unordered/unique.
     case 'array':
       return toArrayBody(instance.value, false);
-    case 'set':
+    case 'set_type':
       return toArrayBody(instance.value, true);
     case 'map':
       return toMapBody(instance.value);

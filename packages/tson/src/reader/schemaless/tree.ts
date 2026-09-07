@@ -3,8 +3,7 @@
  * scope** -- the port of `reader/SchemalessTreeReader.java`, the schemaless (Class 1) tree-
  * producing peer of `reader/bind.ts`'s `bindReader` (which produces authored host objects
  * instead). Like Jackson's `readTree`: the wire structure is the source of truth. Leaves are
- * typed by §4 base resolution (`bigint`/`TsonDecimal`/`number`/`boolean`/`string`, and the
- * `null` token as an {@link AbsentNode} -- `tree/nodes.ts` has one no-value node, not two), or by
+ * typed by §4 base resolution (`bigint`/`TsonDecimal`/`number`/`boolean`/`string`), or by
  * `vocabulary.ts`'s built-in atom table when a leaf carries a type-ref for one (`!uuid`, `!date`,
  * ...); a container carries its own wire type-ref (`!person`) when present, uninterpreted.
  *
@@ -106,12 +105,13 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    */
   readonly preserveUnknownTypeRefs?: boolean;
   /**
-   * [TSON-DATA] §8.2's name-hygiene policy. Two independent scopes read from it at this layer:
-   * each record's own field names (§8.2's one Part 1 scope over a *name*, checked once per
-   * record after its fields are read -- see {@link reportNameHygiene} for why field names see
-   * mechanism 1 only), and every type-ref/annotation name as it is pulled off the event stream
-   * (checked once each, as they are lexically `identifier`, §7.4/§7.7 -- see
-   * `checkIdentifierHygiene` in this module). Defaults to {@link DEFAULT_NAME_POLICY} -- mechanism
+   * [TSON-DATA] §8.2's name-hygiene policy. Every identifier position at this layer reads from it,
+   * in one walk: each record's own field names (§8.2's one Part 1 scope, checked once per record
+   * after its fields are read -- see {@link reportNameHygiene}), and every type-ref/annotation
+   * name as it is pulled off the event stream (checked once each -- see `checkIdentifierHygiene`
+   * in this module). All three positions are `identifier` (§2.5, §7.7), so all three meet all
+   * three mechanisms; the scope a record's field names form is what mechanism 1 additionally
+   * needs. Defaults to {@link DEFAULT_NAME_POLICY} -- mechanism
    * 3 at Highly Restrictive over the whole name -- matching §8.2's own defaults. Relaxing any of
    * the three is this field's job (`unicode/policy.ts`'s own `with*` functions build a relaxed
    * value); §8.2 forbids relaxing one silently, e.g. from an environment variable, which is
@@ -615,17 +615,15 @@ function* readRecord(
  * occurrence as fields arrived; this is the different rule that two *distinct* names read alike,
  * and mechanism 1 needs the whole set collected before it can see a collision at all).
  *
- * **Skeleton distinctness only -- mechanisms 2 and 3 never run over this scope.** A `field-name`
- * is `unquoted-token / single-line-token` (§2.5, §7.4), lexical rather than `identifier` (§7.7),
- * so it carries no identifier profile and no restriction level to be judged against in the first
- * place; only mechanism 1's look-alike relation applies, because two *values* that happen to read
- * alike are exactly the confusion §8.2 exists to catch, whatever grammar rule produced them. This
- * matches the reference implementation's `SchemalessTreeReader.reportConfusableFields`
- * (`tson-compiler/.../reader/SchemalessTreeReader.java`), which calls only
- * `ConfusableNames.firstCollision` here -- never `IdentifierParser.hygiene` or a restriction-level
- * check. (A type-ref or annotation name, by contrast, sits on an `identifier` position and is
- * checked by `checkIdentifierHygiene`, this module's own port of the reference's
- * `DefaultTsonReadContext.checkNameHygiene`.)
+ * **All three mechanisms, in that order.** A field name is an `identifier` (§2.5, §7.7), so §8.2's
+ * "Names and scopes" paragraph reaches it exactly as it reaches a declared name: "a schemaless
+ * record's field names meet all three mechanisms exactly as a declared name does; there is one
+ * walk, and no position is policed differently by conformance class". Mechanisms 2 and 3 are
+ * per-name and judge each field name on its own; mechanism 1 is a relation over the scope and
+ * needs the whole set. The per-name pass runs first because that is the order the mechanisms
+ * decide in -- a within-word mixed-script homograph is refused by mechanism 3 before mechanism 1
+ * has a pair to compare it against, and reporting the collision instead would name the wrong
+ * rule.
  *
  * **A refusal is a fifth outcome, not one of §8.1's four error categories** -- reported through
  * `ctx.report` so a *collecting* read gets the ordinary `Diagnostic` shape (path, position, the
@@ -644,8 +642,33 @@ function reportNameHygiene(
   fieldNames: Iterable<string>,
   identifierPolicy: NamePolicy,
 ): void {
+  const names = [...fieldNames];
+  for (const name of names) {
+    const refusal = nameHygieneRefusal([name], identifierPolicy);
+    if (refusal === undefined) continue;
+    const perName =
+      `the field name '${name}' is refused under [TSON-DATA] §8.2's name-hygiene policy: ` +
+      refusal.detail;
+    try {
+      ctx
+        .field(name)
+        .report(
+          diagnosticCodeForMechanism(refusal.mechanism),
+          perName,
+          'a field name this processor will accept',
+          `'${name}'`,
+        );
+    } catch (thrown) {
+      throw new TsonNameHygieneRefusedError(perName, {
+        mechanism: refusal.mechanism,
+        names: refusal.names,
+        uts39Version: UTS39_VERSION,
+        cause: thrown,
+      });
+    }
+  }
   if (!identifierPolicy.skeletonDistinctness) return;
-  const collision = firstConfusableCollision(fieldNames);
+  const collision = firstConfusableCollision(names);
   if (collision === undefined) return;
   // §8.2 "on detection": reported at the second occurrence's position, in the manner of §2.6's
   // duplicate-key diagnostic.
@@ -788,12 +811,11 @@ function* readMap(
 /**
  * A token leaf, decoded by the built-in atom `checkTypeRef` matched, else by §4 base resolution.
  *
- * Both no-value outcomes land on {@link AbsentNode}: the `null` token, which §4.1 resolves to the
- * null base value and which the tree model spells as absence, and a token the atom rejected,
- * where reporting never abandons the surrounding value and the diagnostic -- not the placeholder
- * -- carries what went wrong. This is the only path on which `null` means absence: it is base
- * resolution's answer, so it holds exactly where §4 applies (no declared type in scope). Under a
- * schema, `null` is a token like any other (`reader/tree/atom.ts`'s own family handles that case).
+ * The only no-value outcome is a token the atom rejected: reporting never abandons the
+ * surrounding value, and the diagnostic -- not the placeholder -- carries what went wrong. A
+ * token base resolution reaches always narrows to a real value (§4.5 is total over three
+ * classes); `null` is an ordinary string here, exactly as it is at every other unquoted-token
+ * position (§4.4).
  */
 function leaf(
   ctx: ReadContext,
@@ -815,16 +837,12 @@ function leaf(
     }
   }
   const narrowed = narrowBaseValue(resolveBaseType({ text: token.text, form: token.form }));
-  return narrowed === null
-    ? absentNode(typeRefName, annotations)
-    : atomNode(narrowed, typeRefName, annotations);
+  return atomNode(narrowed, typeRefName, annotations);
 }
 
-/** §4's base type resolution narrowed to the natural host value each {@link BaseValue} variant implies -- this module's own copy of the Java reference's `ValueParser.narrow`. `null` return means the base `null` token; every other {@link BaseValue} kind narrows to a real, never-`null`, {@link AtomValue}. */
-function narrowBaseValue(value: BaseValue): AtomValue | null {
+/** §4's base type resolution narrowed to the natural host value each {@link BaseValue} variant implies -- this module's own copy of the Java reference's `ValueParser.narrow`. Total: every {@link BaseValue} kind narrows to a real {@link AtomValue}. */
+function narrowBaseValue(value: BaseValue): AtomValue {
   switch (value.kind) {
-    case 'null':
-      return null;
     case 'boolean':
       return value.value;
     case 'string':
@@ -855,7 +873,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
 // compound one, and a leading `!text` or `@doc` is in neither.
 // ---------------------------------------------------------------------------------------------
 
-/** A unique stand-in for the absent sentinel `_`/`null` as a key identity -- distinct from every real decoded value, including a quoted `"null"` string (base resolution's own `StringValue`). */
+/** A unique stand-in for the absent sentinel `_` as a key identity -- distinct from every real decoded value, including the string `"null"` (quoted or not: base resolution's own `StringValue`, §4.4). */
 const ABSENT_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-absent-key');
 
 /**

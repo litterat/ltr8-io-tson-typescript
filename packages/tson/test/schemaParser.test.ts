@@ -284,6 +284,18 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
   it('rejects a numeric name after "!"', () => {
     expect(thrownBy(`${META} { x => !42 }`)).toBeInstanceOf(TsonParseError);
   });
+
+  it('an instance payload record admits a trailing comma (§2.4, §12.1)', () => {
+    expect(typeDefOf('!record_def { entries: [], }')).toEqual(
+      typeDefOf('!record_def { entries: [] }'),
+    );
+  });
+
+  it('an instance payload field name is an identifier, exactly as in ordinary data (§2.5, §7.7)', () => {
+    expect(thrownBy(`${META} { x => !choice { "not an id": [T error] } }`)).toBeInstanceOf(
+      TsonParseError,
+    );
+  });
 });
 
 describe('type-def: structural forms (§5.7-§5.9)', () => {
@@ -557,6 +569,26 @@ describe('field groups (§5.11)', () => {
   });
 });
 
+describe('a field name is an identifier in the schema grammar too (§2.5, §5.2, §5.11, §7.7)', () => {
+  it('rejects a quoted, non-identifier record field name', () => {
+    expect(thrownBy(`${META} { x => { "first name": text } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it('admits a quoted field name whose decoded text is an identifier, same as its unquoted spelling', () => {
+    expect(typeDefOf('{ "order-id": uuid }')).toEqual(typeDefOf('{ order-id: uuid }'));
+  });
+
+  it('rejects a non-identifier group member name', () => {
+    expect(thrownBy(`${META} { x => { ("first name": text | b: text) } }`)).toBeInstanceOf(
+      TsonParseError,
+    );
+  });
+
+  it('rejects a non-identifier name in a removal set', () => {
+    expect(thrownBy(`${META} { x => customer -{ "not an id" } }`)).toBeInstanceOf(TsonParseError);
+  });
+});
+
 // ── Type expressions (§5.3, §5.4) ───────────────────────────────────────
 
 describe('choice types (§5.4)', () => {
@@ -728,6 +760,50 @@ describe('type arguments (§12.1, §5.10)', () => {
 describe('type names (§12.1)', () => {
   it('rejects a numeric type parameter name', () => {
     expect(thrownBy(`${META} { x => <42> map<text, 42> }`)).toBeInstanceOf(TsonParseError);
+  });
+});
+
+// ── A comma may follow the last element of every list (§2.4, §12.1) ────
+
+describe('a comma may follow the last element of every list in this grammar (§2.4, §12.1)', () => {
+  it('a trailing comma follows the last declaration in a schema map', () => {
+    const doc = parse(`${META} { a => uuid, b => text, }`);
+    expect([...doc.body.declarations.keys()]).toEqual(['a', 'b']);
+  });
+
+  it('a trailing comma follows the last field in a record body', () => {
+    expect(typeDefOf('{ id: uuid, title: text, }')).toEqual(typeDefOf('{ id: uuid  title: text }'));
+  });
+
+  it('a trailing comma follows the last name in a removal set', () => {
+    const def = typeDefOf('customer -{ vip, tier, }');
+    expect(def.kind).toBe('structuralTypeDef');
+    if (def.kind !== 'structuralTypeDef') throw new Error('unreachable');
+    expect(def.body).toEqual({
+      kind: 'constructionDef',
+      supertypes: [{ kind: 'simpleRef', name: 'customer' }],
+      removal: { fieldNames: ['vip', 'tier'] },
+    });
+  });
+
+  it('a trailing comma follows the last parameter in a type-parameter list', () => {
+    expect(typeDefOf('<T, MIN,> pair<T, MIN>')).toEqual(typeDefOf('<T MIN> pair<T MIN>'));
+  });
+
+  it('a trailing comma follows the last argument in a type-argument list', () => {
+    expect(typeDefOf('pair<uuid, text,>')).toEqual(typeDefOf('pair<uuid text>'));
+  });
+
+  it('a trailing comma follows the last element in a tuple', () => {
+    expect(typeDefOf('[text, integer,]')).toEqual(typeDefOf('[text integer]'));
+  });
+
+  it('a leading comma (following nothing) is still a parse error', () => {
+    expect(thrownBy(`${META} { x => { , id: uuid } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it('a comma following another comma is still a parse error, needing no rule of its own', () => {
+    expect(thrownBy(`${META} { x => { id: uuid, , title: text } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 

@@ -68,9 +68,12 @@ describe('structural errors carry expected/actual (§8.1)', () => {
   });
 
   it('omits both when the failure states a rule rather than a substitution', () => {
-    // An adjacency violation or a trailing separator has no substitution to name. The pair is
+    // An adjacency violation or a doubled separator has no substitution to name. The pair is
     // all-or-nothing: no throw site invents one to fill the other.
-    const error = new TsonParseError('a separator may not trail its sequence', POSITION);
+    const error = new TsonParseError(
+      'adjacent values must be separated by whitespace, a comma, or both',
+      POSITION,
+    );
     expect(error.expected).toBeUndefined();
     expect(error.actual).toBeUndefined();
     expect(error.position).toEqual(POSITION);

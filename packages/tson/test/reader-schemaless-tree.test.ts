@@ -24,8 +24,8 @@ function readCollect(text: string, options?: Parameters<typeof schemalessTreeRea
 }
 
 describe('schemalessTreeReader -- base type resolution leaves (§4, no type-ref)', () => {
-  it('null resolves to the absent node', () => {
-    expect(readFail('null')).toEqual({ kind: 'absent', annotations: { values: [] } });
+  it('the unquoted token null is an ordinary string atom, not absence -- absence has one spelling, the sentinel _ (§4.4, §7.3)', () => {
+    expect((readFail('null') as AtomNode).value).toBe('null');
   });
 
   it('true/false resolve to boolean atoms', () => {

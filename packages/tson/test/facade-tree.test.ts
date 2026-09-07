@@ -124,7 +124,7 @@ describe('a collecting read never throws for a bad document', () => {
   const MALFORMED: readonly (readonly [string, Uint8Array])[] = [
     ['an unclosed record', bytesOf('{ x: 1')],
     ['a value where a key belongs', bytesOf('{ : 1 }')],
-    ['a trailing separator', bytesOf('[1 2 ,]')],
+    ['a comma following another comma', bytesOf('[1, , 2]')],
     ['malformed UTF-8', new Uint8Array([0x7b, 0x78, 0x3a, 0x20, 0xc3, 0x28, 0x7d])],
     ['a lone continuation byte', new Uint8Array([0x80])],
   ];

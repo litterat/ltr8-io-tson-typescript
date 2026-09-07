@@ -78,12 +78,17 @@ describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
     expect(text?.read({ text: 'hello world', form: 'single-line' })).toBe('hello world');
   });
 
-  it('base64/base64url/base32/hex each decode their own RFC 4648 encoding', () => {
+  it('bytes decodes RFC 4648 §4 base64, matching `bytes => !bytes_type { encoding: BASE64 }`', () => {
     // "hi" == base64 "aGk="
-    const base64 = lookupBuiltinAtom('base64');
-    expect(base64?.read({ text: 'aGk=', form: 'unquoted' })).toEqual(new Uint8Array([0x68, 0x69]));
-    const hex = lookupBuiltinAtom('hex');
-    expect(hex?.read({ text: '6869', form: 'unquoted' })).toEqual(new Uint8Array([0x68, 0x69]));
+    const bytes = lookupBuiltinAtom('bytes');
+    expect(bytes?.read({ text: 'aGk=', form: 'unquoted' })).toEqual(new Uint8Array([0x68, 0x69]));
+  });
+
+  it('§5.3 -- base64/base64url/base32/hex are not Part 1 vocabulary; only `bytes` is', () => {
+    expect(lookupBuiltinAtom('base64')).toBeUndefined();
+    expect(lookupBuiltinAtom('base64url')).toBeUndefined();
+    expect(lookupBuiltinAtom('base32')).toBeUndefined();
+    expect(lookupBuiltinAtom('hex')).toBeUndefined();
   });
 
   it('uuid is unconstrained -- no declared version', () => {
@@ -102,6 +107,12 @@ describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
       day: 1,
     });
     expect(lookupBuiltinAtom('duration')?.read({ text: 'P1D', form: 'unquoted' })).toBeDefined();
+  });
+
+  it('period is unconstrained', () => {
+    expect(lookupBuiltinAtom('period')?.read({ text: 'P1Y', form: 'unquoted' })).toEqual({
+      months: 12n,
+    });
   });
 
   it('uri/email/mac/ipv4/ipv6/cidr4/cidr6 each parse their own shape unconstrained', () => {

@@ -118,12 +118,10 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
   }
 };
 
-/** §4's base-type resolution (null/boolean/number/string), narrowed to a plain host value for meta-kernel's own `value` escape hatch. */
+/** A `value`-carried token narrowed to a plain host value, by the same three-class reading §4 states — the last resort for a meta-schema facet no declared atom stands behind, never a fallback under a schema, where §4.1 does not reach. */
 function decodeBaseValue(wire: BaseToken): unknown {
   const base = resolveBaseType(wire);
   switch (base.kind) {
-    case 'null':
-      return null;
     case 'boolean':
       return base.value;
     case 'string':

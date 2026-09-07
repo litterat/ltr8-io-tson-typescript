@@ -46,7 +46,6 @@ import type { TsonEvent } from '../stream/event.js';
 
 /** [TSON-DATA] §4's fixed base-type order, mapped onto §5.4's own classes -- the token half of {@link classifyEvent}. */
 const BASE_KIND_TO_CLASS: Record<BaseValue['kind'], DiscriminationClass> = {
-  null: 'NULL',
   boolean: 'BOOLEAN',
   number: 'NUMBER',
   string: 'STRING',
@@ -54,7 +53,6 @@ const BASE_KIND_TO_CLASS: Record<BaseValue['kind'], DiscriminationClass> = {
 
 /** §5.4's own lowercase spelling for each class, for a diagnostic naming the classes a choice admits. */
 const CLASS_LABEL: Record<DiscriminationClass, string> = {
-  NULL: 'null',
   BOOLEAN: 'boolean',
   NUMBER: 'number',
   STRING: 'string',

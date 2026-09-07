@@ -5,6 +5,7 @@
  * obtained (permanently/temporarily), 78 a type with no registered binding, 70 a library gap or
  * fault** -- so every case below asserts the code, not just that something printed.
  */
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -208,13 +209,25 @@ describe('compile', () => {
 });
 
 describe('hash', () => {
+  /**
+   * `core.tn`'s own published pin, read out of the file rather than copied into this test. That is
+   * the whole claim being made -- `hash` reproduces the digest the document states about itself
+   * ([TSON-DATA] §2.2.1) -- and a copy here would instead pin whichever revision of `spec/m/` was
+   * vendored when the test was written, failing on every re-vendoring for a reason that has
+   * nothing to do with the hasher.
+   */
+  function publishedPin(file: string): string {
+    const id = readFileSync(join(SPEC_M, file), 'utf8').split('\n', 1)[0] ?? '';
+    const pin = /sha256=([0-9a-f]{64})/u.exec(id)?.[1];
+    if (pin === undefined) throw new Error(`no sha256 pin in ${file}'s own !!id`);
+    return pin;
+  }
+
   it('reproduces core.tn’s own published content-hash pin', async () => {
     const io = captureOutput();
     const code = await main(['hash', join(SPEC_M, 'core.tn')]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain(
-      'sha256:c2127732df2dbac80ac4bbb7cb7d35070bfe546472368088a2f76343a8d85830',
-    );
+    expect(io.stdout()).toContain(`sha256:${publishedPin('core.tn')}`);
   });
 
   it('--format json emits a parseable report with the same hash', async () => {
@@ -226,9 +239,7 @@ describe('hash', () => {
       files: { content_hash: string }[];
     };
     expect(parsed.outcome).toBe('VALID');
-    expect(parsed.files[0]?.content_hash).toBe(
-      'c2127732df2dbac80ac4bbb7cb7d35070bfe546472368088a2f76343a8d85830',
-    );
+    expect(parsed.files[0]?.content_hash).toBe(publishedPin('core.tn'));
   });
 
   it('--format tson emits a document this same implementation can read back', async () => {

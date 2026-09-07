@@ -20,8 +20,9 @@
  *    without the compiler, or a hand-built node/binding carrying an arbitrary type-ref). This
  *    dispatches on the *value's own runtime shape* instead, mirroring `VocabularyAtoms.java`'s
  *    reverse `Class<?> -> Entry` map: a value shaped like a {@link Uuid}/{@link Ipv4Address}/.../
- *    {@link TsonDuration} always writes quoted with a synthesised type-ref (the same "structured
- *    values are always quoted" rule the reference's own `TsonTreeWriter.writeAtom` applies to
+ *    {@link TsonDuration}/{@link TsonPeriod} always writes quoted with a synthesised type-ref (the
+ *    same "structured values are always quoted" rule the reference's own `TsonTreeWriter.writeAtom`
+ *    applies to
  *    everything its `VocabularyAtoms` reverse map matches), while a `bigint`/{@link TsonDecimal}/
  *    `boolean` writes bare and untyped -- part of the numeric ladder or the base-boolean case, for
  *    which base type resolution (§4) recovers the value with no annotation at all -- and a
@@ -60,6 +61,7 @@ import type {
   Rational,
   TsonDecimal,
   TsonDuration,
+  TsonPeriod,
   Uuid,
 } from '../value/types.js';
 
@@ -174,7 +176,12 @@ function isPlainTime(value: object): value is PlainTime {
 }
 
 function isTsonDuration(value: object): value is TsonDuration {
-  return 'period' in value && 'clock' in value;
+  return 'nanoseconds' in value;
+}
+
+/** `value` carries `months` ({@link TsonPeriod}), disjoint from every other shape here. */
+function isTsonPeriod(value: object): value is TsonPeriod {
+  return 'months' in value;
 }
 
 /**
@@ -210,7 +217,7 @@ export function formatDefaultAtom(value: AtomValue): AtomText {
     return { quoted: false, text: writeFloat(value) };
   }
   if (value instanceof Uint8Array) {
-    return { typeRef: 'base64', quoted: true, text: mustLookup('base64').write(value) };
+    return { typeRef: 'bytes', quoted: true, text: mustLookup('bytes').write(value) };
   }
   if (isTsonDecimal(value)) {
     return { quoted: false, text: writeDefaultDecimal(value) };
@@ -247,6 +254,9 @@ export function formatDefaultAtom(value: AtomValue): AtomText {
   }
   if (isTsonDuration(value)) {
     return { typeRef: 'duration', quoted: true, text: mustLookup('duration').write(value) };
+  }
+  if (isTsonPeriod(value)) {
+    return { typeRef: 'period', quoted: true, text: mustLookup('period').write(value) };
   }
   throw new TsonInternalError(
     `don't know how to write an atom value of shape ${JSON.stringify(value)}`,

@@ -1,6 +1,8 @@
 /**
- * Tree mode's `void` reader -- reads the absent sentinel, spelled `_` or, equivalently, `null` (§7.3),
- * into an {@link AbsentNode}. The port of `AbsentTreeReader`.
+ * Tree mode's `void` reader -- reads the absent sentinel `_`, `void`'s one admitted spelling
+ * (§7.3), into an {@link AbsentNode}. The unquoted token `null` is not equivalent: it is an
+ * ordinary string with no keyword status ([TSON-DATA] §4.4), so it lands on the mismatch branch
+ * below like any other token. The port of `AbsentTreeReader`.
  */
 import type { Task } from '../../io/bytes.js';
 import type { ReadContext, TypeReader } from '../contracts.js';

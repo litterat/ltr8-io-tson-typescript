@@ -55,7 +55,7 @@ export class TsonLexError extends TsonPositionedError {
  * mismatches, and {@link Diagnostic} carries both fields through unchanged.
  *
  * The pair is all-or-nothing and both are optional, because a throw site that states a *rule*
- * rather than a substitution — an adjacency violation, a trailing separator — has no substitution
+ * rather than a substitution — an adjacency violation, a doubled separator — has no substitution
  * to name. No throw site invents one to fill the other.
  */
 export class TsonParseError extends TsonPositionedError {
@@ -108,7 +108,7 @@ export class TsonUnsupportedDocumentError extends TsonPositionedError {
  * throw site supplies one, and an optional field is the one thirty-three parsers would skip.
  */
 export abstract class TsonAtomTypeError extends TsonError {
-  /** The type name that rejected the token, e.g. `base64`. */
+  /** The type name that rejected the token, e.g. `bytes`. */
   readonly typeRef: string;
   /** The violated constraint, standing alone — one of the six shapes above. */
   readonly expected: string;

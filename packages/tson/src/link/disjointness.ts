@@ -28,13 +28,13 @@ import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Annotations, Reference, TypeDefinition } from '../schema/meta/typedef.js';
 
 /**
- * The granularity at which TSON text discriminates an untagged value ([TSON-DATA] §4's four
+ * The granularity at which TSON text discriminates an untagged value ([TSON-DATA] §4's three
  * scalar base-type classes plus the two container delimiter forms). Records and maps share
  * `BRACE` deliberately (and arrays and tuples `BRACKET`): both are `{...}`/`[...]` on the wire
  * and the empty `{}` is ambiguous between record and map, so calling them distinct would promise
  * a discrimination the encoding cannot deliver on every value.
  */
-export type DiscriminationClass = 'NULL' | 'BOOLEAN' | 'NUMBER' | 'STRING' | 'BRACE' | 'BRACKET';
+export type DiscriminationClass = 'BOOLEAN' | 'NUMBER' | 'STRING' | 'BRACE' | 'BRACKET';
 
 /** An enum's class is its members' shared base-type class (e.g. `[true false]` is BOOLEAN); mixed → `undefined`. */
 function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
@@ -42,13 +42,7 @@ function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
   for (const member of body.members) {
     const base = resolveBaseType({ text: member, form: 'unquoted' });
     const memberClass: DiscriminationClass =
-      base.kind === 'null'
-        ? 'NULL'
-        : base.kind === 'boolean'
-          ? 'BOOLEAN'
-          : base.kind === 'number'
-            ? 'NUMBER'
-            : 'STRING';
+      base.kind === 'boolean' ? 'BOOLEAN' : base.kind === 'number' ? 'NUMBER' : 'STRING';
     if (common === undefined) {
       common = memberClass;
     } else if (common !== memberClass) {

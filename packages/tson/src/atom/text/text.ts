@@ -13,7 +13,7 @@
  *
  * A pure format check with no shape requirement of its own: any token is a valid `text` (§4.4's
  * "any quoted token resolves to a string" already makes this true of an untyped leaf, and `!text`
- * on an unquoted token simply keeps that token's own text rather than letting §4's null/boolean/
+ * on an unquoted token simply keeps that token's own text rather than letting §4's boolean and
  * number checks reinterpret it). What `text_type` narrows is length and pattern, not shape.
  *
  * **`pattern` (I-Regexp, RFC 9485) is accepted but not yet enforced**, matching `email.ts`'s own

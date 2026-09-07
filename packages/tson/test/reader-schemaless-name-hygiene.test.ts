@@ -72,19 +72,26 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
     expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
   });
 
-  it('a lone id_пользователя field is not refused at all -- mechanism 1 never fires alone, and mechanisms 2/3 do not run over a field-name scope in the first place', () => {
-    // Contrast `unicode/policy.test.ts`'s own coverage of `id_пользователя`: over an
-    // `identifier` scope (a type-ref/annotation name, or a schema-layer name) this same text
-    // is refused by mechanism 3's default whole-name unit. A `field-name` is lexical, not
-    // `identifier` (§2.5, §7.7), so that mechanism never applies here at all -- not even to
-    // relax, since there is nothing this scope was checking against it to begin with.
+  it('a lone mixed-script field name is refused by mechanism 3, with no pair for mechanism 1 to see (§8.2)', () => {
+    // §8.2's "Names and scopes": "Because a field name is an identifier at every layer (§2.5), a
+    // schemaless record's field names meet all three mechanisms exactly as a declared name does;
+    // there is one walk, and no position is policed differently by conformance class." So this
+    // text is refused here for the same reason `unicode/policy.test.ts` refuses it over a
+    // type-ref or a schema-layer name: mechanism 3's default whole-name restriction level.
     const text = `{ "${ID_POLZOVATELYA}": 1 }`;
-    expect(() => readFail(text)).not.toThrow();
+    expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
   });
 
-  it('a lone field name carrying an Identifier_Status=Restricted character is not refused -- mechanism 2 does not run over a field-name scope', () => {
+  it('a lone field name carrying an Identifier_Status=Restricted character is refused by mechanism 2 (§8.2)', () => {
     const text = `{ "${RESTRICTED}": 1 }`;
-    expect(() => readFail(text)).not.toThrow();
+    expect(() => readFail(text)).toThrow(TsonNameHygieneRefusedError);
+  });
+
+  it('a quoted field name is held to the same rules -- quoting escapes a lexical accident, not a wider name set (§2.5)', () => {
+    // The unquoted spelling of the same name reaches the identical verdict; quoting changes only
+    // what the token grammar can carry, never what §8.2 will accept.
+    expect(() => readFail(`{ "${RESTRICTED}": 1 }`)).toThrow(TsonNameHygieneRefusedError);
+    expect(() => readFail(`{ ${RESTRICTED}: 1 }`)).toThrow(TsonNameHygieneRefusedError);
   });
 
   it('names the UTS #39 data version in the refusal (§8.2)', () => {
@@ -118,16 +125,18 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
   });
 
   it('a collecting read reports CONFUSABLE_NAMES as a diagnostic, and still builds the record', () => {
-    const text = `{ admin: 1, "${CYR_A}dmin": 2 }`;
+    // The pair has to be two single-script names to isolate mechanism 1. §8.2 says so directly:
+    // "a within-word mixed-script homograph such as `аdmin` is refused by mechanism 3 before this
+    // one has a pair to compare, so a test written the obvious way passes for the wrong reason."
+    const text = `{ aec: 1, "${cp(0x0430, 0x0435, 0x0441)}": 2 }`;
     const { value, diagnostics } = readCollect(text);
     expect(diagnostics.map((d) => d.code)).toEqual(['CONFUSABLE_NAMES']);
     expect((value as RecordNode).fields.size).toBe(2);
   });
 
-  it('relaxing mechanism 1 admits what the default policy refuses -- the only mechanism this scope ever applies', () => {
-    // Single-script each, so only mechanism 1 sees this pair (mechanism 3 alone would admit it,
-    // and does not run over a field-name scope regardless -- see this describe block's other
-    // cases).
+  it('relaxing mechanism 1 admits what the default policy refuses', () => {
+    // Single-script each, so only mechanism 1 sees this pair: mechanisms 2 and 3 admit both names
+    // on their own, which is what leaves the relaxation observable.
     const skeletonPair = `{ aec: 1, "${cp(0x0430, 0x0435, 0x0441)}": 2 }`;
     expect(() =>
       readFail(skeletonPair, withSkeletonDistinctness(DEFAULT_NAME_POLICY, false)),

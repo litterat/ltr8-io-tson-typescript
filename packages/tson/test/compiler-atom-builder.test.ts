@@ -105,7 +105,14 @@ describe('buildAtomReader -- unit (§4.2): value/token/void distinguished by nam
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('reads value through base type resolution (§4), narrowing null to absent and everything else to its base value', () => {
+  it("rejects the unquoted token 'null' at a void position -- void admits '_' and nothing else ([TSON-SCHEMA] §7.3)", () => {
+    const reader = buildAtomReader('void', { kind: 'unit' });
+    const { ctx, diagnostics } = collectingContextOver('null');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+  });
+
+  it('reads value through base type resolution (§4), narrowing every token to its base value -- including the unquoted token "null", an ordinary string (§4.4)', () => {
     const reader = buildAtomReader('value', { kind: 'unit' });
     expect(runSync(reader.read(bodyContextOver('42')))).toEqual({
       kind: 'atom',
@@ -113,7 +120,8 @@ describe('buildAtomReader -- unit (§4.2): value/token/void distinguished by nam
       annotations: { values: [] },
     });
     expect(runSync(reader.read(bodyContextOver('null')))).toEqual({
-      kind: 'absent',
+      kind: 'atom',
+      value: 'null',
       annotations: { values: [] },
     });
     expect(runSync(reader.read(bodyContextOver('true')))).toEqual({

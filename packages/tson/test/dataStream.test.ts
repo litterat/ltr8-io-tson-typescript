@@ -272,8 +272,12 @@ describe('records (§2.5)', () => {
     ]);
   });
 
-  it('a trailing comma before "}" is a parse error (§2.4)', () => {
-    expect(() => events('{ x: 1, }')).toThrow(TsonParseError);
+  it('a comma may follow the last field (§2.4)', () => {
+    expect(shape('{ x: 1, }')).toEqual(shape('{ x: 1 }'));
+  });
+
+  it('a comma following another comma is a parse error, with no rule of its own -- the parser simply finds a comma where the next field name belongs (§2.4)', () => {
+    expect(() => events('{ x: 1, , y: 2 }')).toThrow(TsonParseError);
   });
 
   it('zero-width separation between fields is a parse error (§2.4)', () => {
@@ -299,7 +303,7 @@ describe('records (§2.5)', () => {
   });
 
   it('a rule violation (not a substitution) carries no expected/actual pair', () => {
-    const error = thrownBy('{ x: 1, }') as TsonParseError;
+    const error = thrownBy('{ a: "x"b: "y" }') as TsonParseError;
     expect(error.expected).toBeUndefined();
     expect(error.actual).toBeUndefined();
   });
@@ -335,8 +339,8 @@ describe('maps (§2.6)', () => {
     ]);
   });
 
-  it('a trailing comma before "}" is a parse error', () => {
-    expect(() => events('{ a => 1, }')).toThrow(TsonParseError);
+  it('a comma may follow the last entry (§2.4)', () => {
+    expect(shape('{ a => 1, }')).toEqual(shape('{ a => 1 }'));
   });
 });
 
@@ -491,8 +495,8 @@ describe('arrays (§2.7)', () => {
     ]);
   });
 
-  it('a trailing comma before "]" is a parse error', () => {
-    expect(() => events('[1, 2, 3,]')).toThrow(TsonParseError);
+  it('a comma may follow the last element (§2.4)', () => {
+    expect(shape('[1, 2, 3,]')).toEqual(shape('[1 2 3]'));
   });
 
   it('zero-width separation between elements is a parse error', () => {
@@ -800,15 +804,66 @@ describe('naming positions take the identifier grammar (§3.1, §3.2, §7.7)', (
 });
 
 describe('a field name is not the multi-line form (§2.5, §7.4)', () => {
-  it('rejects a triple-quoted field name', () => {
+  it('rejects a triple-quoted field name, even one whose content is itself an identifier', () => {
     expect(() => events('{\n"""\nname\n"""\n: 1\n}')).toThrow(TsonParseError);
-  });
-
-  it('still admits the single-line quoted form, which is what keeps JSON keys valid', () => {
-    expect(() => events('{ "first name": 1 }')).not.toThrow();
   });
 
   it('still admits a triple-quoted map key, which is a value and keeps all three forms', () => {
     expect(() => events('{\n"""\nkey\n"""\n=> 1\n}')).not.toThrow();
+  });
+});
+
+describe('a field name is an identifier, for both spellings (§2.5, §7.7)', () => {
+  it('rejects an unquoted field name that is not an identifier (starts with a digit)', () => {
+    expect(() => events('{ 42x: 2 }')).toThrow(TsonParseError);
+    expect(() => events('{ 42x: 2 }')).toThrow(/not an identifier/);
+  });
+
+  it("rejects the quoted field name '_id' -- '_' is XID_Continue only, so no identifier begins with it (§7.7 rule 3)", () => {
+    // The bare spelling '_id' cannot reach this check at all: '_' is not in the unquoted-token
+    // start set (§7.1), so the lexer reads it as its own absent-token followed by a separate
+    // 'id' token, which the §2.8 brace dispatch commits to a map on before a field name is ever
+    // in play. Only the quoted spelling reaches the identifier check as one token.
+    expect(() => events('{ "_id": 1 }')).toThrow(/not an identifier/);
+  });
+
+  it('rejects a quoted field name whose decoded text is not an identifier -- quoting is relief from a lexical accident, never a wider name set', () => {
+    expect(() => events('{ "first name": 1 }')).toThrow(TsonParseError);
+    expect(() => events('{ "first name": 1 }')).toThrow(/not an identifier/);
+  });
+
+  it('the same non-identifier key is the honest spelling of a map (§2.5)', () => {
+    expect(() => events('{ "first name" => 1 }')).not.toThrow();
+  });
+
+  it('admits a quoted field name whose decoded text is an identifier, including a hyphen', () => {
+    expect(shape('{ "order-id": 1 }')).toEqual(shape('{ order-id: 1 }'));
+  });
+
+  it('NFC-normalises a quoted field name before matching the identifier grammar and reports the normalised text -- a decomposed and a precomposed spelling are one name (§7.2.1, §7.7)', () => {
+    const decomposed = 'cafe\u0301'; // 'cafe' + COMBINING ACUTE ACCENT (U+0301) -- not NFC
+    const precomposed = 'caf\u00e9'; // LATIN SMALL LETTER E WITH ACUTE (U+00E9) -- NFC
+    expect(decomposed).not.toBe(precomposed);
+    expect(decomposed.normalize('NFC')).toBe(precomposed);
+    const es = events(`{ "${decomposed}": 1 }`);
+    expect(es[2]).toEqual(expect.objectContaining({ kind: 'field-name', name: precomposed }));
+  });
+});
+
+describe('the §2.8 brace dispatch tightens with field-name identity (§2.5, §2.8, §7.7)', () => {
+  it("a first value followed by ':' whose decoded text is not an identifier is a parse error, never a silent fallback to a map", () => {
+    expect(() => events('{ "first name": 1 }')).toThrow(TsonParseError);
+  });
+
+  it('rewriting the same key with "=>" reads as the honest map', () => {
+    expect(shape('{ "first name" => 1 }')).toEqual([
+      'DocumentStart(|)',
+      'MapStart',
+      'Token(first name,single-line)',
+      'MapArrow',
+      'Token(1,unquoted)',
+      'MapEnd',
+      'DocumentEnd',
+    ]);
   });
 });

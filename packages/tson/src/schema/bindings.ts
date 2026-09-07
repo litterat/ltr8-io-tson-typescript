@@ -533,8 +533,6 @@ function annotationArgumentValue(argument: DataValue | undefined): unknown {
   if (core.kind !== 'token') return undefined;
   const base = resolveBaseType(core);
   switch (base.kind) {
-    case 'null':
-      return null;
     case 'boolean':
       return base.value;
     case 'string':
@@ -551,17 +549,20 @@ function annotationArgumentValue(argument: DataValue | undefined): unknown {
  * this module's own annotation arguments carry. Mirrors `bind/encode.ts`'s own
  * `defaultAtomEncoder` -- not a general-purpose value writer, honest about the values this
  * position actually sees rather than pretending to handle every host value.
+ *
+ * There is no spelling of absence here and no host `null` to write one from: the notation carries
+ * no `null` keyword (§4.4), so the bare token would read back as the string `"null"`. A value this
+ * function cannot spell returns `undefined` and the argument is left off, which is what an absent
+ * annotation argument already means (§6).
  */
 function annotationArgumentDataValue(value: unknown): DataValue | undefined {
   if (value === undefined) return undefined;
   const text =
-    value === null
-      ? 'null'
-      : typeof value === 'string'
-        ? value
-        : typeof value === 'boolean' || typeof value === 'number' || typeof value === 'bigint'
-          ? String(value)
-          : undefined;
+    typeof value === 'string'
+      ? value
+      : typeof value === 'boolean' || typeof value === 'number' || typeof value === 'bigint'
+        ? String(value)
+        : undefined;
   if (text === undefined) return undefined;
   return { annotations: [], coreValue: { kind: 'token', text, form: 'unquoted' } };
 }

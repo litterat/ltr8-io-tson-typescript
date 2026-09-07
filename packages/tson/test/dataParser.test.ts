@@ -316,8 +316,12 @@ describe('requireDocumentEnd: pulling past the root value is what rejects traili
     },
   );
 
-  it('a trailing comma before a closing brace is rejected (§2.4)', () => {
-    expect(() => doc('{ x: 1, }')).toThrow(TsonParseError);
+  it('a comma may follow the last field (§2.4)', () => {
+    expect(doc('{ x: 1, }')).toEqual(doc('{ x: 1 }'));
+  });
+
+  it('a comma following another comma is rejected, with no rule of its own (§2.4)', () => {
+    expect(() => doc('{ x: 1, , y: 2 }')).toThrow(TsonParseError);
   });
 
   it('two array elements with no separator between them is rejected (§2.4)', () => {

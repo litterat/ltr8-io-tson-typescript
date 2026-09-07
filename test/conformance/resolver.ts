@@ -16,9 +16,10 @@ import type { ExpectedBaseValue, ExpectedNumberForm } from './sidecar.js';
 
 /**
  * Resolves `subject`'s single bare token per §4. §4 itself never rejects a token (every unquoted
- * token that isn't null/boolean/a number falls through to string, §4.4), so this only throws for a
- * malformed document (a lexer/parser failure) or a subject that isn't a bare token at all -- the
- * latter is a vector-authoring error this harness surfaces loudly rather than silently misreading.
+ * token that isn't a boolean or a number falls through to string, §4.4 -- `null` among them, being
+ * an ordinary word), so this only throws for a malformed document (a lexer/parser failure) or a
+ * subject that isn't a bare token at all -- the latter is a vector-authoring error this harness
+ * surfaces loudly rather than silently misreading.
  */
 export function resolveBaseValue(subject: Uint8Array): ExpectedBaseValue {
   const { document } = runSync(parseDocument(fromBytes(subject)));
@@ -30,8 +31,6 @@ export function resolveBaseValue(subject: Uint8Array): ExpectedBaseValue {
   }
   const resolved = resolveBaseType({ text: core.text, form: core.form });
   switch (resolved.kind) {
-    case 'null':
-      return { kind: 'null' };
     case 'boolean':
       return { kind: 'boolean', value: resolved.value };
     case 'string':
