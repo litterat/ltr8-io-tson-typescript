@@ -1,11 +1,12 @@
 export const meta = {
   name: 'tson-rev35-stage-3',
   description:
-    'Revision 35 Stage 3: rebuild the schema model — TypeDefinition loses four fields, TemplateBody holds text, BinaryType becomes BytesType, Extern and UnknownType become Scoped',
+    'Revision 35 Stage 3: rebuild the schema model, and with it the applicability rule that replaces the field it deletes — TypeDefinition loses four fields, an entry is a constructor by IS-A top, TemplateBody holds text, BinaryType becomes BytesType, Extern and UnknownType become Scoped',
   whenToUse:
-    "After Stage 2's gate is committed. Lands alone: src/schema/meta is the frozen contract layer every later stage compiles against, so it must be complete before Stage 4 fans out.",
+    "After Stage 1's gate is committed. Runs BEFORE Stage 2, which the plan orders first but which cannot be measured until the kernel resolves again. src/schema/meta is the frozen contract layer every later stage compiles against, so it must be complete before Stage 4 fans out.",
   phases: [
     { title: 'Model', detail: 'rebuild src/schema/meta and the bindings that read it' },
+    { title: 'Applicability', detail: 'WP4.2 — what `!C {}` may apply is an entry that IS-A top' },
     { title: 'Verify', detail: 'adversarially, against the kernel and meta declarations' },
   ],
 };
@@ -195,8 +196,8 @@ checked annotation has NO third outcome: it holds or the schema fails to load.
 
 ## What is NOT yours
 
-- \`compiler/definitionResolver.ts\`, \`referenceFlattener.ts\`, \`heldBody.ts\`,
-  \`atomNarrowing.ts\` — Stage 4.
+- \`compiler/referenceFlattener.ts\` (WP4.1), \`heldBody.ts\` (WP4.3),
+  \`atomNarrowing.ts\` (WP4.5) — later Stage 4 packages.
 - Scoped-value DISPATCH and the governing-schema switch — Stage 5.
 - Resolved-output WRITING — Stage 6.
 - \`test/conformance/\` — Stage 7, and never to make a vector pass.
@@ -208,10 +209,20 @@ not compile is not complete. Keep those edits MECHANICAL — make them read the 
 not implement Stage 4's or Stage 6's behaviour while you are in there. Where a call site genuinely
 needs the derived \`kind\`, call your derivation function.
 
+**\`constructor\` is the exception, and it is why a second package follows yours.** Deleting the
+field breaks three compiler modules that read it — \`definitionResolver.ts\`, \`desugar.ts\` and
+\`templates.ts\` — and what replaces it is a real rule (WP4.2's IS-A \`top\`), not a mechanical
+substitution. Delete the field, provide the \`isConstructor(entry)\` derivation beside your \`kind\`
+derivation, and make those three call it so the tree compiles. Do not go further into WP4.2's
+placement and atom-refinement rules; the next package owns those and will build on what you leave.
+
 **The bundled schemas are the test.** \`spec/m/*.tn\` are loaded at runtime and
 \`packages/tson/src/stdlib/schemas.generated.ts\` is already regenerated from the Revision 35
-copies. The meta-kernel bootstrap in \`packages/tson/src/schema/bootstrap.ts\` must resolve them.
-That is not fully achievable until Stage 4 lands the resolver, so state plainly how far it gets and
+copies. The meta-kernel bootstrap in \`packages/tson/src/schema/bootstrap.ts\` must resolve them —
+it currently stops at \`value => !unit {}\`, because \`unit\` was \`~atom & {}\` and is now
+\`atom & {}\`, so the stored flag says it is not a constructor. Getting past that is the point of
+this stage. Stage 1 already made that bootstrap resolve in dependency order and gave it a real
+meta reader; build on it rather than reverting it. State plainly how far the three schemas get and
 what blocks the rest — do not claim more than you can run.`;
 
 const MODEL_RESULT = {
@@ -274,7 +285,9 @@ const VERDICT = {
   },
 };
 
-log('Revision 35 Stage 3: the schema model. Lands alone; Stage 4 compiles against it.');
+log(
+  'Revision 35 Stage 3: the schema model, then the applicability rule that replaces the field it deletes.',
+);
 
 const model = await agent(
   `${PORTER}
@@ -301,15 +314,113 @@ if (model === null) {
 
 log(`Model: ${model.status}, ${String(model.filesWritten.length)} files`);
 
+const APPLICABILITY_BRIEF = `WP4.2 — applicability is IS-A \`top\` ([TSON-SCHEMA] §3.3.1, §4.2, §5.5).
+
+The schema model has just landed. \`TypeDefinition.constructor\` is gone and an
+\`isConstructor(entry)\` derivation stands in its place, with the three call sites in
+\`definitionResolver.ts\`, \`desugar.ts\` and \`templates.ts\` calling it so the tree compiles.
+Your package is the rule that derivation is supposed to enforce, which the previous package
+deliberately did not build.
+
+Read §3.3.1, §4.1, §4.2 and §5.5 in \`spec/tson-part2-schema.md\` in full before writing anything.
+
+**\`~\` leaves the type-def head.** It keeps exactly one grammar role, the default-value modifier
+(\`port: integer ~ 8080\`). At type-def position it is a special token with no role, and a source
+document that writes one there is a resolver error. The corpus states this by name:
+\`class2/schema/invalid/a-constructor-marker-is-not-grammar\`. Note what the runner requires of it
+— at the Class 2 schema layer the category is the PHASE's, so an error vector there states
+\`resolver\` however parser-shaped the rule is, decided from the schema having failed to load and
+never by reading whichever internal diagnostic fired.
+
+**What \`!C { ... }\` may apply is an entry that IS-A \`top\`.** §5.5: "the \`!\` prefix always
+takes an entry that IS-A \`top\` — a constructor (§4.2)". The kernel's \`reference\` is included,
+which stops being a dispatched special case and becomes ordinary: \`!reference { target: X }\`
+denotes the alias \`X\`, REFERENCE-kinded, open (\`<B> !reference { … }\`) and closed alike. Find
+the special case in \`definitionResolver.ts\` and delete it rather than leaving it beside the
+general rule.
+
+**Revision 34's separate "level discipline" rule disappears into the placement rule.**
+Constructorness now propagates through composition and refinement, so an ordinary schema that
+composes with a constructor has *ipso facto* declared an entry that IS-A \`top\`, and placement
+refuses it. One check where there were two — delete the second, do not leave it as a redundant
+guard.
+
+**Atom refinement's test is easy to get wrong, and the spec calls it out.** It asks whether the
+body **is an atom application** (\`!integer_type {}\`), NOT whether the target IS-A \`atom\`:
+IS-A \`atom\` is true of the constructor and false of every instance, which is the opposite of
+what a reader expects. It is also not a kind check. Get this exactly right and write a test that
+would fail under each of the two wrong readings.
+
+**Kind determination is §5.5's, and it is a resolver error to get two.** "A constructor's kind is
+settled at definition time by the base kind — \`atom\`, \`product\`, \`sum\`, or \`data\`,
+excluding \`top\` — reachable through its transitive supertypes chain. Zero base kinds in the
+chain → PRODUCT by structural default; exactly one → that kind; two or more → resolver error."
+
+**Bodies are closed (§5.5).** A construction or refinement body is validated as an ordinary closed
+record: a member the constructor's vocabulary does not declare is a resolver error at the
+declaration, naming the member and the constructor's real fields. §5.5 says why this is stated
+where bodies are written: an implementation that binds field-by-field and ignores unmatched members
+reports success while discarding the constraint the author wrote, so
+\`!integer ^ { minimum: 1  maximum: 100 }\` — JSON Schema's spellings — would compile clean and
+constrain nothing. Check that this port does not do that.
+
+**The measure of this package is the kernel.** \`spec/m/meta-kernel.tn\`, \`meta.tn\` and
+\`core.tn\` must bootstrap and resolve; \`packages/tson/test/bootstrap.test.ts\`,
+\`stdlib.test.ts\` and \`bundled-schemas-resolve.test.ts\` are the tests that say so. Around 43
+unit tests and all 56 \`class2/\` vectors are currently red behind this one rule; they will not
+all go green here (Stage 4's remaining packages, Stage 5 and Stage 6 own the rest), but the ones
+blocked purely on "nothing is a constructor" must. Report the count you actually reach.
+
+Fixture assertions that state Revision 34 counts or Revision 34 shapes — declaration counts, entry
+counts, \`constructor\` being true — are yours to update to what Revision 35 requires, with the
+reason in the test name. Do not update one to match whatever the code happens to produce; work out
+what the spec and the bundled schema require and assert that.
+
+Do NOT touch \`compiler/referenceFlattener.ts\` (WP4.1), \`heldBody.ts\` (WP4.3),
+\`atomNarrowing.ts\` (WP4.5), the scoped-value dispatch (Stage 5), the resolved-output writer
+(Stage 6), or \`test/conformance/\`.`;
+
+const applicability = await agent(
+  `${PORTER}
+
+---
+
+${APPLICABILITY_BRIEF}
+
+The schema model package reported: ${model.contractSummary}
+Files it changed: ${model.filesWritten.join(', ')}
+
+\`packages/tson/src/schema/meta/\` is now FROZEN. Import from it; if something there is genuinely
+wrong, say so and stop rather than editing it — Stage 4's other packages build on it next.
+
+Definition of done, all of: npm run typecheck, npm run lint, npm run format:check, npm test,
+npm run test:conformance. Do not modify test/conformance/.`,
+  {
+    label: 'applicability',
+    phase: 'Applicability',
+    model: 'sonnet',
+    schema: MODEL_RESULT,
+    effort: 'high',
+  },
+);
+
+log(
+  applicability === null
+    ? 'Applicability returned nothing'
+    : `Applicability: ${applicability.status}, ${String(applicability.filesWritten.length)} files`,
+);
+
 const verdict = await agent(
-  `Adversarially review the TSON TypeScript port's Stage 3 schema model — the rebuild of
-\`packages/tson/src/schema/meta/\` for 2026 Revision 35. Default to finding it UNSOUND.
+  `Adversarially review the TSON TypeScript port's Stage 3 — the rebuild of
+\`packages/tson/src/schema/meta/\` for 2026 Revision 35, and the applicability rule (WP4.2) that
+replaces the \`constructor\` field it deletes. Default to finding it UNSOUND.
 
 This layer is the FROZEN CONTRACT nine Stage 4 packages will compile against concurrently. A gap
 here is not a bug in one package, it is a gap in nine. Review it as a contract, not as code.
 
-Files claimed: ${model.filesWritten.join(', ')}
+Files claimed by the model package: ${model.filesWritten.join(', ')}
 Contract claimed: ${model.contractSummary}
+Files claimed by the applicability package: ${applicability === null ? '(it returned nothing)' : applicability.filesWritten.join(', ')}
 
 Check, in this order:
 
@@ -347,6 +458,32 @@ Check, in this order:
     contract layer blocks the fan-out.
 14. Did it edit \`test/conformance/\`?
 
+Then the applicability half (WP4.2), which the second package owned:
+
+15. Does a \`~\` at type-def position actually fail? Run
+    \`class2/schema/invalid/a-constructor-marker-is-not-grammar\` and check the runner sees a
+    \`resolver\` category decided from the schema having failed to load, not from an internal
+    parser diagnostic.
+16. Is \`reference\` applied like any other constructor, or is the special case still there beside
+    the general rule? \`!reference { target: X }\` must denote the alias \`X\`, open and closed
+    alike.
+17. Was Revision 34's separate "level discipline" check DELETED, or left as a redundant guard that
+    happens to agree? §5.5 makes it one check, not two.
+18. **Atom refinement's test.** Does it ask whether the body IS AN ATOM APPLICATION
+    (\`!integer_type {}\`)? Construct the two wrong readings yourself — an IS-A \`atom\` check
+    (true of the constructor, false of every instance) and a kind check — and confirm each would
+    fail a test the package wrote. If neither would, the test does not pin the rule.
+19. **Are bodies closed?** \`!integer ^ { minimum: 1  maximum: 100 }\` — JSON Schema's spellings,
+    not this vocabulary's — must be a resolver error naming the member and the constructor's real
+    fields. Try it. A body that binds field-by-field and ignores unmatched members reports success
+    while discarding the constraint the author wrote, which is the failure §5.5 states this rule to
+    prevent.
+20. Do all three bundled schemas bootstrap and resolve? If not, is the remaining blocker honestly
+    attributed to a later package rather than reported as done?
+21. Was any fixture assertion updated to match whatever the code happens to produce, rather than to
+    what the spec and the bundled schema require? Check each changed expected value against
+    \`spec/m/\`.
+
 Report only problems you can point at a file and line for.`,
   { label: 'verify:model', phase: 'Verify', schema: VERDICT, effort: 'high' },
 );
@@ -357,4 +494,4 @@ log(
     : `Verdict: ${verdict.sound ? 'sound' : 'UNSOUND'}, ${String(verdict.problems.length)} problems`,
 );
 
-return { stage: 3, model, verdict };
+return { stage: 3, model, applicability, verdict };

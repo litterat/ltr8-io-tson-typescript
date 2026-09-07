@@ -127,6 +127,18 @@ written but not part of value identity. That feeds WP2.
 **Gate for Stage 1:** the Class 1 lexer, parser and vocabulary vectors green. Schema-layer vectors are
 expected red until Stage 6.
 
+## Stage order, as executed
+
+Stages 2 and 3 run in the opposite order to the one written below, and the reason is worth
+recording rather than silently swapping. Stage 2's gate is six `class2/validate/` vectors, and no
+`class2/` vector can be measured at all until the meta-kernel bootstraps: Revision 35 removes `~`,
+so `TypeDefinition.constructor` is false for every entry, `value => !unit {}` fails to resolve, and
+the standard library never loads. Stage 3 removes that field, and WP4.2 supplies the IS-A `top`
+rule that replaces it — which is also why those two run as one wave rather than two. Stage 2
+follows, against a suite that can see it.
+
+Nothing else about either stage changes.
+
 ## Stage 2 — One value-space equality contract
 
 One Sonnet package. §5.5 adds a foundational clause: a type denotes a value space, an encoding defines
