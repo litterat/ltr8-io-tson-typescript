@@ -2,12 +2,12 @@
 
 Everything else in this directory is **vendored verbatim** from the reference implementation at
 https://github.com/litterat/ltr8-io-tson-java, pinned to commit
-`a576b62966b78ce9e4f7f656b679b238c0353b79` (the same commit `scripts/fetch-references.sh` pins).
+`6655418d666e26e333e8f3a17f3374c2e603951d` (the same commit `scripts/fetch-references.sh` pins).
 
 | File | What it is |
 | --- | --- |
-| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 34, Working Draft. |
-| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 34, Working Draft. |
+| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 35, Working Draft. |
+| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 35, Working Draft. |
 | `m/meta-kernel.tn`, `m/meta.tn`, `m/core.tn` | The three live bundled schemas. |
 | `m/*-resolved.tn` | Resolver-output fixtures for the three above. |
 
