@@ -26,9 +26,9 @@ Waves run in order. A wave starts only when the previous wave's gate is green.
 
 | Wave | Work                                                                                                      | Gate                                                                                    |
 | ---- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| 0    | Contract review. No implementation.                                                                       | `typecheck` clean; `.references/` and `spec/` present; 146 vectors discovered           |
+| 0    | Contract review. No implementation.                                                                       | `typecheck` clean; `.references/` and `spec/` present; every vector discovered          |
 | 1    | The leaf packages: unicode, byte input, lexer, numbers, event stream, atoms ×4, regex, tree, bind runtime | Gates green; lexer and resolver vectors moving                                          |
-| 2    | Data parser, schema grammar parser, `schema.meta` bindings, desugarer, conformance harness                | **All 146 vectors green.** The Part 1 completion gate                                   |
+| 2    | Data parser, schema grammar parser, `schema.meta` bindings, desugarer, conformance harness                | **All Class 1 vectors green.** The Part 1 completion gate                               |
 | 3    | Definition resolver → template materialisation ∥ schema resolver, flattening, meta-kernel bootstrap       | meta-kernel resolves 49 declarations, meta 31, core 48, matching `spec/m/*-resolved.tn` |
 | 4    | Linking, registry, identity, content hashing ∥ readers (abstract → tree ∥ bind ∥ schemaless)              | Gates green; no vector regressed                                                        |
 | 5    | Compiler ∥ emit and writers                                                                               | A user schema importing `core.tn` compiles and validates real data three schemas deep   |
