@@ -286,6 +286,87 @@ describe('a record template closes to the instantiation entry itself', () => {
     expect(asFloat).not.toBe(decimal);
   });
 
+  it('an argument that is an alias follows its reference chain to its terminal entry, so `box<user_id>` over `user_id => uuid` mints the same entry as `box<uuid>` (§8.2)', () => {
+    const { namespace, materialiser } = harness();
+    namespace.set('uuid', {
+      supertypes: ['atom', 'top'],
+      subtypes: [],
+      body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+      annotations: [],
+    });
+    namespace.set('user_id', {
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'reference', target: { name: 'uuid', arguments: [], annotations: [] } },
+      annotations: [],
+    });
+    namespace.set(
+      'box',
+      recordTemplate(['T'], {
+        kind: 'record',
+        supertypes: [],
+        groups: [],
+        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+      }),
+    );
+    const overAlias = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('user_id')],
+      annotations: [],
+    });
+    const overTerminal = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('uuid')],
+      annotations: [],
+    });
+    expect(overAlias).toBe(overTerminal);
+    // Self-describing (§8.1): the minted entry's own `source` states the canonical application --
+    // the terminal entry `uuid`, not the alias `user_id` the first caller happened to write.
+    const entry = namespace.get(overAlias);
+    if (entry === undefined) throw new Error('unreachable');
+    expect(entry.source).toEqual({ name: 'box', arguments: [ref('uuid')], annotations: [] });
+  });
+
+  it('a refinement or a fresh instance is not an alias and keeps its own identity, even over an otherwise-identical body (§8.2)', () => {
+    const { namespace, materialiser } = harness();
+    // Two distinct entries with the same shape, standing in for `!uuid ^ {}` and `!uuid_type {}`
+    // already lifted by desugaring -- neither is a `Reference` body, so `terminal` stops on each
+    // immediately rather than following anywhere.
+    const atomBody: Top = { kind: 'record', supertypes: [], fields: [], groups: [] };
+    namespace.set('uuid_refined', {
+      supertypes: ['uuid', 'atom', 'top'],
+      subtypes: [],
+      body: atomBody,
+      annotations: [],
+    });
+    namespace.set('uuid_fresh', {
+      supertypes: ['atom', 'top'],
+      subtypes: [],
+      body: atomBody,
+      annotations: [],
+    });
+    namespace.set(
+      'box',
+      recordTemplate(['T'], {
+        kind: 'record',
+        supertypes: [],
+        groups: [],
+        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+      }),
+    );
+    const overRefined = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('uuid_refined')],
+      annotations: [],
+    });
+    const overFresh = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('uuid_fresh')],
+      annotations: [],
+    });
+    expect(overRefined).not.toBe(overFresh);
+  });
+
   it('closes arguments innermost-first, so a nested application names the inner entry before the outer one', () => {
     const { namespace, materialiser } = harness();
     namespace.set(

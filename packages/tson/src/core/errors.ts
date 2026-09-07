@@ -289,6 +289,29 @@ export class TsonInternalError extends TsonError {
 }
 
 /**
+ * Base for [TSON-DATA] §8.1's "fifth, distinguishable outcome": "a refusal... MUST NOT be
+ * reported in any of the four categories above" (lexer, parser, resolver, validation). A refusal
+ * means *this processor declined* -- under its stated policy or limits -- and never that the
+ * document is wrong: the same document may be well-formed, valid, and accepted in full by the
+ * next processor along.
+ *
+ * §8.1 names two causes as of this revision: {@link TsonNameHygieneRefusedError} (§8.2's three
+ * name-hygiene mechanisms) and {@link TsonLimitRefusedError} ([TSON-DATA] §9.1 / [TSON-SCHEMA]
+ * §11.5's resource limits). Both extend this class rather than {@link TsonError} directly only so
+ * a caller who wants "was this refused, whichever cause" has one type to test; the structural
+ * guarantee is this class's own placement, not either subclass's: `TsonRefusedError` extends
+ * {@link TsonError} directly, never {@link TsonLexError}, {@link TsonParseError},
+ * {@link TsonReadError}, or {@link TsonAtomTypeError} (or any of their subclasses), so
+ * `instanceof` against every one of those four families -- what a category-mapping caller like a
+ * conformance runner tests -- answers `false` unconditionally for anything refused. A document
+ * that is refused is never also reported as invalid; the two are different processors' verdicts
+ * on two different questions.
+ */
+export abstract class TsonRefusedError extends TsonError {
+  override readonly name: string = 'TsonRefusedError';
+}
+
+/**
  * [TSON-DATA] §8.2's mechanism that refused a name -- see {@link TsonNameHygieneRefusedError}.
  * Kept here rather than imported from `unicode/policy.ts`'s own identically-shaped type: `core/`
  * sits below `unicode/` in this package's import graph, and a plain string-literal union needs no
@@ -298,22 +321,15 @@ export type NameHygieneMechanism =
   'skeleton-distinctness' | 'identifier-status' | 'restriction-level';
 
 /**
- * A document refused under [TSON-DATA] §8.2's name-hygiene policy -- §8.1's "fifth,
- * distinguishable outcome": "a refusal... MUST NOT be reported in any of the four categories
- * above" (lexer, parser, resolver, validation). This is what makes that true structurally rather
- * than by convention: it extends {@link TsonError} directly, never {@link TsonLexError},
- * {@link TsonParseError}, {@link TsonReadError}, or {@link TsonAtomTypeError} (or any of their
- * subclasses), so `instanceof` against every one of those four families -- what a category-mapping
- * caller like a conformance runner tests -- answers `false` unconditionally. A document that is
- * refused is never also reported as invalid; the two are different processors' verdicts on two
- * different questions.
+ * A document refused under [TSON-DATA] §8.2's name-hygiene policy -- {@link TsonRefusedError}'s
+ * first cause.
  *
  * §8.2 requires a refusal to **name the UTS #39 data version it was computed against**, because
  * the mechanisms depend on `confusables.txt`, `IdentifierStatus.txt`, and `Script` -- none of
  * which the Unicode Consortium freezes -- so two conforming processors can legitimately disagree,
  * and the version is the only thing that explains it (`unicode/uts39.ts`'s own `UTS39_VERSION`).
  */
-export class TsonNameHygieneRefusedError extends TsonError {
+export class TsonNameHygieneRefusedError extends TsonRefusedError {
   override readonly name: string = 'TsonNameHygieneRefusedError';
   /** Which of §8.2's three mechanisms refused the document. */
   readonly mechanism: NameHygieneMechanism;
@@ -339,5 +355,61 @@ export class TsonNameHygieneRefusedError extends TsonError {
     this.mechanism = details.mechanism;
     this.names = details.names;
     this.uts39Version = details.uts39Version;
+  }
+}
+
+/**
+ * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}. Closed to
+ * the one limit this port enforces: `STATUS.md`'s known gaps names the other eleven [TSON-DATA]
+ * §9.1 limits and five [TSON-SCHEMA] §11.5 schema limits, none of which this type or
+ * {@link TsonLimitRefusedError} can be raised for today.
+ */
+export type ResourceLimitName = 'nesting-depth';
+
+/**
+ * A document refused under [TSON-DATA] §9.1's resource-limits policy ([TSON-SCHEMA] §11.5 for the
+ * work resolving a schema adds on top of it) -- {@link TsonRefusedError}'s second cause. "A
+ * processor that exceeds a limit MUST report a clear refusal naming the limit and the configured
+ * threshold rather than failing with an out-of-memory condition, a stack overflow, or any other
+ * host-language fault" (§9.1); {@link limit} and {@link configuredThreshold} are exactly that
+ * pair, and this class's own placement under {@link TsonRefusedError} is what keeps the refusal
+ * "distinguishable from the four categories" §8.1 requires rather than surfacing as, say, a
+ * {@link TsonParseError} that merely happens to mention a limit in its message.
+ *
+ * Unlike {@link TsonNameHygieneRefusedError}, a limit refusal is never reported through a
+ * collecting diagnostics receiver first and converted on throw: everything past the point a limit
+ * is exceeded is unreachable by construction (a document that nests one level past the bound has
+ * nothing further below that level to collect), so every site that raises this class throws it
+ * directly, under a fail-fast read and a collecting one alike -- see the throw sites themselves
+ * (`core/limits.ts`'s own `nestingLimitRefusal`) for why that holds specifically for the one limit
+ * built so far.
+ */
+export class TsonLimitRefusedError extends TsonRefusedError {
+  override readonly name: string = 'TsonLimitRefusedError';
+  /** Which resource limit refused the document. */
+  readonly limit: ResourceLimitName;
+  /** The threshold this processor was configured with -- the value {@link limit} was checked against. */
+  readonly configuredThreshold: number;
+  /** Where in the document the limit was reached, when the throw site has one to give. */
+  readonly position?: Position;
+
+  constructor(
+    message: string,
+    details: {
+      readonly limit: ResourceLimitName;
+      readonly configuredThreshold: number;
+      readonly position?: Position;
+      readonly cause?: unknown;
+    },
+  ) {
+    super(
+      details.position === undefined
+        ? message
+        : `${message} at ${formatPosition(details.position)}`,
+      details.cause === undefined ? undefined : { cause: details.cause },
+    );
+    this.limit = details.limit;
+    this.configuredThreshold = details.configuredThreshold;
+    if (details.position !== undefined) this.position = details.position;
   }
 }

@@ -314,7 +314,7 @@ describe('the TypeRef <-> TypeArgument declaration-order cycle ([TSON-SCHEMA] §
   });
 });
 
-describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([TSON-SCHEMA] §3.1, §8.3)", () => {
+describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([TSON-SCHEMA] §3.1)", () => {
   it('is what every type_ref-typed field slot in this module actually binds through', () => {
     expect(typeArgumentRefBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
     expect(referenceBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
@@ -330,10 +330,10 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
     const built = typeRefAnnotatedBinding.construct(inner, {
       values: [
         {
-          name: 'alias',
+          name: 'since',
           value: {
             annotations: [],
-            coreValue: { kind: 'token', text: 'user_id', form: 'unquoted' },
+            coreValue: { kind: 'token', text: '0.35.0', form: 'unquoted' },
           },
         },
       ],
@@ -341,7 +341,7 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
     expect(built).toEqual({
       name: 'user_id',
       arguments: [],
-      annotations: [{ name: 'alias', value: 'user_id' }],
+      annotations: [{ name: 'since', value: '0.35.0' }],
     });
   });
 
@@ -354,20 +354,20 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
     expect(firstAnnotation === undefined ? undefined : 'value' in firstAnnotation).toBe(false);
   });
 
-  it('unwrap()/annotationsOf() round-trip a TypeRef carrying its own @alias back to wire shape', () => {
+  it('unwrap()/annotationsOf() round-trip a TypeRef carrying its own annotation back to wire shape', () => {
     const typeRef: TypeRef = {
       name: 'text',
       arguments: [],
-      annotations: [{ name: 'alias', value: 'user_id' }],
+      annotations: [{ name: 'since', value: '0.35.0' }],
     };
     expect(typeRefAnnotatedBinding.unwrap(typeRef)).toBe(typeRef);
     expect(typeRefAnnotatedBinding.annotationsOf(typeRef)).toEqual({
       values: [
         {
-          name: 'alias',
+          name: 'since',
           value: {
             annotations: [],
-            coreValue: { kind: 'token', text: 'user_id', form: 'unquoted' },
+            coreValue: { kind: 'token', text: '0.35.0', form: 'unquoted' },
           },
         },
       ],

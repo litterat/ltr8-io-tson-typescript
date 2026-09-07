@@ -121,7 +121,7 @@ describe('subsumption -- §7.2 at every position it governs', () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("admits an alias of the position's own type (§7.2 compares after flattening both)", () => {
+  it("admits an alias of the position's own type (§7.2 compares after following both to a terminal)", () => {
     const aliasSchema = resolveUserSchema(USER_SCHEMA);
     const aliasCompiled = compile(aliasSchema);
     const viaAlias = validate(aliasCompiled, 'h2', bytes(`{ f: !other { name: "x" } }`));

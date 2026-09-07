@@ -3,7 +3,10 @@
  * merging every import's namespace into the type-name namespace before any local declaration
  * resolves, driving `definitionResolver.ts` over every declaration on demand (dependency order,
  * not source order, so a declaration may compose or refine one declared later in the same
- * schema), §8.3 use-site flattening, and the `@synthetic` key marker (§8.2).
+ * schema), and the `@synthetic` key marker (§8.2). A type position naming a `REFERENCE` entry is
+ * left exactly as the author wrote it (§8.3) -- nothing here walks or rewrites a use site past
+ * one; a consumer that needs the type at the end of a chain does its own ephemeral walk
+ * (`compiler/referenceChain.ts`'s shared function).
  *
  * Ported from the reference implementation's `SchemaResolver`
  * (`tson-compiler/.../resolver/SchemaResolver.java`); see that file's own module doc for the
@@ -65,7 +68,6 @@ import { createHeldBody, isHeldBody } from './heldBody.js';
 import { heldEmptyRecord } from './wireForm.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
 import { inferAll } from './parameterKinds.js';
-import { flattenSchema } from './referenceFlattener.js';
 import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syntheticMerge.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -180,9 +182,10 @@ export interface ResolveSchemaOptions {
  * entry is copied in exactly as its own schema resolved it, never re-resolved or re-materialised
  * against the importer.
  *
- * §5.10 materialisation and §8.3 use-site flattening both run once every local declaration has
- * resolved -- see this module's own doc on the former's optionality. Flattening is unconditional
- * and needs no dependency: `referenceFlattener.ts` is self-contained.
+ * §5.10 materialisation runs once every local declaration has resolved -- see this module's own
+ * doc on its optionality. Nothing runs after it to rewrite a use site (§8.3): a reference is a
+ * hop, not a rewrite, so what materialisation and the synthetic merge leave in `namespace` is the
+ * resolved schema's own final shape.
  *
  * **§6: an annotation written before a declared name binds to the name, not the definition.** A
  * resolved schema is `{type_name => type_definition}`, so the name is the *key* of `entries` --
@@ -360,7 +363,7 @@ export function resolveSchema(
         };
   const materialised = materialiser.materialise(beforeMaterialise, materialiseReporter);
   const resolvedLocals = new Map(materialised.entries);
-  let instantiations = new Map(materialised.materialised);
+  const instantiations = new Map(materialised.materialised);
   const mintedSynthetic = materialised.synthetics;
   for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
   for (const [name, definition] of instantiations) namespace.set(name, definition);
@@ -389,16 +392,10 @@ export function resolveSchema(
     for (const [name, definition] of instantiations) namespace.set(name, definition);
   }
 
-  // §8.3, last because it needs everything above already in the namespace: a type position naming
-  // a REFERENCE entry is rewritten to the end of its chain and keeps the author's own name as
-  // @alias. After materialisation specifically, so an alias to an application flattens onto the
-  // entry that application minted rather than onto the alias in front of it.
-  const mintedNames = new Set(instantiations.keys());
-  const flatLocals = flattenSchema(resolvedLocals, namespace, mintedNames);
-  for (const [name, definition] of flatLocals) resolvedLocals.set(name, definition);
-  instantiations = flattenSchema(instantiations, namespace, mintedNames);
-  for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
-  for (const [name, definition] of instantiations) namespace.set(name, definition);
+  // §8.3: a type position naming a REFERENCE entry keeps that name -- a reference is a hop, not a
+  // rewrite, so resolved output states the chain exactly as the author wrote it and nothing here
+  // rewrites a use site past one. `namespace`/`resolvedLocals`/`instantiations` therefore need no
+  // further pass once materialisation and the synthetic merge above have settled.
 
   // §6: a declaration's own name-annotations bind to the *name*, never hoisted onto the
   // definition -- so they, and the derived @synthetic marker, land on entries' key, not its value.

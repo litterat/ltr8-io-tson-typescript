@@ -46,7 +46,7 @@ import { isApplication, typeRefOf } from './wireForm.js';
  * without being resolved: every unquoted name it mentions, at any depth (a declared parameter the
  * body never references is an author error, §5.10), and every type application it writes, at any
  * depth (a recursive application that does not pass its parameters through unchanged grows its
- * argument at every level, §5.10.1). Neither is part of `TemplateBody` itself any more — the
+ * argument at every level, §5.10.1). Neither is part of `TemplateBody` itself — the
  * contract's own `template` field carries only text — so a caller that needs either narrows (or
  * casts, the way this module's own callers do) from `TemplateBody` to this richer type first.
  */

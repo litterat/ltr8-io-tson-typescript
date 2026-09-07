@@ -243,12 +243,13 @@ registered binding, `70` a library gap or an internal fault.
 ### Resource limits
 
 §9.1 asks an implementation to bound nesting depth, and every recursive layer here costs a host
-call frame per level. `maxNestingDepth` (default 512) is that bound, per call or once per instance:
+call frame per level. `maxNestingDepth` (default 64, §9.1's own) is that bound, per call or once
+per instance:
 
 ```ts
-parse(bytes, { maxNestingDepth: 64 });
-readTree(bytes, { schema, root: 'order', maxNestingDepth: 64 });
-createTson({ maxNestingDepth: 64 }); // applies to every schema it resolves and document it reads
+parse(bytes, { maxNestingDepth: 128 });
+readTree(bytes, { schema, root: 'order', maxNestingDepth: 128 });
+createTson({ maxNestingDepth: 128 }); // applies to every schema it resolves and document it reads
 ```
 
 A document past the limit is refused with a typed error and a position, never a host

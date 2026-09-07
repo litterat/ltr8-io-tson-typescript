@@ -53,12 +53,10 @@ import {
   TsonAtomTypeError,
   TsonInternalError,
   TsonNameHygieneRefusedError,
-  TsonReadError,
 } from '../../core/errors.js';
 import {
   maxNestingDepthOf,
-  nestingLimitExpectation,
-  nestingLimitMessage,
+  nestingLimitRefusal,
   type NestingLimitOptions,
 } from '../../core/limits.js';
 import type { Task } from '../../io/bytes.js';
@@ -201,13 +199,7 @@ function* readStructuralDataValue(
   depth = 0,
 ): Task<DataValue> {
   if (depth >= limit) {
-    throw new TsonReadError({
-      code: 'TYPE_MISMATCH',
-      message: nestingLimitMessage(limit),
-      path: ctx.path(),
-      expected: nestingLimitExpectation(limit),
-      actual: 'deeper',
-    });
+    throw nestingLimitRefusal(limit, ctx.position());
   }
   const annotations = yield* readStructuralAnnotations(
     ctx,
@@ -490,13 +482,7 @@ function* readNode(
     // unreachable, so there is nothing further to collect. Recovering by skipping would also
     // reintroduce the very problem — skipCoreValue recurses too, so on a 100,000-deep document it
     // overflows the stack while discarding what the guard just refused to read.
-    throw new TsonReadError({
-      code: 'TYPE_MISMATCH',
-      message: nestingLimitMessage(limit),
-      path: ctx.path(),
-      expected: nestingLimitExpectation(limit),
-      actual: 'deeper',
-    });
+    throw nestingLimitRefusal(limit, ctx.position());
   }
   const annotations = yield* readStructuralAnnotations(ctx, limit, identifierPolicy, tokenPolicy);
   const typeRefName = yield* readTypeRefName(ctx, identifierPolicy);

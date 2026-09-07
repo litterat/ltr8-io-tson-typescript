@@ -216,8 +216,10 @@ const bigintBinding: Binding<bigint> = atom<bigint>('integer');
 /**
  * These bounds are not typed `number`/`rational` on the wire at all: `decimal_type`/
  * `float_type`/`rational_type` all declare them `value` (`spec/m/meta.tn`), meta-kernel's own
- * universal-atom escape hatch -- so per §5.2 the token is settled by [TSON-DATA] §4 base type
- * resolution, never by the constrained family's own atom parser. An unquoted integer bound
+ * universal-atom escape hatch -- the token, uninterpreted, read by the type the position hands it
+ * to. §5.2 settles which type that is: "a `value`-typed field is read by the atom the position
+ * stands for once that atom is in scope (§7.4)", never by [TSON-DATA] §4 base type resolution,
+ * which §7.3 removes from schema scope entirely. An unquoted integer bound
  * (`min: 1`, `min: 0x10`) resolves to §4.3's `number` case with an `integer`/`based-integer`
  * form; an unquoted non-integer bound (`min: 1.0`, `min: 1e3`) resolves to the same case with a
  * `float` form. Every one of `decimalFromWire`/`rationalFromWire` below parses with the same
@@ -426,9 +428,8 @@ const valueBinding: Binding<unknown> = atom<unknown>('value');
 // Internal enumerations
 // -------------------------------------------------------------------------------------------
 
-// `type_kind` is gone from the kernel (§4.1, §8.1): a resolved entry's kind is derived
-// (`typeKind`, `schema/meta/typedef.ts`), never a wire field, so this module binds no such atom
-// any more.
+// The kernel declares no `type_kind` (§4.1, §8.1): a resolved entry's kind is derived
+// (`typeKind`, `schema/meta/typedef.ts`) rather than carried, so there is no such atom to bind.
 const fieldStateBinding: Binding<FieldState> = atom<FieldState>('field_state');
 const elementStateBinding: Binding<ElementState> = atom<ElementState>('element_state');
 const complexComponentBinding: Binding<ComplexComponent> =
@@ -516,7 +517,7 @@ const annotationsBinding: Binding<Annotations> = arrayOf<Annotation>(annotationB
  * `metaReader.ts` already imports this module (the reverse direction would cycle). A non-token
  * argument (a nested record/array/map) has no §4 base type to resolve to and is not representable
  * at this position yet -- annotation arguments this package's own bundled schemas carry are all
- * bare tokens (`@alias:name`'s identifier, in practice).
+ * bare or quoted tokens (`@since:"0.35.0"`, `@lang:en`, in practice).
  */
 function annotationArgumentValue(argument: DataValue | undefined): unknown {
   if (argument === undefined) return undefined;
@@ -612,11 +613,10 @@ const typeRefBinding: RecordBinding<TypeRef> = record<TypeRef>({
 /**
  * {@link typeRefBinding} wrapped so a reader/writer at a `type_ref`-typed position recovers the
  * wire annotations written on the reference *value itself* (§3.1) into {@link TypeRef.annotations}
- * -- most notably `@alias:name`, attached here when a use site is flattened past a REFERENCE entry
- * (§8.3: "the alias attaches to the type value, not the `record_field`"), confirmed directly
- * against `spec/m/meta-kernel-resolved.tn`'s own `type: @alias:field_name identifier`. Every field
- * slot below that holds a `TypeRef` binds through this wrapper, never through the bare
- * {@link typeRefBinding} directly -- see that binding's own doc for why it alone cannot carry this.
+ * -- an annotation an author writes directly in front of a field's type reference attaches to
+ * that type value, not to the enclosing `record_field`. Every field slot below that holds a
+ * `TypeRef` binds through this wrapper, never through the bare {@link typeRefBinding} directly --
+ * see that binding's own doc for why it alone cannot carry this.
  */
 const typeRefAnnotatedBinding: AnnotatedBinding<TypeRef> = annotated<TypeRef>({
   value: typeRefBinding,
@@ -1652,8 +1652,11 @@ export {
  * `BindingRegistry`/reader wiring (definition resolution, linking) is free to `chain()` this
  * behind or in front of its own tables; this is deliberately not the full
  * `SchemaMetaNameBinder`-equivalent alias set (`field_name`/`type_name`/`param_name` -> `identifier`,
- * and the like) since those names are use-site aliases the reference flattener (§8.3) resolves
- * away before a value reaches this registry at all -- see this file's own report for the finding.
+ * and the like), since those three are entry *names*, not `TypeDefinition.body` shapes -- {@link
+ * topBinding} dispatches on the applied-constructor tag a body's own wire form carries (`record`,
+ * `array`, `reference`, ...), and a `field_name`-named entry's own body reads through the
+ * `reference` tag like any other alias's, whether or not a use site elsewhere names `field_name`
+ * itself (§8.3: a use site keeps the author's own name and is never rewritten past it).
  */
 export const metaBindings: BindingRegistry = registry({
   type_definition: typeDefinitionBinding,

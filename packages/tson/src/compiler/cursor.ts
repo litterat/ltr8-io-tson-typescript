@@ -18,8 +18,7 @@
 import { TsonInternalError, TsonParseError } from '../core/errors.js';
 import {
   maxNestingDepthOf,
-  nestingLimitExpectation,
-  nestingLimitMessage,
+  nestingLimitRefusal,
   type NestingLimitOptions,
 } from '../core/limits.js';
 import { START, type Position } from '../core/position.js';
@@ -67,7 +66,8 @@ export function createCursor(input: ByteInput, options?: NestingLimitOptions): C
 }
 
 /**
- * Runs `body` one level deeper, refusing a document that nests past the cursor's limit (§9.1).
+ * Runs `body` one level deeper, refusing (§9.1's fifth outcome, `TsonLimitRefusedError`) a
+ * document that nests past the cursor's limit.
  *
  * Wrapped around each production that can re-enter itself -- `parseTypeRef` in the schema grammar
  * and `parseCoreValue` in the data-value grammar -- which between them sit on every cycle in
@@ -82,10 +82,7 @@ export function createCursor(input: ByteInput, options?: NestingLimitOptions): C
  */
 export function* nested<T>(state: CursorState, at: Token, body: () => Task<T>): Task<T> {
   if (state.depth >= state.maxNestingDepth) {
-    throw new TsonParseError(nestingLimitMessage(state.maxNestingDepth), at.start, {
-      expected: nestingLimitExpectation(state.maxNestingDepth),
-      actual: 'deeper',
-    });
+    throw nestingLimitRefusal(state.maxNestingDepth, at.start);
   }
   state.depth += 1;
   try {

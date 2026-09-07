@@ -18,11 +18,10 @@
  * sees an event, so a schema document never reaches here as a `Document` at all.
  */
 
-import { TsonInternalError, TsonParseError } from '../core/errors.js';
+import { TsonInternalError } from '../core/errors.js';
 import {
   maxNestingDepthOf,
-  nestingLimitExpectation,
-  nestingLimitMessage,
+  nestingLimitRefusal,
   type NestingLimitOptions,
 } from '../core/limits.js';
 import type { Position } from '../core/position.js';
@@ -109,9 +108,9 @@ export interface ParsedDocument {
  * Pulls events all the way to the stream's own `document-end` — reaching the end of the root
  * value is not the same as reaching the end of the *document* (§7.1 requires the difference to be
  * observable: `{ x: 1 } junk` is trailing content, not a second value). The pull is what performs
- * that check, not an assertion added afterwards: `stream/dataStream.js`'s own root frame raises
- * {@link TsonParseError} the moment it is asked for one more event past the root value and finds
- * the document is not actually over. A caller that built the root and stopped there — never
+ * that check, not an assertion added afterwards: `stream/dataStream.js`'s own root frame raises a
+ * `TsonParseError` the moment it is asked for one more event past the root value and finds the
+ * document is not actually over. A caller that built the root and stopped there — never
  * asking the stream for anything past it — would silently accept any trailing content, which is
  * exactly the trap: nothing fails on its own from merely *stopping* a lazy pull-based stream
  * early.
@@ -233,14 +232,11 @@ export function* parseCoreValue(source: EventSource, options?: ParseOptions): Ta
   return yield* coreValueAt(source, contextOf(options), 0);
 }
 
-/** Refuses a document that has nested past this parse's limit (§9.1), positioned at what comes next. */
+/** Refuses (§9.1's fifth outcome) a document that has nested past this parse's limit, positioned at what comes next. */
 function* guardDepth(source: EventSource, ctx: ParseContext, depth: number): Task<void> {
   if (depth < ctx.maxNestingDepth) return;
   const here = yield* source.peek();
-  throw new TsonParseError(nestingLimitMessage(ctx.maxNestingDepth), here.position, {
-    expected: nestingLimitExpectation(ctx.maxNestingDepth),
-    actual: 'deeper',
-  });
+  throw nestingLimitRefusal(ctx.maxNestingDepth, here.position);
 }
 
 function* coreValueAt(source: EventSource, ctx: ParseContext, depth: number): Task<CoreValue> {

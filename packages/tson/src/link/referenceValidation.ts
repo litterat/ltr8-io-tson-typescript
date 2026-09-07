@@ -37,6 +37,7 @@ import { isDataBody, type NonDataTop } from './bodyKind.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import { isHeldBody } from '../compiler/heldBody.js';
+import { terminal, type EntryLookup } from '../compiler/referenceChain.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -322,6 +323,12 @@ function validateBody(
  * type is even known; see its own doc). Mirrors the reference implementation's own
  * `TsonSchemaLinker.checkFieldValue`.
  *
+ * **The chain end is what has to be checked, not the hop.** A field typed by an alias (`a =>
+ * text`, `f: a = hello`) states a value of whatever the alias names, and resolved output states
+ * the chain rather than rewriting the use site past it (§8.3), so the walk happens here --
+ * `field.type.name` is what the error names (the author's own spelling), and `terminal(...)` is
+ * what decides whether the value reads.
+ *
  * **Atoms and enums only, and the rest is not silently blessed.** A field typed by a record,
  * container or choice needs a compiled reader to check a value against, and compilation happens
  * after linking, so those are left for `compile.ts`'s own construction-time read (`STATUS.md`
@@ -342,14 +349,18 @@ function checkFieldValue(
   if (field.value === undefined || ownParameters.includes(field.type.name)) {
     return;
   }
-  const target = namespace.get(field.type.name);
-  // An unresolved reference is already reported by validateTypeRef, above; a target that is still
-  // open (or an application of one) has no single body to check against until materialisation
-  // closes it. A held body (no `kind` of its own) is excluded by the parameters check just above,
-  // kept here too as a defensive no-op; a `Data` body is not a type at all, already rejected as
-  // this field's own type reference by `validateTypeRef`; and a `reference`-bodied target should
-  // not occur -- §8.3 flattens a type position past one -- so skipping is the right answer if it
-  // ever does: the chain end is what would have to be checked, not the hop.
+  const terminalName = terminal(field.type.name, lookupIn(namespace));
+  const target = namespace.get(terminalName);
+  // An unresolved reference is already reported by validateTypeRef, above (a name the walk itself
+  // does not reach, undeclared or a cycle, resolves no `target` here either). A target that is
+  // still open (or an application of one) has no single body to check against until
+  // materialisation closes it. A held body (no `kind` of its own) is excluded by the parameters
+  // check just above, kept here too as a defensive no-op; a `Data` body is not a type at all,
+  // already rejected as this field's own type reference by `validateTypeRef`; and a
+  // `reference`-bodied target cannot occur here -- {@link terminal} does not stop on one except at
+  // a cycle or an argument-bearing target, both already excluded by `target === undefined`/
+  // `field.type.arguments.length > 0` respectively (an alias's own `target` never carries
+  // arguments once closed, §8.1).
   if (
     target === undefined ||
     typeParameters(target).length > 0 ||
@@ -362,10 +373,10 @@ function checkFieldValue(
   }
   const body = target.body;
   const value = field.value;
-  if (!isScalarBody(field.type.name, body)) {
+  if (!isScalarBody(terminalName, body)) {
     throw notAScalarType(entryName, field, value, body);
   }
-  const parser = atomParserFor(field.type.name, body);
+  const parser = atomParserFor(terminalName, body);
   if (parser === undefined) {
     return; // scalar but unchecked here -- see `atom/forType.ts`'s own top note
   }
@@ -575,29 +586,6 @@ function checkArity(
 
 // ── Choice variants ──────────────────────────────────────────────────────────────────────────
 
-/** The name a reference chain ends at (§8.3). A cycle stops the walk rather than hanging. */
-function terminalName(name: string, namespace: ReadonlyMap<string, TypeDefinition>): string {
-  const walked = new Set<string>();
-  let current = name;
-  while (!walked.has(current)) {
-    walked.add(current);
-    const def = namespace.get(current);
-    const body = def?.body;
-    if (
-      def === undefined ||
-      body === undefined ||
-      !('kind' in body) ||
-      isDataBody(body) ||
-      body.kind !== 'reference' ||
-      body.target.arguments.length > 0
-    ) {
-      return current; // an argument-bearing target is an application, not a hop to another entry
-    }
-    current = body.target.name;
-  }
-  return current;
-}
-
 /** A stable structural key for a {@link TypeRef}, ignoring `annotations` (identity is where a reference *points*). */
 function typeRefKey(ref: TypeRef): string {
   return `${ref.name}<${ref.arguments.map(typeArgumentKey).join(',')}>`;
@@ -607,24 +595,30 @@ function typeArgumentKey(arg: TypeArgument): string {
   return arg.kind === 'ref' ? `r:${typeRefKey(arg.ref)}` : `v:${arg.value.form}:${arg.value.text}`;
 }
 
+/** {@link terminal}'s `EntryLookup` over a finished namespace `Map`. */
+function lookupIn(namespace: ReadonlyMap<string, TypeDefinition>): EntryLookup {
+  return (name) => namespace.get(name);
+}
+
 /**
- * §5.4: "The resolver validates that each variant resolves to a distinct type." Judged after
- * §8.3 flattening (an alias and its target are one type), so `(text | my_text)` with
- * `my_text => text` is caught the same way `(text | text)` is.
+ * §5.4: "The resolver validates that each variant resolves to a distinct type." Judged at the end
+ * of each variant's reference chain (§8.3: an alias and its target are one type), so `(text |
+ * my_text)` with `my_text => text` is caught the same way `(text | text)` is.
  */
 function checkVariantsAreDistinct(
   entryName: string,
   choice: ChoiceBody,
   namespace: ReadonlyMap<string, TypeDefinition>,
 ): void {
+  const lookup = lookupIn(namespace);
   const seen = new Map<string, string>();
   for (const variant of choice.variants) {
-    const flattened: TypeRef = {
-      name: terminalName(variant.name, namespace),
+    const atEnd: TypeRef = {
+      name: terminal(variant.name, lookup),
       arguments: variant.arguments,
       annotations: [],
     };
-    const key = typeRefKey(flattened);
+    const key = typeRefKey(atEnd);
     const first = seen.get(key);
     if (first === undefined) {
       seen.set(key, variant.name);
@@ -634,7 +628,7 @@ function checkVariantsAreDistinct(
       `'${entryName}' ${
         first === variant.name
           ? `lists the variant '${variant.name}' twice`
-          : `variants '${first}' and '${variant.name}' both resolve to '${flattened.name}'`
+          : `variants '${first}' and '${variant.name}' both resolve to '${atEnd.name}'`
       } -- §5.4 requires each variant to resolve to a distinct type`,
     );
   }
@@ -643,15 +637,17 @@ function checkVariantsAreDistinct(
 /**
  * A variant must not resolve to `void` (§5.4): `(T | void)` spells optionality as a choice, and
  * optionality belongs to the position -- a field's `?` state, the `_` sentinel -- never to the
- * type occupying it.
+ * type occupying it. Judged at the end of the chain, like distinctness, so an alias of `void` is
+ * caught under whatever name the author wrote.
  */
 function checkVariantsAreNotVoid(
   entryName: string,
   choice: ChoiceBody,
   namespace: ReadonlyMap<string, TypeDefinition>,
 ): void {
+  const lookup = lookupIn(namespace);
   for (const variant of choice.variants) {
-    if (terminalName(variant.name, namespace) === 'void') {
+    if (terminal(variant.name, lookup) === 'void') {
       throw new TsonSchemaValidationError(
         `'${entryName}' has a variant${variant.name === 'void' ? '' : ` '${variant.name}'`} ` +
           "resolving to 'void' -- optionality is not choice (§5.4): a value's absence is the " +

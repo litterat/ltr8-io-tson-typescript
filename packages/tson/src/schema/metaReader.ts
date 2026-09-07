@@ -59,6 +59,7 @@ import type { DefinitionGetter, DefinitionMetaReader } from '../compiler/resolve
 import { tryParseNumber } from '../base/numberGrammar.js';
 import { toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType, type BaseToken } from '../base/baseTypeResolver.js';
+import { readFullDate, readFullTime } from '../atom/temporal/rfc3339.js';
 import {
   fieldGroupBinding,
   integerSizeBinding,
@@ -77,13 +78,19 @@ import type { Top, TypeDefinition } from './meta/typedef.js';
 
 /**
  * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`identifier`, `token`,
- * `text`, `boolean`, `integer`, `value`, `scope_kind`, and the five other enum-shaped constraint
- * atoms `field_state`/`element_state`/`complex_component`/`ieee_format`/`bytes_encoding`).
- * Deliberately narrow:
- * this is not a general-purpose `atom/` replacement, only what a schema *source* document's own
- * constructor-application bodies ever carry -- min/max bounds, size bits, enum members, boolean
- * flags. `base/`'s own number grammar and base-type resolution do the real parsing (§4, §7.6); no
- * regex, per `CLAUDE.md`'s own rule for the number grammar.
+ * `text`, `boolean`, `integer`, `value`, `date`, `time`, `datetime`, `scope_kind`, and the five
+ * other enum-shaped constraint atoms `field_state`/`element_state`/`complex_component`/
+ * `ieee_format`/`bytes_encoding`). Deliberately narrow: this is not a general-purpose `atom/`
+ * replacement, only what a schema *source* document's own constructor-application bodies ever
+ * carry -- min/max bounds, size bits, enum members, boolean flags, and the temporal bound facets.
+ * Every one of those bounds is `value`-typed in `spec/m/meta.tn` (`( min: value | exclusive_min:
+ * value )?` on `date_type`, `time_type`, `datetime_type`, `duration_type` and `period_type`
+ * alike), so §5.2's rule governs each the same way: the token is read under the atom the position
+ * stands for, once that atom is in scope, and the result is stored. `base/`'s own number grammar
+ * does the real parsing for the numeric
+ * `value` case (§4, §7.6); `atom/temporal/rfc3339.ts`'s hand-written grammar does it for
+ * `date`/`time`/`datetime`, the same parser every document-level `!date`/`!time`/`!datetime`
+ * token goes through -- no regex, per `CLAUDE.md`'s own rule.
  */
 export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
   switch (binding.wireType) {
@@ -109,6 +116,61 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
 
     case 'value':
       return decodeBaseValue(wire);
+
+    // `date_type.min`/`.max` (`schema/bindings.ts`'s `calendarDateBinding`) read the token
+    // directly as `CalendarDate` -- no bridge, since the two shapes already agree field for
+    // field.
+    case 'date': {
+      const parsed = readFullDate(wire.text, 0);
+      if (parsed?.next !== wire.text.length) {
+        throw readError(`expected an RFC 3339 full-date, found '${wire.text}'`);
+      }
+      return parsed.value;
+    }
+
+    // `time_type.min`/`.max` (`offsetTimeBinding`) bridge this shape into `OffsetTime`; the
+    // decoder's own job stops at the RFC 3339 `full-time` grammar.
+    case 'time': {
+      const parsed = readFullTime(wire.text, 0);
+      if (parsed === undefined) {
+        throw readError(`expected an RFC 3339 full-time, found '${wire.text}'`);
+      }
+      return {
+        hour: parsed.hour,
+        minute: parsed.minute,
+        second: parsed.second,
+        nanosecond: parsed.nanosecond,
+        offset: { totalMinutes: parsed.offsetMinutes },
+      };
+    }
+
+    // `datetime_type.min`/`.max` (`offsetDateTimeBinding`) -- `full-date "T" full-time`, the
+    // same two-primitive composition `atom/temporal/datetime.ts` itself uses.
+    case 'datetime': {
+      const text = wire.text;
+      const datePart = readFullDate(text, 0);
+      if (datePart === undefined) {
+        throw readError(`expected an RFC 3339 date-time, found '${text}'`);
+      }
+      const separator = text.charCodeAt(datePart.next);
+      if (separator !== 0x54 /* 'T' */ && separator !== 0x74 /* 't' */) {
+        throw readError(`expected an RFC 3339 date-time, found '${text}'`);
+      }
+      const timePart = readFullTime(text, datePart.next + 1);
+      if (timePart === undefined) {
+        throw readError(`expected an RFC 3339 date-time, found '${text}'`);
+      }
+      return {
+        date: datePart.value,
+        time: {
+          hour: timePart.hour,
+          minute: timePart.minute,
+          second: timePart.second,
+          nanosecond: timePart.nanosecond,
+          offset: { totalMinutes: timePart.offsetMinutes },
+        },
+      };
+    }
 
     // The remaining meta-kernel/meta atoms are all closed enumerations (`scope_kind`,
     // `field_state`, `element_state`, `complex_component`, `ieee_format`, `bytes_encoding`):

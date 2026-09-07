@@ -66,8 +66,8 @@ import type {
   TupleBinding,
   VariantBinding,
 } from '../bind/binding.js';
-import { TsonAtomTypeError, TsonInternalError, TsonReadError } from '../core/errors.js';
-import { nestingLimitExpectation, nestingLimitMessage } from '../core/limits.js';
+import { TsonAtomTypeError, TsonInternalError } from '../core/errors.js';
+import { nestingLimitRefusal } from '../core/limits.js';
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
 import type { TsonEvent } from '../stream/event.js';
@@ -323,13 +323,7 @@ function* readStructuralAnnotations(
 
 function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): Task<DataValue> {
   if (depth >= limit) {
-    throw new TsonReadError({
-      code: 'TYPE_MISMATCH',
-      message: nestingLimitMessage(limit),
-      path: ctx.path(),
-      expected: nestingLimitExpectation(limit),
-      actual: 'deeper',
-    });
+    throw nestingLimitRefusal(limit, ctx.position());
   }
   const annotations = yield* readStructuralAnnotations(ctx, limit, depth);
   let typeRef: string | undefined;

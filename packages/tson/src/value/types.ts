@@ -235,21 +235,32 @@ export interface Ipv6Address {
 /**
  * A CIDR network — the host value for `!cidr4`/`!cidr6` (§5.5, RFC 4632 and its IPv6 analogue).
  *
- * **Holds the authored text verbatim, not a decoded address/prefix pair.** `CONFORMANCE.md` is explicit
- * about why: "Java has no CIDR type, so the host value is the token's own text rather than an invented
- * address/prefix pair — validated, never rewritten, so a round trip is exact (which for IPv6 also avoids
- * expanding `2001:db8::/32` into its uncompressed eight-group spelling on the way out)." The address and
- * prefix are still validated at parse time (reusing the same address grammars as `!ipv4`/`!ipv6`, per
- * `CONFORMANCE.md`) — that check simply doesn't change what gets stored.
+ * **A network value, not retained text**: `address` and `prefixLength` are the decoded pair
+ * ([TSON-SCHEMA] §5.5's "network value"), host bits already zeroed, which is what lets
+ * `cidr4.ts`/`cidr6.ts` judge `within`/`excluding`/`max_prefix` against the value itself rather
+ * than re-parsing a string every time a facet needs an answer.
+ *
+ * `addressText` carries the address portion exactly as authored, ahead of `write`'s own
+ * `${addressText}/${prefixLength}`. This is not redundant with `address`: IPv4's `dec-octet`
+ * grammar admits exactly one spelling per octet, so `address` alone would round-trip it, but RFC
+ * 4291 §2.2 admits several spellings of one IPv6 address (`::` compression, a hex group's leading
+ * zeros), and only the text an author chose distinguishes "2001:db8::/32" from
+ * "2001:0db8:0000:0000:0000:0000:0000:0000/32" on the way back out — both decode to the same
+ * 16-byte network. `formatIpv4`/`formatIpv6` deliberately don't own `write` here for that reason.
  *
  * Verified against
- * `.references/ltr8-io-tson-test-suite/tests/vocabulary/valid/cidr4-plain-expected.tn` (`value:
- * "192.0.2.0/24"`) and `.../cidr6-compressed-expected.tn` (`value: "2001:db8::/32"`, compression intact).
+ * `.references/ltr8-io-tson-test-suite/tests/class1/vocabulary/valid/cidr4-plain-expected.tn`
+ * (`value: { text: "192.0.2.0/24" }`) and `.../cidr6-compressed-expected.tn` (`value: { text:
+ * "2001:db8::/32" }`, compression intact).
  */
 export interface Cidr {
   readonly kind: 'cidr4' | 'cidr6';
-  /** The address followed by `/` and the prefix length, exactly as authored. */
-  readonly text: string;
+  /** The address portion exactly as authored, before the `/`. */
+  readonly addressText: string;
+  /** The decoded network address, host bits zeroed: 4 bytes for `cidr4`, 16 for `cidr6`. */
+  readonly address: Uint8Array;
+  /** The prefix length after `/`, already checked against the family's own 0–32/0–128 range. */
+  readonly prefixLength: number;
 }
 
 /**

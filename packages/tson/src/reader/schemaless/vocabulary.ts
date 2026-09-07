@@ -150,7 +150,7 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
   types.set('time', createTimeParser('time', { kind: 'time_type' }));
   types.set('datetime', createDateTimeParser('datetime', { kind: 'datetime_type' }));
   types.set('duration', createDurationParser('duration', { kind: 'duration_type' }));
-  types.set('period', createPeriodParser('period'));
+  types.set('period', createPeriodParser('period', { kind: 'period_type' }));
 
   types.set('uuid', createUuidParser('uuid', { kind: 'uuid_type' }));
   types.set('uri', createUriParser('uri', { kind: 'uri_type', spec: RFC.uri }));

@@ -23,12 +23,11 @@ import type {
   DiagnosticsReceiver,
   SchemaLocation,
 } from '../core/diagnostic.js';
-import { TsonInternalError, TsonReadError } from '../core/errors.js';
+import { TsonInternalError } from '../core/errors.js';
 import {
   DEFAULT_MAX_NESTING_DEPTH,
   maxNestingDepthOf,
-  nestingLimitExpectation,
-  nestingLimitMessage,
+  nestingLimitRefusal,
   type NestingLimitOptions,
 } from '../core/limits.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
@@ -159,7 +158,8 @@ function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | 
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The depth one level below `tail`, refusing a document that nests past this read's limit (§9.1).
+ * The depth one level below `tail`, refusing (§9.1's fifth outcome, `TsonLimitRefusedError`) a
+ * document that nests past this read's limit.
  *
  * Thrown rather than reported, even under a collecting receiver -- `reader/schemaless/tree.ts`
  * states the reasoning and it holds identically here: a nesting bound is a resource limit, not a
@@ -174,13 +174,7 @@ function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | 
 function descend(cursor: Cursor, tail: PathStep | undefined): number {
   const depth = (tail?.depth ?? 0) + 1;
   if (depth > cursor.maxNestingDepth) {
-    throw new TsonReadError({
-      code: 'TYPE_MISMATCH',
-      message: nestingLimitMessage(cursor.maxNestingDepth),
-      expected: nestingLimitExpectation(cursor.maxNestingDepth),
-      actual: 'deeper',
-      ...(cursor.position === undefined ? {} : { dataPosition: cursor.position }),
-    });
+    throw nestingLimitRefusal(cursor.maxNestingDepth, cursor.position);
   }
   return depth;
 }

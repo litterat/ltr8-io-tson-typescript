@@ -431,6 +431,49 @@ describe('composition (§5.8)', () => {
     expect(host.state).toBe('REQUIRED_FIXED');
   });
 
+  it("a restated field carries the restatement's own annotations, in source order, followed by the inherited field's, in source order -- through a three-deep chain (§5.8)", () => {
+    // Each level restates `x`, adding its own annotation ahead of what it inherits: the
+    // restatement leads, so the innermost declaration's annotation ends up first and the
+    // original's last -- "nothing is dropped, no per-name dedup" (§5.8).
+    const doc = parse(`
+      base  => { @a1 x: token }
+      mid   => base & { @a2 x: token }
+      outer => mid & { @a3 x: token }
+    `);
+    const { resolver, entries } = harness();
+    const base = resolver.resolve(declarationOf(doc, 'base'));
+    entries.set('base', base);
+    const mid = resolver.resolve(declarationOf(doc, 'mid'));
+    entries.set('mid', mid);
+    const outer = resolveOne(resolver, doc, 'outer');
+    if (!isRecordBody(base.body) || !isRecordBody(mid.body) || !isRecordBody(outer.body)) {
+      throw new Error('unreachable');
+    }
+
+    expect(fieldNamed(base.body, 'x').annotations).toEqual([{ name: 'a1' }]);
+    expect(fieldNamed(mid.body, 'x').annotations).toEqual([{ name: 'a2' }, { name: 'a1' }]);
+    expect(fieldNamed(outer.body, 'x').annotations).toEqual([
+      { name: 'a3' },
+      { name: 'a2' },
+      { name: 'a1' },
+    ]);
+  });
+
+  it("an elided-type restatement still merges its own annotations ahead of the inherited field's (§5.7, §5.8)", () => {
+    const doc = parse(`
+      config     => { @a1 host: token }
+      production => config & { @a2 host: = "prod.example.com" }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('config', resolver.resolve(declarationOf(doc, 'config')));
+    const production = resolveOne(resolver, doc, 'production');
+    if (!isRecordBody(production.body)) throw new Error('unreachable');
+
+    const host = fieldNamed(production.body, 'host');
+    expect(host.type).toEqual({ name: 'token', arguments: [], annotations: [] });
+    expect(host.annotations).toEqual([{ name: 'a2' }, { name: 'a1' }]);
+  });
+
   it('a supertype names no type this schema declares or imports', () => {
     const doc = parse('bad => nowhere & {}');
     const { resolver } = harness();
@@ -966,6 +1009,48 @@ describe('constructor application (§5.5, §5.6)', () => {
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as TsonSchemaValidationError).message).toContain('contradict each other');
+  });
+
+  it("applies a constructor named through an alias in the structure namespace, reading the payload against the chain's terminal (§8.3)", () => {
+    // alias_integer => integer, in the structure namespace itself -- a REFERENCE-kind entry
+    // naming the real constructor `integer`. `!alias_integer { ... }` must read exactly as
+    // `!integer { ... }` would: the meta-schema's own reader table is keyed by the constructor's
+    // own name, so the value handed to it is re-typed to the terminal before binding.
+    const doc = parse('int8 => !alias_integer { size: { bits: 8  signed: true } }');
+    const { resolver, structure } = harness({ definitionMetaReader: integerTypeReader });
+    structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
+    structure.set('alias_integer', {
+      source: { name: 'integer', arguments: [], annotations: [] },
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'reference', target: { name: 'integer', arguments: [], annotations: [] } },
+      annotations: [],
+    });
+
+    const int8 = resolveOne(resolver, doc, 'int8');
+
+    // The author's own spelling survives in `source` -- the alias, not the terminal it names.
+    expect(int8.source).toEqual({ name: 'alias_integer', arguments: [], annotations: [] });
+    expect(int8.body).toEqual({
+      kind: 'integer_type',
+      size: { bits: 8n, signed: true },
+    });
+  });
+
+  it('rejects a constructor alias whose own chain ends at a name the structure namespace does not declare (§8.3)', () => {
+    const doc = parse('bad => !dangling { }');
+    const { resolver, structure } = harness();
+    structure.set('dangling', {
+      source: { name: 'nowhere', arguments: [], annotations: [] },
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'reference', target: { name: 'nowhere', arguments: [], annotations: [] } },
+      annotations: [],
+    });
+    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('does not declare');
   });
 });
 

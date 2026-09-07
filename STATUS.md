@@ -219,32 +219,69 @@ day it does not match is the day it matters.
 
 - **Use-site naming is not implemented (§8.3).** A diagnostic names the entry a reference resolves
   to, not the alias the author wrote at that position, so `c: pct` where `pct => small` reports
-  `'small'` — a declaration the author never wrote, and possibly in a file they never opened. The
-  reference implementation renames a shared compiled reader per use site at compile time, free at
-  read time. The tree readers here already carry a `displayName` distinct from `name`, so the
-  container half is a short step; the atom builders have no such parameter across their twenty
-  constructor families, which is what makes it a real change rather than a rename.
-
-- **A value type-argument's identity compares its spelling, not its value (§8.2).** Revision 34
-  settles that a literal argument is recorded verbatim but compared under [TSON-DATA] §4 value
-  equivalence, so `vector<float32, 255>` and `vector<float32, 0xFF>` are one instantiation entry
-  while `1` and `1.0` stay two. This port keys the entry on the written form, so the first pair
-  mints two entries that mean the same thing. It costs a duplicate entry, never a wrong verdict.
+  `'small'` — a declaration the author never wrote, and possibly in a file they never opened.
+  Confirmed still open after §8.3's use-site flattening was removed (`referenceFlattener.ts`
+  deleted, resolved output now states every use site exactly as written): the two are independent
+  mechanisms. Flattening only ever touched _resolved output_ — the value model `bundled-
+schemas-resolve.test.ts` compares — while this gap is `compile.ts`'s own reader-sharing: a
+  `Reference` body's compiled reader is `resolve(body.target.name)`, the _cached_ reader already
+  built for the target under the target's own name, so every diagnostic baked into it (`expected a
+record for 'base', found an array`) names the terminal regardless of how many aliases led there
+  or whether resolved output was ever rewritten. The reference implementation renames a shared
+  compiled reader per use site at compile time, free at read time. The tree readers here already
+  carry a `displayName` distinct from `name`, so the container half is a short step; the atom
+  builders have no such parameter across their twenty constructor families, which is what makes it
+  a real change rather than a rename.
 
 - **The read stack costs a host call frame per nesting level, and is bounded rather than
-  iterative.** §9.1's bound is `maxNestingDepth`, configurable per call (`parse`, `readTree`,
-  `validate`, `parseSchemaDocument`) or once on an instance (`createTson({ maxNestingDepth })`),
-  defaulting to 512. Lowering it is free; raising it is bounded by the host's own call stack —
-  around 750 levels for the Tier 3 parser — because the recursion is still real. Making Tier 3,
-  the schema grammar and the tree readers iterative the way the Tier 2 event stream already is
-  (its explicit frame stack walks a million levels) is the proper fix, and the bound is what keeps
-  the failure honest until then. Five distinct paths past the bound have been closed, each of
-  which reached a public entry point as an uncaught `RangeError`: a schema document's annotation
-  value, its nested array types and its nested choice types (all three inside
-  `resolveSchema`/`compile`, which matters most since a schema is routinely fetched from
-  elsewhere); a self-recursive schema type read through the compiled reader stack, which had no
-  bound at all; and an annotation chain (`@a:@a:@a:…`), which is a real descent with no brace or
-  bracket for a structural counter to see.
+  iterative.** §9.1's "nesting depth" bound is `maxNestingDepth`, configurable per call (`parse`,
+  `readTree`, `validate`, `parseSchemaDocument`) or once on an instance
+  (`createTson({ maxNestingDepth })`), defaulting to §9.1's own 64. Exceeding it is §8.1's fifth
+  outcome — a `TsonLimitRefusedError` naming the limit and the configured threshold
+  (`core/limits.ts`'s own `nestingLimitRefusal`), never a `TsonParseError`/`TsonReadError` — and
+  every enforcement site throws it directly, fail-fast and collecting reads alike, since nothing
+  below the point a limit is exceeded is reachable to collect. Lowering the limit is free; raising
+  it is bounded by the host's own call stack — around 750 levels for the Tier 3 parser — because
+  the recursion is still real. Making Tier 3, the schema grammar and the tree readers iterative
+  the way the Tier 2 event stream already is (its explicit frame stack walks a million levels) is
+  the proper fix, and the bound is what keeps the failure honest until then. Five distinct paths
+  past the bound have been closed, each of which reached a public entry point as an uncaught
+  `RangeError`: a schema document's annotation value, its nested array types and its nested choice
+  types (all three inside `resolveSchema`/`compile`, which matters most since a schema is
+  routinely fetched from elsewhere); a self-recursive schema type read through the compiled reader
+  stack, which had no bound at all; and an annotation chain (`@a:@a:@a:…`), which is a real
+  descent with no brace or bracket for a structural counter to see.
+
+- **Eleven of [TSON-DATA] §9.1's twelve resource limits, and all five of [TSON-SCHEMA] §11.5's,
+  are not enforced.** §9.1 states a limits policy of twelve named counters, each MUST-enforced at
+  its default or a configured value; this port builds the refusal mechanism and the nesting-depth
+  counter alone (`core/limits.ts`). A deliberate scope decision, not an oversight: the pinned Java
+  reference itself implements only `maxDepth` and leaves the other eleven, and `CLAUDE.md`'s
+  "structural parity is worth more than idiom while the reference moves" argument applies to limit
+  _coverage_ too — a limit this port enforced and the reference did not would be a divergence
+  nobody asked for. No vector in the shared corpus exercises any of these sixteen, so nothing here
+  is measured red by it, but a document that exhausts one of them (a single 20 MB token, say)
+  still reaches an unbounded read rather than a clean refusal. Unenforced, with §9.1's/§11.5's own
+  defaults:
+
+  | Limit                         | Applies to                                                                   | Default    |
+  | ----------------------------- | ---------------------------------------------------------------------------- | ---------- |
+  | token length                  | one token's decoded text, in code points                                     | 1,048,576  |
+  | decoded text length           | one value's text after escape processing, in code points                     | 1,048,576  |
+  | numeric literal length        | digits in one numeric token, annotated or not                                | 4,096      |
+  | decoded binary size           | one `!bytes` value's octets                                                  | 16,777,216 |
+  | document size                 | the document's bytes                                                         | 16,777,216 |
+  | elements                      | one array or set                                                             | 1,048,576  |
+  | entries                       | one map                                                                      | 1,048,576  |
+  | fields                        | one record                                                                   | 65,536     |
+  | annotations                   | on one value                                                                 | 64         |
+  | total values                  | all values in one document, containers and scalars alike                     | 16,777,216 |
+  | foreign schemas               | distinct schemas a document's scope pushes may load ([TSON-SCHEMA] §7.8)     | 16         |
+  | import closure (§11.5)        | schema documents reachable from one header through `!!meta`/`!!import`       | 64         |
+  | schema entries (§11.5)        | declarations in one schema map, synthetic and instantiation entries included | 65,536     |
+  | reference chain (§11.5)       | hops from a use site to a terminal entry (§8.3)                              | 64         |
+  | supertype chain (§11.5)       | length of one entry's transitive `supertypes` (§8.1)                         | 64         |
+  | materialisation depth (§11.5) | nested open synthetics closed for one application (§5.10, §8.2)              | 64         |
 
 - **`node10` type resolution fails for every subpath**, that resolver predating `exports`. The
   package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer on

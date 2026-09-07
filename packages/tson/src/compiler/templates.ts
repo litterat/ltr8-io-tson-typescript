@@ -73,6 +73,7 @@ import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
 import { inferOne, type Kind } from './parameterKinds.js';
+import { terminal } from './referenceChain.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -338,6 +339,37 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     });
   }
 
+  /**
+   * `args` with every reference argument's chain followed to its terminal entry (§8.2, §8.3) --
+   * what makes `box<user_id>` over `user_id => uuid` denote the same type as `box<uuid>` and mint
+   * the same entry, a reference being the same type under another name. Only a *bare* reference
+   * argument is a hop to follow: one still carrying its own arguments is an application, which
+   * {@link close} has already resolved to its own entry's bare name (or left unresolved for the
+   * linker to report) before `instantiate` ever sees it, so there is no further hop to take here.
+   * A refinement or a fresh instance never reaches this as a bare reference at all -- desugaring
+   * lifts each to its own synthetic entry first, and a synthetic's body is never a `Reference`, so
+   * {@link terminal} stops on it immediately and returns it unchanged, keeping its own identity
+   * exactly as §8.2's table says a refinement and a fresh instance do. A value argument's own
+   * equivalence is `derivedName.ts`'s concern, untouched here.
+   *
+   * Applied once, to the same `args` that go on to name the application, hash it, bind its
+   * template's parameters, and record the minted entry's own `source` -- so `source` states the
+   * canonical application (§8.1's own "`source` is structured provenance"), and the body a
+   * canonicalised bind substitutes is the same recomputation an ingesting reader would perform
+   * from that `source`.
+   */
+  function canonicalArgs(args: readonly TypeArgument[]): readonly TypeArgument[] {
+    return args.map((argument) => {
+      if (argument.kind !== 'ref' || argument.ref.arguments.length > 0) {
+        return argument;
+      }
+      const name = terminal(argument.ref.name, deps.namespaceDefinitions);
+      return name === argument.ref.name
+        ? argument
+        : { kind: 'ref', ref: { name, arguments: [], annotations: argument.ref.annotations } };
+    });
+  }
+
   /** Each parameter of the applied signature against the argument applied for it, in order. */
   function bind(
     parameters: readonly string[],
@@ -404,8 +436,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // §5.10's parameter kinds, applied before the application is named: a bare reference bound to
     // a VALUE parameter reclassifies to a literal here, so the name and every downstream `source`
     // record what the parameter always meant rather than what the argument's own token shape
-    // suggested at parse time.
-    const args = byParameterKind(head, template, parameters, rawArgs);
+    // suggested at parse time. Chain-following (§8.2) applies after that reclassification, over
+    // only what is left a reference by it -- see `canonicalArgs`'s own doc on why the order
+    // matters.
+    const args = canonicalArgs(byParameterKind(head, template, parameters, rawArgs));
     const name = ofApplication(head, args);
     if (aliasClosing.has(name)) {
       throw new TsonSchemaValidationError(

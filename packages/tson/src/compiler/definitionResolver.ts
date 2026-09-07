@@ -112,6 +112,7 @@ import {
 import { substitute } from './templateSubstitution.js';
 import { resolveFieldModifiers } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
+import { terminal, terminalDefinition } from './referenceChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -235,7 +236,7 @@ function isRecordBody(body: Top): body is RecordBody {
 /**
  * `TypeDefinition` plus the type parameters a declaration carries before {@link holdIfOpen} folds
  * them into a held body's own `TemplateBody.parameters` (§5.10) — `schema/meta`'s own
- * `TypeDefinition` carries no such field any more (Revision 35 keeps parameters on the body that
+ * `TypeDefinition` carries no such field (parameters live on the body that
  * holds them). A private, module-internal shape: every public return path narrows to
  * `TypeDefinition` through {@link holdIfOpen} before leaving this module.
  */
@@ -376,20 +377,20 @@ function resolveInstance(
   instance: Instance,
 ): TypeDefinition {
   const target = requireTypeRef(instance.value, `'${name}'`);
-  const constructorDef = resolveConstructorTarget(deps, name, target);
-  if (!isConstructor(constructorDef)) {
+  const head = resolveConstructorTarget(deps, name, target);
+  if (!isConstructor(head.definition)) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${target}' does not resolve to a constructor (§3.3.1) -- did you mean atom refinement ` +
         `('!${target} ^ { ... }')?`,
     );
   }
-  if (!isRecordBody(constructorDef.body)) {
+  if (!isRecordBody(head.definition.body)) {
     throw new TsonInternalError(
       `'${name}': constructor '${target}' has a non-record body; a constructor is record-shaped (§7.2) and ` +
         'cannot be declared otherwise',
     );
   }
-  const body = bindAtomInstance(deps, name, instance.value);
+  const body = bindAtomInstance(deps, name, readAsConstructor(instance.value, head.name));
   return {
     source: { name: target, arguments: [], annotations: [] },
     supertypes: [],
@@ -413,24 +414,24 @@ function resolveInstanceTemplate(
   template: Instance,
 ): TypeDefinition {
   const target = requireTypeRef(template.value, `'${name}'`);
-  const constructorDef = resolveConstructorTarget(deps, name, target);
+  const head = resolveConstructorTarget(deps, name, target);
   // `reference => top & { target: type_ref }` composes with `top` directly (§4.1), so it is
   // `isConstructor`-eligible on the same terms as every other constructor and needs no carve-out
   // here: §5.5 says the kernel's `reference` "is applicable like any other".
-  if (!isConstructor(constructorDef)) {
+  if (!isConstructor(head.definition)) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${target}' does not resolve to a constructor (§3.3.1), so there is nothing for ` +
         `'<...> !${target} { ... }' to build`,
     );
   }
-  if (!isRecordBody(constructorDef.body)) {
+  if (!isRecordBody(head.definition.body)) {
     throw new TsonInternalError(
       `'${name}': constructor '${target}' has a non-record body; a constructor is record-shaped (§7.2) and ` +
         'cannot be declared otherwise',
     );
   }
   if (template.value.coreValue.kind === 'record') {
-    checkTemplateBindings(name, target, constructorDef.body, template.value.coreValue);
+    checkTemplateBindings(name, target, head.definition.body, template.value.coreValue);
   }
   return {
     source: { name: target, arguments: [], annotations: [] },
@@ -497,12 +498,16 @@ function resolveAtomRefinement(
   refinement: AtomRefinement,
 ): TypeDefinition {
   const sourceName = refinement.target;
-  const source = deps.namespaceDefinitions(sourceName);
-  if (source === undefined) {
+  const declared = deps.namespaceDefinitions(sourceName);
+  if (declared === undefined) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${sourceName}' does not resolve against the type-name namespace (§3.3.1)`,
     );
   }
+  // §5.5 asks whether the source resolves to an atom-family INSTANCE, and §5.7's identity table
+  // makes `user_id => uuid` "the same type, under another name" -- so the question is asked of the
+  // chain terminal (§8.3), not of the alias's own `!reference` body.
+  const source = vocabularyOf(deps, sourceName) ?? declared;
   if (!isAtom(source.body)) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${sourceName}' is not an atom-family instance (§5.5) -- its body is not an atom ` +
@@ -598,27 +603,61 @@ function mergeWithSource(
   };
 }
 
+/** A constructor-application target (`!C value`), resolved through §8.3's chain: the name a compiled reader is keyed by, and the entry it names -- {@link resolveConstructorTarget}'s own result. */
+interface ConstructorHead {
+  readonly name: string;
+  readonly definition: TypeDefinition;
+}
+
 /**
  * A constructor-application target (`!C value`) resolves against the structure namespace only —
- * never the type-name namespace (§3.3.1). A constructor is always meta-schema vocabulary,
- * declared in the *governing* meta-schema, one hop via `!!meta`.
+ * never the type-name namespace (§3.3.1) — **after following its reference chain** (§8.3): `C`
+ * may itself be an alias (`alias_array => array`), and every question this resolver asks of the
+ * head from here on — is it a template, is it applicable, whose vocabulary reads the payload — is
+ * a question about the entry at the end of the chain, not about the hop. A constructor is always
+ * meta-schema vocabulary, declared in the *governing* meta-schema, one hop via `!!meta`.
+ *
+ * The author's own spelling survives where it is visible: {@link resolveInstance}/
+ * {@link resolveInstanceTemplate} record `target` (not {@link ConstructorHead.name}) in the
+ * result's own `source`, so the chain stays walkable from resolved output.
  */
 function resolveConstructorTarget(
   deps: DefinitionResolverDeps,
   name: string,
   target: string,
-): TypeDefinition {
-  const structural = deps.metaDefinitions(target);
-  if (structural !== undefined) return structural;
-  throw new TsonSchemaValidationError(
-    `'${name}': '!${target}' does not resolve against the structure namespace (§3.3.1)`,
-  );
+): ConstructorHead {
+  if (deps.metaDefinitions(target) === undefined) {
+    throw new TsonSchemaValidationError(
+      `'${name}': '!${target}' does not resolve against the structure namespace (§3.3.1)`,
+    );
+  }
+  const terminalName = terminal(target, deps.metaDefinitions);
+  const atEnd = deps.metaDefinitions(terminalName);
+  if (atEnd === undefined) {
+    // The walk stopped at a name the structure namespace does not declare -- a broken hop, which
+    // is the alias's own problem and not this declaration's, but this is where it becomes visible.
+    throw new TsonSchemaValidationError(
+      `'${name}': '!${target}' is an alias whose chain ends at '${terminalName}', which the ` +
+        'structure namespace does not declare (§8.3)',
+    );
+  }
+  return { name: terminalName, definition: atEnd };
+}
+
+/**
+ * `value` re-typed to the name its payload is read against — the terminal of the head's own
+ * chain (§8.3), where the author may have written an alias. A no-op for the ordinary case, where
+ * they are the same name; the meta-schema's reader table is keyed by the constructor's own name,
+ * so an alias reaches one only by asking under it.
+ */
+function readAsConstructor(value: DataValue, constructorName: string): DataValue {
+  return value.typeRef === constructorName ? value : { ...value, typeRef: constructorName };
 }
 
 /**
  * Shared by {@link resolveInstance}/{@link resolveAtomRefinement}/{@link openOperand} — reads a
  * type-ref-carrying value against its own constructor's compiled reader, then checks its own
- * internal coherence (§7.2: family coherence is a resolver question, not a data-validation one).
+ * internal coherence (§7.4: family coherence is a resolver question, not a data-validation one).
  */
 function bindAtomInstance(deps: DefinitionResolverDeps, name: string, value: DataValue): Top {
   const constructorName = requireTypeRef(value, `'${name}'`);
@@ -644,7 +683,7 @@ function bindAtomInstance(deps: DefinitionResolverDeps, name: string, value: Dat
   return body;
 }
 
-/** §7.2: family coherence between a constructor's own bindings is a resolver question, checked here rather than left to the atom parsers (which would surface it as a library-gap "not implemented", exactly the wrong classification for the author's own mistake). */
+/** §7.4's "Coherence of a body's facets": family coherence between a constructor's own bindings is a resolver question, checked here rather than left to the atom parsers (which would surface it as a library-gap "not implemented", exactly the wrong classification for the author's own mistake). */
 function checkCoherent(name: string, constructorName: string, body: Top): void {
   if (!isAtom(body)) return;
   const violations = checkAtomCoherence(body);
@@ -789,7 +828,11 @@ function resolveComposition(
         `'${name}': supertype '${supertypeName}' names no type this schema declares or imports`,
       );
     }
-    if (!isRecordBody(supertypeDef.body)) {
+    // §4.3: "every operand of a composition or subtraction MUST, after following its reference
+    // chain (§8.3), be a definition whose body is a `!record`". See `resolveRefinement` for why
+    // the composed vocabulary is the terminal's while the recorded name is the author's.
+    const supertypeVocabulary = vocabularyOf(deps, supertypeName) ?? supertypeDef;
+    if (!isRecordBody(supertypeVocabulary.body)) {
       throw new TsonSchemaValidationError(
         `'${name}': supertype '${supertypeName}' has no fields to contribute -- its body is a binding record, ` +
           "not a vocabulary, so there is nothing for '&' to compose with (§5.8, and §5.7's vocabulary-body " +
@@ -798,9 +841,9 @@ function resolveComposition(
     }
     directSupertypes.push(supertypeName);
     addIfAbsent(transitiveSupertypes, seenTransitive, supertypeName);
-    for (const ancestor of supertypeDef.supertypes)
+    for (const ancestor of supertypeVocabulary.supertypes)
       addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
-    absorb(name, supertypeDef.body, fields, groups, seenFieldNames, inheritedFieldIndex);
+    absorb(name, supertypeVocabulary.body, fields, groups, seenFieldNames, inheritedFieldIndex);
   }
 
   if (construction.body !== undefined) {
@@ -923,7 +966,7 @@ function addIfAbsent(list: string[], seen: Set<string>, name: string): void {
 /**
  * §4.1: literal, kernel-fixed base-kind names in the transitive chain — never "inherit the
  * nearest ancestor's own kind". Called for its validation alone at both call sites (a
- * `TypeDefinition` carries no `kind` field to store the answer in any more, §8.1) — a namespace
+ * `TypeDefinition` carries no `kind` field to store the answer in, §8.1) — a namespace
  * consumer that needs an entry's actual kind later derives it with `typeKind`
  * (`schema/meta/typedef.ts`), which reaches the identical answer by walking `supertypes` and
  * `body` together rather than `transitiveSupertypes` alone, and covers every entry shape, not
@@ -990,7 +1033,12 @@ function resolveRefinement(
       `'${name}': refinement source '${sourceName}' names no type this schema declares or imports`,
     );
   }
-  if (!isRecordBody(sourceDef.body)) {
+  // §4.3, §5.7: the operand's body is judged **after following its reference chain** (§8.3), so an
+  // alias to a record is an admissible source and an alias to a binding record is not -- "an alias
+  // resolving to either is *finished*". The vocabulary tightened is the terminal's; the name
+  // recorded in `supertypes` stays the one the author wrote, since §8.3 states the chain as written.
+  const sourceVocabulary = vocabularyOf(deps, sourceName) ?? sourceDef;
+  if (!isRecordBody(sourceVocabulary.body)) {
     throw new TsonSchemaValidationError(
       `'${name}': refinement source '${sourceName}' has no vocabulary to tighten -- its body is a binding ` +
         "record, so it is finished and '^' on it is a resolver error (§5.7). Refine the head it derives from, " +
@@ -1000,7 +1048,7 @@ function resolveRefinement(
   const transitiveSupertypes: string[] = [];
   const seenTransitive = new Set<string>();
   addIfAbsent(transitiveSupertypes, seenTransitive, sourceName);
-  for (const ancestor of sourceDef.supertypes)
+  for (const ancestor of sourceVocabulary.supertypes)
     addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
   return refineOnto(
     deps,
@@ -1009,8 +1057,25 @@ function resolveRefinement(
     parameters,
     sourceRef,
     transitiveSupertypes,
-    sourceDef.body,
+    sourceVocabulary.body,
   );
+}
+
+/**
+ * The entry `name`'s reference chain ends at (§8.3), or `undefined` where the walk reaches no
+ * entry at all -- an undeclared name, an argument-bearing target, or a cycle.
+ *
+ * §4.3 states the rule every caller here needs in one line: the source of a refinement and every
+ * operand of a composition or subtraction MUST, **after following its reference chain**, be a
+ * definition whose body is a `!record`. So an alias to a record is an admissible operand and an
+ * alias to a binding record is not -- "an alias resolving to either is *finished*". §5.5 asks the
+ * same question of an atom refinement's source.
+ *
+ * The walk decides only what the operand *is*. What the resolved entry records stays the name the
+ * author wrote, because §8.3 states a chain as written and collapses it nowhere.
+ */
+function vocabularyOf(deps: DefinitionResolverDeps, name: string): TypeDefinition | undefined {
+  return terminalDefinition(name, deps.namespaceDefinitions);
 }
 
 /** §5.7's tightening, over a field set already obtained — shared by a closed source (which heads the supertype chain and becomes `source`) and an open operand (neither, since it names no entry). */
@@ -1333,6 +1398,14 @@ function requireFieldNameNotSeen(
   }
 }
 
+/**
+ * §5.8's restated-field annotation merge, which a plain new field also passes through vacuously
+ * (`inherited` `undefined` -- own annotations only): the restatement's own annotations, in source
+ * order, followed by the inherited field's own (already-merged, so a chain accumulates leader
+ * first at every link), in source order. Nothing is dropped and no name is a key -- an inherited
+ * field restated twice down a chain carries both restatements' annotations plus the original's,
+ * each restatement ahead of what it restates.
+ */
 function resolveField(
   deps: DefinitionResolverDeps,
   field: FieldDef,
@@ -1340,7 +1413,8 @@ function resolveField(
   inherited: RecordField | undefined,
 ): RecordField {
   const base = resolveFieldEntry(deps, field, parameters, inherited);
-  const annotations = annotationsOf(deps, field.name, field.annotations);
+  const own = annotationsOf(deps, field.name, field.annotations);
+  const annotations = inherited === undefined ? own : [...own, ...inherited.annotations];
   return { ...base, annotations };
 }
 

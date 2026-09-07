@@ -76,7 +76,7 @@ export function createIntegerParser(
   }
 
   function validate(value: bigint, text: string): void {
-    const { size, min, exclusiveMin, max, exclusiveMax, multipleOf } = constraints;
+    const { size, min, exclusiveMin, max, exclusiveMax, multipleOf, members } = constraints;
     if (size !== undefined) {
       const bounds = integerBounds(size);
       if (value < bounds.min || value > bounds.max) {
@@ -127,6 +127,14 @@ export function createIntegerParser(
         typeRef,
         `'${text}' is not a multiple of ${of}`,
         `a multiple of ${of}`,
+      );
+    }
+    if (members !== undefined && members.length > 0 && !members.includes(value)) {
+      const membership = `one of (${members.map(String).join(', ')})`;
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' is not a member of the sparse set -- expected ${membership}`,
+        membership,
       );
     }
   }

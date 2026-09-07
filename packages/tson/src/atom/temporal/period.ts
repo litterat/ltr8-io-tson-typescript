@@ -3,25 +3,81 @@
  * port of `atom/PeriodParser.java`.
  *
  * Grammar recognition lives in `isoPeriod.ts` (`tryParseIsoPeriod`/`formatIsoPeriod`); this
- * module is only the `AtomType` wiring.
+ * module is the `AtomType` wiring plus the bound/step check against the parsed value.
  *
- * **No `constraints` parameter, unlike every other `create*Parser` factory in `atom/temporal/`.**
- * `period_type` (`schema/meta/atoms-temporal.ts`'s `PeriodType`) carries `min`/`max`/
- * `multiple_of` as the kernel's `value` escape hatch resolved to a month count (`bigint`,
- * §7.4) -- but wiring a bound check against them is a resolver concern this module does not yet
- * reach into, mirroring `duration.ts`'s own precedent and `complex.ts`'s for a family with
- * nothing yet to bound: no parameter to thread through unread, only a value to parse. The
- * built-in, always-unconstrained `period => !period_type {}` instance
- * (`reader/schemaless/vocabulary.ts`) needs nothing else.
+ * **`min`/`exclusive_min`/`max`/`exclusive_max`/`multiple_of` are enforced against the *value* —
+ * the signed month count, never the written form** ([TSON-SCHEMA] §5.5, §5.7): `period_type`'s
+ * bounds and step are read under `period`'s own atom at schema load
+ * (`schema/metaReader.ts`/`schema/bindings.ts`'s own `periodBoundBinding`), so `PeriodType`'s
+ * fields (`schema/meta/atoms-temporal.ts`) already hold the resolved `bigint` this module
+ * compares against directly. `multiple_of` tests the magnitude with the sign ignored (§5.7). No
+ * `precision` facet: a month count has no fractional part to bound.
  */
 
-import { TsonAtomParseError } from '../../core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
+import type { PeriodType } from '../../schema/meta/atoms-temporal.js';
 import type { TsonPeriod } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { formatIsoPeriod, tryParseIsoPeriod } from './isoPeriod.js';
 
-/** Builds the `AtomType` for the unconstrained `period_type` instance -- `period` (§5.4). */
-export function createPeriodParser(typeRef: string): AtomType<TsonPeriod> {
+/**
+ * Builds the `AtomType` for one fully-parameterised `period_type` instance -- `period` (§5.4).
+ * `constraints` defaults to the unconstrained body so an unconstrained caller need not spell
+ * `{ kind: 'period_type' }` out, the one asymmetry from {@link createDurationParser}'s own
+ * required parameter.
+ */
+export function createPeriodParser(
+  typeRef: string,
+  constraints: PeriodType = { kind: 'period_type' },
+): AtomType<TsonPeriod> {
+  function validate(months: bigint, text: string): void {
+    const { min, exclusiveMin, max, exclusiveMax, multipleOf } = constraints;
+    if (min !== undefined && months < min) {
+      const bound = formatIsoPeriod(min);
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' is less than the minimum ${bound}`,
+        `>= ${bound}`,
+      );
+    }
+    if (exclusiveMin !== undefined && months <= exclusiveMin) {
+      const bound = formatIsoPeriod(exclusiveMin);
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' must be strictly greater than ${bound}`,
+        `> ${bound}`,
+      );
+    }
+    if (max !== undefined && months > max) {
+      const bound = formatIsoPeriod(max);
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' is greater than the maximum ${bound}`,
+        `<= ${bound}`,
+      );
+    }
+    if (exclusiveMax !== undefined && months >= exclusiveMax) {
+      const bound = formatIsoPeriod(exclusiveMax);
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' must be strictly less than ${bound}`,
+        `< ${bound}`,
+      );
+    }
+    if (multipleOf !== undefined) {
+      const magnitude = months < 0n ? -months : months;
+      const step = multipleOf < 0n ? -multipleOf : multipleOf;
+      if (magnitude % step !== 0n) {
+        const of = formatIsoPeriod(multipleOf);
+        throw new TsonAtomValidationError(
+          typeRef,
+          `'${text}' is not a multiple of ${of}`,
+          `a multiple of ${of}`,
+        );
+      }
+    }
+  }
+
   function read(token: AtomToken): TsonPeriod {
     const text = token.text;
     const months = tryParseIsoPeriod(text);
@@ -33,6 +89,7 @@ export function createPeriodParser(typeRef: string): AtomType<TsonPeriod> {
         'a period',
       );
     }
+    validate(months, text);
     return { months };
   }
 

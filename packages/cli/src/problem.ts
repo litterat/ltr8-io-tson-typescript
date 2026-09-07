@@ -27,9 +27,11 @@
  */
 import {
   TsonLexError,
+  TsonLimitRefusedError,
   TsonNotImplementedError,
   TsonParseError,
   TsonReadError,
+  TsonRefusedError,
   TsonSchemaValidationError,
   TsonUnsupportedDocumentError,
   type Diagnostic,
@@ -67,6 +69,25 @@ export function classifyReadError(error: unknown): Problem {
   }
   if (error instanceof TsonReadError) {
     return { kind: 'invalid', diagnostic: error.diagnostic };
+  }
+  // §8.1's fifth outcome. A refusal is not one of the four categories, but it *is* a verdict --
+  // this processor looked at the document and declined it, and the sender holds the fix -- and
+  // §8.1 requires it to travel in the same report as the four rather than apart from them. So it
+  // is a verdict here for the same reason a name-hygiene refusal already is, and `exit.ts`'s own
+  // note says why that does not collapse the distinction the spec draws: which layer detected a
+  // problem is not what a caller does next, and what a caller does next is edit the document.
+  if (error instanceof TsonLimitRefusedError) {
+    return {
+      kind: 'invalid',
+      diagnostic: {
+        code: 'LIMIT_REFUSED',
+        message: error.message,
+        ...(error.position === undefined ? {} : { dataPosition: error.position }),
+      },
+    };
+  }
+  if (error instanceof TsonRefusedError) {
+    return { kind: 'invalid', diagnostic: { code: 'LIMIT_REFUSED', message: error.message } };
   }
   // TsonInternalError and anything else (an unreadable file, a bug here) land the same way:
   // this run did not reach a verdict, which is exactly EXIT.FAULT's meaning.

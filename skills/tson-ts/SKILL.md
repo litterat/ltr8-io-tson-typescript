@@ -289,15 +289,15 @@ as a bug report, not as invalid input. Full code list and error-class hierarchy:
 
 ## Resource limits and name policy
 
-`maxNestingDepth` (default **512**, §9.1) bounds nesting, per call or once per instance. The
+`maxNestingDepth` (default **64**, §9.1's own default) bounds nesting, per call or once per instance. The
 recursion is real — one host call frame per level — so lowering it is free and raising it is bounded
 by the host stack. A document past the limit is refused with a typed error and a position, never a
 host `RangeError`.
 
 ```ts
-parse(bytes, { maxNestingDepth: 64 });
-readTree(bytes, { schema, root: 'order', maxNestingDepth: 64 });
-createTson({ maxNestingDepth: 64 }); // every schema it resolves and document it reads
+parse(bytes, { maxNestingDepth: 128 });
+readTree(bytes, { schema, root: 'order', maxNestingDepth: 128 });
+createTson({ maxNestingDepth: 128 }); // every schema it resolves and document it reads
 ```
 
 §8.2's three name-hygiene mechanisms are on by default (skeleton distinctness, `Identifier_Status`,

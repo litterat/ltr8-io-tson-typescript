@@ -567,6 +567,46 @@ describe('validateReferences: field values (§5.2)', () => {
     }).toThrow(/not a value of that type/u);
   });
 
+  it("checks a fixed value against the terminal of the field's own type when that type is itself an alias (§5.2, §8.3)", () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['int', int],
+      ['count', def({ kind: 'reference', target: ref('int') })],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('not-a-number'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+      // The message still names the field's own declared type, `count` -- the author's own
+      // spelling, not `int`, the terminal the value is actually checked against.
+    }).toThrow(/is declared 'count'.*not a value of that type/su);
+  });
+
+  it("accepts a fixed value that is a value of the terminal an alias-typed field's own chain leads to (§5.2, §8.3)", () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['int', int],
+      ['count', def({ kind: 'reference', target: ref('int') })],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('3'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
   it('skips a field whose own type names one of the enclosing template’s parameters', () => {
     const merged = new Map<string, TypeDefinition>([
       [

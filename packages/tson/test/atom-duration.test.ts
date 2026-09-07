@@ -125,6 +125,47 @@ describe('§5.4 !duration -- magnitude errors (TsonAtomValidationError, category
   });
 });
 
+describe('§5.5/§5.7 !duration -- min/max/multiple_of/precision, enforced against the value', () => {
+  it('below the declared minimum is refused', () => {
+    const bounded: DurationType = { kind: 'duration_type', min: 1_800_000_000_000n }; // PT30M
+    expect(() => createDurationParser('duration', bounded).read(token('PT10M'))).toThrow(
+      TsonAtomValidationError,
+    );
+    expect(createDurationParser('duration', bounded).read(token('PT45M'))).toEqual(
+      duration(2_700_000_000_000n),
+    );
+  });
+
+  it('above the declared maximum is refused', () => {
+    const bounded: DurationType = { kind: 'duration_type', max: 7_200_000_000_000n }; // PT2H
+    expect(() => createDurationParser('duration', bounded).read(token('PT3H'))).toThrow(
+      TsonAtomValidationError,
+    );
+  });
+
+  it('off the declared step is refused, on it is admitted', () => {
+    const stepped: DurationType = { kind: 'duration_type', multipleOf: 900_000_000_000n }; // PT15M
+    expect(() => createDurationParser('duration', stepped).read(token('PT40M'))).toThrow(
+      TsonAtomValidationError,
+    );
+    expect(createDurationParser('duration', stepped).read(token('PT45M'))).toEqual(
+      duration(2_700_000_000_000n),
+    );
+  });
+
+  it('precision admits a value that is a whole number of 10^-N seconds, not a written digit count', () => {
+    const tenths: DurationType = { kind: 'duration_type', precision: 1n };
+    // 0.51s is not a whole number of tenths.
+    expect(() => createDurationParser('duration', tenths).read(token('PT0.51S'))).toThrow(
+      TsonAtomValidationError,
+    );
+    // 0.500s is a whole number of tenths, however many digits it is spelled with.
+    expect(createDurationParser('duration', tenths).read(token('PT0.500S'))).toEqual(
+      duration(500_000_000n),
+    );
+  });
+});
+
 describe('§5.4 !duration -- write', () => {
   it('writes the canonical PTnHnMnS form', () => {
     const parser = createDurationParser('duration', UNCONSTRAINED);

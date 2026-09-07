@@ -14,16 +14,19 @@
  * builds the host value directly from the four decoded octets, never handing the original text
  * to any host parser (this port has none to hand it to regardless -- JS has no `InetAddress`).
  *
- * `within`/`excluding` (meta.tn's `ipv4_type`) are not modeled -- no built-in instance sets
- * either, and set-membership/non-overlap against an array of other addresses or CIDR blocks is a
- * materially bigger piece of work than a scalar constraint, left for later (matching
- * `Ipv4Parser.java`'s own deferral).
+ * **`within`/`excluding` (meta.tn's `ipv4_type`) are enforced against the value as a
+ * single-address block** ([TSON-SCHEMA] §5.5): inside at least one `within` network when the
+ * field is present, and inside none of `excluding`. `cidrParsing.ts` owns the shared bit
+ * arithmetic and the schema-load question of whether the declared pair admits any value at all;
+ * this module only parses the two lists once, at construction, and asks the per-value question of
+ * each decoded address.
  */
 
 import { TsonAtomParseError } from '../../core/errors.js';
 import type { Ipv4Type } from '../../schema/meta/atoms-network.js';
 import type { Ipv4Address } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
+import { addressBlock, checkNetworkAdmitted, isSubnetOf, parseNetworkList } from './cidrParsing.js';
 
 const ASCII_ZERO = 0x30;
 const ASCII_NINE = 0x39;
@@ -81,9 +84,8 @@ export function formatIpv4(octets: Uint8Array): string {
  * type for error reporting, e.g. `'ipv4'` for §5.5's unconstrained `ipv4 => !ipv4_type {}`.
  */
 export function createIpv4Parser(typeRef: string, constraints: Ipv4Type): AtomType<Ipv4Address> {
-  // `within`/`excluding` are accepted but not enforced -- see this module's own TSDoc. Destructured
-  // only to keep that deferral visible at the type level rather than silently dropping the parameter.
-  const { within: _within, excluding: _excluding } = constraints;
+  const within = parseNetworkList(constraints.within, parseIpv4Octets);
+  const excluding = parseNetworkList(constraints.excluding, parseIpv4Octets);
 
   function read(token: AtomToken): Ipv4Address {
     const text = token.text;
@@ -96,6 +98,7 @@ export function createIpv4Parser(typeRef: string, constraints: Ipv4Type): AtomTy
         'an IPv4 address',
       );
     }
+    checkNetworkAdmitted(typeRef, text, addressBlock(octets), within, excluding, 32, isSubnetOf);
     return { kind: 'ipv4', octets };
   }
 

@@ -246,7 +246,7 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
     case 'duration_type':
       return wrap(createDurationParser(name, atom), name);
     case 'period_type':
-      return wrap(createPeriodParser(name), name);
+      return wrap(createPeriodParser(name, atom), name);
     case 'cidr4_type':
       return wrap(createCidr4Parser(name, atom), name);
     case 'cidr6_type':

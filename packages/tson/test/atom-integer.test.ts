@@ -132,6 +132,14 @@ describe('§5.6 integer atoms -- refinement constraints', () => {
     expect(parser.read(token('15'))).toBe(15n);
     expect(() => parser.read(token('7'))).toThrow(TsonAtomValidationError);
   });
+
+  it('a sparse member set (§5.6, §7.4) admits only its own members, not a value between or outside them', () => {
+    const port: IntegerType = { kind: 'integer_type', members: [80n, 443n, 8080n] };
+    const parser = createIntegerParser('port', port);
+    expect(parser.read(token('443'))).toBe(443n);
+    expect(() => parser.read(token('22'))).toThrow(TsonAtomValidationError);
+    expect(() => parser.read(token('81'))).toThrow(TsonAtomValidationError);
+  });
 });
 
 describe("§5.6 integer atoms -- write is read's inverse", () => {

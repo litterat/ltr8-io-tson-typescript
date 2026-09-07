@@ -78,9 +78,14 @@ describe('§5.5 !datetime -- precision', () => {
     expect(parser.read(token('2025-03-13T10:15:30.100Z')).time.nanosecond).toBe(100000000);
   });
 
-  it('rejects a token with more written digits than the bound, even with trailing zeros', () => {
+  it('admits a value spelled with more digits than the bound, when trailing zeros make it exact on the grid (§5.5)', () => {
     const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 3n });
-    expect(() => parser.read(token('2025-03-13T10:15:30.1000Z'))).toThrow(TsonAtomValidationError);
+    expect(parser.read(token('2025-03-13T10:15:30.1000Z')).time.nanosecond).toBe(100000000);
+  });
+
+  it('rejects a value that is not a whole number of 10^-N seconds, however few digits it is spelled with', () => {
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 1n });
+    expect(() => parser.read(token('2025-03-13T10:15:30.51Z'))).toThrow(TsonAtomValidationError);
   });
 
   it('precision: 0 admits no fractional part at all', () => {

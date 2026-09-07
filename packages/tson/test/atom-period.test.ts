@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { TsonAtomParseError } from '../src/core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createPeriodParser } from '../src/atom/temporal/period.js';
 import type { AtomToken } from '../src/atom/contract.js';
+import type { PeriodType } from '../src/schema/meta/atoms-temporal.js';
 
 // §5.4's `!period` atom: `P` with a `Y` component, an `M` component, or both, and nothing else.
 // The value space is a signed integer count of months.
@@ -74,6 +75,31 @@ describe('§5.4 !period -- shape errors (TsonAtomParseError, category resolver)'
 
   it('rejects lowercase designators', () => {
     expect(() => createPeriodParser('period').read(token('p1y'))).toThrow(TsonAtomParseError);
+  });
+});
+
+describe('§5.5/§5.7 !period -- min/max/multiple_of, enforced against the value', () => {
+  it('below the declared minimum is refused', () => {
+    const bounded: PeriodType = { kind: 'period_type', min: 6n };
+    expect(() => createPeriodParser('period', bounded).read(token('P3M'))).toThrow(
+      TsonAtomValidationError,
+    );
+    expect(createPeriodParser('period', bounded).read(token('P1Y'))).toEqual(period(12n));
+  });
+
+  it('above the declared maximum is refused', () => {
+    const bounded: PeriodType = { kind: 'period_type', max: 24n };
+    expect(() => createPeriodParser('period', bounded).read(token('P3Y'))).toThrow(
+      TsonAtomValidationError,
+    );
+  });
+
+  it('off the declared step is refused, on it is admitted', () => {
+    const stepped: PeriodType = { kind: 'period_type', multipleOf: 3n };
+    expect(() => createPeriodParser('period', stepped).read(token('P1Y1M'))).toThrow(
+      TsonAtomValidationError,
+    );
+    expect(createPeriodParser('period', stepped).read(token('P1Y'))).toEqual(period(12n));
   });
 });
 

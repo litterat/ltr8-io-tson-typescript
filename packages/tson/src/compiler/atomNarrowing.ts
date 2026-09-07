@@ -6,9 +6,17 @@
  * reference implementation's `AtomNarrowing` (`tson-schema/.../meta/AtomNarrowing.java`) — a
  * generic Java utility class here becomes a set of plain, independently-typed functions.
  *
- * There is deliberately no helper for a *selector* facet (`complex_type.component`,
- * `float_type.format`, `uuid_type.version`): a selector picks among unordered alternatives, so no
- * comparison decides whether swapping one narrows.
+ * **A selector facet's own narrowing relation is not one shape (§5.7).** Each of the four —
+ * `integer_type.size`, `complex_type.component`, `float_type.format`, `bytes_type.encoding` —
+ * states its own relation. `size` folds into the family's own ordered-bound comparison (a width
+ * chain is exactly "does the derived range narrow", so {@link checkLower}/{@link checkUpper}
+ * already state it, applied to {@link tighterLower}/{@link tighterUpper}'s own inputs, in
+ * `atomChecks.ts`'s own `integerNarrows`); `format` ranks a single linear order, which
+ * {@link checkSelectorOrder} below states once for every such facet; `component` ranks *two*
+ * incomparable chains, a shape specific enough to that one family that `atomChecks.ts`'s own
+ * `complexNarrows` builds it by hand rather than forcing it through a shared helper; `encoding`
+ * alone carries no relation at all — every alphabet is a fresh instance, so the only legal move
+ * is no move, checked by equality rather than by comparison, again in `atomChecks.ts`.
  *
  * Every `check*` function appends a human-readable violation fragment to `out` and appends
  * nothing when the refinement is a valid tightening, so a family's rule reads as a straight list
@@ -241,7 +249,82 @@ export function checkSubset(
   }
 }
 
+/**
+ * {@link checkSubset}'s twin for a member set compared by the family's own value identity
+ * (§5.5, §7.4) rather than string/reference equality — `integer_type.members`,
+ * `decimal_type.members`, where `1` and `1.0` are one member. `source` absent or empty is
+ * unconstrained, exactly as {@link checkSubset} treats an empty one; `refined` absent while
+ * `source` is not is itself a widening (the constraint disappeared) and is reported the same way
+ * a genuinely added member would be.
+ */
+export function checkMemberSubset<T>(
+  out: string[],
+  facet: string,
+  source: readonly T[] | undefined,
+  refined: readonly T[] | undefined,
+  equals: (a: T, b: T) => boolean,
+): void {
+  if (source === undefined || source.length === 0) {
+    return;
+  }
+  if (refined === undefined) {
+    out.push(
+      `${facet} is absent, which does not shrink the source's own [${source.map(renderBoundValue).join(', ')}]`,
+    );
+    return;
+  }
+  const added = refined.filter((r) => !source.some((s) => equals(s, r)));
+  if (added.length > 0) {
+    out.push(
+      `${facet} adds [${added.map(renderBoundValue).join(', ')}], which the source does not admit`,
+    );
+  }
+}
+
+/** Whether `value` satisfies a lower {@link Bound} — the per-member coherence check ("does every member of `members` satisfy the body's other facets", §7.4) reduces to this rather than a source/refined comparison. `undefined` is unbounded and admits everything. */
+export function admitsLower<T>(
+  bound: Bound<T> | undefined,
+  value: T,
+  compare: (a: T, b: T) => number,
+): boolean {
+  if (bound === undefined) return true;
+  const order = compare(value, bound.value);
+  return bound.inclusive ? order >= 0 : order > 0;
+}
+
+/** The {@link admitsLower} twin, for an upper bound. */
+export function admitsUpper<T>(
+  bound: Bound<T> | undefined,
+  value: T,
+  compare: (a: T, b: T) => number,
+): boolean {
+  if (bound === undefined) return true;
+  const order = compare(value, bound.value);
+  return bound.inclusive ? order <= 0 : order < 0;
+}
+
 /** Ordinary numeric/lexicographic comparison, for the many facets whose host type is already comparable with `<`/`>`. */
 export function naturalCompare<T extends number | bigint | string>(a: T, b: T): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * A selector facet whose closed vocabulary carries a single linear narrowing order —
+ * `float_type.format` (§5.5, §5.7, §9): `rank` places each member on that order, and a
+ * refinement may move to an equal or lower rank only. `atomChecks.ts` supplies the family's own
+ * `rank` table; this is the one comparison every such order shares, the same role
+ * {@link checkAtLeast}/{@link checkAtMost} play for an ordinary bound.
+ */
+export function checkSelectorOrder<T>(
+  out: string[],
+  facet: string,
+  source: T,
+  refined: T,
+  rank: (value: T) => number,
+): void {
+  if (rank(refined) > rank(source)) {
+    out.push(
+      `${facet} ${renderBoundValue(refined)} does not narrow the source's own ${renderBoundValue(source)} (§5.7)`,
+    );
+  }
 }

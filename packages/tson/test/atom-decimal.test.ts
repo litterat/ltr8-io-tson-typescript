@@ -71,6 +71,20 @@ describe('§5.6 !number -- decimal_type constraints', () => {
     // them, so it must not be rejected by a fraction_digits: 2 bound.
     expect(parser.read(token('100'))).toEqual({ unscaled: 100n, exponent: 0 });
   });
+
+  it('a sparse member set (§5.6, §7.4) admits only its own members by value -- 1 and 1.0 are one member', () => {
+    const price: DecimalType = {
+      kind: 'decimal_type',
+      members: [
+        { unscaledValue: 1n, scale: 0 },
+        { unscaledValue: 250n, scale: 2 },
+      ], // 1, 2.50
+    };
+    const parser = createDecimalParser('price', price);
+    expect(parser.read(token('1.00'))).toEqual({ unscaled: 100n, exponent: -2 });
+    expect(parser.read(token('2.5'))).toEqual({ unscaled: 25n, exponent: -1 });
+    expect(() => parser.read(token('3'))).toThrow(TsonAtomValidationError);
+  });
 });
 
 describe('§5.6 !number -- write round-trips through read', () => {

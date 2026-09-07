@@ -26,7 +26,8 @@
  * its 16 bytes directly, with no separate 4-vs-16-byte host type for a value to be silently
  * reinterpreted as.
  *
- * `within`/`excluding` are not modeled, for the reason `ipv4.ts`'s own TSDoc gives.
+ * `within`/`excluding` are enforced the way `ipv4.ts`'s own TSDoc describes, against this
+ * family's 128-bit address width.
  */
 
 import { TsonAtomParseError } from '../../core/errors.js';
@@ -34,6 +35,7 @@ import type { Ipv6Type } from '../../schema/meta/atoms-network.js';
 import type { Ipv6Address } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { parseIpv4Octets } from './ipv4.js';
+import { addressBlock, checkNetworkAdmitted, isSubnetOf, parseNetworkList } from './cidrParsing.js';
 
 const ASCII_ZERO = 0x30;
 const ASCII_NINE = 0x39;
@@ -169,8 +171,8 @@ export function formatIpv6(bytes: Uint8Array): string {
  * type for error reporting, e.g. `'ipv6'` for §5.5's unconstrained `ipv6 => !ipv6_type {}`.
  */
 export function createIpv6Parser(typeRef: string, constraints: Ipv6Type): AtomType<Ipv6Address> {
-  // `within`/`excluding` are accepted but not enforced -- see `ipv4.ts`'s own TSDoc for why.
-  const { within: _within, excluding: _excluding } = constraints;
+  const within = parseNetworkList(constraints.within, parseIpv6Bytes);
+  const excluding = parseNetworkList(constraints.excluding, parseIpv6Bytes);
 
   function read(token: AtomToken): Ipv6Address {
     const text = token.text;
@@ -182,6 +184,7 @@ export function createIpv6Parser(typeRef: string, constraints: Ipv6Type): AtomTy
         'an IPv6 address',
       );
     }
+    checkNetworkAdmitted(typeRef, text, addressBlock(octets), within, excluding, 128, isSubnetOf);
     return { kind: 'ipv6', octets };
   }
 

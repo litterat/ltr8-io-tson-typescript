@@ -9,6 +9,7 @@ import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 import type { UriType } from '../src/schema/meta/atoms-text.js';
 import type { Unit } from '../src/schema/meta/algebra.js';
 import type { CoreValue } from '../src/ast/value.js';
+import type { ArrayBody } from '../src/schema/meta/bodies.js';
 import type { Reference, TypeDefinition } from '../src/schema/meta/typedef.js';
 import { isConstructor, typeKind } from '../src/schema/meta/typedef.js';
 import type { Instance } from '../src/ast/schema/fields.js';
@@ -128,8 +129,8 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     }
   });
 
-  it("flattens a REFERENCE-kind alias (type_name => identifier) at every use site inside the array-of-type_name synthetic, keeping the author's own name as @alias (§8.3)", () => {
-    // type_name itself: an unflattened, single-hop alias entry.
+  it('leaves a REFERENCE-kind alias (type_name => identifier) exactly as written, at its own declaration and at every use site inside the array-of-type_name synthetic (§8.3)', () => {
+    // type_name itself: a single-hop alias entry.
     const typeName = entryOf(schema, 'type_name');
     expect(kindOf(schema, 'type_name')).toBe('REFERENCE');
     expect((typeName.body as Reference).target).toEqual({
@@ -138,21 +139,20 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
       annotations: [],
     });
 
-    // The synthetic array instance meta-kernel's own `[type_name]?` (e.g. record.supertypes)
-    // lifts to: its element_type must be flattened past type_name, onto identifier, carrying
-    // @alias.
+    // A reference is a hop, not a rewrite: the synthetic array instance meta-kernel's own
+    // `[type_name]?` (e.g. record.supertypes) lifts to still names `type_name`, the entry the
+    // author wrote -- nothing rewrites it onto `identifier`, and no `@alias` annotation appears
+    // anywhere to say it did.
     const synthetic = [...schema.entries.values()].find(
       (entry) =>
         entry.source?.name === 'array' &&
         'elementType' in entry.body &&
-        entry.body.elementType.name === 'identifier' &&
-        entry.body.elementType.annotations.some(
-          (a) => a.name === 'alias' && a.value === 'type_name',
-        ),
+        entry.body.elementType.name === 'type_name',
     );
     if (synthetic === undefined) {
-      throw new Error('expected a synthetic array-of-type_name entry, flattened onto identifier');
+      throw new Error('expected a synthetic array-of-type_name entry, naming type_name as written');
     }
+    expect((synthetic.body as ArrayBody).elementType.annotations).toEqual([]);
   });
 });
 

@@ -56,7 +56,8 @@ import {
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from './core/errors.js';
-import type { NestingLimitOptions } from './core/limits.js';
+import { limitsPolicyOf } from './core/limits.js';
+import type { LimitsPolicy, NestingLimitOptions } from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
 import type { NamePolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
@@ -419,6 +420,17 @@ export interface Tson {
    */
   readonly processorPolicy: ProcessorPolicy;
 
+  /**
+   * [TSON-DATA] §9.1's resource-limits policy this instance enforces ([TSON-SCHEMA] §11.5 for the
+   * work resolving a schema adds on top of a document's own bytes) -- reported beside {@link
+   * processorPolicy} on the same terms §9.1 states for it: with any report that carries a
+   * refusal, and reachable independently of one, so a sender can learn what fits before writing.
+   *
+   * Currently the nesting-depth bound alone (`core/limits.ts`'s own `LimitsPolicy`); `STATUS.md`'s
+   * known gaps names the other sixteen §9.1/§11.5 limits this instance does not enforce.
+   */
+  readonly limitsPolicy: LimitsPolicy;
+
   parse(source: Uint8Array, options?: NestingLimitOptions): ParsedDocument;
   parse(source: AsyncByteSource, options?: NestingLimitOptions): Promise<ParsedDocument>;
   readTree(source: Uint8Array, options?: ReadTreeOptions): Value;
@@ -499,6 +511,7 @@ export function createTson(config: Config = {}): Tson {
     fetch: fetchReference,
     preload,
     processorPolicy: processorPolicy(config.identifierPolicy, config.tokenPolicy),
+    limitsPolicy: limitsPolicyOf(limit),
     // Bound to this instance's limit (and, for a schemaless tree read, its two Unicode policies) rather
     // than passed through bare, so `tson.parse(bytes)`/`tson.readTree(bytes)`/`tson.validate(bytes)`
     // obey the policy the instance was configured with. A caller's own per-call options still

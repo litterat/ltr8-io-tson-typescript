@@ -24,8 +24,9 @@ import { resolveBaseType } from '../base/baseTypeResolver.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isDataBody } from './bodyKind.js';
+import { terminalDefinition } from '../compiler/referenceChain.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
-import type { Annotations, Reference, TypeDefinition } from '../schema/meta/typedef.js';
+import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
 import { choiceDisjoint } from '../schema/meta/typedef.js';
 
 /**
@@ -100,38 +101,17 @@ function classify(def: TypeDefinition): DiscriminationClass | undefined {
 
 /**
  * The class of `name`'s untagged wire values, or `undefined` when it has none. A reference chain
- * is followed to its terminal entry first (§8.3 makes an alias and its target one type); a cycle,
- * having no terminal, has no class. An `undefined` result makes the enclosing choice
- * non-disjoint and blocks untagged recovery — the conservative side, the tag stays required.
+ * is followed to its terminal entry first (§8.3 makes an alias and its target one type,
+ * `referenceChain.ts`'s shared walk); a cycle, having no terminal, has no class. An `undefined`
+ * result makes the enclosing choice non-disjoint and blocks untagged recovery — the conservative
+ * side, the tag stays required.
  */
 export function discriminationClassOf(
   name: string,
   namespace: ReadonlyMap<string, TypeDefinition>,
 ): DiscriminationClass | undefined {
-  const walked = new Set<string>();
-  let current = name;
-  for (;;) {
-    if (walked.has(current)) {
-      return undefined; // a reference cycle has no terminal entry, so no class
-    }
-    walked.add(current);
-    const def = namespace.get(current);
-    if (def === undefined) {
-      return undefined;
-    }
-    const body = def.body;
-    // An argument-bearing target is an application rather than a hop, and has no entry to
-    // classify until materialisation mints one -- which it has, for every entry a compiled
-    // choice can reach.
-    if ('kind' in body && !isDataBody(body) && body.kind === 'reference') {
-      const reference: Reference = body;
-      if (reference.target.arguments.length === 0) {
-        current = reference.target.name;
-        continue;
-      }
-    }
-    return classify(def);
-  }
+  const def = terminalDefinition(name, (n) => namespace.get(n));
+  return def === undefined ? undefined : classify(def);
 }
 
 /** `true` exactly when every variant has a class and no class repeats (§5.4). */

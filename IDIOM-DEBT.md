@@ -24,7 +24,7 @@ finds it should read this file rather than "fix" it.
 
 Worth stating first, because it bounds the rest. The port is not a transliteration:
 
-- **19 classes in the whole library, and every one is an `Error` subclass**
+- **21 classes in the whole library, and every one is an `Error` subclass**
   (`core/errors.ts`, `regex/errors.ts`). No service objects, no abstract factories, no
   interface-with-one-implementation. Everything else is functions over plain data.
 - **Discriminated unions, not visitors.** `ast/value.ts`, `stream/event.ts`, `tree/nodes.ts` and

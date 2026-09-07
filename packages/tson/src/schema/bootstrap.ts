@@ -59,7 +59,6 @@ import { createDefinitionResolver } from '../compiler/definitionResolver.js';
 import { createDefinitionMetaReader } from './metaReader.js';
 import type { DefinitionGetter } from '../compiler/resolverTypes.js';
 import { desugar } from '../compiler/desugar.js';
-import { flattenSchema } from '../compiler/referenceFlattener.js';
 import { parseSchemaDocument } from '../compiler/schemaParser.js';
 import type { Schema } from '../compiler/schemaResolver.js';
 import type { ArrayBody, EnumBody, MapBody } from './meta/bodies.js';
@@ -74,13 +73,6 @@ export function bootstrapMetaKernel(source: Uint8Array): Schema {
   // own doc.
   const document = desugar(parsed, new Set());
   const entries = resolveEntries(document);
-  // §8.3 applies here as it does to any other schema: this is a shorter route to the same
-  // resolved form, not a different one, and this output governs anything whose !!meta is
-  // meta-kernel -- so a use site flattened by ordinary resolution and left unflattened here would
-  // be two answers to one question. No minted entries to stop at: this bootstrap runs no
-  // materialisation, and meta-kernel imports nothing, so `entries` is the whole namespace a chain
-  // can walk.
-  const flattened = flattenSchema(entries, entries, new Set());
   const id = document.id;
   if (id === undefined) {
     throw new TsonInternalError(
@@ -91,7 +83,7 @@ export function bootstrapMetaKernel(source: Uint8Array): Schema {
     id,
     meta: document.meta,
     imports: document.imports,
-    entries: flattened,
+    entries,
     // The bootstrap route attaches no @synthetic marker, deliberately: this output stands in only
     // as the transient governing meta for meta-kernel's own resolution, and nothing here reads the
     // marker. A caller wanting meta-kernel's entries properly marked runs `schemaResolver.ts`'s

@@ -199,7 +199,7 @@ export function atomParserFor(
     case 'duration_type':
       return createDurationParser(declaredName, body);
     case 'period_type':
-      return createPeriodParser(declaredName);
+      return createPeriodParser(declaredName, body);
     case 'cidr4_type':
       return createCidr4Parser(declaredName, body);
     case 'cidr6_type':
