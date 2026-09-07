@@ -14,11 +14,8 @@ function field(name: string, type: TypeRef, state: RecordField['state'] = 'REQUI
   return { name, type, state, annotations: [] };
 }
 
-function def(body: Top, parameters: readonly string[] = []): TypeDefinition {
+function def(body: Top): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters,
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,
@@ -381,19 +378,17 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
 
   it('treats a held (open template) body as inhabited unconditionally', () => {
     const held: Top = {
-      names: () => new Set<string>(),
-      applications: () => [],
+      parameters: ['T'],
+      template: '!record { fields: [] }',
     };
-    const merged = new Map<string, TypeDefinition>([['tree', def(held, ['T'])]]);
+    const merged = new Map<string, TypeDefinition>([['tree', def(held)]]);
     expect(() => {
       check(merged);
     }).not.toThrow();
   });
 
   it('treats a Data body as inhabited unconditionally', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ['op', { ...def({ kind: 'operation' }), kind: 'DATA' }],
-    ]);
+    const merged = new Map<string, TypeDefinition>([['op', def({ kind: 'operation' })]]);
     expect(() => {
       check(merged);
     }).not.toThrow();

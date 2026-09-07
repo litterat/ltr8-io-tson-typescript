@@ -15,12 +15,11 @@
  *
  * **`min`/`max` are not enforced here yet.** The value space is totally ordered — an exact
  * nanosecond count — so the bounds are enforceable, which is exactly what the split from `period`
- * bought ([TSON-SCHEMA] §5.5, §5.7). What is missing is a bound to compare against:
- * `duration_type`'s bounds are `value`-typed, meaning the resolver reads each under the atom the
- * slot stands for and stores the result (§5.2, §7.4), and `DurationType.min`/`.max`
- * (`schema/meta/atoms-temporal.ts`) still carry the raw ISO 8601 text. Parsing that text here
- * instead would put the reading in the wrong layer and give a facet a second, private notion of
- * what its value is.
+ * bought ([TSON-SCHEMA] §5.5, §5.7). `duration_type`'s bounds are `value`-typed in the kernel, so
+ * `DurationType.min`/`.max` (`schema/meta/atoms-temporal.ts`) already hold the resolved nanosecond
+ * `bigint` a bound check would compare against — what is missing is the schema-load wiring that
+ * populates them from a token and the comparison itself, a resolver concern this atom parser does
+ * not reach into.
  */
 
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
@@ -43,8 +42,8 @@ export function createDurationParser(
   typeRef: string,
   constraints: DurationType,
 ): AtomType<TsonDuration> {
-  // `constraints.min`/`.max` are not read here: they are still raw text, and reading them is the
-  // resolver's job under §5.2's value-typed facet rule -- see this module's own TSDoc.
+  // `constraints.min`/`.max` are not read here: wiring a bound check against them is a resolver
+  // concern -- see this module's own TSDoc.
   void constraints;
 
   function read(token: AtomToken): TsonDuration {

@@ -48,6 +48,7 @@ import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
+import { typeParameters } from '../schema/meta/typedef.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -60,7 +61,7 @@ import type {
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { desugar, lifted, type DesugarFailureReporter } from './desugar.js';
-import { createHeldBody } from './heldBody.js';
+import { createHeldBody, isHeldBody } from './heldBody.js';
 import { heldEmptyRecord } from './wireForm.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
 import { inferAll } from './parameterKinds.js';
@@ -530,11 +531,12 @@ function mergeImports(
  * wire-vocabulary mismatch -- neither naming what the author did).
  */
 function refuseHeadAbstraction(name: string, resolved: TypeDefinition): void {
-  if ('kind' in resolved.body) {
+  if ('kind' in resolved.body || !isHeldBody(resolved.body)) {
     return; // not a held TemplateBody
   }
-  for (const application of resolved.body.applications()) {
-    if (resolved.parameters.includes(application.name)) {
+  const body = resolved.body;
+  for (const application of body.applications()) {
+    if (body.parameters.includes(application.name)) {
       throw new TsonSchemaValidationError(
         `'${name}': '${application.name}' is a type parameter applied to arguments -- a parameter stands for a ` +
           `type, never for a template, and §5.10 admits no head abstraction, so '${application.name}<...>' is no ` +
@@ -560,9 +562,6 @@ function unresolvedPlaceholder(
   parameters: readonly string[],
 ): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters,
-    constructor: false,
     supertypes: [],
     subtypes: [],
     // An open placeholder holds its body like every other open entry, so nothing downstream has to
@@ -570,7 +569,7 @@ function unresolvedPlaceholder(
     body:
       parameters.length === 0
         ? { kind: 'record', supertypes: [], fields: [], groups: [] }
-        : createHeldBody(heldEmptyRecord()),
+        : createHeldBody(heldEmptyRecord(), parameters),
     ...(position === undefined ? {} : { position }),
     annotations: [],
   };
@@ -594,7 +593,7 @@ function condemn(
 ): void {
   for (const name of names) {
     const condemned = requiredGet(resolvedLocals, name, 'condemn');
-    const placeholder = unresolvedPlaceholder(condemned.position, condemned.parameters);
+    const placeholder = unresolvedPlaceholder(condemned.position, typeParameters(condemned));
     resolvedLocals.set(name, placeholder);
     namespace.set(name, placeholder);
   }

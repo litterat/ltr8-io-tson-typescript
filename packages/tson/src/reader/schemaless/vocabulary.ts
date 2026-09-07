@@ -144,7 +144,7 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
 
   types.set('text', createTextParser('text', { kind: 'text_type' }));
 
-  types.set('bytes', createBinaryParser('bytes', { kind: 'binary', encoding: 'BASE64' }));
+  types.set('bytes', createBinaryParser('bytes', { kind: 'bytes_type', encoding: 'BASE64' }));
 
   types.set('date', createDateParser('date', { kind: 'date_type' }));
   types.set('time', createTimeParser('time', { kind: 'time_type' }));

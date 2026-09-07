@@ -1,6 +1,6 @@
 /**
- * The text-shaped atom families' resolved constraint vocabularies (§5.3, §5.5, §5.7, §9):
- * `text`, `binary` (the four RFC 4648 encodings), `regex`, `uri`, `email`, and `uuid`.
+ * The text-shaped atom families' resolved constraint vocabularies (§5.5, §5.7, §9): `text`,
+ * `regex`, `uri`, `email`, and `uuid`.
  */
 
 /**
@@ -14,52 +14,22 @@
  * compiles it at validation time rather than storing a compiled form.
  *
  * `length` is an exact length — both a floor and a ceiling at once — alongside the ordinary
- * `minLength`/`maxLength` bounds.
+ * `minLength`/`maxLength` bounds. All three count Unicode code points, and are `bigint`
+ * because the kernel's own `min_length`/`max_length`/`length` are typed `non_negative_integer`.
  *
  * Also an {@link Atom} variant: `text => !text_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
  */
 export interface TextType {
   readonly kind: 'text_type';
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly length?: number;
+  readonly minLength?: bigint;
+  readonly maxLength?: bigint;
+  readonly length?: bigint;
   readonly pattern?: string;
 }
 
 /**
- * `binary`'s `binary_encoding` selector (§5.3) — RFC 4648's four encodings, each also a
- * built-in annotation name (`!base64`, and so on).
- */
-export type BinaryEncoding = 'BASE64' | 'BASE64URL' | 'BASE32' | 'HEX';
-
-/**
- * meta.tn's `binary` constructor (§5.3's four binary atoms, RFC 4648) — one shape, not one
- * per encoding: `binary`'s only field beyond the RFC pin is `encoding: binary_encoding`, a
- * closed four-value selector, exactly the same shape as {@link IntegerType.size} or
- * {@link FloatType.format} — a single constructor parameterised by one of its own fields,
- * not four different constructors.
- *
- * Named `BinaryType` here despite meta.tn's constructor being spelled `binary`, not
- * `binary_type` like every other constructor in this family — the odd one out, faithfully
- * carried over from the reference implementation's own naming.
- *
- * `minLength`/`maxLength` are modelled for structural fidelity (meta.tn defines them on the
- * constructor) though no built-in instance sets either.
- *
- * Also an {@link Atom} variant: `base64 => !binary BASE64` and its three siblings are
- * constructor-application instances (§5.5) whose resolved bodies are this shape with the
- * matching `encoding` and no length bounds.
- */
-export interface BinaryType {
-  readonly kind: 'binary';
-  readonly encoding: BinaryEncoding;
-  readonly minLength?: number;
-  readonly maxLength?: number;
-}
-
-/**
- * The meta-kernel's `regex_type` constructor (§5.7: `regex_type => ~text_type &
+ * The meta-kernel's `regex_type` constructor (§5.7: `regex_type => text_type &
  * atom_specification & { spec: = "https://www.rfc-editor.org/rfc/rfc9485" }`) — `text_type`'s
  * length and pattern facets plus `atom_specification`'s `spec`, pinned to RFC 9485, the
  * I-Regexp specification.
@@ -77,9 +47,9 @@ export interface BinaryType {
 export interface RegexType {
   readonly kind: 'regex_type';
   readonly spec: string;
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly length?: number;
+  readonly minLength?: bigint;
+  readonly maxLength?: bigint;
+  readonly length?: bigint;
   readonly pattern?: string;
 }
 
@@ -98,9 +68,9 @@ export interface RegexType {
 export interface UriType {
   readonly kind: 'uri_type';
   readonly spec: string;
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly length?: number;
+  readonly minLength?: bigint;
+  readonly maxLength?: bigint;
+  readonly length?: bigint;
   readonly pattern?: string;
   readonly scheme?: string;
 }
@@ -117,21 +87,22 @@ export interface UriType {
 export interface EmailType {
   readonly kind: 'email_type';
   readonly spec: string;
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly length?: number;
+  readonly minLength?: bigint;
+  readonly maxLength?: bigint;
+  readonly length?: bigint;
   readonly pattern?: string;
 }
 
 /**
  * The meta-kernel's `uuid_type` constructor (§5.5's `uuid` atom, RFC 9562). `version`
  * selects a generation scheme (a selector, not an ordered bound — version 7 is not
- * "narrower" than version 4, it is a different value set).
+ * "narrower" than version 4, it is a different value set), and is `bigint` because the
+ * kernel's own field is typed `non_negative_integer`.
  *
  * Also an {@link Atom} variant: `uuid => !uuid_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with `version` absent.
  */
 export interface UuidType {
   readonly kind: 'uuid_type';
-  readonly version?: number;
+  readonly version?: bigint;
 }

@@ -39,6 +39,7 @@ import {
   bridge,
   field,
   lazy,
+  map,
   optional,
   record,
   variant,
@@ -51,6 +52,7 @@ import type {
   Binding,
   BindingRef,
   BindingRegistry,
+  MapBinding,
   RecordBinding,
   VariantBinding,
 } from '../bind/binding.js';
@@ -73,18 +75,17 @@ import type { Decimal, Rational, Unit } from './meta/algebra.js';
 import type {
   Annotation,
   Annotations,
-  Extern,
   Reference,
+  Scoped,
+  ScopeKind,
   Token,
   TokenForm,
   TypeArgument,
   TypeArgumentRef,
   TypeArgumentValue,
   TypeDefinition,
-  TypeKind,
   TypeRef,
   Top,
-  UnknownType,
 } from './meta/typedef.js';
 import type {
   ChoiceBody,
@@ -99,15 +100,8 @@ import type {
   TupleElement,
   ArrayBody,
 } from './meta/bodies.js';
-import type {
-  BinaryEncoding,
-  BinaryType,
-  EmailType,
-  RegexType,
-  TextType,
-  UriType,
-  UuidType,
-} from './meta/atoms-text.js';
+import type { EmailType, RegexType, TextType, UriType, UuidType } from './meta/atoms-text.js';
+import type { BytesEncoding, BytesType } from './meta/atoms-bytes.js';
 import type {
   ComplexComponent,
   ComplexType,
@@ -125,10 +119,13 @@ import type {
   DurationType,
   OffsetDateTime,
   OffsetTime,
+  PeriodType,
   TimeType,
 } from './meta/atoms-temporal.js';
 import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type, MacType } from './meta/atoms-network.js';
 import type { SourcePosition } from './meta/position.js';
+import { formatIsoDuration, tryParseIsoDuration } from '../atom/temporal/isoDuration.js';
+import { formatIsoPeriod, tryParseIsoPeriod } from '../atom/temporal/isoPeriod.js';
 
 // -------------------------------------------------------------------------------------------
 // The missing twelfth combinator
@@ -201,23 +198,15 @@ const identifierBinding: Binding<string> = bridge<string, AtomToken>(
 
 const booleanBinding: Binding<boolean> = atom<boolean>('boolean');
 
-/** Arbitrary-precision `integer` (§5.6) -- the kernel's own unbounded integer, host `bigint`. */
-const bigintBinding: Binding<bigint> = atom<bigint>('integer');
-
 /**
- * A small bound narrowed to `number` (`minLength`, `totalDigits`, `version`, ...) -- every one of
- * these is kernel `integer` on the wire (arbitrary precision, per meta.tn's own note: "where the
- * type is integer, the field uses `integer?` directly"), but the Java original binds it to a
- * plain `Integer` for fields it knows never carry a value needing more than 32 bits, and this
- * port's own `schema/meta` types follow that choice (`Optional<Integer>` -> `number`, not
- * `bigint`). The bridge is honest about the mismatch rather than silently asserting `bigint` and
- * `number` are the same shape.
+ * Arbitrary-precision `integer` (§5.6) -- the kernel's own unbounded integer, host `bigint`.
+ * Every counting facet in this package's model (`minLength`, `totalDigits`, `version`, ...) is
+ * `non_negative_integer`-typed on the wire, itself a refinement of this same `integer` (§9), and
+ * `schema/meta`'s own types now bind every one of them to `bigint` rather than narrowing to
+ * `number` the way an earlier revision's model did -- this leaf is used directly at every such
+ * position, with no bridge in between.
  */
-const int32Binding: Binding<number> = bridge<number, bigint>(
-  bigintBinding,
-  (n) => BigInt(n),
-  (b) => Number(b),
-);
+const bigintBinding: Binding<bigint> = atom<bigint>('integer');
 
 // -------------------------------------------------------------------------------------------
 // Exact-numeric bounds -- `decimal_type`/`float_type`/`rational_type`'s own `min`/
@@ -437,13 +426,15 @@ const valueBinding: Binding<unknown> = atom<unknown>('value');
 // Internal enumerations
 // -------------------------------------------------------------------------------------------
 
-const typeKindBinding: Binding<TypeKind> = atom<TypeKind>('type_kind');
+// `type_kind` is gone from the kernel (§4.1, §8.1): a resolved entry's kind is derived
+// (`typeKind`, `schema/meta/typedef.ts`), never a wire field, so this module binds no such atom
+// any more.
 const fieldStateBinding: Binding<FieldState> = atom<FieldState>('field_state');
 const elementStateBinding: Binding<ElementState> = atom<ElementState>('element_state');
 const complexComponentBinding: Binding<ComplexComponent> =
   atom<ComplexComponent>('complex_component');
 const floatFormatBinding: Binding<FloatFormat> = atom<FloatFormat>('ieee_format');
-const binaryEncodingBinding: Binding<BinaryEncoding> = atom<BinaryEncoding>('binary_encoding');
+const bytesEncodingBinding: Binding<BytesEncoding> = atom<BytesEncoding>('bytes_encoding');
 
 /**
  * §8.1's own addition to `type_definition`, not a kernel field at all (`SourcePosition`'s own
@@ -668,7 +659,7 @@ const typeArgumentBinding: VariantBinding<TypeArgument> = variant(
 );
 
 // -------------------------------------------------------------------------------------------
-// Reference / Extern / UnknownType
+// Reference / Scoped
 // -------------------------------------------------------------------------------------------
 
 const referenceBinding: RecordBinding<Reference> = record<Reference>({
@@ -679,20 +670,41 @@ const referenceBinding: RecordBinding<Reference> = record<Reference>({
   },
 });
 
-const externBinding: RecordBinding<Extern> = record<Extern>({
-  fields: [
-    field<Extern, 'schema'>(0, 'schema', 'schema', textBinding),
-    field<Extern, 'types'>(1, 'types', 'types', arrayOf<string>(identifierBinding)),
-  ],
-  construct: (slots) => {
-    const [schemaUri, types] = slots as [string, readonly string[]];
-    return { kind: 'extern', schema: schemaUri, types };
-  },
+const scopeKindBinding: Binding<ScopeKind> = atom<ScopeKind>('scope_kind');
+
+/**
+ * `scoped.schemas`'s own value type, `[type_name; 1..]?` (§7.8) -- a non-empty list, or the
+ * absent sentinel meaning "every type this schema declares", collapsed onto this package's own
+ * absent-equals-empty convention (`Scoped`'s own doc) at the model boundary. Never exercised by
+ * any bundled fixture (`declared`/`extern`/`dynamic` all carry `scope` alone), so the absent case
+ * on the wire is read as `[]` rather than reconstructed from a genuinely separate `_` marker --
+ * a later work package's own reader is what will exercise this position for real.
+ */
+const scopedSchemaTypesBinding: Binding<readonly string[]> = arrayOf<string>(identifierBinding);
+
+const scopedSchemasBinding: MapBinding<ReadonlyMap<string, readonly string[]>> = map<
+  ReadonlyMap<string, readonly string[]>,
+  string,
+  readonly string[]
+>({
+  key: textBinding,
+  value: scopedSchemaTypesBinding,
+  construct: (entries) => new Map(entries),
+  read: (host) => host,
 });
 
-const unknownTypeBinding: RecordBinding<UnknownType> = record<UnknownType>({
-  fields: [],
-  construct: () => ({ kind: 'unknown_type' }),
+const scopedBinding: RecordBinding<Scoped> = record<Scoped>({
+  fields: [
+    field<Scoped, 'scope'>(0, 'scope', 'scope', arrayOf<ScopeKind>(scopeKindBinding)),
+    optional<Scoped, 'schemas'>(1, 'schemas', 'schemas', scopedSchemasBinding),
+  ],
+  construct: (slots) => {
+    const [scope, schemas] = slots as [
+      readonly ScopeKind[],
+      ReadonlyMap<string, readonly string[]> | undefined,
+    ];
+    return { kind: 'scoped', scope, ...opt('schemas', schemas) };
+  },
 });
 
 // -------------------------------------------------------------------------------------------
@@ -880,15 +892,17 @@ const integerTypeBinding: RecordBinding<IntegerType> = record<IntegerType>({
     optional<IntegerType, 'max'>(3, 'max', 'max', bigintBinding),
     optional<IntegerType, 'exclusiveMax'>(4, 'exclusive_max', 'exclusiveMax', bigintBinding),
     optional<IntegerType, 'multipleOf'>(5, 'multiple_of', 'multipleOf', bigintBinding),
+    optional<IntegerType, 'members'>(6, 'members', 'members', arrayOf<bigint>(bigintBinding)),
   ],
   construct: (slots) => {
-    const [size, min, exclusiveMin, max, exclusiveMax, multipleOf] = slots as [
+    const [size, min, exclusiveMin, max, exclusiveMax, multipleOf, members] = slots as [
       IntegerSize | undefined,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
+      readonly bigint[] | undefined,
     ];
     return {
       kind: 'integer_type',
@@ -898,6 +912,7 @@ const integerTypeBinding: RecordBinding<IntegerType> = record<IntegerType>({
       ...opt('max', max),
       ...opt('exclusiveMax', exclusiveMax),
       ...opt('multipleOf', multipleOf),
+      ...opt('members', members),
     };
   },
 });
@@ -963,19 +978,21 @@ const decimalTypeBinding: RecordBinding<DecimalType> = record<DecimalType>({
     optional<DecimalType, 'max'>(2, 'max', 'max', decimalBinding),
     optional<DecimalType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', decimalBinding),
     optional<DecimalType, 'multipleOf'>(4, 'multiple_of', 'multipleOf', decimalBinding),
-    optional<DecimalType, 'totalDigits'>(5, 'total_digits', 'totalDigits', int32Binding),
-    optional<DecimalType, 'fractionDigits'>(6, 'fraction_digits', 'fractionDigits', int32Binding),
+    optional<DecimalType, 'totalDigits'>(5, 'total_digits', 'totalDigits', bigintBinding),
+    optional<DecimalType, 'fractionDigits'>(6, 'fraction_digits', 'fractionDigits', bigintBinding),
+    optional<DecimalType, 'members'>(7, 'members', 'members', arrayOf<Decimal>(decimalBinding)),
   ],
   construct: (slots) => {
-    const [min, exclusiveMin, max, exclusiveMax, multipleOf, totalDigits, fractionDigits] =
+    const [min, exclusiveMin, max, exclusiveMax, multipleOf, totalDigits, fractionDigits, members] =
       slots as [
         Decimal | undefined,
         Decimal | undefined,
         Decimal | undefined,
         Decimal | undefined,
         Decimal | undefined,
-        number | undefined,
-        number | undefined,
+        bigint | undefined,
+        bigint | undefined,
+        readonly Decimal[] | undefined,
       ];
     return {
       kind: 'decimal_type',
@@ -986,6 +1003,7 @@ const decimalTypeBinding: RecordBinding<DecimalType> = record<DecimalType>({
       ...opt('multipleOf', multipleOf),
       ...opt('totalDigits', totalDigits),
       ...opt('fractionDigits', fractionDigits),
+      ...opt('members', members),
     };
   },
 });
@@ -1031,16 +1049,16 @@ const complexTypeBinding: RecordBinding<ComplexType> = record<ComplexType>({
 
 const textTypeBinding: RecordBinding<TextType> = record<TextType>({
   fields: [
-    optional<TextType, 'minLength'>(0, 'min_length', 'minLength', int32Binding),
-    optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', int32Binding),
-    optional<TextType, 'length'>(2, 'length', 'length', int32Binding),
+    optional<TextType, 'minLength'>(0, 'min_length', 'minLength', bigintBinding),
+    optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', bigintBinding),
+    optional<TextType, 'length'>(2, 'length', 'length', bigintBinding),
     optional<TextType, 'pattern'>(3, 'pattern', 'pattern', textBinding),
   ],
   construct: (slots) => {
     const [minLength, maxLength, length, pattern] = slots as [
-      number | undefined,
-      number | undefined,
-      number | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
       string | undefined,
     ];
     return {
@@ -1053,20 +1071,20 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
   },
 });
 
-const binaryTypeBinding: RecordBinding<BinaryType> = record<BinaryType>({
+const bytesTypeBinding: RecordBinding<BytesType> = record<BytesType>({
   fields: [
-    field<BinaryType, 'encoding'>(0, 'encoding', 'encoding', binaryEncodingBinding),
-    optional<BinaryType, 'minLength'>(1, 'min_length', 'minLength', int32Binding),
-    optional<BinaryType, 'maxLength'>(2, 'max_length', 'maxLength', int32Binding),
+    field<BytesType, 'encoding'>(0, 'encoding', 'encoding', bytesEncodingBinding),
+    optional<BytesType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
+    optional<BytesType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
   ],
   construct: (slots) => {
     const [encoding, minLength, maxLength] = slots as [
-      BinaryEncoding,
-      number | undefined,
-      number | undefined,
+      BytesEncoding,
+      bigint | undefined,
+      bigint | undefined,
     ];
     return {
-      kind: 'binary',
+      kind: 'bytes_type',
       encoding,
       ...opt('minLength', minLength),
       ...opt('maxLength', maxLength),
@@ -1077,17 +1095,17 @@ const binaryTypeBinding: RecordBinding<BinaryType> = record<BinaryType>({
 const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
   fields: [
     field<RegexType, 'spec'>(0, 'spec', 'spec', textBinding),
-    optional<RegexType, 'minLength'>(1, 'min_length', 'minLength', int32Binding),
-    optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', int32Binding),
-    optional<RegexType, 'length'>(3, 'length', 'length', int32Binding),
+    optional<RegexType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
+    optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
+    optional<RegexType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<RegexType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
   ],
   construct: (slots) => {
     const [spec, minLength, maxLength, length, pattern] = slots as [
       string,
-      number | undefined,
-      number | undefined,
-      number | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
       string | undefined,
     ];
     return {
@@ -1104,18 +1122,18 @@ const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
 const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
   fields: [
     field<UriType, 'spec'>(0, 'spec', 'spec', textBinding),
-    optional<UriType, 'minLength'>(1, 'min_length', 'minLength', int32Binding),
-    optional<UriType, 'maxLength'>(2, 'max_length', 'maxLength', int32Binding),
-    optional<UriType, 'length'>(3, 'length', 'length', int32Binding),
+    optional<UriType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
+    optional<UriType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
+    optional<UriType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<UriType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
     optional<UriType, 'scheme'>(5, 'scheme', 'scheme', textBinding),
   ],
   construct: (slots) => {
     const [spec, minLength, maxLength, length, pattern, scheme] = slots as [
       string,
-      number | undefined,
-      number | undefined,
-      number | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
       string | undefined,
       string | undefined,
     ];
@@ -1134,17 +1152,17 @@ const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
 const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
   fields: [
     field<EmailType, 'spec'>(0, 'spec', 'spec', textBinding),
-    optional<EmailType, 'minLength'>(1, 'min_length', 'minLength', int32Binding),
-    optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', int32Binding),
-    optional<EmailType, 'length'>(3, 'length', 'length', int32Binding),
+    optional<EmailType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
+    optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
+    optional<EmailType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<EmailType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
   ],
   construct: (slots) => {
     const [spec, minLength, maxLength, length, pattern] = slots as [
       string,
-      number | undefined,
-      number | undefined,
-      number | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
       string | undefined,
     ];
     return {
@@ -1159,9 +1177,9 @@ const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
 });
 
 const uuidTypeBinding: RecordBinding<UuidType> = record<UuidType>({
-  fields: [optional<UuidType, 'version'>(0, 'version', 'version', int32Binding)],
+  fields: [optional<UuidType, 'version'>(0, 'version', 'version', bigintBinding)],
   construct: (slots) => {
-    const [version] = slots as [number | undefined];
+    const [version] = slots as [bigint | undefined];
     return { kind: 'uuid_type', ...opt('version', version) };
   },
 });
@@ -1224,20 +1242,111 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = record<DateTimeType>({
 });
 
 /**
- * Unlike {@link dateTypeBinding}/{@link timeTypeBinding}, `min`/`max` here stay raw ISO 8601 text
- * (`DurationType`'s own doc: "deliberately... to avoid the same host-value dependency"), matching
- * `DurationType.java`'s `Optional<String>` fields exactly rather than parsing through the
- * `duration` atom's own structured host value. `textBinding` (not a `duration`-family atom) is
- * the honest label for that: this position is deliberately never parsed.
+ * `duration_type`'s own `min`/`exclusive_min`/`max`/`exclusive_max`/`multiple_of` (§5.5, §9): the
+ * kernel's `value` escape hatch, read under `duration`'s own atom once it is in scope (§5.2,
+ * §7.4) -- so the resolved value is `duration`'s own value space, a signed count of nanoseconds
+ * (`atoms-temporal.ts`'s own `DurationType` doc), not the raw token. Parses the same way
+ * `atom/temporal/isoDuration.ts` does rather than inventing a second reading of the grammar.
  */
+function durationBoundFromWire(w: unknown): bigint {
+  if (typeof w === 'bigint') return w;
+  if (typeof w === 'string') {
+    const nanoseconds = tryParseIsoDuration(w);
+    if (nanoseconds !== undefined) return nanoseconds;
+  }
+  throw notANumericBound('a duration (RFC 3339 Appendix A, §5.5)', w);
+}
+
+const durationBoundBinding: Binding<bigint> = bridge<bigint, unknown>(
+  atom<unknown>('duration'),
+  (nanoseconds) => formatIsoDuration(nanoseconds),
+  durationBoundFromWire,
+);
+
 const durationTypeBinding: RecordBinding<DurationType> = record<DurationType>({
   fields: [
-    optional<DurationType, 'min'>(0, 'min', 'min', textBinding),
-    optional<DurationType, 'max'>(1, 'max', 'max', textBinding),
+    optional<DurationType, 'min'>(0, 'min', 'min', durationBoundBinding),
+    optional<DurationType, 'exclusiveMin'>(
+      1,
+      'exclusive_min',
+      'exclusiveMin',
+      durationBoundBinding,
+    ),
+    optional<DurationType, 'max'>(2, 'max', 'max', durationBoundBinding),
+    optional<DurationType, 'exclusiveMax'>(
+      3,
+      'exclusive_max',
+      'exclusiveMax',
+      durationBoundBinding,
+    ),
+    optional<DurationType, 'precision'>(4, 'precision', 'precision', bigintBinding),
+    optional<DurationType, 'multipleOf'>(5, 'multiple_of', 'multipleOf', durationBoundBinding),
   ],
   construct: (slots) => {
-    const [min, max] = slots as [string | undefined, string | undefined];
-    return { kind: 'duration_type', ...opt('min', min), ...opt('max', max) };
+    const [min, exclusiveMin, max, exclusiveMax, precision, multipleOf] = slots as [
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+    ];
+    return {
+      kind: 'duration_type',
+      ...opt('min', min),
+      ...opt('exclusiveMin', exclusiveMin),
+      ...opt('max', max),
+      ...opt('exclusiveMax', exclusiveMax),
+      ...opt('precision', precision),
+      ...opt('multipleOf', multipleOf),
+    };
+  },
+});
+
+/**
+ * `period_type`'s own `min`/`exclusive_min`/`max`/`exclusive_max`/`multiple_of` (§5.5, §9): the
+ * same `value`-escape-hatch treatment {@link durationBoundBinding}'s own doc states in full,
+ * `period`'s value space (a signed integer count of months) in place of `duration`'s.
+ */
+function periodBoundFromWire(w: unknown): bigint {
+  if (typeof w === 'bigint') return w;
+  if (typeof w === 'string') {
+    const months = tryParseIsoPeriod(w);
+    if (months !== undefined) return months;
+  }
+  throw notANumericBound('a period (RFC 3339 Appendix A, §5.5)', w);
+}
+
+const periodBoundBinding: Binding<bigint> = bridge<bigint, unknown>(
+  atom<unknown>('period'),
+  (months) => formatIsoPeriod(months),
+  periodBoundFromWire,
+);
+
+const periodTypeBinding: RecordBinding<PeriodType> = record<PeriodType>({
+  fields: [
+    optional<PeriodType, 'min'>(0, 'min', 'min', periodBoundBinding),
+    optional<PeriodType, 'exclusiveMin'>(1, 'exclusive_min', 'exclusiveMin', periodBoundBinding),
+    optional<PeriodType, 'max'>(2, 'max', 'max', periodBoundBinding),
+    optional<PeriodType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', periodBoundBinding),
+    optional<PeriodType, 'multipleOf'>(4, 'multiple_of', 'multipleOf', periodBoundBinding),
+  ],
+  construct: (slots) => {
+    const [min, exclusiveMin, max, exclusiveMax, multipleOf] = slots as [
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+    ];
+    return {
+      kind: 'period_type',
+      ...opt('min', min),
+      ...opt('exclusiveMin', exclusiveMin),
+      ...opt('max', max),
+      ...opt('exclusiveMax', exclusiveMax),
+      ...opt('multipleOf', multipleOf),
+    };
   },
 });
 
@@ -1272,16 +1381,16 @@ const ipv6TypeBinding: RecordBinding<Ipv6Type> = record<Ipv6Type>({
 const cidr4TypeBinding: RecordBinding<Cidr4Type> = record<Cidr4Type>({
   fields: [
     field<Cidr4Type, 'spec'>(0, 'spec', 'spec', textBinding),
-    optional<Cidr4Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', int32Binding),
-    optional<Cidr4Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', int32Binding),
+    optional<Cidr4Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', bigintBinding),
+    optional<Cidr4Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', bigintBinding),
     field<Cidr4Type, 'within'>(3, 'within', 'within', arrayOf<string>(textBinding)),
     field<Cidr4Type, 'excluding'>(4, 'excluding', 'excluding', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
     const [spec, minPrefix, maxPrefix, within, excluding] = slots as [
       string,
-      number | undefined,
-      number | undefined,
+      bigint | undefined,
+      bigint | undefined,
       readonly string[],
       readonly string[],
     ];
@@ -1299,16 +1408,16 @@ const cidr4TypeBinding: RecordBinding<Cidr4Type> = record<Cidr4Type>({
 const cidr6TypeBinding: RecordBinding<Cidr6Type> = record<Cidr6Type>({
   fields: [
     field<Cidr6Type, 'spec'>(0, 'spec', 'spec', textBinding),
-    optional<Cidr6Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', int32Binding),
-    optional<Cidr6Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', int32Binding),
+    optional<Cidr6Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', bigintBinding),
+    optional<Cidr6Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', bigintBinding),
     field<Cidr6Type, 'within'>(3, 'within', 'within', arrayOf<string>(textBinding)),
     field<Cidr6Type, 'excluding'>(4, 'excluding', 'excluding', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
     const [spec, minPrefix, maxPrefix, within, excluding] = slots as [
       string,
-      number | undefined,
-      number | undefined,
+      bigint | undefined,
+      bigint | undefined,
       readonly string[],
       readonly string[],
     ];
@@ -1366,15 +1475,14 @@ const topBinding: VariantBinding<Top> = variant(
     identifier: unitBinding,
     void: unitBinding,
     reference: referenceBinding,
-    unknown_type: unknownTypeBinding,
-    extern: externBinding,
+    scoped: scopedBinding,
     integer_type: integerTypeBinding,
     float_type: floatTypeBinding,
     decimal_type: decimalTypeBinding,
     rational_type: rationalTypeBinding,
     complex_type: complexTypeBinding,
     text_type: textTypeBinding,
-    binary: binaryTypeBinding,
+    bytes_type: bytesTypeBinding,
     regex_type: regexTypeBinding,
     uri_type: uriTypeBinding,
     email_type: emailTypeBinding,
@@ -1383,6 +1491,7 @@ const topBinding: VariantBinding<Top> = variant(
     time_type: timeTypeBinding,
     datetime_type: dateTimeTypeBinding,
     duration_type: durationTypeBinding,
+    period_type: periodTypeBinding,
     ipv4_type: ipv4TypeBinding,
     ipv6_type: ipv6TypeBinding,
     cidr4_type: cidr4TypeBinding,
@@ -1413,70 +1522,51 @@ const topBinding: VariantBinding<Top> = variant(
  * an annotations carrier.
  */
 const positionSlot = {
-  ...optional<TypeDefinition, 'position'>(8, 'position', 'position', sourcePositionBinding),
+  ...optional<TypeDefinition, 'position'>(4, 'position', 'position', sourcePositionBinding),
   unbound: true,
 };
 
+/**
+ * The kernel's own `type_definition` now declares exactly four fields (`source`, `supertypes`,
+ * `subtypes`, `body`, §8.1) -- `kind`, `parameters`, `constructor` and `disjoint` are gone,
+ * because each restated a fact `supertypes`/`body` already determine: `kind` is derived
+ * (`typeKind`), `constructor` is derived (`isConstructor`), `parameters` lives on the held
+ * `TemplateBody` that carries them, and `disjoint` lives on the `ChoiceBody` it is a fact about
+ * (`choiceDisjoint`) -- all four in `schema/meta/typedef.ts`. This binding carries only what the
+ * kernel still declares, plus this package's own `position`/`annotations` additions.
+ */
 const typeDefinitionBinding: RecordBinding<TypeDefinition> = record<TypeDefinition>({
   fields: [
     optional<TypeDefinition, 'source'>(0, 'source', 'source', typeRefAnnotatedBinding),
-    field<TypeDefinition, 'kind'>(1, 'kind', 'kind', typeKindBinding),
-    field<TypeDefinition, 'parameters'>(
-      2,
-      'parameters',
-      'parameters',
-      arrayOf<string>(identifierBinding),
-    ),
-    field<TypeDefinition, 'constructor'>(3, 'constructor', 'constructor', booleanBinding),
     field<TypeDefinition, 'supertypes'>(
-      4,
+      1,
       'supertypes',
       'supertypes',
       arrayOf<string>(identifierBinding),
     ),
     field<TypeDefinition, 'subtypes'>(
-      5,
+      2,
       'subtypes',
       'subtypes',
       arrayOf<string>(identifierBinding),
     ),
-    optional<TypeDefinition, 'disjoint'>(6, 'disjoint', 'disjoint', booleanBinding),
-    field<TypeDefinition, 'body'>(7, 'body', 'body', topBinding),
+    field<TypeDefinition, 'body'>(3, 'body', 'body', topBinding),
     positionSlot,
-    field<TypeDefinition, 'annotations'>(9, 'annotations', 'annotations', annotationsBinding),
+    field<TypeDefinition, 'annotations'>(5, 'annotations', 'annotations', annotationsBinding),
   ],
   construct: (slots) => {
-    const [
-      source,
-      kind,
-      parameters,
-      constructorFlag,
-      supertypes,
-      subtypes,
-      disjoint,
-      body,
-      position,
-      annotations,
-    ] = slots as [
+    const [source, supertypes, subtypes, body, position, annotations] = slots as [
       TypeRef | undefined,
-      TypeKind,
-      readonly string[],
-      boolean,
       readonly string[],
       readonly string[],
-      boolean | undefined,
       Top,
       SourcePosition | undefined,
       Annotations,
     ];
     return {
       ...opt('source', source),
-      kind,
-      parameters,
-      constructor: constructorFlag,
       supertypes,
       subtypes,
-      ...opt('disjoint', disjoint),
       body,
       ...opt('position', position),
       annotations,
@@ -1503,13 +1593,11 @@ export {
   textBinding,
   booleanBinding,
   bigintBinding,
-  int32Binding,
-  typeKindBinding,
   fieldStateBinding,
   elementStateBinding,
   complexComponentBinding,
   floatFormatBinding,
-  binaryEncodingBinding,
+  bytesEncodingBinding,
   sourcePositionBinding,
   annotationBinding,
   annotationsBinding,
@@ -1519,8 +1607,8 @@ export {
   typeArgumentValueBinding,
   typeArgumentBinding,
   referenceBinding,
-  externBinding,
-  unknownTypeBinding,
+  scopeKindBinding,
+  scopedBinding,
   integerSizeBinding,
   recordFieldBinding,
   fieldGroupBinding,
@@ -1537,7 +1625,7 @@ export {
   rationalTypeBinding,
   complexTypeBinding,
   textTypeBinding,
-  binaryTypeBinding,
+  bytesTypeBinding,
   regexTypeBinding,
   uriTypeBinding,
   emailTypeBinding,
@@ -1546,6 +1634,7 @@ export {
   timeTypeBinding,
   dateTimeTypeBinding,
   durationTypeBinding,
+  periodTypeBinding,
   ipv4TypeBinding,
   ipv6TypeBinding,
   cidr4TypeBinding,
@@ -1571,6 +1660,11 @@ export const metaBindings: BindingRegistry = registry({
   record: recordBodyBinding,
   array: arrayBodyBinding,
   set: arrayBodyBinding,
+  // `set_type` (§9): the kernel's own refinement of `array` (`array ^ {...}`, unmarked in the
+  // notation but a constructor all the same, §4.2) -- applied directly by `enum_set => !set_type
+  // { element_type: identifier }`, so a schema reader binding that application needs this name
+  // too, not only the `set<T>` template's own wire name.
+  set_type: arrayBodyBinding,
   map: mapBodyBinding,
   tuple: tupleBodyBinding,
   choice: choiceBodyBinding,
@@ -1580,15 +1674,14 @@ export const metaBindings: BindingRegistry = registry({
   identifier: unitBinding,
   void: unitBinding,
   reference: referenceBinding,
-  unknown_type: unknownTypeBinding,
-  extern: externBinding,
+  scoped: scopedBinding,
   integer_type: integerTypeBinding,
   float_type: floatTypeBinding,
   decimal_type: decimalTypeBinding,
   rational_type: rationalTypeBinding,
   complex_type: complexTypeBinding,
   text_type: textTypeBinding,
-  binary: binaryTypeBinding,
+  bytes_type: bytesTypeBinding,
   regex_type: regexTypeBinding,
   uri_type: uriTypeBinding,
   email_type: emailTypeBinding,
@@ -1597,6 +1690,7 @@ export const metaBindings: BindingRegistry = registry({
   time_type: timeTypeBinding,
   datetime_type: dateTimeTypeBinding,
   duration_type: durationTypeBinding,
+  period_type: periodTypeBinding,
   ipv4_type: ipv4TypeBinding,
   ipv6_type: ipv6TypeBinding,
   cidr4_type: cidr4TypeBinding,

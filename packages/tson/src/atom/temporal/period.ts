@@ -6,14 +6,13 @@
  * module is only the `AtomType` wiring.
  *
  * **No `constraints` parameter, unlike every other `create*Parser` factory in `atom/temporal/`.**
- * `period_type` carries `min`/`max`/`multiple_of` in `spec/m/meta.tn`, but `schema/meta`
- * (`schema/meta/atoms-temporal.ts`) carries no `PeriodType` member to hold them, so there is
- * nothing to thread through. Those facets are `value`-typed: the resolver reads each under the
- * atom the slot stands for and stores the result ([TSON-SCHEMA] §5.2, §7.4), so the model has to
- * carry a bound already read as a month count before a parser can be handed one. Until it does,
- * this mirrors `complex.ts`'s own precedent for a family with nothing yet to bound: no parameter
- * to thread through unread, only a value to parse. The built-in, always-unconstrained
- * `period => !period_type {}` instance (`reader/schemaless/vocabulary.ts`) needs nothing else.
+ * `period_type` (`schema/meta/atoms-temporal.ts`'s `PeriodType`) carries `min`/`max`/
+ * `multiple_of` as the kernel's `value` escape hatch resolved to a month count (`bigint`,
+ * §7.4) -- but wiring a bound check against them is a resolver concern this module does not yet
+ * reach into, mirroring `duration.ts`'s own precedent and `complex.ts`'s for a family with
+ * nothing yet to bound: no parameter to thread through unread, only a value to parse. The
+ * built-in, always-unconstrained `period => !period_type {}` instance
+ * (`reader/schemaless/vocabulary.ts`) needs nothing else.
  */
 
 import { TsonAtomParseError } from '../../core/errors.js';

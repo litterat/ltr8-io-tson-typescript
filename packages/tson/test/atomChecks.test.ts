@@ -112,15 +112,15 @@ describe('decimal_type', () => {
   });
 
   it('total_digits/fraction_digits may only fall, and fraction_digits must not exceed total_digits', () => {
-    const source: DecimalType = { kind: 'decimal_type', totalDigits: 10, fractionDigits: 4 };
+    const source: DecimalType = { kind: 'decimal_type', totalDigits: 10n, fractionDigits: 4n };
     expect(
-      checkAtomNarrows(source, { kind: 'decimal_type', totalDigits: 5, fractionDigits: 2 }),
+      checkAtomNarrows(source, { kind: 'decimal_type', totalDigits: 5n, fractionDigits: 2n }),
     ).toEqual([]);
     expect(
-      checkAtomNarrows(source, { kind: 'decimal_type', totalDigits: 12 }).length,
+      checkAtomNarrows(source, { kind: 'decimal_type', totalDigits: 12n }).length,
     ).toBeGreaterThan(0);
     expect(
-      checkAtomCoherence({ kind: 'decimal_type', totalDigits: 4, fractionDigits: 6 }).length,
+      checkAtomCoherence({ kind: 'decimal_type', totalDigits: 4n, fractionDigits: 6n }).length,
     ).toBeGreaterThan(0);
   });
 });
@@ -140,23 +140,27 @@ describe('rational_type', () => {
 
 describe('text_type', () => {
   it('min_length may only rise and max_length may only fall', () => {
-    const source: TextType = { kind: 'text_type', minLength: 2, maxLength: 10 };
-    expect(checkAtomNarrows(source, { kind: 'text_type', minLength: 4, maxLength: 6 })).toEqual([]);
-    expect(checkAtomNarrows(source, { kind: 'text_type', minLength: 1 }).length).toBeGreaterThan(0);
-    expect(checkAtomNarrows(source, { kind: 'text_type', maxLength: 20 }).length).toBeGreaterThan(
+    const source: TextType = { kind: 'text_type', minLength: 2n, maxLength: 10n };
+    expect(checkAtomNarrows(source, { kind: 'text_type', minLength: 4n, maxLength: 6n })).toEqual(
+      [],
+    );
+    expect(checkAtomNarrows(source, { kind: 'text_type', minLength: 1n }).length).toBeGreaterThan(
+      0,
+    );
+    expect(checkAtomNarrows(source, { kind: 'text_type', maxLength: 20n }).length).toBeGreaterThan(
       0,
     );
   });
 
   it("`length` is checked against both the source's min and max (an exact length is both a floor and a ceiling)", () => {
-    const source: TextType = { kind: 'text_type', minLength: 2, maxLength: 10 };
-    expect(checkAtomNarrows(source, { kind: 'text_type', length: 5 })).toEqual([]);
-    expect(checkAtomNarrows(source, { kind: 'text_type', length: 20 }).length).toBeGreaterThan(0);
+    const source: TextType = { kind: 'text_type', minLength: 2n, maxLength: 10n };
+    expect(checkAtomNarrows(source, { kind: 'text_type', length: 5n })).toEqual([]);
+    expect(checkAtomNarrows(source, { kind: 'text_type', length: 20n }).length).toBeGreaterThan(0);
   });
 
   it('coherence: min_length above max_length admits nothing', () => {
     expect(
-      checkAtomCoherence({ kind: 'text_type', minLength: 10, maxLength: 3 }).length,
+      checkAtomCoherence({ kind: 'text_type', minLength: 10n, maxLength: 3n }).length,
     ).toBeGreaterThan(0);
   });
 
@@ -174,7 +178,7 @@ describe('cidr4_type', () => {
       spec: 'x',
       within: [],
       excluding: [],
-      minPrefix: 40,
+      minPrefix: 40n,
     });
     expect(violations.some((v) => v.includes('0-32'))).toBe(true);
   });
@@ -275,6 +279,6 @@ describe('isAtom', () => {
       isAtom({ kind: 'reference', target: { name: 'x', arguments: [], annotations: [] } }),
     ).toBe(false);
     // A held template body: no `kind` tag at all (schema/meta's own contract).
-    expect(isAtom({ names: () => new Set(), applications: () => [] })).toBe(false);
+    expect(isAtom({ parameters: ['T'], template: '!record { fields: [] }' })).toBe(false);
   });
 });

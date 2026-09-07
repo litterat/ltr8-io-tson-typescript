@@ -15,8 +15,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const USER_SCHEMA = `
 !!id:"test://subsumption.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   person    => { name: text }
   employee  => person & { badge: text }
@@ -76,8 +76,8 @@ describe('subsumption -- §7.2 at every position it governs', () => {
   it('refuses an unrelated type at a tuple position', () => {
     const tupleSchema = `
 !!id:"test://subsumption-tuple.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   pair => [text, text]
   holder => { p: pair }

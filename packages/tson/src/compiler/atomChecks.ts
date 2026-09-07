@@ -27,7 +27,7 @@ import type {
   IntegerType,
   RationalType,
 } from '../schema/meta/atoms-numeric.js';
-import type { BinaryType } from '../schema/meta/atoms-text.js';
+import type { BytesType } from '../schema/meta/atoms-bytes.js';
 import type { DateTimeType, DateType, TimeType } from '../schema/meta/atoms-temporal.js';
 import type { Cidr4Type, Cidr6Type } from '../schema/meta/atoms-network.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
@@ -55,7 +55,6 @@ import {
   compareBigint,
   compareCalendarDate,
   compareDecimal,
-  compareNumber,
   compareOffsetDateTime,
   compareOffsetTime,
   compareRational,
@@ -202,8 +201,8 @@ function decimalNarrows(source: DecimalType, refined: DecimalType): string[] {
     bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
     compareDecimal,
   );
-  checkAtMost(out, 'total_digits', source.totalDigits, refined.totalDigits, compareNumber);
-  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareNumber);
+  checkAtMost(out, 'total_digits', source.totalDigits, refined.totalDigits, compareBigint);
+  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareBigint);
   if (
     source.multipleOf !== undefined &&
     refined.multipleOf !== undefined &&
@@ -234,7 +233,7 @@ function decimalCoherence(t: DecimalType): string[] {
     t.fractionDigits,
     'total_digits',
     t.totalDigits,
-    compareNumber,
+    compareBigint,
   );
   return out;
 }
@@ -291,29 +290,29 @@ function rationalCoherence(t: RationalType): string[] {
   return out;
 }
 
-// ── text-shaped families: text_type, binary, regex_type, uri_type, email_type ──────────────────
+// ── text-shaped families: text_type, bytes_type, regex_type, uri_type, email_type ──────────────
 
 interface TextConstraints {
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly length?: number;
+  readonly minLength?: bigint;
+  readonly maxLength?: bigint;
+  readonly length?: bigint;
 }
 
-function effectiveMinLength(t: TextConstraints): number | undefined {
+function effectiveMinLength(t: TextConstraints): bigint | undefined {
   return t.minLength ?? t.length;
 }
 
-function effectiveMaxLength(t: TextConstraints): number | undefined {
+function effectiveMaxLength(t: TextConstraints): bigint | undefined {
   return t.maxLength ?? t.length;
 }
 
 /** `text_type`'s own narrowing rule — reused verbatim by `regex_type`/`uri_type`/`email_type`, which compose `text_type`'s length facets flat (§5.7). */
 function textNarrows(source: TextConstraints, refined: TextConstraints): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min_length', effectiveMinLength(source), refined.minLength, compareNumber);
-  checkAtLeast(out, 'length', effectiveMinLength(source), refined.length, compareNumber);
-  checkAtMost(out, 'max_length', effectiveMaxLength(source), refined.maxLength, compareNumber);
-  checkAtMost(out, 'length', effectiveMaxLength(source), refined.length, compareNumber);
+  checkAtLeast(out, 'min_length', effectiveMinLength(source), refined.minLength, compareBigint);
+  checkAtLeast(out, 'length', effectiveMinLength(source), refined.length, compareBigint);
+  checkAtMost(out, 'max_length', effectiveMaxLength(source), refined.maxLength, compareBigint);
+  checkAtMost(out, 'length', effectiveMaxLength(source), refined.length, compareBigint);
   return out;
 }
 
@@ -323,24 +322,24 @@ function textCoherence(t: TextConstraints): string[] {
   checkNonNegative(out, 'min_length', t.minLength);
   checkNonNegative(out, 'max_length', t.maxLength);
   checkNonNegative(out, 'length', t.length);
-  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareNumber);
-  checkOrdered(out, 'min_length', t.minLength, 'length', t.length, compareNumber);
-  checkOrdered(out, 'length', t.length, 'max_length', t.maxLength, compareNumber);
+  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareBigint);
+  checkOrdered(out, 'min_length', t.minLength, 'length', t.length, compareBigint);
+  checkOrdered(out, 'length', t.length, 'max_length', t.maxLength, compareBigint);
   return out;
 }
 
-function binaryNarrows(source: BinaryType, refined: BinaryType): string[] {
+function bytesNarrows(source: BytesType, refined: BytesType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min_length', source.minLength, refined.minLength, compareNumber);
-  checkAtMost(out, 'max_length', source.maxLength, refined.maxLength, compareNumber);
+  checkAtLeast(out, 'min_length', source.minLength, refined.minLength, compareBigint);
+  checkAtMost(out, 'max_length', source.maxLength, refined.maxLength, compareBigint);
   return out;
 }
 
-function binaryCoherence(t: BinaryType): string[] {
+function bytesCoherence(t: BytesType): string[] {
   const out: string[] = [];
   checkNonNegative(out, 'min_length', t.minLength);
   checkNonNegative(out, 'max_length', t.maxLength);
-  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareNumber);
+  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareBigint);
   return out;
 }
 
@@ -394,17 +393,17 @@ function dateTimeCoherence(t: DateTimeType): string[] {
 
 function cidrNarrows(source: Cidr4Type | Cidr6Type, refined: Cidr4Type | Cidr6Type): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min_prefix', source.minPrefix, refined.minPrefix, compareNumber);
-  checkAtMost(out, 'max_prefix', source.maxPrefix, refined.maxPrefix, compareNumber);
+  checkAtLeast(out, 'min_prefix', source.minPrefix, refined.minPrefix, compareBigint);
+  checkAtMost(out, 'max_prefix', source.maxPrefix, refined.maxPrefix, compareBigint);
   checkSubset(out, 'within', source.within, refined.within);
   return out;
 }
 
-function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: number): string[] {
+function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: bigint): string[] {
   const out: string[] = [];
-  checkWithin(out, 'min_prefix', t.minPrefix, 0, prefixBits);
-  checkWithin(out, 'max_prefix', t.maxPrefix, 0, prefixBits);
-  checkOrdered(out, 'min_prefix', t.minPrefix, 'max_prefix', t.maxPrefix, compareNumber);
+  checkWithin(out, 'min_prefix', t.minPrefix, 0n, prefixBits);
+  checkWithin(out, 'max_prefix', t.maxPrefix, 0n, prefixBits);
+  checkOrdered(out, 'min_prefix', t.minPrefix, 'max_prefix', t.maxPrefix, compareBigint);
   return out;
 }
 
@@ -463,10 +462,10 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'text_type'
         ? textNarrows(source, refined)
         : mismatch('text', refined);
-    case 'binary':
-      return refined.kind === 'binary'
-        ? binaryNarrows(source, refined)
-        : mismatch('binary', refined);
+    case 'bytes_type':
+      return refined.kind === 'bytes_type'
+        ? bytesNarrows(source, refined)
+        : mismatch('bytes', refined);
     case 'regex_type':
       return refined.kind === 'regex_type'
         ? textNarrows(source, refined)
@@ -502,8 +501,10 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
     case 'enum':
       return refined.kind === 'enum' ? enumNarrows(source, refined) : mismatch('an enum', refined);
     // No orderable facet at all: unit, uuid_type, complex_type (a pure selector), uuid/ipv4/ipv6/
-    // mac (selector- or spec-only), duration_type (unparsed-text bounds, left ordered by nothing
-    // for the reason `atoms-temporal.ts`'s own `DurationType` doc gives).
+    // mac (selector- or spec-only). `duration_type`/`period_type` now hold resolved bigint bounds
+    // (`atoms-temporal.ts`'s own docs) rather than unparsed text, so narrowing them is only a
+    // wiring gap, not a representational one -- deferred to a later work package alongside the
+    // rest of §5.7's per-family narrowing relations.
     case 'unit':
     case 'uuid_type':
     case 'complex_type':
@@ -511,6 +512,7 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
     case 'ipv6_type':
     case 'mac_type':
     case 'duration_type':
+    case 'period_type':
       return [];
   }
 }
@@ -531,11 +533,12 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'float_type',
   'rational_type',
   'uuid_type',
-  'binary',
+  'bytes_type',
   'date_type',
   'time_type',
   'datetime_type',
   'duration_type',
+  'period_type',
   'cidr4_type',
   'cidr6_type',
   'email_type',
@@ -576,8 +579,8 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
       return rationalCoherence(atom);
     case 'text_type':
       return textCoherence(atom);
-    case 'binary':
-      return binaryCoherence(atom);
+    case 'bytes_type':
+      return bytesCoherence(atom);
     case 'regex_type':
       return textCoherence(atom);
     case 'uri_type':
@@ -591,9 +594,9 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'datetime_type':
       return dateTimeCoherence(atom);
     case 'cidr4_type':
-      return cidrCoherence(atom, 32);
+      return cidrCoherence(atom, 32n);
     case 'cidr6_type':
-      return cidrCoherence(atom, 128);
+      return cidrCoherence(atom, 128n);
     case 'enum':
       return enumCoherence(atom);
     case 'unit':
@@ -603,6 +606,7 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'ipv6_type':
     case 'mac_type':
     case 'duration_type':
+    case 'period_type':
       return [];
   }
 }

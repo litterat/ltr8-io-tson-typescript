@@ -299,11 +299,10 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
 });
 
 describe('type-def: structural forms (§5.7-§5.9)', () => {
-  it('a bare record body is a StructuralTypeDef with constructor: false', () => {
+  it('a bare record body is a StructuralTypeDef', () => {
     expect(typeDefOf('{ id: uuid  title: text }')).toEqual({
       kind: 'structuralTypeDef',
       typeParams: [],
-      constructor: false,
       body: {
         kind: 'recordDef',
         entries: [
@@ -328,23 +327,21 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     expect(typeDefOf('{}')).toEqual({
       kind: 'structuralTypeDef',
       typeParams: [],
-      constructor: false,
       body: { kind: 'recordDef', entries: [] },
     });
   });
 
-  it('"~" marks a fresh record as a constructor', () => {
-    const def = typeDefOf('~{ x: uuid }');
-    expect(def.kind).toBe('structuralTypeDef');
-    if (def.kind !== 'structuralTypeDef') throw new Error('unreachable');
-    expect(def.constructor).toBe(true);
+  it('"~" has no role at type-def position and is a parse error, even before a fresh record (§4.2, §12.1)', () => {
+    // There is no constructor marker any more: an entry is a constructor by being IS-A `top`
+    // (§4.2), never by a leading `~`. The corpus states this by name
+    // (`class2/schema/invalid/a-constructor-marker-is-not-grammar`).
+    expect(thrownBy(`${META} { x => ~{ y: uuid } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('refinement ("^") targets a bare type-name and takes a record-def body', () => {
     expect(typeDefOf('customer ^ { vip: boolean }')).toEqual({
       kind: 'structuralTypeDef',
       typeParams: [],
-      constructor: false,
       body: {
         kind: 'refinedDef',
         target: { kind: 'simpleRef', name: 'customer' },
@@ -363,12 +360,8 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     });
   });
 
-  it('"~" then a refinement head is a constructor refinement', () => {
-    const def = typeDefOf('~pair<uuid, text> ^ { }');
-    expect(def.kind).toBe('structuralTypeDef');
-    if (def.kind !== 'structuralTypeDef') throw new Error('unreachable');
-    expect(def.constructor).toBe(true);
-    expect(def.body.kind).toBe('refinedDef');
+  it('"~" before a refinement head is likewise a parse error (§4.2, §12.1)', () => {
+    expect(thrownBy(`${META} { x => ~pair<uuid, text> ^ { } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('composition chains "&"-joined supertypes and admits a trailing body', () => {
@@ -381,7 +374,6 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     expect(typeDefOf('address & contact & { vip: boolean }')).toEqual({
       kind: 'structuralTypeDef',
       typeParams: [],
-      constructor: false,
       body: {
         kind: 'constructionDef',
         supertypes: [
@@ -819,7 +811,7 @@ describe("the spec's own worked example (§1.6)", () => {
     const doc = parse(`
 !!id:"https://example.com/task.tn"
 ${META}
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 @doc:"Task-tracking example schema."
 {
   priority => integer

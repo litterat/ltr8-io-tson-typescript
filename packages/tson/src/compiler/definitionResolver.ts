@@ -29,6 +29,19 @@
  * kind" (`atom` the entry is itself `kind: PRODUCT`, since its own chain is just `[top]`). Zero
  * found → `PRODUCT`; exactly one → that kind; two or more → a resolver error.
  *
+ * **Applicability is IS-A `top` (§3.3.1, §4.2), never a marker.** `!C value` and `<...> !C
+ * value` both resolve `C` against the structure namespace and require {@link isConstructor}
+ * (IS-A `top`, derived from `supertypes`) — the kernel's `reference` included, applied like any
+ * other constructor (`!reference { target: X }` denotes the alias `X`). Composition and
+ * refinement carry the placement consequence themselves: an ordinary declaration that composes
+ * or refines a constructor thereby IS-A `top` too (`supertypes` says so), so there is exactly one
+ * rule to check applicability against, never a second "is this really meant to be a constructor"
+ * guard beside it. `~` plays no part in any of this — it has left the type-def head entirely
+ * (`schemaParser.ts`); a source document that writes one there fails in the parser.
+ *
+ * **Atom refinement's own test is on the body, and on nothing else (§5.5)** — see
+ * {@link resolveAtomRefinement}'s own note for why neither IS-A nor kind can stand in for it.
+ *
  * **Field groups (§5.11) flatten**: each member becomes an ordinary `RecordField` in source
  * position, state `OPTIONAL` regardless of the group's own state (a REQUIRED group still means
  * each *member* is individually optional — at most one is guaranteed, not which); the group
@@ -73,6 +86,7 @@ import type {
   TypeKind,
   TypeRef,
 } from '../schema/meta/typedef.js';
+import { isConstructor } from '../schema/meta/typedef.js';
 import type {
   ElementState,
   FieldGroup,
@@ -92,6 +106,8 @@ import {
   defaultAnnotationValueEncoder as defaultHeldAnnotationEncoder,
   heldEmptyRecord,
   heldRecord,
+  refValue,
+  scoped,
 } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
 import { resolveFieldModifiers } from './fieldModifiers.js';
@@ -180,23 +196,56 @@ function requiredGet<K, V>(map: ReadonlyMap<K, V>, key: K, context: string): V {
   return value;
 }
 
-/** A reference definition whose target is a bare or applied name (§8.3) — `TypeDefinition.reference` in the Java original. */
+/**
+ * A reference definition whose target is a bare or applied name (§8.3) — `TypeDefinition.reference`
+ * in the Java original. **`parameters` empty** produces the closed alias body directly
+ * (`!reference { target }`), REFERENCE-kind by derivation ({@link typeKind}'s second branch).
+ * **Non-empty** — a partial application, `uuid_pair => <B> pair<uuid, B>` (§5.10) — holds the
+ * same `!reference { target }` as *text* instead: "every open entry [is] written as a
+ * constructor application, `<params> !C core-value`, this one included" (meta-kernel's own
+ * `reference` doc), so the held form is what an author would have written, built the same way
+ * `holdIfOpen` builds one for a composition/refinement template.
+ */
 function referenceDefinition(target: TypeRef, parameters: readonly string[]): TypeDefinition {
-  const body: Reference = { kind: 'reference', target };
+  if (parameters.length === 0) {
+    const body: Reference = { kind: 'reference', target };
+    return { source: target, supertypes: [], subtypes: [], body, annotations: [] };
+  }
+  const application = {
+    annotations: [],
+    typeRef: REFERENCE_HEAD,
+    coreValue: {
+      kind: 'record' as const,
+      fields: [{ name: 'target', value: scoped(refValue(target)) }],
+    },
+  };
   return {
     source: target,
-    kind: 'REFERENCE',
-    parameters,
-    constructor: false,
     supertypes: [],
     subtypes: [],
-    body,
+    body: createHeldBody(application, parameters),
     annotations: [],
   };
 }
 
 function isRecordBody(body: Top): body is RecordBody {
   return (body as { readonly kind?: unknown }).kind === 'record';
+}
+
+/**
+ * `TypeDefinition` plus the type parameters a declaration carries before {@link holdIfOpen} folds
+ * them into a held body's own `TemplateBody.parameters` (§5.10) — `schema/meta`'s own
+ * `TypeDefinition` carries no such field any more (Revision 35 keeps parameters on the body that
+ * holds them). A private, module-internal shape: every public return path narrows to
+ * `TypeDefinition` through {@link holdIfOpen} before leaving this module.
+ */
+interface Draft {
+  readonly source?: TypeRef;
+  readonly parameters: readonly string[];
+  readonly supertypes: readonly string[];
+  readonly subtypes: readonly string[];
+  readonly body: Top;
+  readonly annotations: Annotations;
 }
 
 function isHeldBody(body: Top): body is HeldBody {
@@ -227,15 +276,17 @@ function resolveTypeDef(
   typeDef: TypeDef,
 ): TypeDefinition {
   if (typeDef.kind === 'structuralTypeDef') {
+    // No marker to read here (§4.2): a fresh record, composition or refinement is a constructor
+    // only by actually composing or refining IS-A `top` below -- `resolveComposition`/
+    // `resolveRefinement` build `supertypes` from what the declaration's own body names, and
+    // {@link isConstructor} reads it off the result. A bare record body never does, whatever an
+    // author might have intended.
     const parameters = typeDef.typeParams;
-    const constructorFlag = typeDef.constructor;
     const body = typeDef.body;
     if (body.kind === 'recordDef') {
       const recordBody = resolveRecordBody(deps, body.entries, parameters);
       return holdIfOpen(name, {
-        kind: 'PRODUCT',
         parameters,
-        constructor: constructorFlag,
         supertypes: [],
         subtypes: [],
         body: recordBody,
@@ -243,9 +294,9 @@ function resolveTypeDef(
       });
     }
     if (body.kind === 'constructionDef') {
-      return holdIfOpen(name, resolveComposition(deps, name, body, constructorFlag, parameters));
+      return holdIfOpen(name, resolveComposition(deps, name, body, parameters));
     }
-    return holdIfOpen(name, resolveRefinement(deps, name, body, constructorFlag, parameters));
+    return holdIfOpen(name, resolveRefinement(deps, name, body, parameters));
   }
   if (typeDef.kind === 'referenceTypeDef') {
     const parameters = typeDef.typeParams;
@@ -280,16 +331,17 @@ function resolveTypeDef(
  * process closes them all. See `heldBody.ts`'s own module doc for why these two are held here
  * (a plain record template is instead rewritten by the desugarer, before resolution runs).
  */
-function holdIfOpen(name: string, resolved: TypeDefinition): TypeDefinition {
-  if (resolved.parameters.length === 0 || !isRecordBody(resolved.body)) {
-    return resolved;
+function holdIfOpen(name: string, draft: Draft): TypeDefinition {
+  const { parameters, ...rest } = draft;
+  if (parameters.length === 0 || !isRecordBody(draft.body)) {
+    return rest;
   }
-  const record = resolved.body;
+  const record = draft.body;
   if (record.fields.length === 0 && record.groups.length === 0 && record.supertypes.length === 0) {
-    return { ...resolved, body: createHeldBody(heldEmptyRecord()) };
+    return { ...rest, body: createHeldBody(heldEmptyRecord(), parameters) };
   }
   return {
-    ...resolved,
+    ...rest,
     body: createHeldBody(
       heldRecord(record, (value) => {
         try {
@@ -301,6 +353,7 @@ function holdIfOpen(name: string, resolved: TypeDefinition): TypeDefinition {
           );
         }
       }),
+      parameters,
     ),
   };
 }
@@ -324,7 +377,7 @@ function resolveInstance(
 ): TypeDefinition {
   const target = requireTypeRef(instance.value, `'${name}'`);
   const constructorDef = resolveConstructorTarget(deps, name, target);
-  if (!constructorDef.constructor) {
+  if (!isConstructor(constructorDef)) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${target}' does not resolve to a constructor (§3.3.1) -- did you mean atom refinement ` +
         `('!${target} ^ { ... }')?`,
@@ -339,9 +392,6 @@ function resolveInstance(
   const body = bindAtomInstance(deps, name, instance.value);
   return {
     source: { name: target, arguments: [], annotations: [] },
-    kind: constructorDef.kind,
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,
@@ -364,11 +414,10 @@ function resolveInstanceTemplate(
 ): TypeDefinition {
   const target = requireTypeRef(template.value, `'${name}'`);
   const constructorDef = resolveConstructorTarget(deps, name, target);
-  // `reference` is the one head whose kind cannot come from its supertype chain and whose
-  // eligibility cannot come from a `~`: §4.1 gives an alias `kind: REFERENCE`, and the kernel
-  // deliberately leaves `reference` unmarked because it describes no value.
-  const alias = target === REFERENCE_HEAD;
-  if (!alias && !constructorDef.constructor) {
+  // `reference => top & { target: type_ref }` composes with `top` directly (§4.1), so it is
+  // `isConstructor`-eligible on the same terms as every other constructor and needs no carve-out
+  // here: §5.5 says the kernel's `reference` "is applicable like any other".
+  if (!isConstructor(constructorDef)) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${target}' does not resolve to a constructor (§3.3.1), so there is nothing for ` +
         `'<...> !${target} { ... }' to build`,
@@ -385,12 +434,9 @@ function resolveInstanceTemplate(
   }
   return {
     source: { name: target, arguments: [], annotations: [] },
-    kind: alias ? 'REFERENCE' : constructorDef.kind,
-    parameters: template.typeParams,
-    constructor: false,
     supertypes: [],
     subtypes: [],
-    body: createHeldBody(template.value),
+    body: createHeldBody(template.value, template.typeParams),
     annotations: [],
   };
 }
@@ -426,10 +472,24 @@ function checkTemplateBindings(
 
 /**
  * `!I ^ { values }` — refines an atom-family instance by tightening its constructor's constraint
- * fields. `I` resolves against the type-name namespace only (§3.3.1) and MUST be a
- * non-constructor instance of an atom family. Merges with `I`'s own already-bound value rather
+ * fields. `I` resolves against the type-name namespace only (§3.3.1) and MUST be an atom-family
+ * **instance** — an entry whose body *is* an atom application (`integer` carries
+ * `!integer_type {}`), not the constructor whose body is the vocabulary record *describing* one
+ * (`integer_type` carries `!record { ... }`). Merges with `I`'s own already-bound value rather
  * than replacing it ({@link mergeWithSource}), which is what makes a *chained* refinement carry
  * its ancestor's constraints forward.
+ *
+ * **The test is on the body, and on nothing else (§3.3.1, §5.5).** Neither IS-A nor kind
+ * separates a constructor from its own instances: `!integer_type {}`'s (`integer`'s) `source`
+ * refinement target has empty `supertypes` exactly like `integer_type` itself has (construction
+ * transfers no IS-A, §4.1), so an IS-A check cannot rule `integer_type` out by testing `source`
+ * for being a constructor either way -- and both `integer` and `integer_type` are ATOM-kinded
+ * (`typeKind`'s third branch reads a constructor's own kind off its supertypes exactly as an
+ * instance's), so a kind check cannot separate them, "true of the constructor, false of every
+ * instance" being the opposite of what a reader would guess. {@link isAtom} answers the one
+ * question that does: is `source.body` itself a member of the {@link Atom} union, which is true
+ * of `integer` (`body.kind === 'integer_type'`) and false of `integer_type` (`body.kind ===
+ * 'record'`, the vocabulary record `integer_type` composes for its own instances to fill).
  */
 function resolveAtomRefinement(
   deps: DefinitionResolverDeps,
@@ -443,15 +503,13 @@ function resolveAtomRefinement(
       `'${name}': '!${sourceName}' does not resolve against the type-name namespace (§3.3.1)`,
     );
   }
-  if (source.constructor) {
+  if (!isAtom(source.body)) {
     throw new TsonSchemaValidationError(
-      `'${name}': '!${sourceName} ^ { ... }' refines a constructor, not an instance (§3.3.1) -- did you mean ` +
-        `constructor application ('!${sourceName} { ... }')?`,
-    );
-  }
-  if (source.kind !== 'ATOM') {
-    throw new TsonSchemaValidationError(
-      `'${name}': '!${sourceName}' is not an atom-family instance (§5.5), kind=${source.kind}`,
+      `'${name}': '!${sourceName}' is not an atom-family instance (§5.5) -- its body is not an atom ` +
+        `application, so there is nothing here to tighten. A constructor's own body is its vocabulary ` +
+        `record, not an atom application ('!${sourceName} ^ { ... }' would refine an instance like ` +
+        `'integer', not the vocabulary record 'integer_type' describes) -- did you mean constructor ` +
+        `application ('!${sourceName} { ... }')?`,
     );
   }
   const constructorRef = source.source;
@@ -465,9 +523,6 @@ function resolveAtomRefinement(
   checkNarrows(name, sourceName, source.body, body);
   return {
     source: constructorRef,
-    kind: source.kind,
-    parameters: [],
-    constructor: false,
     supertypes: [sourceName],
     subtypes: [],
     body,
@@ -695,9 +750,8 @@ function resolveComposition(
   deps: DefinitionResolverDeps,
   name: string,
   construction: ConstructionDef,
-  constructorFlag: boolean,
   parameters: readonly string[],
-): TypeDefinition {
+): Draft {
   const directSupertypes: string[] = [];
   const transitiveSupertypes: string[] = [];
   const seenTransitive = new Set<string>();
@@ -768,16 +822,17 @@ function resolveComposition(
   }
   checkGroupPresence(name, fields, groups);
 
-  const kind = determineKind(name, transitiveSupertypes);
+  // §4.1: at most one base kind may be reachable through the supertype chain -- kept as a
+  // validation-only call (its own diagnostic is the point) now that kind is derived rather than
+  // stored; see `determineKind`'s own doc.
+  determineKind(name, transitiveSupertypes);
   const body: RecordBody = { kind: 'record', supertypes: directSupertypes, fields, groups };
   // §5.9: subtraction breaks IS-A. The contract index (supertypes) is emptied while the body
   // keeps `directSupertypes` as authorial lineage (record.supertypes) -- for EVERY supertype,
   // including one that contributed nothing to the removal (§5.9's own "the clause is head-level").
   const contract = construction.removal !== undefined ? [] : transitiveSupertypes;
   return {
-    kind,
     parameters,
-    constructor: constructorFlag,
     supertypes: contract,
     subtypes: [],
     body,
@@ -865,7 +920,15 @@ function addIfAbsent(list: string[], seen: Set<string>, name: string): void {
   }
 }
 
-/** §4.1: literal, kernel-fixed base-kind names in the transitive chain — never "inherit the nearest ancestor's own kind". */
+/**
+ * §4.1: literal, kernel-fixed base-kind names in the transitive chain — never "inherit the
+ * nearest ancestor's own kind". Called for its validation alone at both call sites (a
+ * `TypeDefinition` carries no `kind` field to store the answer in any more, §8.1) — a namespace
+ * consumer that needs an entry's actual kind later derives it with `typeKind`
+ * (`schema/meta/typedef.ts`), which reaches the identical answer by walking `supertypes` and
+ * `body` together rather than `transitiveSupertypes` alone, and covers every entry shape, not
+ * only a fresh composition or refinement's own.
+ */
 function determineKind(name: string, transitiveSupertypes: readonly string[]): TypeKind {
   const baseKindsFound = transitiveSupertypes.filter(
     (s) => s === 'atom' || s === 'product' || s === 'sum' || s === 'data',
@@ -905,16 +968,14 @@ function resolveRefinement(
   deps: DefinitionResolverDeps,
   name: string,
   refined: RefinedDef,
-  constructorFlag: boolean,
   parameters: readonly string[],
-): TypeDefinition {
+): Draft {
   if (refined.target.kind === 'genericRef' && namesOwnParameter(refined.target, parameters)) {
     const operand = openOperand(deps, name, refined.target, parameters, 'refinement source');
     return refineOnto(
       deps,
       name,
       refined,
-      constructorFlag,
       parameters,
       undefined,
       [...operand.ancestors],
@@ -945,7 +1006,6 @@ function resolveRefinement(
     deps,
     name,
     refined,
-    constructorFlag,
     parameters,
     sourceRef,
     transitiveSupertypes,
@@ -958,12 +1018,11 @@ function refineOnto(
   deps: DefinitionResolverDeps,
   name: string,
   refined: RefinedDef,
-  constructorFlag: boolean,
   parameters: readonly string[],
   source: TypeRef | undefined,
   transitiveSupertypes: readonly string[],
   sourceBody: RecordBody,
-): TypeDefinition {
+): Draft {
   const fields: RecordField[] = [...sourceBody.fields];
   const groups: FieldGroup[] = [...sourceBody.groups];
   const inheritedFieldIndex = new Map<string, number>();
@@ -997,13 +1056,12 @@ function refineOnto(
   }
   checkGroupPresence(name, fields, groups);
 
-  const kind = determineKind(name, transitiveSupertypes);
+  // Validation only -- see `resolveComposition`'s own identical call for why.
+  determineKind(name, transitiveSupertypes);
   const body: RecordBody = { kind: 'record', supertypes: [], fields, groups };
   return {
     ...(source === undefined ? {} : { source }),
-    kind,
     parameters,
-    constructor: constructorFlag,
     supertypes: transitiveSupertypes,
     subtypes: [],
     body,
@@ -1093,18 +1151,18 @@ function openOperand(
         `'${typeParams.join(', ')}' (§5.10)`,
     );
   }
-  if (template.parameters.length !== application.args.length) {
+  const held = template.body;
+  if (held.parameters.length !== application.args.length) {
     throw new TsonSchemaValidationError(
-      `'${name}': ${position} '${head}' declares ${String(template.parameters.length)} type parameter(s) and ` +
+      `'${name}': ${position} '${head}' declares ${String(held.parameters.length)} type parameter(s) and ` +
         `is applied to ${String(application.args.length)} (§5.10)`,
     );
   }
   const bindings = new Map<string, TypeArgument>();
-  template.parameters.forEach((parameter, i) => {
+  held.parameters.forEach((parameter, i) => {
     bindings.set(parameter, typeArgument(deps, at(application.args, i, 'openOperand')));
   });
-  const held = template.body;
-  const substituted = substitute(held.application.coreValue, head, template.parameters, bindings);
+  const substituted = substitute(held.application.coreValue, head, held.parameters, bindings);
   const absorbedValue: DataValue = {
     annotations: held.application.annotations,
     ...(held.application.typeRef === undefined ? {} : { typeRef: held.application.typeRef }),

@@ -56,14 +56,14 @@ describe('§5.6 !number -- decimal_type constraints', () => {
   });
 
   it('total_digits bounds the significant digit count', () => {
-    const limited: DecimalType = { kind: 'decimal_type', totalDigits: 3 };
+    const limited: DecimalType = { kind: 'decimal_type', totalDigits: 3n };
     const parser = createDecimalParser('limited', limited);
     expect(parser.read(token('123'))).toEqual({ unscaled: 123n, exponent: 0 });
     expect(() => parser.read(token('1234'))).toThrow(TsonAtomValidationError);
   });
 
   it('fraction_digits bounds digits after the decimal point, clamped at 0 for a positive-exponent value', () => {
-    const limited: DecimalType = { kind: 'decimal_type', fractionDigits: 2 };
+    const limited: DecimalType = { kind: 'decimal_type', fractionDigits: 2n };
     const parser = createDecimalParser('limited', limited);
     expect(parser.read(token('1.23'))).toEqual({ unscaled: 123n, exponent: -2 });
     expect(() => parser.read(token('1.234'))).toThrow(TsonAtomValidationError);

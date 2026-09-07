@@ -19,7 +19,7 @@ const UNCONSTRAINED: Cidr6Type = {
   excluding: [],
 };
 
-function withPrefixBounds(minPrefix?: number, maxPrefix?: number): Cidr6Type {
+function withPrefixBounds(minPrefix?: bigint, maxPrefix?: bigint): Cidr6Type {
   return {
     ...UNCONSTRAINED,
     ...(minPrefix !== undefined && { minPrefix }),
@@ -107,7 +107,7 @@ describe('§5.5 !cidr6 -- prefix range and host-bits validation errors', () => {
 
 describe('§5.5 !cidr6 -- cidr6_type minPrefix/maxPrefix facets', () => {
   it('applies both bounds', () => {
-    const parser = createCidr6Parser('cidr6', withPrefixBounds(32, 48));
+    const parser = createCidr6Parser('cidr6', withPrefixBounds(32n, 48n));
     expect(parser.read(token('2001:db8::/32'))).toEqual({ kind: 'cidr6', text: '2001:db8::/32' });
     try {
       parser.read(token('2000::/16'));

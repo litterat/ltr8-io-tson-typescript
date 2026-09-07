@@ -1,10 +1,10 @@
 /**
  * The two remaining base-kind unions (`product`, `sum`, §4.1), the `unit` atom constructor,
- * the two product-shape enums implied by (but never carried on) a product body, and the two
- * exact host-value shapes this package's constraint fields are typed with: {@link Rational}
- * and {@link IsoDuration}.
+ * the two product-shape enums implied by (but never carried on) a product body, and the exact
+ * host-value shapes this package's constraint fields are typed with: {@link Rational} and
+ * {@link Decimal}.
  */
-import type { Extern, UnknownType } from './typedef.js';
+import type { Scoped } from './typedef.js';
 import type { ArrayBody, ChoiceBody, MapBody, RecordBody, TupleBody } from './bodies.js';
 
 /**
@@ -18,11 +18,12 @@ export type Product = RecordBody | ArrayBody | MapBody | TupleBody;
 
 /**
  * The meta-kernel's `sum => top & {}` base kind (§4.1) — every SUM-kind {@link Top}
- * variant: {@link ChoiceBody} (`choice => ~sum & { variants: [type_ref] }`, §5.4),
- * {@link UnknownType} (`unknown_type => ~sum & {}`, "the universe of types"), and
- * {@link Extern} (`extern => ~sum & { schema: uri  types: [type_name]? }`).
+ * variant: {@link ChoiceBody} (`choice => sum & { variants: [type_ref]  disjoint: boolean?
+ * }`, §5.4), the closed sum that enumerates its variants, and {@link Scoped} (`scoped => sum
+ * & { scope: ...  schemas: ...? }`, §7.8), the open one that names the namespaces its
+ * variants are drawn from.
  */
-export type Sum = ChoiceBody | UnknownType | Extern;
+export type Sum = ChoiceBody | Scoped;
 
 /**
  * The meta-kernel's `product_size_type` enum (§4.1, §8.1) — fixed per product constructor
@@ -43,7 +44,7 @@ export type ProductAccessType = 'INDEX' | 'NAMED';
 
 /**
  * The meta-kernel's `unit` atom constructor's own vocabulary, resolved (§4.2, §8.1): an
- * empty marker, `!unit {}` — the body of `value`, `token`, and `void` (and core's own
+ * empty marker, `!unit {}` — the body of `value`, `identifier`, and `void` (and core's own
  * `void` sibling), "the atom with no constraint vocabulary" (§4.2).
  */
 export interface Unit {
@@ -83,39 +84,4 @@ export interface Rational {
 export interface Decimal {
   readonly unscaledValue: bigint;
   readonly scale: number;
-}
-
-/**
- * The meta-kernel's `duration` host value — ISO 8601's `PnYnMnDTnHnMnS`, split into its
- * calendar part (`Y`/`M`/`D`, no fixed length) and its clock part (`H`/`M`/`S`, an exact
- * length), mirroring the two `java.time` types the reference implementation pairs for the
- * same reason no single type covers the grammar: `Period` (calendar) rejects any `T`-time
- * part at all, and `Duration` (clock) rejects any `Y`/`M` outright.
- *
- * Lives here, not in a richer host-value module, because {@link DurationType}'s doc records
- * a deliberate divergence: `min`/`max` on that type are kept as raw ISO 8601 text rather
- * than this parsed shape, precisely to avoid the same host-value dependency this type would
- * otherwise pull in. `IsoDuration` is ported for structural completeness — a later
- * work package's atom parser is the first real consumer.
- *
- * Not modelled as `Comparable`: a calendar-based duration (`P1M`, one calendar month) has no
- * fixed length to compare against a clock-based one (`P1M` may be 28-31 days depending on
- * when it is applied) — ordering is a partial order this shape does not carry.
- */
-export interface IsoDuration {
-  readonly calendarPart: IsoCalendarPart;
-  readonly clockPart: IsoClockPart;
-}
-
-/** The calendar-based component of an {@link IsoDuration}, mirroring `java.time.Period`'s fields. */
-export interface IsoCalendarPart {
-  readonly years: number;
-  readonly months: number;
-  readonly days: number;
-}
-
-/** The clock-based component of an {@link IsoDuration}, mirroring `java.time.Duration`'s fields. */
-export interface IsoClockPart {
-  readonly seconds: bigint;
-  readonly nanoseconds: number;
 }

@@ -72,8 +72,8 @@ describe('readTree/validate: schemaless (Class 1)', () => {
 describe('readTree/validate: schema-governed', () => {
   const SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   reading => { id: uuid label: non_empty_text }
 }

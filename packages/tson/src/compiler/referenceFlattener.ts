@@ -129,7 +129,10 @@ function terminalName(
   while (!walked.has(current)) {
     walked.add(current);
     const definition = namespace.get(current);
-    if (definition?.kind !== 'REFERENCE' || !isReferenceBody(definition.body)) {
+    // A `Reference`-shaped body is REFERENCE-kind by derivation's own second branch
+    // (`schema/meta/typedef.ts`'s `typeKind`) with no further lookup needed, so the body check
+    // alone decides this -- `definition === undefined` falls through to the same `return current`.
+    if (definition === undefined || !isReferenceBody(definition.body)) {
       return current;
     }
     // Stop *at* a materialised instantiation rather than walking through it -- see this module's

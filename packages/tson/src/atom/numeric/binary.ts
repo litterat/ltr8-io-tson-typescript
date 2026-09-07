@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta.tn's `binary` constructor's encoding-parameterised octet
+ * Parses and validates against meta.tn's `bytes_type` constructor's encoding-parameterised octet
  * value space -- the port of `atom/BytesParser.java`. `!bytes` is Part 1's one binary annotation
  * and its spelling is base64 (§5.3): an alphabet is a *spelling* of an octet sequence, not a kind
  * of value, and a schemaless document has no schema to carry a selector, so `!bytes` fixes one
@@ -25,7 +25,7 @@
  */
 
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
-import type { BinaryType } from '../../schema/meta/atoms-text.js';
+import type { BytesType } from '../../schema/meta/atoms-bytes.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { decodeBase32, encodeBase32 } from './base32.js';
 import { decodeBase64, encodeBase64 } from './base64.js';
@@ -74,27 +74,27 @@ function encodeHex(data: Uint8Array): string {
 }
 
 /**
- * Builds the `AtomType` for one fully-parameterised `binary` instance -- e.g. Part 1's `bytes` is
- * `createBinaryParser('bytes', { kind: 'binary', encoding: 'BASE64' })`, the only instance
+ * Builds the `AtomType` for one fully-parameterised `bytes_type` instance -- e.g. Part 1's `bytes`
+ * is `createBinaryParser('bytes', { kind: 'bytes_type', encoding: 'BASE64' })`, the only instance
  * `reader/schemaless/vocabulary.ts` registers. See {@link createIntegerParser} for why `typeRef`
  * is required explicitly rather than derived from `encoding` the way `BytesParser.java`'s own
  * `typeName()` derives it.
  */
-export function createBinaryParser(typeRef: string, constraints: BinaryType): AtomType<Uint8Array> {
+export function createBinaryParser(typeRef: string, constraints: BytesType): AtomType<Uint8Array> {
   function validate(value: Uint8Array, text: string): void {
     const { minLength, maxLength } = constraints;
-    if (minLength !== undefined && value.length < minLength) {
+    if (minLength !== undefined && BigInt(value.length) < minLength) {
       const length = String(value.length);
-      const bound = String(minLength);
+      const bound = minLength.toString();
       throw new TsonAtomValidationError(
         typeRef,
         `'${text}' decodes to ${length} bytes, less than the minimum ${bound}`,
         `at least ${bound} bytes`,
       );
     }
-    if (maxLength !== undefined && value.length > maxLength) {
+    if (maxLength !== undefined && BigInt(value.length) > maxLength) {
       const length = String(value.length);
-      const bound = String(maxLength);
+      const bound = maxLength.toString();
       throw new TsonAtomValidationError(
         typeRef,
         `'${text}' decodes to ${length} bytes, more than the maximum ${bound}`,

@@ -18,13 +18,23 @@ export interface IntegerSize {
 
 /**
  * The meta-kernel's `integer_type` constructor (§5.6, §9): the integer family's atom
- * constraint vocabulary — bit width/signedness (via {@link IntegerSize}), bounds, and a
- * multiple-of constraint.
+ * constraint vocabulary — bit width/signedness (via {@link IntegerSize}), bounds, a
+ * multiple-of constraint, and a sparse member set.
  *
  * `min`/`exclusiveMin` are mutually exclusive, as are `max`/`exclusiveMax` — the Java
  * original's compact constructor rejects a value carrying both of either pair. This type
  * cannot enforce that exclusion structurally; a resolver MUST never populate both members of
  * either pair on one value.
+ *
+ * `multipleOf` is `non_negative_integer`-typed in the kernel (the sign is asserted separately,
+ * as a schema-load coherence check that it is strictly positive) — still `bigint` here, the
+ * same representation as every other field in this family.
+ *
+ * `members` is the kernel's `integer_member_set` — `!set_type { element_type: integer }` — an
+ * ordered array of already-parsed integers on the same "member order preserved, not
+ * semantically significant" convention {@link EnumBody.members} states. Every member must
+ * itself satisfy this body's other facets (a coherence check outside this value model), and a
+ * refinement may only shrink the set.
  *
  * Also an {@link Atom} variant: `integer => !integer_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
@@ -37,6 +47,7 @@ export interface IntegerType {
   readonly max?: bigint;
   readonly exclusiveMax?: bigint;
   readonly multipleOf?: bigint;
+  readonly members?: readonly bigint[];
 }
 
 /**
@@ -79,9 +90,16 @@ export interface FloatType {
  * ISO/IEC 11404 `scaled`).
  *
  * `totalDigits`/`fractionDigits` are SQL's own `DECIMAL(precision, scale)` pair: the total
- * significant digits permitted, and how many of them fall after the point. `min`/
- * `exclusiveMin` and `max`/`exclusiveMax` are mutually exclusive pairs, the same unenforced
- * invariant {@link IntegerType} carries.
+ * significant digits permitted, and how many of them fall after the point — `bigint` because
+ * the kernel types both `non_negative_integer`. `min`/`exclusiveMin` and `max`/`exclusiveMax`
+ * are mutually exclusive pairs, the same unenforced invariant {@link IntegerType} carries.
+ *
+ * `members` is the kernel's `set<value>` — every element is `value`-typed (§7.4), so the
+ * resolver reads each token under this constrained atom (`decimal`) *before* the set is
+ * formed: `1` and `1.0` are one member and a duplicate rather than two, exactly as they are one
+ * value everywhere else in this family. A member that does not parse as a decimal fails at
+ * schema load. Every member must satisfy this body's other facets, and a refinement may only
+ * shrink the set — the same rules {@link IntegerType.members} states.
  *
  * Also an {@link Atom} variant: `number => !decimal_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
@@ -93,8 +111,9 @@ export interface DecimalType {
   readonly max?: Decimal;
   readonly exclusiveMax?: Decimal;
   readonly multipleOf?: Decimal;
-  readonly totalDigits?: number;
-  readonly fractionDigits?: number;
+  readonly totalDigits?: bigint;
+  readonly fractionDigits?: bigint;
+  readonly members?: readonly Decimal[];
 }
 
 /**

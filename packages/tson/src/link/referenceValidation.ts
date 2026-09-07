@@ -36,6 +36,7 @@ import {
 import { isDataBody, type NonDataTop } from './bodyKind.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
+import { isHeldBody } from '../compiler/heldBody.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -44,7 +45,14 @@ import type {
   RecordField,
   TupleBody,
 } from '../schema/meta/bodies.js';
-import type { Token, TypeArgument, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
+import type {
+  Token,
+  TypeArgument,
+  TypeDefinition,
+  TypeKind,
+  TypeRef,
+} from '../schema/meta/typedef.js';
+import { typeKind, typeParameters } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -148,7 +156,7 @@ function validateEntry(
       source.arguments.length > 0
         ? namespace
         : mergeWithFallback(namespace, structureNamespace);
-    validateTypeRef(source, sourceLookup, def.parameters, name, ' source');
+    validateTypeRef(source, sourceLookup, typeParameters(def), name, ' source');
   }
 
   for (const supertype of def.supertypes) {
@@ -162,7 +170,7 @@ function validateEntry(
     }
   }
 
-  validateBody(name, def, namespace, def.parameters);
+  validateBody(name, def, namespace, typeParameters(def));
 }
 
 function validateBody(
@@ -175,8 +183,15 @@ function validateBody(
   if (!('kind' in body)) {
     // A held TemplateBody: opaque to everything that needs to know what a reference *resolves
     // to* (that cannot be settled until substitution supplies arguments) except arity, which is
-    // decidable without substituting -- see checkHeldArity's own note.
-    checkHeldArity(entryName, body.applications(), namespace, ownParameters);
+    // decidable without substituting -- see checkHeldArity's own note. `isHeldBody` is this
+    // package's own single implementation of the contract (`compiler/heldBody.ts`'s own top
+    // note); a body that somehow is not one has no applications to check.
+    checkHeldArity(
+      entryName,
+      isHeldBody(body) ? body.applications() : [],
+      namespace,
+      ownParameters,
+    );
     return;
   }
   if (isDataBody(body)) {
@@ -280,11 +295,12 @@ function validateBody(
     case 'float_type':
     case 'rational_type':
     case 'uuid_type':
-    case 'binary':
+    case 'bytes_type':
     case 'date_type':
     case 'time_type':
     case 'datetime_type':
     case 'duration_type':
+    case 'period_type':
     case 'cidr4_type':
     case 'cidr6_type':
     case 'email_type':
@@ -292,8 +308,7 @@ function validateBody(
     case 'ipv4_type':
     case 'ipv6_type':
     case 'complex_type':
-    case 'unknown_type':
-    case 'extern':
+    case 'scoped':
       return; // no type reference of their own to validate
   }
 }
@@ -337,7 +352,7 @@ function checkFieldValue(
   // ever does: the chain end is what would have to be checked, not the hop.
   if (
     target === undefined ||
-    target.parameters.length > 0 ||
+    typeParameters(target).length > 0 ||
     field.type.arguments.length > 0 ||
     !('kind' in target.body) ||
     isDataBody(target.body) ||
@@ -413,10 +428,8 @@ function describeBody(body: NonDataTop): string {
       return 'an alias';
     case 'unit':
       return 'the void type'; // reached only when isScalarBody already refused this same name
-    case 'unknown_type':
-      return 'the unknown type, which is every type rather than a token shape';
-    case 'extern':
-      return 'an external type';
+    case 'scoped':
+      return "a scoped type, whose value names its own type rather than taking one from the position's own token shape";
     default:
       return 'not a scalar type';
   }
@@ -429,6 +442,26 @@ function asWritten(token: Token): string {
 
 // ── Type references ──────────────────────────────────────────────────────────────────────────
 
+/**
+ * {@link typeKind}, best-effort: `namespace` here is the merged local/imported namespace only,
+ * never the governing structure namespace a constructor name might need for the derivation's own
+ * fourth branch (§8.1) — a gap this function accepts rather than threading a second namespace
+ * through every reference-validation call site for a check that exists only to produce a better
+ * diagnostic (§4.1's own DATA-position refusal), never to decide whether data is valid: an
+ * unresolved lookup here means "cannot prove DATA", not "not DATA", and the caller treats it that
+ * way.
+ */
+function safeTypeKind(
+  def: TypeDefinition,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+): TypeKind | undefined {
+  try {
+    return typeKind(def, (n) => namespace.get(n));
+  } catch {
+    return undefined;
+  }
+}
+
 function validateTypeRef(
   ref: TypeRef,
   namespace: ReadonlyMap<string, TypeDefinition>,
@@ -438,7 +471,7 @@ function validateTypeRef(
 ): void {
   const context = `'${subject}'${trail}`;
   const target = namespace.get(ref.name);
-  if (target?.kind === 'DATA') {
+  if (target !== undefined && safeTypeKind(target, namespace) === 'DATA') {
     // §8.1's schema map holds only type definitions, so an entry describing something else has
     // no way to say "declare me, but do not let anything name me as a type" other than this
     // check. Without it the misuse resolves, links AND compiles, and fails only when a document
@@ -514,7 +547,8 @@ function checkArity(
   if (referenced === undefined) {
     return; // reached only through the structure-namespace fallback, which the caller already allowed
   }
-  const declared = referenced.parameters.length;
+  const referencedParameters = typeParameters(referenced);
+  const declared = referencedParameters.length;
   const supplied = ref.arguments.length;
   if (declared === supplied) {
     return;
@@ -528,13 +562,13 @@ function checkArity(
   if (supplied === 0) {
     throw new TsonSchemaValidationError(
       `${context}: '${ref.name}' is a template taking ${String(declared)} type argument` +
-        `${declared === 1 ? '' : 's'} [${referenced.parameters.join(', ')}], and a template is ` +
+        `${declared === 1 ? '' : 's'} [${referencedParameters.join(', ')}], and a template is ` +
         `not a type until it is applied -- write '${ref.name}<...>' with its arguments (§5.10)`,
     );
   }
   throw new TsonSchemaValidationError(
     `${context}: '${ref.name}' takes ${String(declared)} type argument${declared === 1 ? '' : 's'} ` +
-      `[${referenced.parameters.join(', ')}], but ${String(supplied)} ${supplied === 1 ? 'was' : 'were'} ` +
+      `[${referencedParameters.join(', ')}], but ${String(supplied)} ${supplied === 1 ? 'was' : 'were'} ` +
       'applied (§5.10)',
   );
 }
@@ -636,13 +670,14 @@ function checkVariantsAreNotVoid(
  * from any other -- the parameter is a mistake, not a degenerate-but-legal template.
  */
 function checkOpenEntryUsesEveryParameter(name: string, def: TypeDefinition): void {
-  if (def.parameters.length === 0) {
+  const parameters = typeParameters(def);
+  if (parameters.length === 0) {
     return;
   }
   const referenced = new Set<string>();
   if (def.source !== undefined) collectNames(def.source, referenced);
   collectBodyNames(def.body, referenced);
-  for (const parameter of def.parameters) {
+  for (const parameter of parameters) {
     if (!referenced.has(parameter)) {
       throw new TsonSchemaValidationError(
         `'${name}' declares the type parameter '${parameter}' and never references it, so every ` +
@@ -666,8 +701,10 @@ function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void
   if (!('kind' in body)) {
     // The one question a held body answers without being resolved, and it answers it about
     // tokens rather than references -- the same rule substitution follows when deciding what to
-    // rewrite.
-    for (const n of body.names()) into.add(n);
+    // rewrite. `isHeldBody`: see `validateBody`'s own identical note.
+    if (isHeldBody(body)) {
+      for (const n of body.names()) into.add(n);
+    }
     return;
   }
   if (isDataBody(body)) {
@@ -700,7 +737,7 @@ function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void
       collectNames(body.target, into);
       return;
     default:
-      return; // an atom body, Data, Unit, EnumBody, UnknownType, or Extern names no type parameter
+      return; // an atom body, Data, Unit, EnumBody, or Scoped names no type parameter
   }
 }
 

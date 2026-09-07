@@ -159,6 +159,18 @@ day it does not match is the day it matters.
 
 ## Known gaps
 
+- **A chained atom refinement records one hop of ancestry where composition records the whole
+  chain.** `definitionResolver.ts`'s `resolveAtomRefinement` writes `supertypes: [sourceName]`,
+  while `resolveComposition` writes the full transitive chain — so `tiny => !smaller ^ { max: 10 }`
+  over `smaller => !small ^ { max: 50 }` over `small => !integer ^ { max: 100 }` resolves to
+  `supertypes: [smaller]`, not `[smaller small integer]`. The bundled fixture does not settle it:
+  `meta-kernel-resolved.tn` has exactly one atom refinement, `non_negative_integer`, whose source
+  `integer` is a constructor _application_ with no supertypes of its own, so `[integer]` is both
+  readings at once. Every other refinement in the fixture is a record refinement, and `set_type`
+  states `[array product top]` — transitive. §4.2 makes IS-A transitive, so a reader asking
+  "is `tiny` an `integer`?" off `supertypes` alone gets the wrong answer today; nothing in the
+  corpus asks it. Worth resolving upstream rather than guessing, since it changes resolved output.
+
 - **A data document's annotations are preserved but never resolved (§6).** §6 says an annotation
   names a type reachable one hop through the governing target — the `!!schema` target for a data
   document — that an annotation whose name does not resolve there is an error, and that the value

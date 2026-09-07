@@ -57,8 +57,8 @@ export interface Ipv6Type {
 export interface Cidr4Type {
   readonly kind: 'cidr4_type';
   readonly spec: string;
-  readonly minPrefix?: number;
-  readonly maxPrefix?: number;
+  readonly minPrefix?: bigint;
+  readonly maxPrefix?: bigint;
   readonly within: readonly string[];
   readonly excluding: readonly string[];
 }
@@ -76,8 +76,8 @@ export interface Cidr4Type {
 export interface Cidr6Type {
   readonly kind: 'cidr6_type';
   readonly spec: string;
-  readonly minPrefix?: number;
-  readonly maxPrefix?: number;
+  readonly minPrefix?: bigint;
+  readonly maxPrefix?: bigint;
   readonly within: readonly string[];
   readonly excluding: readonly string[];
 }

@@ -515,14 +515,27 @@ function differences(name: string): string[] {
 
 describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixtures", () => {
   // A fixture's entry count is its schema's authored declaration count plus whatever §5.3's sugar
-  // forms lift to a closed synthetic entry: meta-kernel declares 49 and lifts 8, meta declares 30
-  // and lifts 1 (`array_value_xxhash`), core declares 48 and lifts none. Pinned because the two
-  // counts are easy to conflate, and a schema whose declaration count drifts is a vendoring
-  // failure `vendored-spec.test.ts` should have caught first.
+  // forms lift to a closed synthetic entry: meta-kernel declares 50 and lifts 8, meta declares 38
+  // and lifts 7, core declares 50 and lifts none. Pinned because the two counts are easy to
+  // conflate, and a schema whose declaration count drifts is a vendoring failure
+  // `vendored-spec.test.ts` should have caught first.
+  //
+  // Revision 35's own declaration-count deltas, name for name against the Revision 34 vendor:
+  // meta-kernel drops `alias` (§8.3: a reference is a hop, never a rewrite -- nothing left to
+  // mark), `set` (moved to meta/core as an ordinary instance) and `type_kind` (no longer resolver
+  // output, §8.1), and gains `template` (§5.10's held-body constructor), `set_type` (the
+  // constructor `set` now instantiates), `integer_member_set` and `non_negative_integer` (§5.2's
+  // sparse member sets and the type of every counting facet). meta drops `binary`/
+  // `binary_encoding` and `extern`/`unknown_type` (§5.3, §7.8's rebuild) and gains
+  // `bytes_type`/`bytes_encoding`, `scoped`/`scope_kind`, `period_type`, `set`, and the six
+  // annotations §6 adds as checked/advisory vocabulary (`discriminator`, `rest`, `title`,
+  // `examples`, `read_only`, `write_only`). core drops `alias`, its four alphabet siblings
+  // (`base32`/`base64`/`base64url`/`hex`) and `unknown`, and gains `bytes`, `period`, `set`, and
+  // the `scoped` instances `declared`/`extern`/`dynamic` plus `extern_of`/`extern_type`.
   it.each([
-    ['meta-kernel', 49, 57],
-    ['meta', 30, 31],
-    ['core', 48, 48],
+    ['meta-kernel', 50, 58],
+    ['meta', 38, 45],
+    ['core', 50, 50],
   ])('%s.tn declares %i names and its fixture holds %i entries', (name, declared, entries) => {
     const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
     expect(document.body.declarations.size).toBe(declared);
@@ -544,11 +557,14 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         'field is written at default is a writer question (Wave 5)',
     },
     {
-      pattern: /^enum_set\.body\.(!|v\.(unordered|unique_items))$/,
+      pattern: /^(enum_set|integer_member_set)\.body\.(!|v\.(unordered|unique_items|min_items))$/,
       reason:
-        'topBinding writes every host ArrayBody as `array`, so a set round-trips as an unordered ' +
-        'unique array rather than as `set` — the wire aliases need a discriminating test, and ' +
-        'the readers that fix the other half of it are Wave 4',
+        'topBinding writes every host ArrayBody as `array`, so a `!set_type {}` application ' +
+        'round-trips as an unordered unique array rather than as `set_type` -- `min_items` is ' +
+        'lost along with it, since plain ArrayBody carries no such field -- the wire aliases ' +
+        'need a discriminating test, and the readers that fix the other half of it are Wave 4. ' +
+        "`integer_member_set` (§5.2's new sparse-member-set constraint) is the identical gap " +
+        'under a Revision 35 name, not a second defect',
     },
   ];
 
@@ -601,7 +617,12 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
   it('populates subtypes for meta-kernel.tn exactly as the fixture records (Wave 4 work package 15)', () => {
     const entries = resolved('meta-kernel').entries;
     const subtypeCount = (name: string): number => entries.get(name)?.subtypes.length ?? -1;
-    expect(subtypeCount('top')).toBe(17);
+    // Revision 35 adds two entries that IS-A `top`: `template` (§5.10's held-body constructor,
+    // composing with `top` directly like `reference`) and `set_type` (§5.6's "the nearest
+    // constructor in the source chain for every container closure" for a `set<T>` application --
+    // `array ^ { ... }`, a *constructor* refinement, §4.2, which preserves IS-A per §5.7's
+    // operations table).
+    expect(subtypeCount('top')).toBe(18);
     expect(subtypeCount('atom')).toBe(6);
     expect(subtypeCount('product')).toBe(5);
     expect(subtypeCount('sum')).toBe(1);

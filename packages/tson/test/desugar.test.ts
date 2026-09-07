@@ -516,7 +516,6 @@ describe('reporter-mode failure handling', () => {
     expect(bad.typeDef).toEqual({
       kind: 'structuralTypeDef',
       typeParams: [],
-      constructor: false,
       body: { kind: 'recordDef', entries: [] },
     });
 

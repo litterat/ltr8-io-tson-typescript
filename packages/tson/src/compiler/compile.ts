@@ -40,13 +40,8 @@ import { createDataStream } from '../stream/dataStream.js';
 import { createReadContext } from '../reader/context.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import type { LinkedSchema } from '../link/link.js';
-import type {
-  Extern,
-  Reference,
-  Top,
-  TypeDefinition,
-  UnknownType,
-} from '../schema/meta/typedef.js';
+import type { Reference, Scoped, Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { choiceDisjoint, typeKind } from '../schema/meta/typedef.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -59,7 +54,6 @@ import { recordTreeReader } from '../reader/tree/record.js';
 import { mapTreeReader } from '../reader/tree/map.js';
 import { arrayTreeReader } from '../reader/tree/array.js';
 import { tupleTreeReader } from '../reader/tree/tuple.js';
-import { schemalessTreeReader } from '../reader/schemaless/tree.js';
 import { choiceTreeReader } from './choiceReader.js';
 import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
@@ -129,11 +123,8 @@ function isChoiceBody(body: Top): body is ChoiceBody {
 function isReference(body: Top): body is Reference {
   return 'kind' in body && body.kind === 'reference';
 }
-function isUnknownType(body: Top): body is UnknownType {
-  return 'kind' in body && body.kind === 'unknown_type';
-}
-function isExtern(body: Top): body is Extern {
-  return 'kind' in body && body.kind === 'extern';
+function isScoped(body: Top): body is Scoped {
+  return 'kind' in body && body.kind === 'scoped';
 }
 
 /**
@@ -195,7 +186,7 @@ function buildReader(
       body,
       resolve,
       location(),
-      definition.disjoint === true,
+      choiceDisjoint(definition) === true,
       schema.entries,
     );
   }
@@ -205,20 +196,14 @@ function buildReader(
     // (safe even when the alias and its target form part of a cycle).
     return resolve(body.target.name);
   }
-  if (isUnknownType(body)) {
-    // `unknown` (§4.2): "the universe of types," accepting any well-formed value of any type --
-    // exactly `reader/schemaless/tree.ts`'s own no-schema-in-scope contract, reused rather than
-    // restated. Every import this pulls in terminates in `atom/`/`base/`/`tree/`/`stream/`/
-    // `core/` (that module's own top note), so this stays clear of `compiler/`'s `bind/` zone.
-    return schemalessTreeReader();
-  }
-  if (isExtern(body)) {
-    // meta.tn's own `extern` (a reference into a separately-governed schema, §7.8): "no compiled
-    // reader exists for this constructor, a documented gap in the reference implementation"
-    // (`typedef.ts`'s own doc on `Extern`) -- carried over unchanged rather than closed here,
-    // since closing it means resolving a second schema library this module is never handed.
+  if (isScoped(body)) {
+    // meta.tn's own `scoped` (§7.8) -- the open sum a value's type comes from a namespace for.
+    // The dispatch it drives -- LOCAL/EXTERN cell selection by value shape, the governing-schema
+    // switch on descent into an EXTERN value -- is a later work package's concern, not this
+    // module's; no compiled reader exists for any `scoped` instance yet, `declared`/`dynamic`
+    // included.
     throw new TsonNotImplementedError(
-      `'${name}' is an 'extern' reference into a separately-governed schema (§7.8) -- no compiled reader exists for this constructor yet`,
+      `'${name}' is a 'scoped' instance (§7.8) -- no compiled reader exists for this constructor yet`,
     );
   }
   if (isAtom(body)) {
@@ -230,7 +215,8 @@ function buildReader(
   // reaching it here through an already-linked schema means something upstream let it through;
   // reported as this module's own gap rather than silently misread as a type.
   throw new TsonNotImplementedError(
-    `'${name}' (kind ${definition.kind}) is not a data type -- it describes meta-schema vocabulary, not a value, and has no compiled reader`,
+    `'${name}' (kind ${typeKind(definition, (n) => schema.entries.get(n))}) is not a data type -- ` +
+      'it describes meta-schema vocabulary, not a value, and has no compiled reader',
   );
 }
 

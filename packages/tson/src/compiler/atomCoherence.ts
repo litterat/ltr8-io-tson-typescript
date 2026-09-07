@@ -77,9 +77,9 @@ export function checkOrdered<T>(
 export function checkWithin(
   out: string[],
   facet: string,
-  value: number | undefined,
-  low: number,
-  high: number,
+  value: bigint | undefined,
+  low: bigint,
+  high: bigint,
 ): void {
   if (value !== undefined && (value < low || value > high)) {
     out.push(
@@ -91,10 +91,11 @@ export function checkWithin(
 /**
  * A count-style facet may not be negative — a length or a digit count below zero describes no
  * value. Kept separate from {@link checkWithin} because the ceiling is the family's business and
- * the floor is not: every count shares zero, and no family has a meaningful maximum.
+ * the floor is not: every count shares zero, and no family has a meaningful maximum. `bigint`
+ * because every counting facet this checks is now `non_negative_integer`-typed (§9).
  */
-export function checkNonNegative(out: string[], facet: string, value: number | undefined): void {
-  if (value !== undefined && value < 0) {
+export function checkNonNegative(out: string[], facet: string, value: bigint | undefined): void {
+  if (value !== undefined && value < 0n) {
     out.push(`${facet} ${String(value)} is negative`);
   }
 }

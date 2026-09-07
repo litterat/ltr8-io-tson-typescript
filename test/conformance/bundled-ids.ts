@@ -8,9 +8,9 @@
  * never the vectors that reference `core.tn`.
  */
 export const BUNDLED_SCHEMA_IDS = {
-  'meta-kernel.tn': 'https://tson.io/2026/34/m/meta-kernel.tn',
-  'meta.tn': 'https://tson.io/2026/34/m/meta.tn',
-  'core.tn': 'https://tson.io/2026/34/m/core.tn',
+  'meta-kernel.tn': 'https://tson.io/2026/35/m/meta-kernel.tn',
+  'meta.tn': 'https://tson.io/2026/35/m/meta.tn',
+  'core.tn': 'https://tson.io/2026/35/m/core.tn',
 } as const satisfies Record<string, string>;
 
 /** A short, unversioned bundled-schema name usable in a sidecar's `meta`/`import` fields. */

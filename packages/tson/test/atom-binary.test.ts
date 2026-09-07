@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createBinaryParser } from '../src/atom/numeric/binary.js';
 import type { AtomToken } from '../src/atom/contract.js';
-import type { BinaryType } from '../src/schema/meta/atoms-text.js';
+import type { BytesType } from '../src/schema/meta/atoms-bytes.js';
 
 // §5.3: `!bytes` is Part 1's one binary annotation, and its spelling is base64. base64url/base32/
 // hex are not Part 1 vocabulary any more (`reader-schemaless-vocabulary.test.ts` asserts that),
@@ -20,10 +20,10 @@ function hex(bytes: Uint8Array): string {
     .join('');
 }
 
-const BASE64: BinaryType = { kind: 'binary', encoding: 'BASE64' };
-const BASE64URL: BinaryType = { kind: 'binary', encoding: 'BASE64URL' };
-const BASE32: BinaryType = { kind: 'binary', encoding: 'BASE32' };
-const HEX: BinaryType = { kind: 'binary', encoding: 'HEX' };
+const BASE64: BytesType = { kind: 'bytes_type', encoding: 'BASE64' };
+const BASE64URL: BytesType = { kind: 'bytes_type', encoding: 'BASE64URL' };
+const BASE32: BytesType = { kind: 'bytes_type', encoding: 'BASE32' };
+const HEX: BytesType = { kind: 'bytes_type', encoding: 'HEX' };
 
 describe("§5.3 BASE64 -- !bytes' one alphabet", () => {
   it('decodes RFC 4648 §4 -- "ZGVhZGJlZWY=" decodes to the ASCII text "deadbeef"', () => {
@@ -78,7 +78,12 @@ describe('HEX -- a schema-layer bytes_type.encoding alphabet, RFC 4648 §8', () 
 
 describe('§5.3 bytes -- length bounds', () => {
   it('min_length/max_length validate the decoded byte count', () => {
-    const bounded: BinaryType = { kind: 'binary', encoding: 'HEX', minLength: 2, maxLength: 4 };
+    const bounded: BytesType = {
+      kind: 'bytes_type',
+      encoding: 'HEX',
+      minLength: 2n,
+      maxLength: 4n,
+    };
     const parser = createBinaryParser('bounded', bounded);
     expect(parser.read(token('deadbeef'))).toHaveLength(4);
     expect(() => parser.read(token('de'.repeat(1)))).toThrow(TsonAtomValidationError);

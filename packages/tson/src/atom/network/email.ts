@@ -105,25 +105,26 @@ export function createEmailParser(typeRef: string, constraints: EmailType): Atom
   }
 
   function validate(text: string): void {
-    if (constraints.length !== undefined && text.length !== constraints.length) {
+    const length = BigInt(text.length);
+    if (constraints.length !== undefined && length !== constraints.length) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is ${String(text.length)} characters, expected exactly ${String(constraints.length)}`,
-        `exactly ${String(constraints.length)} characters`,
+        `'${text}' is ${length.toString()} characters, expected exactly ${constraints.length.toString()}`,
+        `exactly ${constraints.length.toString()} characters`,
       );
     }
-    if (constraints.minLength !== undefined && text.length < constraints.minLength) {
+    if (constraints.minLength !== undefined && length < constraints.minLength) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is ${String(text.length)} characters, less than the minimum ${String(constraints.minLength)}`,
-        `at least ${String(constraints.minLength)} characters`,
+        `'${text}' is ${length.toString()} characters, less than the minimum ${constraints.minLength.toString()}`,
+        `at least ${constraints.minLength.toString()} characters`,
       );
     }
-    if (constraints.maxLength !== undefined && text.length > constraints.maxLength) {
+    if (constraints.maxLength !== undefined && length > constraints.maxLength) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is ${String(text.length)} characters, more than the maximum ${String(constraints.maxLength)}`,
-        `at most ${String(constraints.maxLength)} characters`,
+        `'${text}' is ${length.toString()} characters, more than the maximum ${constraints.maxLength.toString()}`,
+        `at most ${constraints.maxLength.toString()} characters`,
       );
     }
     // `pattern` (I-Regexp) is deferred until `regex/` lands a matcher -- see this module's TSDoc.

@@ -5,9 +5,6 @@ import type { TypeDefinition } from '../src/schema/meta/typedef.js';
 
 function def(supertypes: readonly string[], subtypes: readonly string[] = []): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: false,
     supertypes,
     subtypes,
     body: { kind: 'record', supertypes: [], fields: [], groups: [] },

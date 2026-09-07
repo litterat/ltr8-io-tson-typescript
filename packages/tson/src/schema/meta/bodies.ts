@@ -1,7 +1,7 @@
 /**
  * The kernel's structural (PRODUCT) constructors' resolved vocabularies — `record`, `array`,
- * `map`, `tuple`, `choice`, `enum` — plus the held body of an open template (§4.2, §5.2–§5.4,
- * §5.10, §8.1).
+ * `map`, `tuple`, `enum` — plus `choice` (SUM-kind) and the held body of an open template
+ * (§4.2, §5.2–§5.4, §5.10, §8.1).
  */
 import type { Annotations, Token, TypeRef } from './typedef.js';
 
@@ -28,7 +28,7 @@ export type ElementState = 'REQUIRED' | 'OPTIONAL';
  *
  * **`value` is one slot, and carries a parameter as readily as a literal.** Inside a
  * template body a token there is a parameter exactly when its text resolves against the
- * enclosing {@link TypeDefinition.parameters} list; a closed entry has no parameters for one
+ * enclosing entry's declared type parameters; a closed entry has no parameters for one
  * to resolve into, so the same slot is unambiguous at both ends and needs no separate label
  * (§8.1's shadowing rule). §5.7's fixation — a parametric `= P` sits at `REQUIRED` until its
  * value is concrete, then becomes `REQUIRED_FIXED` — is what this single channel costs, and
@@ -88,8 +88,9 @@ export interface RecordBody {
  * values (`state: REQUIRED`, `unordered: true`, `uniqueItems: true`).
  *
  * `minItems`/`maxItems` are `bigint` because the kernel's own `min_items`/`max_items` are
- * typed `integer`, the kernel's arbitrary-precision integer — no built-in bound ever
- * exceeds a small count in practice, but the field type itself is unbounded.
+ * typed `non_negative_integer`, itself a refinement of the kernel's arbitrary-precision
+ * `integer` — no built-in bound ever exceeds a small count in practice, but the field type
+ * itself is unbounded.
  */
 export interface ArrayBody {
   readonly kind: 'array';
@@ -145,20 +146,29 @@ export interface TupleBody {
 /**
  * The kernel's `choice` constructor's own vocabulary, resolved (§4.1, §5.4, §8.1): a
  * SUM-kind body backing every declared choice type (`contact_method => (email | phone |
- * address)` and similar). `variants` is ordered as written; {@link
- * TypeDefinition.disjoint} — not a field here — carries the resolver-derived
- * discrimination-class distinctness fact for the enclosing definition.
+ * address)` and similar). `variants` is ordered as written.
+ *
+ * `disjoint` is a resolver-derived index over `variants`, parallel to {@link
+ * TypeDefinition.subtypes}: `true` or `false` by discrimination-class distinctness (§5.4).
+ * Declarations never set it; on ingest it MUST be discarded and recomputed. It lives here
+ * rather than on {@link TypeDefinition} because it is a fact about a variant list, and this is
+ * the only body that has one — an entry with no variants has nowhere to put it, so "recorded on
+ * every choice and absent on every other definition" is structural rather than a rule a
+ * document could break (§8.1). Use {@link choiceDisjoint} to read it off a `TypeDefinition`
+ * without narrowing `body` by hand.
  */
 export interface ChoiceBody {
   readonly kind: 'choice';
   readonly variants: readonly TypeRef[];
+  readonly disjoint?: boolean;
 }
 
 /**
  * The kernel's `enum` constructor's own vocabulary, resolved (§4.1, §8.1): `members: enum_set`
- * — `!set { element_type: identifier  min_items: 1 }` — backs `boolean` (`[true false]`), the
- * kernel's own internal enumerations (`product_access_type`, `field_state`, `type_kind`, ...),
- * and every user-declared `!enum [...]` instance. Kept as an ordered array, matching how {@link
+ * — `!set_type { element_type: identifier }` (inheriting `set_type`'s own `min_items: 1`
+ * default) — backs `boolean` (`[true false]`), the kernel's own internal enumerations
+ * (`product_access_type`, `field_state`, `scope_kind`, ...), and every user-declared
+ * `!enum [...]` instance. Kept as an ordered array, matching how {@link
  * TypeDefinition.supertypes}/{@link TypeDefinition.subtypes} already represent conceptual
  * sets — member order is preserved for deterministic output, not semantically significant.
  *
@@ -174,43 +184,48 @@ export interface EnumBody {
 }
 
 /**
- * The body of a template — an entry declaring type parameters, which §5.10 calls open —
- * held in the form it was written rather than resolved into constructor vocabulary.
- * **Holds in both directions**: a {@link TypeDefinition.body} that is one of these means the
- * entry declares {@link TypeDefinition.parameters}, and every entry that declares parameters
+ * The kernel's `template` constructor's own vocabulary, resolved (§5.10, §8.1) — the body of an
+ * entry that declares type parameters, which §5.10 calls open. **Holds in both directions**: a
+ * {@link TypeDefinition.body} that is one of these means the entry declares type parameters
+ * (read them with `typeParameters` in `./typedef.js`), and every entry that declares parameters
  * has one.
  *
- * **Declared here but implemented elsewhere.** The held form is the compiler's own schema
- * AST — exactly one class implements this interface, and it lives outside `schema/meta`
- * (in the layer that depends on this package, never the reverse, mirroring
- * {@link SourcePosition}'s relationship to `core/position.ts`'s `Position`). This package
- * only declares the seat.
+ * **A real change of representation, not a rename.** `template` is the constructor application
+ * as written, held as **text** and unread until materialisation substitutes the parameters
+ * away — not a value of any constructor's own record shape, and cannot be one: a parameter
+ * stands wherever a token stands (`min_items: N` in a value slot as readily as `element_type:
+ * T` in a type slot), so a body carrying one is not typed by any constructor's vocabulary until
+ * it closes. Writing it as though it already had a shape leaves the two halves disagreeing — a
+ * value parameter refuses to read at all, and a type parameter reads as a reference to a type
+ * nobody declared.
  *
- * **It never serialises and carries no `kind` tag.** An open entry's resolved form is its
- * declaration round-tripped, not a `type_definition` value the kernel could hold in any
- * case (`body: top` is REQUIRED with no `top` variant an open body could be) — so no
- * implementation of this shape carries a constructor name, nothing binds through it, and a
- * resolved-output consumer never meets one (§1.3). This is why {@link Top}'s own note calls
- * this member out as the one requiring a `'kind' in body` check before narrowing.
+ * **The text is authoritative; the parsed form is what compares.** Identity is derived from the
+ * *parsed* application, never the text itself, so two spellings of one form reduce to one entry
+ * and whitespace is free (§5.10, §8.2). Parsing that text — and answering the questions §5.10
+ * asks of it (which names it mentions, which applications it writes, at any depth) — is a later
+ * work package's concern (`compiler`'s own held-body cache), never this package's: `schema/meta`
+ * holds the seat, not the parser, the same boundary {@link SourcePosition} draws against
+ * `core/position.ts`'s `Position`.
  *
- * The two methods answer the only two questions a *held*, unresolved body can answer
- * without being resolved:
+ * **It never serialises as a value of the vocabulary it will close into, and carries no `kind`
+ * tag of its own.** An open entry's resolved form is its declaration round-tripped, not a
+ * `type_definition` value the kernel could hold in any other shape (`body: top` is REQUIRED
+ * with no exception) — so a resolved-output consumer never meets one of these where a closed
+ * type is expected (§1.3), and code that must handle either narrows with `isTemplateBody` (in
+ * `./typedef.js`) before switching on `kind`, as {@link Top}'s own note says.
  */
 export interface TemplateBody {
   /**
-   * Every unquoted name this body mentions, at any depth — the one question §5.10 asks at
-   * link time: a declared parameter the body never references is an author error. Includes
-   * every token substitution would rewrite; a quoted token in a value slot is a literal and
-   * never a name.
+   * The parameter names this entry binds, in declaration order — the arity and order an
+   * application binds against (§5.10, §8.1). Read this instead of a stored
+   * `TypeDefinition.parameters` field, which the kernel no longer carries.
    */
-  names(): ReadonlySet<string>;
+  readonly parameters: readonly string[];
 
   /**
-   * Every type application this body writes, at any depth — the question §5.10.1 asks at
-   * the declaration: a recursive application that does not pass its parameters through
-   * unchanged grows its argument at every level, so no finite set of types closes it. Each
-   * element is the {@link TypeRef} an application spells, nesting included (an application
-   * inside another's argument list is itself a member of this list).
+   * The constructor application as written, held and unread (§5.10). Comparison for identity
+   * is over this text's *parsed* form, never the text itself, so whitespace is free — but the
+   * parse is a later work package's job, not this package's.
    */
-  applications(): readonly TypeRef[];
+  readonly template: string;
 }

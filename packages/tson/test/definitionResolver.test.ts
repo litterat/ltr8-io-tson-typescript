@@ -7,6 +7,7 @@ import {
   TsonInternalError,
   TsonMissingBindingError,
   TsonNotImplementedError,
+  TsonParseError,
   TsonReadError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
@@ -18,7 +19,8 @@ import {
 import type { DataValue, CoreValue, RecordValue } from '../src/ast/value.js';
 import type { Declaration, SchemaDocument } from '../src/ast/schema/document.js';
 import type { RecordBody, RecordField } from '../src/schema/meta/bodies.js';
-import type { Top, TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top, TypeDefinition, TypeKind } from '../src/schema/meta/typedef.js';
+import { isConstructor, typeKind, typeParameters } from '../src/schema/meta/typedef.js';
 import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 
 const META = '!!meta:"https://example.com/m.tn"';
@@ -94,6 +96,51 @@ function isRecordBody(body: Top): body is RecordBody {
   return (body as { readonly kind?: unknown }).kind === 'record';
 }
 
+/**
+ * A minimal stand-in for the kernel's own constructor entries -- `typeKind`'s fourth branch
+ * needs to look one up whenever a fixture resolves an *instance* (`integer => !integer_type {}`)
+ * without this test file bothering to hand-build the kernel's own `integer_type`/`record`/...
+ * declarations first. Covers exactly the constructor names this file's own fixtures apply.
+ */
+function stubConstructorKind(name: string): TypeKind | undefined {
+  if (name === 'record' || name === 'array' || name === 'map' || name === 'tuple') return 'PRODUCT';
+  if (name === 'choice' || name === 'scoped') return 'SUM';
+  if (name === 'data') return 'DATA';
+  if (name === 'unit' || name === 'enum' || name.endsWith('_type')) return 'ATOM';
+  if (name === 'reference' || name === 'template') return 'PRODUCT'; // no base kind in their own chain (§4.1's own default)
+  return undefined;
+}
+
+function stubConstructor(name: string): TypeDefinition | undefined {
+  const kind = stubConstructorKind(name);
+  if (kind === undefined) return undefined;
+  const supertypes =
+    kind === 'ATOM'
+      ? ['atom', 'top']
+      : kind === 'SUM'
+        ? ['sum', 'top']
+        : kind === 'DATA'
+          ? ['data', 'top']
+          : name === 'reference' || name === 'template'
+            ? ['top']
+            : ['product', 'top'];
+  return {
+    supertypes,
+    subtypes: [],
+    body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+    annotations: [],
+  };
+}
+
+/** {@link typeKind}, looked up first against `entries` (the growing type-name namespace), then `structure` (the fixed structure namespace) -- the same two namespaces `harness()` itself hands a resolver -- then {@link stubConstructor} for a well-known kernel constructor name neither map bothered to seed. */
+function kindOf(
+  def: TypeDefinition,
+  entries: ReadonlyMap<string, TypeDefinition>,
+  structure: ReadonlyMap<string, TypeDefinition>,
+): TypeKind {
+  return typeKind(def, (name) => entries.get(name) ?? structure.get(name) ?? stubConstructor(name));
+}
+
 function fieldNamed(body: RecordBody, name: string): RecordField {
   const field = body.fields.find((f) => f.name === name);
   if (field === undefined) throw new Error(`field '${name}' missing from resolved body`);
@@ -105,14 +152,14 @@ function fieldNamed(body: RecordBody, name: string): RecordField {
 describe('a fresh record definition (§5.2)', () => {
   it('resolves plain required fields to a PRODUCT-kind record body', () => {
     const doc = parse('integer_size => { bits: integer  signed: boolean }');
-    const { resolver } = harness();
+    const { resolver, entries, structure } = harness();
 
     const resolved = resolveOne(resolver, doc, 'integer_size');
 
-    expect(resolved.kind).toBe('PRODUCT');
-    expect(resolved.constructor).toBe(false);
+    expect(kindOf(resolved, entries, structure)).toBe('PRODUCT');
+    expect(isConstructor(resolved)).toBe(false);
     expect(resolved.supertypes).toEqual([]);
-    expect(resolved.parameters).toEqual([]);
+    expect(typeParameters(resolved)).toEqual([]);
     expect(resolved.annotations).toEqual([]);
     expect(isRecordBody(resolved.body)).toBe(true);
     if (!isRecordBody(resolved.body)) throw new Error('unreachable');
@@ -134,14 +181,12 @@ describe('a fresh record definition (§5.2)', () => {
     expect(resolved.body.groups).toEqual([]);
   });
 
-  it('resolves a `~`-marked fresh record as a constructor', () => {
-    const doc = parse('widget => ~{ size: integer }');
-    const { resolver } = harness();
-
-    const resolved = resolveOne(resolver, doc, 'widget');
-
-    expect(resolved.constructor).toBe(true);
-    expect(resolved.kind).toBe('PRODUCT');
+  it('`~` before a fresh record is a parse error -- there is no constructor marker at type-def position (§4.2, §12.1)', () => {
+    // §12.1's own grammar note: "there is no constructor marker: an entry is a constructor by
+    // being IS-A `top` (§4.2), and `~` is a special token with no role at type-def position."
+    // The corpus states this by name (`class2/schema/invalid/a-constructor-marker-is-not-grammar`):
+    // this fails in the parser, never by resolving to a non-constructor.
+    expect(() => parse('widget => ~{ size: integer }')).toThrow(TsonParseError);
   });
 
   it('rejects a modifier-only entry with nothing to elide toward (§5.7)', () => {
@@ -266,9 +311,9 @@ describe('field default/fixed modifiers (§5.2)', () => {
 describe('composition (§5.8)', () => {
   it('a bare `top => {}` is a fresh, empty record', () => {
     const doc = parse('top => {}');
-    const { resolver } = harness();
+    const { resolver, entries, structure } = harness();
     const top = resolveOne(resolver, doc, 'top');
-    expect(top.kind).toBe('PRODUCT');
+    expect(kindOf(top, entries, structure)).toBe('PRODUCT');
     expect(top.supertypes).toEqual([]);
     if (!isRecordBody(top.body)) throw new Error('unreachable');
     expect(top.body.fields).toEqual([]);
@@ -281,13 +326,18 @@ describe('composition (§5.8)', () => {
       product => top & { access_pattern: token  size_type: token }
       sum     => top & {}
     `);
-    const { resolver, entries } = harness();
+    const { resolver, entries, structure } = harness();
     resolveAll(resolver, entries, doc);
 
-    expect(entries.get('atom')?.kind).toBe('PRODUCT');
-    expect(entries.get('atom')?.supertypes).toEqual(['top']);
-    expect(entries.get('product')?.kind).toBe('PRODUCT');
-    expect(entries.get('sum')?.kind).toBe('PRODUCT');
+    const atomEntry = entries.get('atom');
+    if (atomEntry === undefined) throw new Error('unreachable');
+    expect(kindOf(atomEntry, entries, structure)).toBe('PRODUCT');
+    expect(atomEntry.supertypes).toEqual(['top']);
+    const productEntry = entries.get('product');
+    const sumEntry = entries.get('sum');
+    if (productEntry === undefined || sumEntry === undefined) throw new Error('unreachable');
+    expect(kindOf(productEntry, entries, structure)).toBe('PRODUCT');
+    expect(kindOf(sumEntry, entries, structure)).toBe('PRODUCT');
   });
 
   it('a type composing with `atom` is itself kind ATOM', () => {
@@ -296,9 +346,11 @@ describe('composition (§5.8)', () => {
       atom => top & {}
       unit => atom & {}
     `);
-    const { resolver, entries } = harness();
+    const { resolver, entries, structure } = harness();
     resolveAll(resolver, entries, doc);
-    expect(entries.get('unit')?.kind).toBe('ATOM');
+    const unitEntry = entries.get('unit');
+    if (unitEntry === undefined) throw new Error('unreachable');
+    expect(kindOf(unitEntry, entries, structure)).toBe('ATOM');
     expect(entries.get('unit')?.supertypes).toEqual(['atom', 'top']);
   });
 
@@ -394,9 +446,6 @@ describe('composition (§5.8)', () => {
     const { resolver, entries } = harness();
     // A finished (binding-record) entry, hand-built as `resolveInstance` would produce one.
     entries.set('bound', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -605,9 +654,6 @@ describe('refinement (§5.7)', () => {
     const doc = parse('bad => bound ^ {}');
     const { resolver, entries } = harness();
     entries.set('bound', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -630,14 +676,13 @@ describe('refinement (§5.7)', () => {
     expect((error as TsonSchemaValidationError).message).toContain('names no inherited group');
   });
 
-  it('a `~`-marked refinement is a constructor', () => {
-    const doc = parse(`
-      base    => { x: token }
-      derived => ~base ^ { x: token = "fixed" }
-    `);
-    const { resolver, entries } = harness();
-    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
-    expect(resolveOne(resolver, doc, 'derived').constructor).toBe(true);
+  it('`~` before a refinement head is likewise a parse error (§4.2, §12.1)', () => {
+    expect(() =>
+      parse(`
+        base    => { x: token }
+        derived => ~base ^ { x: token = "fixed" }
+      `),
+    ).toThrow(TsonParseError);
   });
 });
 
@@ -670,9 +715,6 @@ describe('annotations (§6)', () => {
       },
     });
     structure.set('doc', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -694,9 +736,6 @@ describe('annotations (§6)', () => {
       },
     });
     structure.set('doc', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -715,9 +754,6 @@ describe('annotations (§6)', () => {
       },
     });
     structure.set('doc', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -739,9 +775,6 @@ describe('annotations (§6)', () => {
       },
     });
     structure.set('doc', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -795,10 +828,9 @@ function integerTypeStructure(): TypeDefinition {
     },
   ];
   return {
-    kind: 'ATOM',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    // IS-A `top` through `atom` (hand-built rather than composed, for this test's own
+    // simplified structure namespace) is what makes `isConstructor` true here.
+    supertypes: ['atom', 'top'],
     subtypes: [],
     body: { kind: 'record', supertypes: [], fields, groups: [] },
     annotations: [],
@@ -876,13 +908,14 @@ function integerTypeReader(type: string, value: DataValue): Top {
 describe('constructor application (§5.5, §5.6)', () => {
   it("produces a fresh atom-family instance, binding through the constructor's own reader", () => {
     const doc = parse('int8 => !integer { size: { bits: 8  signed: true }  min: -128  max: 127 }');
-    const { resolver, structure } = harness({ definitionMetaReader: integerTypeReader });
+    const { resolver, entries, structure } = harness({ definitionMetaReader: integerTypeReader });
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
 
     const int8 = resolveOne(resolver, doc, 'int8');
 
-    expect(int8.kind).toBe('ATOM');
-    expect(int8.constructor).toBe(false);
+    expect(kindOf(int8, entries, structure)).toBe('ATOM');
+    expect(isConstructor(int8)).toBe(false);
     expect(int8.supertypes).toEqual([]);
     expect(int8.source).toEqual({ name: 'integer', arguments: [], annotations: [] });
     expect(int8.body).toEqual({
@@ -897,9 +930,6 @@ describe('constructor application (§5.5, §5.6)', () => {
     const doc = parse('bad => !something { }');
     const { resolver, structure } = harness();
     structure.set('something', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },
@@ -922,6 +952,7 @@ describe('constructor application (§5.5, §5.6)', () => {
     const doc = parse('bad => !integer { min: "not-a-number" }');
     const { resolver, structure } = harness({ definitionMetaReader: integerTypeReader });
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as TsonSchemaValidationError).message).toContain('not valid data for');
@@ -931,6 +962,7 @@ describe('constructor application (§5.5, §5.6)', () => {
     const doc = parse('bad => !integer { min: 10  max: 3 }');
     const { resolver, structure } = harness({ definitionMetaReader: integerTypeReader });
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as TsonSchemaValidationError).message).toContain('contradict each other');
@@ -1005,6 +1037,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     `);
     const { resolver, entries, structure } = integerHarness();
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     entries.set('int8', resolver.resolve(declarationOf(doc, 'int8')));
 
     const tighter = resolveOne(resolver, doc, 'tighter');
@@ -1028,6 +1061,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     `);
     const { resolver, entries, structure } = integerHarness();
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     entries.set('int8', resolver.resolve(declarationOf(doc, 'int8')));
     entries.set('small', resolver.resolve(declarationOf(doc, 'small')));
 
@@ -1053,6 +1087,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     `);
     const { resolver, entries, structure } = integerHarness();
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     entries.set('positive', resolver.resolve(declarationOf(doc, 'positive')));
 
     const error = thrownBy(() => resolveOne(resolver, doc, 'wider'));
@@ -1064,6 +1099,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     const doc = parse('bad => !integer ^ { min: 0 }');
     const { resolver, structure } = integerHarness();
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     // `integer` is not in the namespaceDefinitions map at all, matching §3.3.1: an atom refinement
     // source resolves against the type-name namespace only, never the structure namespace.
     expect(thrownBy(() => resolveOne(resolver, doc, 'bad'))).toBeInstanceOf(
@@ -1075,10 +1111,15 @@ describe('atom refinement (§5.5, §5.7)', () => {
     const doc = parse('bad => !notatom ^ { x: 1 }');
     const { resolver, entries } = harness();
     entries.set('notatom', {
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: false,
       supertypes: [],
+      subtypes: [],
+      body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+      annotations: [],
+    });
+    // `typeKind`'s fourth branch needs `record` itself to resolve, to derive `notatom`'s own
+    // kind (PRODUCT) from what it is an instance of.
+    entries.set('record', {
+      supertypes: ['product', 'top'],
       subtypes: [],
       body: { kind: 'record', supertypes: [], fields: [], groups: [] },
       annotations: [],
@@ -1088,6 +1129,58 @@ describe('atom refinement (§5.5, §5.7)', () => {
     expect((error as TsonSchemaValidationError).message).toContain('not an atom-family instance');
   });
 
+  // §5.5's own warning: the eligibility test is on the body, and on nothing else. Two readings
+  // that look plausible both get it backwards -- these two tests each fail under one of them,
+  // together pinning the check down to the body-shape test `isAtom` performs.
+  it(
+    'rejects refining a constructor found directly in the type-name namespace -- not an ' +
+      'IS-A `atom` check and not a kind check (§3.3.1, §5.5)',
+    () => {
+      const doc = parse('bad => !integer_type ^ { min: 0 }');
+      const { resolver, entries } = harness();
+      // Shaped exactly like a real constructor would be: IS-A `atom` (so a check reading "IS-A
+      // atom" -- `supertypes.includes('atom')` -- wrongly accepts it) and itself ATOM-kinded by
+      // `typeKind`'s own third branch (so a kind check -- `typeKind(source) === 'ATOM'` --
+      // wrongly accepts it too: a constructor's kind and its instances' kind are the same
+      // literal, "true of the constructor, false of every instance" being the opposite of what
+      // either reading tests for). Only a check on `body` itself -- is it an atom
+      // *application*, not the vocabulary record describing one -- refuses this.
+      entries.set('integer_type', {
+        supertypes: ['atom', 'top'],
+        subtypes: [],
+        body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+        annotations: [],
+      });
+      const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+      expect(error).toBeInstanceOf(TsonSchemaValidationError);
+      expect((error as TsonSchemaValidationError).message).toContain('not an atom-family instance');
+    },
+  );
+
+  it(
+    'accepts refining an instance with an empty supertypes chain -- not an IS-A `atom` check ' +
+      '(§4.1: construction transfers no IS-A)',
+    () => {
+      const doc = parse('tighter => !integer ^ { max: 100 }');
+      const { resolver, entries } = integerHarness();
+      // `supertypes: []`, exactly as §4.1 states for every constructor-application result:
+      // "construction transfers only the constructor's kind... the result records source: C
+      // with empty supertypes." A check reading "IS-A atom" (`supertypes.includes('atom')`)
+      // finds nothing here and wrongly refuses this legitimate refinement -- the opposite
+      // mistake from the constructor case above, and why neither IS-A reading substitutes for
+      // testing `body` directly.
+      entries.set('integer', {
+        supertypes: [],
+        subtypes: [],
+        source: { name: 'integer', arguments: [], annotations: [] },
+        body: { kind: 'integer_type', min: -128n, max: 127n },
+        annotations: [],
+      });
+      const tighter = resolveOne(resolver, doc, 'tighter');
+      expect(tighter.body).toEqual({ kind: 'integer_type', min: -128n, max: 100n });
+    },
+  );
+
   it('reports a missing SourceBodyEncoder as a coverage gap, not a schema error', () => {
     const doc = parse(`
       int8 => !integer { min: -128 }
@@ -1095,6 +1188,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     `);
     const { resolver, entries, structure } = harness({ definitionMetaReader: integerTypeReader });
     structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
     entries.set('int8', resolver.resolve(declarationOf(doc, 'int8')));
     expect(thrownBy(() => resolveOne(resolver, doc, 'big'))).toBeInstanceOf(
       TsonNotImplementedError,
@@ -1106,10 +1200,9 @@ describe('atom refinement (§5.5, §5.7)', () => {
 
 function widgetStructure(): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    // IS-A `top` through `product` (hand-built, for this test's own simplified structure
+    // namespace) is what makes `isConstructor` true here.
+    supertypes: ['product', 'top'],
     subtypes: [],
     body: {
       kind: 'record',
@@ -1140,8 +1233,8 @@ describe('open constructor application / instance templates (§5.10)', () => {
     const { resolver, structure } = harness();
     structure.set('widget', widgetStructure());
     const resolved = resolveOne(resolver, doc, 'sized');
-    expect(resolved.parameters).toEqual(['T']);
-    expect(resolved.constructor).toBe(false);
+    expect(typeParameters(resolved)).toEqual(['T']);
+    expect(isConstructor(resolved)).toBe(false);
     expect('application' in resolved.body).toBe(true);
   });
 
@@ -1170,10 +1263,10 @@ describe('open constructor application / instance templates (§5.10)', () => {
 describe('top-level template application (§5.10)', () => {
   it('a declaration-level generic application carries its arguments through, unresolved, as a REFERENCE entry', () => {
     const doc = parse('boxed_pair => box<text, uuid>');
-    const { resolver } = harness();
+    const { resolver, entries, structure } = harness();
     const resolved = resolveOne(resolver, doc, 'boxed_pair');
-    expect(resolved.kind).toBe('REFERENCE');
-    expect(resolved.parameters).toEqual([]);
+    expect(kindOf(resolved, entries, structure)).toBe('REFERENCE');
+    expect(typeParameters(resolved)).toEqual([]);
     expect(resolved.source).toEqual({
       name: 'box',
       arguments: [
@@ -1187,17 +1280,21 @@ describe('top-level template application (§5.10)', () => {
 
   it("a partial application re-declares some arguments as the declaration's own open parameters (§5.10)", () => {
     const doc = parse('uuid_pair => <B> pair<uuid, B>');
-    const { resolver } = harness();
+    const { resolver, entries, structure } = harness();
     const resolved = resolveOne(resolver, doc, 'uuid_pair');
-    expect(resolved.kind).toBe('REFERENCE');
-    expect(resolved.parameters).toEqual(['B']);
+    // Open, so TEMPLATE by derivation regardless of what its held body applies (§8.1's own
+    // "Open entries" text: "the entry's kind is TEMPLATE by derivation and it has none until it
+    // closes") -- unlike a closed alias (the test above), which is REFERENCE-kind directly.
+    expect(kindOf(resolved, entries, structure)).toBe('TEMPLATE');
+    expect(typeParameters(resolved)).toEqual(['B']);
+    expect('application' in resolved.body).toBe(true);
   });
 
   it('a bare reference (no arguments) resolves to a REFERENCE entry regardless of what the target itself is (§8.3)', () => {
     const doc = parse('type_name => token');
-    const { resolver } = harness();
+    const { resolver, entries, structure } = harness();
     const resolved = resolveOne(resolver, doc, 'type_name');
-    expect(resolved.kind).toBe('REFERENCE');
+    expect(kindOf(resolved, entries, structure)).toBe('REFERENCE');
     expect(resolved.source).toEqual({ name: 'token', arguments: [], annotations: [] });
   });
 });
@@ -1241,10 +1338,8 @@ describe('invariant violations (bugs in this library, never a verdict on the sch
     const doc = parse('bad => !oddity { }');
     const { resolver, structure } = harness();
     structure.set('oddity', {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: true,
-      supertypes: [],
+      // IS-A `top` (hand-built) is what reaches the record-shape check at all.
+      supertypes: ['atom', 'top'],
       subtypes: [],
       body: { kind: 'unit' },
       annotations: [],

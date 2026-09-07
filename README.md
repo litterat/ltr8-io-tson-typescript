@@ -160,7 +160,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/34/m/meta.tn', 'https://tson.io/2026/34/m/core.tn']);
+await tson.preload(['https://tson.io/2026/35/m/meta.tn', 'https://tson.io/2026/35/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -264,8 +264,8 @@ resolved schema output) and known gaps. In particular:
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/34/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/34/tson-part2-schema.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/35/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/35/tson-part2-schema.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.

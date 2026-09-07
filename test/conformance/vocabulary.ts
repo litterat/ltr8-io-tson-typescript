@@ -135,7 +135,7 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
   });
   const rational = createRationalParser('rational', { kind: 'rational_type' });
   const complex = createComplexParser('complex');
-  const bytes = createBinaryParser('bytes', { kind: 'binary', encoding: 'BASE64' });
+  const bytes = createBinaryParser('bytes', { kind: 'bytes_type', encoding: 'BASE64' });
   const date = createDateParser('date', { kind: 'date_type' });
   const time = createTimeParser('time', { kind: 'time_type' });
   const datetime = createDateTimeParser('datetime', { kind: 'datetime_type' });

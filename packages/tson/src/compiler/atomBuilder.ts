@@ -65,6 +65,7 @@ import { createDateParser } from '../atom/temporal/date.js';
 import { createTimeParser } from '../atom/temporal/time.js';
 import { createDateTimeParser } from '../atom/temporal/datetime.js';
 import { createDurationParser } from '../atom/temporal/duration.js';
+import { createPeriodParser } from '../atom/temporal/period.js';
 
 /** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every non-`unit` atom family. */
 function wrap<T extends AtomValue>(atomType: AtomType<T>, typeRef: string): TypeReader<Value> {
@@ -234,7 +235,7 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
       return wrap(createRationalParser(name, atom), name);
     case 'uuid_type':
       return wrap(createUuidParser(name, atom), name);
-    case 'binary':
+    case 'bytes_type':
       return wrap(createBinaryParser(name, atom), name);
     case 'date_type':
       return wrap(createDateParser(name, atom), name);
@@ -244,6 +245,8 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
       return wrap(createDateTimeParser(name, atom), name);
     case 'duration_type':
       return wrap(createDurationParser(name, atom), name);
+    case 'period_type':
+      return wrap(createPeriodParser(name), name);
     case 'cidr4_type':
       return wrap(createCidr4Parser(name, atom), name);
     case 'cidr6_type':

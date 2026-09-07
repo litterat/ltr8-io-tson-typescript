@@ -15,9 +15,6 @@ function def(
   options: { readonly supertypes?: readonly string[]; readonly subtypes?: readonly string[] } = {},
 ): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: false,
     supertypes: options.supertypes ?? [],
     subtypes: options.subtypes ?? [],
     body,
@@ -34,7 +31,7 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/34/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/35/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),

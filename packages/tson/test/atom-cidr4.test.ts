@@ -20,7 +20,7 @@ const UNCONSTRAINED: Cidr4Type = {
   excluding: [],
 };
 
-function withPrefixBounds(minPrefix?: number, maxPrefix?: number): Cidr4Type {
+function withPrefixBounds(minPrefix?: bigint, maxPrefix?: bigint): Cidr4Type {
   return {
     ...UNCONSTRAINED,
     ...(minPrefix !== undefined && { minPrefix }),
@@ -103,7 +103,7 @@ describe('§5.5 !cidr4 -- nonzero host bits are a validation error (the value is
 
 describe('§5.5 !cidr4 -- cidr4_type minPrefix/maxPrefix facets', () => {
   it('applies minPrefix', () => {
-    const parser = createCidr4Parser('cidr4', withPrefixBounds(16, undefined));
+    const parser = createCidr4Parser('cidr4', withPrefixBounds(16n, undefined));
     expect(parser.read(token('192.168.0.0/16'))).toEqual({ kind: 'cidr4', text: '192.168.0.0/16' });
     try {
       parser.read(token('10.0.0.0/8'));
@@ -114,7 +114,7 @@ describe('§5.5 !cidr4 -- cidr4_type minPrefix/maxPrefix facets', () => {
   });
 
   it('applies maxPrefix', () => {
-    const parser = createCidr4Parser('cidr4', withPrefixBounds(undefined, 24));
+    const parser = createCidr4Parser('cidr4', withPrefixBounds(undefined, 24n));
     expect(parser.read(token('192.0.2.0/24'))).toEqual({ kind: 'cidr4', text: '192.0.2.0/24' });
     try {
       parser.read(token('192.0.2.128/25'));
@@ -125,7 +125,7 @@ describe('§5.5 !cidr4 -- cidr4_type minPrefix/maxPrefix facets', () => {
   });
 
   it('a bound outside the family range neither fails nor widens (family range still applies)', () => {
-    const parser = createCidr4Parser('cidr4', withPrefixBounds(undefined, 64));
+    const parser = createCidr4Parser('cidr4', withPrefixBounds(undefined, 64n));
     expect(parser.read(token('192.0.2.0/24'))).toEqual({ kind: 'cidr4', text: '192.0.2.0/24' });
     expect(() => parser.read(token('10.0.0.0/33'))).toThrow(TsonAtomValidationError);
   });

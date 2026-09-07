@@ -12,7 +12,7 @@ import type { TypeRef } from './typeref.js';
  *   application; a parameter list makes it a template and leaves the payload untouched — an
  *   open entry's body is held rather than read against its constructor's vocabulary until
  *   materialisation substitutes, so a collection payload is as ordinary as a scalar one)
- * - {@link StructuralTypeDef} — `[type-params] ["~"] structural-def` (§5.7–§5.9)
+ * - {@link StructuralTypeDef} — `[type-params] structural-def` (§5.7–§5.9)
  * - {@link ReferenceTypeDef} — `[type-params] type-ref` (§8.3): a plain reference, or any
  *   container form, since a declaration-level container reaches this union through `type-ref`
  *   like every other position
@@ -22,26 +22,30 @@ import type { TypeRef } from './typeref.js';
  * an `ArrayRef`, and rewriting it into the `Instance` its bindings denote is desugaring's job,
  * a later phase this AST does not perform.
  *
+ * **There is no constructor marker.** §12.1's own grammar states it explicitly: "there is no
+ * constructor marker: an entry is a constructor by being IS-A `top` (§4.2), and `~` is a
+ * special token with no role at type-def position." `~` keeps exactly one grammar role, the
+ * field-modifier default-value marker (§5.2's `field-modifier`); a `~` written here is a parse
+ * error (`class2/schema/invalid/a-constructor-marker-is-not-grammar` states the corpus's own
+ * name for it).
+ *
  * Discriminated on `kind` via each member's own `kind` field.
  */
 export type TypeDef = AtomRefinement | Instance | StructuralTypeDef | ReferenceTypeDef;
 
 /**
- * `[type-params] ["~"] structural-def` (§12.1, §4.2, §5.10) — a refinement, composition or
- * subtraction, or fresh record, optionally parameterized and optionally marked as a
- * constructor.
+ * `[type-params] structural-def` (§12.1, §5.7–§5.9) — a refinement, composition or subtraction,
+ * or a fresh record, optionally parameterized.
+ *
+ * Whether the entry this resolves to is a *constructor* is never a fact this shape carries: an
+ * entry IS-A `top` (§4.2) by what it composes or refines, transitively — derived from the
+ * resolved `TypeDefinition.supertypes` (`schema/meta/typedef.ts`'s `isConstructor`), never
+ * marked at the declaration.
  */
 export interface StructuralTypeDef {
   readonly kind: 'structuralTypeDef';
   /** Parameter names from the declaration's own `<...>` (§5.10); empty for an unparameterized definition. */
   readonly typeParams: readonly string[];
-  /**
-   * `true` only when the source carried a literal `~` — the sole signal for `constructor:
-   * true` in resolver output (§5.8: "constructor marker is independent of supertypes"). A bare
-   * record or composition with no `~` is an ordinary (non-constructor) type even though it
-   * uses the same {@link StructuralDef} shapes.
-   */
-  readonly constructor: boolean;
   readonly body: StructuralDef;
 }
 

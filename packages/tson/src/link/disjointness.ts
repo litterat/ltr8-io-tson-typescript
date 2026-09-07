@@ -1,7 +1,7 @@
 /**
- * Derives {@link TypeDefinition.disjoint} for every choice entry (§5.4): a namespace-wide pass,
- * like `subtypes.ts`'s own {@link computeSubtypes}, since a variant's discrimination class is
- * only knowable with every entry resolved.
+ * Derives `ChoiceBody.disjoint` (`schema/meta/bodies.ts`) for every choice entry (§5.4): a
+ * namespace-wide pass, like `subtypes.ts`'s own {@link computeSubtypes}, since a variant's
+ * discrimination class is only knowable with every entry resolved.
  *
  * Ported from the reference implementation's `ChoiceDisjointness`/`DiscriminationClass`
  * (`tson-compiler/.../ChoiceDisjointness.java`, `.../reader/DiscriminationClass.java`); see those
@@ -26,6 +26,7 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import { isDataBody } from './bodyKind.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Annotations, Reference, TypeDefinition } from '../schema/meta/typedef.js';
+import { choiceDisjoint } from '../schema/meta/typedef.js';
 
 /**
  * The granularity at which TSON text discriminates an untagged value ([TSON-DATA] §4's three
@@ -73,7 +74,8 @@ function classify(def: TypeDefinition): DiscriminationClass | undefined {
     case 'time_type':
     case 'datetime_type':
     case 'duration_type':
-    case 'binary':
+    case 'period_type':
+    case 'bytes_type':
     case 'email_type':
     case 'ipv4_type':
     case 'ipv6_type':
@@ -89,8 +91,8 @@ function classify(def: TypeDefinition): DiscriminationClass | undefined {
     case 'array':
     case 'tuple':
       return 'BRACKET';
-    // rational/complex need a tag (their typed forms straddle classes); unit, unknown_type,
-    // choice, extern, and a Data body all have no class either.
+    // rational/complex need a tag (their typed forms straddle classes); unit, choice, scoped,
+    // and a Data body all have no class either.
     default:
       return undefined;
   }
@@ -160,7 +162,10 @@ export function computeDisjointness(
   for (const [name, def] of merged) {
     const body = def.body;
     if ('kind' in body && !isDataBody(body) && body.kind === 'choice') {
-      result.set(name, { ...def, disjoint: isChoiceDisjoint(body.variants, merged) });
+      result.set(name, {
+        ...def,
+        body: { ...body, disjoint: isChoiceDisjoint(body.variants, merged) },
+      });
     }
   }
   return result;
@@ -195,7 +200,7 @@ function assertsDisjoint(
 
 /**
  * §5.4's `@disjoint` assertion, checked against the fact {@link computeDisjointness} derived. The
- * annotation carries no decode force -- the resolver computes `type_definition.disjoint` whether
+ * annotation carries no decode force -- the resolver computes a choice body's `disjoint` whether
  * or not it is present -- and exists to be checked against that derived fact, converting a silent
  * drift into a diagnostic. Two outcomes, because the fact is two-valued: `disjoint: true`
  * verifies the assertion silently; `false` makes it an error. There is no third, unprovable
@@ -223,7 +228,7 @@ export function checkDisjointAssertions(
     const body = def.body;
     if (!('kind' in body) || isDataBody(body) || body.kind !== 'choice') continue;
     if (!assertsDisjoint(def, name, keyAnnotations)) continue;
-    if (def.disjoint === true) continue; // verified -- the assertion holds, and says so
+    if (choiceDisjoint(def) === true) continue; // verified -- the assertion holds, and says so
 
     const variants = body.variants.map((v) => v.name);
     const message =

@@ -20,7 +20,7 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('enforces an exact length', () => {
-    const parser = createTextParser('text', { kind: 'text_type', length: 3 });
+    const parser = createTextParser('text', { kind: 'text_type', length: 3n });
     expect(parser.read({ text: 'abc', form: 'single-line' })).toBe('abc');
     expect(() => parser.read({ text: 'abcd', form: 'single-line' })).toThrow(
       TsonAtomValidationError,
@@ -28,7 +28,7 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('enforces minLength/maxLength', () => {
-    const parser = createTextParser('text', { kind: 'text_type', minLength: 2, maxLength: 4 });
+    const parser = createTextParser('text', { kind: 'text_type', minLength: 2n, maxLength: 4n });
     expect(parser.read({ text: 'ab', form: 'single-line' })).toBe('ab');
     expect(parser.read({ text: 'abcd', form: 'single-line' })).toBe('abcd');
     expect(() => parser.read({ text: 'a', form: 'single-line' })).toThrow(TsonAtomValidationError);
@@ -38,7 +38,7 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('a validation failure carries an ordering-bound `expected` fragment, never the atom name', () => {
-    const parser = createTextParser('text', { kind: 'text_type', maxLength: 1 });
+    const parser = createTextParser('text', { kind: 'text_type', maxLength: 1n });
     try {
       parser.read({ text: 'ab', form: 'single-line' });
       expect.fail('expected a TsonAtomValidationError');

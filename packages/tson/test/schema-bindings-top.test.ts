@@ -11,9 +11,6 @@ import type { TypeDefinition, Top } from '../src/schema/meta/typedef.js';
  */
 function definitionWith(body: Top): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,

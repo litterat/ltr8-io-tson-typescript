@@ -77,8 +77,9 @@ import type { Top, TypeDefinition } from './meta/typedef.js';
 
 /**
  * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`identifier`, `token`,
- * `text`, `boolean`, `integer`, `value`, and the six enum-shaped constraint atoms `type_kind`/`field_state`/
- * `element_state`/`complex_component`/`ieee_format`/`binary_encoding`). Deliberately narrow:
+ * `text`, `boolean`, `integer`, `value`, `scope_kind`, and the five other enum-shaped constraint
+ * atoms `field_state`/`element_state`/`complex_component`/`ieee_format`/`bytes_encoding`).
+ * Deliberately narrow:
  * this is not a general-purpose `atom/` replacement, only what a schema *source* document's own
  * constructor-application bodies ever carry -- min/max bounds, size bits, enum members, boolean
  * flags. `base/`'s own number grammar and base-type resolution do the real parsing (§4, §7.6); no
@@ -109,8 +110,8 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
     case 'value':
       return decodeBaseValue(wire);
 
-    // The remaining meta-kernel/meta atoms are all closed enumerations (`type_kind`,
-    // `field_state`, `element_state`, `complex_component`, `ieee_format`, `binary_encoding`):
+    // The remaining meta-kernel/meta atoms are all closed enumerations (`scope_kind`,
+    // `field_state`, `element_state`, `complex_component`, `ieee_format`, `bytes_encoding`):
     // every member is written as its own bare unquoted name, so the token's own text already
     // is the host value -- `schema/meta`'s corresponding types are plain string-literal unions.
     default:

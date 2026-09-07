@@ -11,6 +11,7 @@ import { expect } from 'vitest';
 
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
 import type { TypeDefinition } from '../../packages/tson/src/schema/meta/typedef.js';
+import { choiceDisjoint } from '../../packages/tson/src/schema/meta/typedef.js';
 
 import { newClass2Tson } from './class2Tson.js';
 import { assertSchemaOrLinkLoadFailed } from './schema.js';
@@ -61,12 +62,13 @@ function assertLinkedNamespaceMatches(
   if (expected.disjoint !== undefined) {
     for (const claim of expected.disjoint) {
       const definition = definitionOf(vector, entries, claim.name);
-      if (definition.disjoint === undefined) {
+      const disjoint = choiceDisjoint(definition);
+      if (disjoint === undefined) {
         throw new Error(
           `${vector.name}: '${claim.name}' has no derived disjointness at all (§5.4)`,
         );
       }
-      expect(definition.disjoint).toBe(claim.value);
+      expect(disjoint).toBe(claim.value);
     }
   }
 

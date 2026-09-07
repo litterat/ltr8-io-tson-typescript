@@ -200,12 +200,16 @@ function resolveEntries(document: SchemaDocument): Map<string, TypeDefinition> {
 /**
  * Resolves one declaration into `entries`.
  *
- * An `Instance` takes its own route: §5.5's constructor application transfers only the target's
- * kind -- no supertypes, no parameters -- and {@link instanceBody} builds that body directly from
- * the kernel's own vocabulary, which is why the generic resolver is handed {@link NEVER_CALLED}
- * as its meta reader. An instance whose target is unrecognised, or not yet resolved after every
- * sweep, is left out rather than guessed at; `instanceBody`'s own doc says why that is not an
- * error here.
+ * An `Instance` takes its own route: §5.5's constructor application produces a fresh entry with
+ * no supertypes and no parameters of its own -- `kind` is no longer transferred at all, now that
+ * it is derived rather than stored (`schema/meta/typedef.ts`'s own `typeKind`, consulted by a
+ * later caller that needs it, not by this bootstrap). Waiting for `target` to exist in `entries`
+ * before proceeding still matters, though: it is what makes the two-pass sweep converge in
+ * declaration order regardless of forward references, since {@link instanceBody} builds the new
+ * entry's body directly from the kernel's own vocabulary without consulting `target` any further
+ * -- which is why the generic resolver is handed {@link NEVER_CALLED} as its meta reader. An
+ * instance whose target is unrecognised, or not yet resolved after every sweep, is left out
+ * rather than guessed at; `instanceBody`'s own doc says why that is not an error here.
  */
 function resolveInto(
   entries: Map<string, TypeDefinition>,
@@ -224,9 +228,6 @@ function resolveInto(
   if (body === undefined) return;
   entries.set(declaration.name, {
     source: { name: targetName, arguments: [], annotations: [] },
-    kind: target.kind,
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,

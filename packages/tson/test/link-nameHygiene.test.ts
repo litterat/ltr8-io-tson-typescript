@@ -11,8 +11,14 @@ import {
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import type { Top } from '../src/schema/meta/typedef.js';
-import type { RecordField } from '../src/schema/meta/bodies.js';
+import type { RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type { TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import { createHeldBody } from '../src/compiler/heldBody.js';
+import { heldRecord } from '../src/compiler/wireForm.js';
+
+function isRecordBody(body: Top): body is RecordBody {
+  return 'fields' in body;
+}
 
 /**
  * `link/nameHygiene.ts`'s implementation of [TSON-SCHEMA] §11.4's schema-layer name-hygiene
@@ -75,13 +81,18 @@ function def(
     readonly parameters?: readonly string[];
   } = {},
 ): TypeDefinition {
+  // A non-empty `parameters` makes this an open entry (§5.10): fold it into a held `TemplateBody`
+  // the way `definitionResolver.ts`'s own `holdIfOpen` does, since `typeParameters` reads the
+  // list off the body, not off a stored field any more.
+  const parameters = options.parameters ?? [];
+  const finalBody: Top =
+    parameters.length === 0 || !isRecordBody(body)
+      ? body
+      : createHeldBody(heldRecord(body), parameters);
   return {
-    kind: 'PRODUCT',
-    parameters: options.parameters ?? [],
-    constructor: false,
     supertypes: options.supertypes ?? [],
     subtypes: options.subtypes ?? [],
-    body,
+    body: finalBody,
     annotations: [],
   };
 }
@@ -111,7 +122,7 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/34/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/35/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),

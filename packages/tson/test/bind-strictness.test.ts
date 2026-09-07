@@ -132,9 +132,6 @@ describe('checkRecordBinding -- every slot needs to fill a field', () => {
 describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowing its body', () => {
   function recordDefinition(fields: readonly RecordField[]): TypeDefinition {
     return {
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'record', supertypes: [], fields, groups: [] },
@@ -168,9 +165,6 @@ describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowin
 
   it('is a no-op for a non-record definition (e.g. an atom-kind type)', () => {
     const definition: TypeDefinition = {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'unit' },

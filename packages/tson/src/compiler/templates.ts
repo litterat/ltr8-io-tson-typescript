@@ -66,6 +66,7 @@ import {
 } from '../core/errors.js';
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
 import type { TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
+import { typeParameters } from '../schema/meta/typedef.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
@@ -386,7 +387,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     if (template === undefined) {
       return undefined; // unresolved head -- the linker's verdict, not this pass's
     }
-    const parameters = template.parameters;
+    const parameters = typeParameters(template);
     if (parameters.length === 0) {
       throw new TsonSchemaValidationError(
         `'${head}' declares no type parameters, so '${head}<...>' applies arguments to something that ` +
@@ -456,7 +457,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // hands back whatever that denotes.
       if (target === REFERENCE_HEAD) {
         aliasClosing.add(name);
-        return closeHeldAlias(head, template, template.body, bind(parameters, args));
+        return closeHeldAlias(head, template.body, bind(parameters, args));
       }
       // A record template's closure is the instantiation itself, where every other held form
       // closes to a synthetic the instantiation then references.
@@ -472,7 +473,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         deps.publish(name, instantiation);
         return name;
       }
-      const formName = closeHeldTemplate(head, template, template.body, bind(parameters, args));
+      const formName = closeHeldTemplate(head, template.body, bind(parameters, args));
       if (generated.has(head)) {
         // A generated head closing its own intermediate form: the form entry *is* the answer,
         // and an instantiation naming this head would carry an internal name into identity.
@@ -492,7 +493,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   /** A held body substituted, its inner applications closed, and read back through its constructor. */
   function closeHeld(
     head: string,
-    template: TypeDefinition,
     open: HeldBody,
     bindings: ReadonlyMap<string, TypeArgument>,
   ): Closed {
@@ -506,7 +506,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // application a slot holds (`tree<p0>` becoming `tree<text>`), and a parameter inside a
     // collection are all the same thing here -- a token in a tree -- because the body was never
     // read against the constructor's vocabulary in the first place.
-    const substituted = substitute(open.application.coreValue, head, template.parameters, bindings);
+    const substituted = substitute(open.application.coreValue, head, open.parameters, bindings);
     const wire = closeApplications(substituted);
     if (deps.definitionMetaReader === undefined) {
       throw new TsonNotImplementedError(
@@ -545,12 +545,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     args: readonly TypeArgument[],
     bindings: ReadonlyMap<string, TypeArgument>,
   ): TypeDefinition {
-    const closed = closeHeld(head, template, open, bindings);
+    const closed = closeHeld(head, open, bindings);
     return {
       source: { name: head, arguments: args, annotations: [] },
-      kind: template.kind,
-      parameters: [],
-      constructor: template.constructor,
       supertypes: template.supertypes,
       subtypes: template.subtypes,
       body: fixRoutedValues(closed.body),
@@ -571,7 +568,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function closeHeldTemplate(
     head: string,
-    template: TypeDefinition,
     open: HeldBody,
     bindings: ReadonlyMap<string, TypeArgument>,
   ): string {
@@ -581,7 +577,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         `'${head}<...>' is a held body whose own application carries no constructor name`,
       );
     }
-    const closed = closeHeld(head, template, open, bindings);
+    const closed = closeHeld(head, open, bindings);
     // Named before the entry is built and from the wire slots as written, which is what keeps
     // one type on one entry: the desugar phase lifts innermost-first, so a form it writes already
     // names the entry its inner form became, and a form closed here has to agree with it or
@@ -597,9 +593,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     }
     const definition: TypeDefinition = {
       source: { name: target, arguments: [], annotations: [] },
-      kind: template.kind,
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: closed.body,
@@ -618,11 +611,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function closeHeldAlias(
     head: string,
-    template: TypeDefinition,
     open: HeldBody,
     bindings: ReadonlyMap<string, TypeArgument>,
   ): string {
-    const substituted = substitute(open.application.coreValue, head, template.parameters, bindings);
+    const substituted = substitute(open.application.coreValue, head, open.parameters, bindings);
     const closed = closeApplications(substituted);
     const target = closed.kind === 'record' ? field(closed, 'target') : undefined;
     if (target?.kind !== 'token') {
@@ -684,7 +676,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     ): MaterialiseResult {
       const rewritten = new Map<string, TypeDefinition>();
       for (const [key, definition] of entries) {
-        if (definition.parameters.length > 0) {
+        if (typeParameters(definition).length > 0) {
           // A template's own body is open: `chain<T>` inside `chain` awaits substitution and is
           // not an application to close. Closing it here would mint an entry per level, keyed on
           // the literal parameter name.
@@ -763,9 +755,6 @@ function instantiationOf(
 ): TypeDefinition {
   return {
     source: { name: head, arguments: args, annotations: [] },
-    kind: 'REFERENCE',
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body: { kind: 'reference', target: { name: formName, arguments: [], annotations: [] } },

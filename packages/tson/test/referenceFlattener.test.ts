@@ -23,9 +23,6 @@ function recordOf(fieldType: TypeRef): TypeDefinition {
     groups: [],
   };
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,
@@ -37,10 +34,7 @@ function recordOf(fieldType: TypeRef): TypeDefinition {
 function aliasOf(target: TypeRef): TypeDefinition {
   const body: Reference = { kind: 'reference', target };
   return {
-    kind: 'REFERENCE',
     source: target,
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,
@@ -123,7 +117,7 @@ describe('flattening a use site naming a REFERENCE entry (§8.3)', () => {
     const namespace = new Map<string, TypeDefinition>([
       ['text', recordOf(ref('unit'))],
       ['doc', aliasOf(ref('text'))],
-      ['box', { ...recordOf(ref('unit')), parameters: ['T'] }],
+      ['box', recordOf(ref('unit'))],
       ['user', recordOf(ref('box', [ref('doc')]))],
     ]);
     const flattened = flattenSchema(
@@ -158,9 +152,9 @@ describe('flattening a use site naming a REFERENCE entry (§8.3)', () => {
 
   it('does not walk through an argument-bearing reference target -- an application, not a further hop', () => {
     const namespace = new Map<string, TypeDefinition>([
-      ['box', { ...recordOf(ref('unit')), parameters: ['T'] }],
+      ['box', recordOf(ref('unit'))],
       // partial => <B> box<B> -- open, so its target still carries an argument.
-      ['partial', { ...aliasOf(ref('box', [ref('B')])), parameters: ['B'] }],
+      ['partial', aliasOf(ref('box', [ref('B')]))],
     ]);
     const flattened = flattenSchema(
       new Map([['partial', entryOf(namespace, 'partial')]]),

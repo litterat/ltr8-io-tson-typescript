@@ -46,7 +46,7 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
     const atom: Atom = {
       kind: 'regex_type',
       spec: 'https://www.rfc-editor.org/rfc/rfc9485',
-      minLength: 3,
+      minLength: 3n,
     };
     const reader = buildAtomReader('short_pattern', atom);
     const { ctx, diagnostics } = collectingContextOver('"ab"');

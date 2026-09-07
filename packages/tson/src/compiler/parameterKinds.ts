@@ -44,7 +44,7 @@ export type Kind = 'TYPE' | 'VALUE';
 const TYPE_REF = 'type_ref';
 
 /**
- * Every kernel/core body shape §5.10 treats as scalar: {@link Unit} (`value`/`token`/`void`), an
+ * Every kernel/core body shape §5.10 treats as scalar: {@link Unit} (`value`/`identifier`/`void`), an
  * enum (`boolean` and every user-declared `!enum`), and one member per `*_type` constructor (§9).
  * A `Product`/`Sum`/`Reference`/held body, or a meta-layer `Data` extension body, is never a
  * scalar for this purpose, whatever its own `kind` happens to spell.
@@ -61,8 +61,9 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'time_type',
   'datetime_type',
   'duration_type',
+  'period_type',
   'text_type',
-  'binary',
+  'bytes_type',
   'regex_type',
   'uri_type',
   'email_type',
@@ -304,10 +305,10 @@ export function inferAll(
 ): ReadonlyMap<string, ReadonlyMap<string, Kind>> {
   const observed = new Map<string, Occurrences>();
   for (const [name, definition] of entries) {
-    if (definition.parameters.length === 0 || !isHeldBody(definition.body)) {
+    if (!isHeldBody(definition.body) || definition.body.parameters.length === 0) {
       continue;
     }
-    const occurrences = createOccurrences(definition.parameters);
+    const occurrences = createOccurrences(definition.body.parameters);
     try {
       walkBody(definition.body, { occurrences, meta });
     } catch (e: unknown) {
@@ -339,10 +340,10 @@ export function inferOne(
   template: TypeDefinition,
   meta: DefinitionGetter,
 ): ReadonlyMap<string, Kind> {
-  if (template.parameters.length === 0 || !isHeldBody(template.body)) {
+  if (!isHeldBody(template.body) || template.body.parameters.length === 0) {
     return new Map();
   }
-  const occurrences = createOccurrences(template.parameters);
+  const occurrences = createOccurrences(template.body.parameters);
   try {
     walkBody(template.body, { occurrences, meta });
   } catch (e: unknown) {
@@ -382,7 +383,9 @@ function settle(
             `parameterKinds.settle: '${deferred.head}' has observed occurrences but no namespace entry`,
           );
         }
-        const calleeParameter = calleeDefinition.parameters[deferred.index];
+        const calleeParameter = isHeldBody(calleeDefinition.body)
+          ? calleeDefinition.body.parameters[deferred.index]
+          : undefined;
         if (calleeParameter === undefined) {
           continue; // an arity error, which the materialiser reports where it is applied
         }

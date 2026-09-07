@@ -51,8 +51,8 @@ export function createCidr6Parser(typeRef: string, constraints: Cidr6Type): Atom
       text,
       address,
       prefixLength,
-      constraints.minPrefix,
-      constraints.maxPrefix,
+      constraints.minPrefix === undefined ? undefined : Number(constraints.minPrefix),
+      constraints.maxPrefix === undefined ? undefined : Number(constraints.maxPrefix),
     );
     return { kind: 'cidr6', text };
   }
