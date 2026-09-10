@@ -61,6 +61,7 @@ import {
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import { TsonBindMismatchError, TsonMissingBindingError, TsonReadError } from '../core/errors.js';
+import { DEFAULT_MAX_SUPERTYPE_CHAIN, supertypeChainLimitRefusal } from '../core/limits.js';
 import type { DataValue, RecordValue } from '../ast/value.js';
 import type { Annotation as WrittenAnnotation } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
@@ -80,6 +81,7 @@ import type {
   Annotation,
   Annotations,
   Reference,
+  Scoped,
   Top,
   TypeArgument,
   TypeDefinition,
@@ -685,13 +687,43 @@ function bindAtomInstance(deps: DefinitionResolverDeps, name: string, value: Dat
 
 /** §7.4's "Coherence of a body's facets": family coherence between a constructor's own bindings is a resolver question, checked here rather than left to the atom parsers (which would surface it as a library-gap "not implemented", exactly the wrong classification for the author's own mistake). */
 function checkCoherent(name: string, constructorName: string, body: Top): void {
-  if (!isAtom(body)) return;
-  const violations = checkAtomCoherence(body);
+  const violations = isAtom(body)
+    ? checkAtomCoherence(body)
+    : isScopedBody(body)
+      ? scopedCoherence(body)
+      : [];
   if (violations.length > 0) {
     throw new TsonSchemaValidationError(
       `'${name}': the body's own '${constructorName}' constraints contradict each other: ${violations.join('; ')}`,
     );
   }
+}
+
+function isScopedBody(body: Top): body is Scoped {
+  return 'kind' in body && body.kind === 'scoped';
+}
+
+/**
+ * `scoped`'s own coherence rule (§7.8), stated once in `meta.tn`'s own `@doc`: "One coherence
+ * rule, of the family a resolver already runs over `min_items`/`max_items`: `schemas` requires
+ * EXTERN in `scope`."
+ *
+ * `schemas` narrows which *foreign* schemas a value may be drawn from, so a body naming them
+ * without admitting EXTERN narrows a namespace it never opens -- the same shape as a bound pair
+ * admitting nothing, and reachable the same way, by editing one of the two and not the other.
+ *
+ * The other state §7.8 could refuse is unspellable rather than checked: `min_items: 1` on both
+ * collections means an empty `scope` and an empty `schemas` have no spelling to begin with.
+ */
+function scopedCoherence(body: Scoped): string[] {
+  if (body.schemas === undefined || body.schemas.size === 0) return [];
+  return body.scope.includes('EXTERN')
+    ? []
+    : [
+        "'schemas' names the foreign schemas a value may come from, but 'scope' does not admit " +
+          "EXTERN, so no value here can come from one (§7.8) -- add EXTERN to 'scope', or drop " +
+          "'schemas'",
+      ];
 }
 
 /** A body the constructor's own vocabulary rejects is the author's error (§7.2), not a coverage gap. */
@@ -864,6 +896,7 @@ function resolveComposition(
     applyRemovals(name, construction.removal, bodyNames(construction), fields, groups);
   }
   checkGroupPresence(name, fields, groups);
+  checkSupertypeChainLimit(name, transitiveSupertypes);
 
   // §4.1: at most one base kind may be reachable through the supertype chain -- kept as a
   // validation-only call (its own diagnostic is the point) now that kind is derived rather than
@@ -998,6 +1031,24 @@ function determineKind(name: string, transitiveSupertypes: readonly string[]): T
   }
 }
 
+/**
+ * [TSON-SCHEMA] §11.5's "supertype chain" limit: `name`'s own transitive `supertypes` (§8.1) MUST
+ * NOT grow past {@link DEFAULT_MAX_SUPERTYPE_CHAIN} entries. `transitiveSupertypes` is already the
+ * fully-accumulated chain by the time either caller reaches this -- each direct supertype's own
+ * chain folded in by induction (`resolveComposition`'s own top note) -- so the count taken here is
+ * exactly what §11.5 names, whether or not a later step (§5.9 subtraction) discards it from the
+ * entry's own stored `supertypes`: the walk that built it is the resource spent, regardless of
+ * what survives.
+ *
+ * A limit refusal, not a resolver error: the chain may be entirely well-formed, and the next
+ * processor along may simply be configured to walk further.
+ */
+function checkSupertypeChainLimit(name: string, transitiveSupertypes: readonly string[]): void {
+  if (transitiveSupertypes.length > DEFAULT_MAX_SUPERTYPE_CHAIN) {
+    throw supertypeChainLimitRefusal(DEFAULT_MAX_SUPERTYPE_CHAIN, name);
+  }
+}
+
 // ── Refinement (§5.7): T ^ { ... } ───────────────────────────────────────────────────────────
 
 /**
@@ -1120,6 +1171,7 @@ function refineOnto(
     );
   }
   checkGroupPresence(name, fields, groups);
+  checkSupertypeChainLimit(name, transitiveSupertypes);
 
   // Validation only -- see `resolveComposition`'s own identical call for why.
   determineKind(name, transitiveSupertypes);
@@ -1551,14 +1603,22 @@ function restatesInheritedGroup(
   for (const member of groupDef.members) {
     const restatedType = resolveTypeRef(deps, member.typeRef);
     const inheritedIndex = requiredGet(inheritedFieldIndex, member.name, 'restatesInheritedGroup');
-    const inheritedType = at(fields, inheritedIndex, 'restatesInheritedGroup').type;
-    if (!typeRefEquals(restatedType, inheritedType)) {
+    const inheritedField = at(fields, inheritedIndex, 'restatesInheritedGroup');
+    if (!typeRefEquals(restatedType, inheritedField.type)) {
       throw new TsonSchemaValidationError(
         `${prefix}gives member '${member.name}' the type '${restatedType.name}' where the source declares ` +
-          `'${inheritedType.name}' -- member type-refs are restated verbatim (§5.11); narrowing a member's ` +
-          'type is done by naming it as an ordinary field',
+          `'${inheritedField.type.name}' -- member type-refs are restated verbatim (§5.11); narrowing a ` +
+          "member's type is done by naming it as an ordinary field",
       );
     }
+    // §5.8's merge, applied to a group member the same way `resolveField` applies it to an
+    // ordinary restated field: the restatement's own annotations in source order, then the
+    // inherited field's own, in source order. Nothing is dropped and the restatement leads.
+    const own = annotationsOf(deps, member.name, member.annotations);
+    fields[inheritedIndex] = {
+      ...inheritedField,
+      annotations: [...own, ...inheritedField.annotations],
+    };
   }
 
   const state: ElementState = groupDef.optional ? 'OPTIONAL' : 'REQUIRED';
@@ -1571,12 +1631,13 @@ function restatesInheritedGroup(
   return true;
 }
 
+/** A fresh group's own member (§5.11, §12.1) -- `*annotation field-name ws ":" ws type-ref`. Bound through the same {@link annotationsOf} every field's own annotations bind through (§6); there is no inherited field to merge onto here, this being a brand-new group rather than a restatement (that merge is {@link restatesInheritedGroup}'s own). */
 function resolveGroupMember(deps: DefinitionResolverDeps, member: GroupMember): RecordField {
   return {
     name: member.name,
     type: resolveTypeRef(deps, member.typeRef),
     state: 'OPTIONAL',
-    annotations: [],
+    annotations: annotationsOf(deps, member.name, member.annotations),
   };
 }
 

@@ -28,8 +28,18 @@
  * bearing target -- it is after the constructor applied there, where the template is the answer.
  * It keeps its own loop, and this note exists so a future reader does not assume there were only
  * ever these five.
+ *
+ * **[TSON-SCHEMA] §11.5's "reference chain" limit lives here**, since every caller shares this
+ * one walk: a chain that has not reached a terminal (or an undeclared name, or closed a cycle
+ * `walked` would otherwise catch for free) within {@link DEFAULT_MAX_REFERENCE_CHAIN} hops is a
+ * limit refusal (`core/limits.ts`'s own `referenceChainLimitRefusal`), not a resolver error --
+ * this deployment declined to spend the resources walking it, distinct from the chain being
+ * genuinely broken. `maxHops` defaults from that constant rather than being threaded through
+ * every one of this module's five callers; see `core/limits.ts`'s own top note on why the five
+ * §11.5 schema-side limits are not independently configurable yet.
  */
-import type { Reference, Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { DEFAULT_MAX_REFERENCE_CHAIN, referenceChainLimitRefusal } from '../core/limits.js';
+import type { Reference, Scoped, Top, TypeDefinition } from '../schema/meta/typedef.js';
 
 /** A single-name lookup -- a finished `Map`'s `get`, or a namespace still being built one declaration at a time (`definitionResolver.ts`'s own `DefinitionGetter`). */
 export type EntryLookup = (name: string) => TypeDefinition | undefined;
@@ -48,10 +58,17 @@ function isReferenceBody(body: Top): body is Reference {
   return 'kind' in body && body.kind === 'reference';
 }
 
-function walk(name: string, entries: EntryLookup): Stop {
+function walk(
+  name: string,
+  entries: EntryLookup,
+  maxHops: number = DEFAULT_MAX_REFERENCE_CHAIN,
+): Stop {
   const walked = new Set<string>();
   let current = name;
   while (!walked.has(current)) {
+    if (walked.size > maxHops) {
+      throw referenceChainLimitRefusal(maxHops, name);
+    }
     walked.add(current);
     const definition = entries(current);
     if (definition === undefined) {
@@ -71,13 +88,46 @@ function walk(name: string, entries: EntryLookup): Stop {
  * The name at the end of `name`'s reference chain -- `name` itself when it does not start one,
  * and the name the walk stopped at when it cannot reach a type (an undeclared name, or a cycle;
  * see this module's own top note).
+ *
+ * @throws TsonLimitRefusedError when the chain has not reached a terminal within `maxHops`
+ *   (default {@link DEFAULT_MAX_REFERENCE_CHAIN}) -- [TSON-SCHEMA] §11.5.
  */
-export function terminal(name: string, entries: EntryLookup): string {
-  return walk(name, entries).name;
+export function terminal(
+  name: string,
+  entries: EntryLookup,
+  maxHops: number = DEFAULT_MAX_REFERENCE_CHAIN,
+): string {
+  return walk(name, entries, maxHops).name;
 }
 
-/** The entry at the end of `name`'s chain, or `undefined` where the walk reaches no type. */
-export function terminalDefinition(name: string, entries: EntryLookup): TypeDefinition | undefined {
-  const stop = walk(name, entries);
+/**
+ * The entry at the end of `name`'s chain, or `undefined` where the walk reaches no type.
+ *
+ * @throws TsonLimitRefusedError when the chain has not reached a terminal within `maxHops`
+ *   (default {@link DEFAULT_MAX_REFERENCE_CHAIN}) -- [TSON-SCHEMA] §11.5.
+ */
+export function terminalDefinition(
+  name: string,
+  entries: EntryLookup,
+  maxHops: number = DEFAULT_MAX_REFERENCE_CHAIN,
+): TypeDefinition | undefined {
+  const stop = walk(name, entries, maxHops);
   return stop.reached ? entries(stop.name) : undefined;
+}
+
+function isScopedBody(body: Top): body is Scoped {
+  return 'kind' in body && body.kind === 'scoped';
+}
+
+/**
+ * Whether `name`'s reference chain (§8.3) terminates at a `scoped` instance (§7.8) -- the
+ * structural fact a container consults to decide whether a nested `!!schema` may stand at this
+ * position at all (`reader/tree/grammar.ts`'s own `refuseUnscopedSchemaRef`). Which cell a scope
+ * push actually lands in -- LOCAL, EXTERN, or neither -- is the `scoped` position's own reader's
+ * concern once dispatched to; this only answers whether the position is a scoped one in the first
+ * place, an undeclared name and a cycle both reading as "no".
+ */
+export function resolvesToScoped(name: string, entries: EntryLookup): boolean {
+  const definition = terminalDefinition(name, entries);
+  return definition !== undefined && isScopedBody(definition.body);
 }

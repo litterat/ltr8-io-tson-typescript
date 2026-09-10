@@ -14,19 +14,30 @@ import type { ArrayBody } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
 import { absentNode, arrayNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
-import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from './grammar.js';
+import {
+  describeEvent,
+  refuseUnscopedSchemaRef,
+  skipAnnotationsAndTypeRef,
+  skipCoreValue,
+} from './grammar.js';
 import { valuesEqual } from './equality.js';
 import { renderValue, type TreeTypeResolver } from './support.js';
 
-/** Builds an `array` tree reader for one compiled schema entry. `resolveType` resolves the element type's own reader once, at construction. */
+/**
+ * Builds an `array` tree reader for one compiled schema entry. `resolveType` resolves the element
+ * type's own reader once, at construction; `isScopedType` answers §7.8's typed-position question
+ * for that same element type, at the same step.
+ */
 export function arrayTreeReader(
   name: string,
   displayName: string,
   body: ArrayBody,
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
+  isScopedType: (typeName: string) => boolean,
 ): TypeReader<Value> {
   const elementParser = resolveType(body.elementType.name);
+  const scopedElement = isScopedType(body.elementType.name);
 
   function validateSize(size: number, ctx: ReadContext): void {
     const count = BigInt(size);
@@ -71,26 +82,23 @@ export function arrayTreeReader(
     for (;;) {
       const peeked = yield* ctx.peek();
       if (peeked.kind === 'array-end') break;
-      if (peeked.kind === 'schema-ref') {
-        yield* ctx.next();
-      }
+      const elementCtx = ctx.index(index);
+      yield* refuseUnscopedSchemaRef(elementCtx, scopedElement, body.elementType.name);
       const elementPeek = yield* ctx.peek();
       let decoded: Value;
       if (elementPeek.kind === 'absent') {
         yield* ctx.next(); // consume the absent event regardless of REQUIRED/OPTIONAL
         if (body.state === 'REQUIRED') {
-          ctx
-            .index(index)
-            .report(
-              'FIELD_REQUIRED',
-              `'${displayName}' element [${String(index)}] is absent, but elements are required`,
-              'a value',
-              '(absent)',
-            );
+          elementCtx.report(
+            'FIELD_REQUIRED',
+            `'${displayName}' element [${String(index)}] is absent, but elements are required`,
+            'a value',
+            '(absent)',
+          );
         }
         decoded = absentNode();
       } else {
-        decoded = yield* elementParser.read(ctx.index(index));
+        decoded = yield* elementParser.read(elementCtx);
       }
       if (seen !== undefined) {
         if (seen.some((element) => valuesEqual(element, decoded))) {

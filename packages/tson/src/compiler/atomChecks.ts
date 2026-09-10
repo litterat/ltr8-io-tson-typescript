@@ -17,10 +17,11 @@
  * selector at all (`Unit`, `UuidType`, `MacType`) returns no violations for both questions, and
  * `ComplexType` (a pure selector, `component`) returns no *coherence* violations — a single
  * field has nothing else to contradict — but does narrow, along `component`'s own partial order
- * (§5.7). The four network families (`Ipv4Type`, `Ipv6Type`, `Cidr4Type`, `Cidr6Type`) narrow the
- * same way — no orderable facet or selector of their own beyond `cidr4_type`/`cidr6_type`'s
- * prefix bounds — but do carry a *coherence* obligation: §5.5's `within`/`excluding` pair, plus a
- * network family's own prefix bounds, MUST between them admit a value ({@link networkCoherence}).
+ * (§5.7). The four network families (`Ipv4Type`, `Ipv6Type`, `Cidr4Type`, `Cidr6Type`) all narrow
+ * their shared `within`/`excluding` pair the same way ({@link networkNarrows}) — `cidr4_type`/
+ * `cidr6_type` add their own prefix-bound narrowing on top — and all four carry a *coherence*
+ * obligation: §5.5's `within`/`excluding` pair, plus a network family's own prefix bounds, MUST
+ * between them admit a value ({@link networkCoherence}).
  */
 import type { Atom, Top } from '../schema/meta/typedef.js';
 import type {
@@ -57,8 +58,8 @@ import {
   checkLower,
   checkMemberSubset,
   checkOnlyWithdraws,
-  checkSelectorOrder,
   checkSubset,
+  checkSuperset,
   checkUpper,
   renderBoundValue,
   tighterLower,
@@ -208,12 +209,55 @@ function integerCoherence(t: IntegerType): string[] {
 
 // ── float_type ───────────────────────────────────────────────────────────────────────────────
 
-/** `float_type.format`'s own narrowing order (§5.5, §5.7, §9): widest range first, since a narrower IEEE format's every value is exactly representable in a wider one, so refining from wide to narrow is the only direction that admits fewer values. Only the two formats a built-in annotation (`float32`/`float64`) actually produces are reachable (`FloatFormat`'s own doc); the ladder is total over those two either way. */
-const FLOAT_FORMAT_RANK: Readonly<Record<FloatFormat, number>> = { BINARY32: 0, BINARY64: 1 };
+/**
+ * `float_type.format`'s own narrowing relation (§5.5, §5.7, §9): two chains, ranked separately by
+ * width -- the binary radix (`BINARY16 ⊂ BINARY32 ⊂ BINARY64 ⊂ BINARY128 ⊂ BINARY256`) and the
+ * decimal radix (`DECIMAL32 ⊂ DECIMAL64 ⊂ DECIMAL128`) -- since a narrower format's every value is
+ * exactly representable in a wider one *of the same radix*, and the two radices are incomparable:
+ * decimal32's grid (base 10) shares no containment either way with any binary format's (base 2).
+ * Mirrors {@link EXACT_COMPONENT_RANK}/{@link APPROXIMATE_COMPONENT_RANK}'s own two-chain shape:
+ * a refinement may move to a lower rank in the *same* chain only.
+ *
+ * Keyed by `string`, not {@link FloatFormat} -- `ieee_format` (`spec/m/meta.tn`) declares all
+ * eight members this table lists, but `FloatFormat` itself names only the two a built-in
+ * annotation (`float32`/`float64`) produces (that type's own doc), so a refinement naming one of
+ * the other six reaches this function as a value outside its own declared TypeScript type. Both
+ * tables are `Partial`, and a member absent from both -- unreachable today, since this table is
+ * total over `ieee_format`'s own members, but a future ninth member would land here -- fails
+ * rather than silently narrowing, the same fail-closed reading {@link complexNarrows} gives an
+ * unrecognised {@link ComplexComponent}.
+ */
+const BINARY_FORMAT_RANK: Readonly<Partial<Record<string, number>>> = {
+  BINARY16: 0,
+  BINARY32: 1,
+  BINARY64: 2,
+  BINARY128: 3,
+  BINARY256: 4,
+};
+const DECIMAL_FORMAT_RANK: Readonly<Partial<Record<string, number>>> = {
+  DECIMAL32: 0,
+  DECIMAL64: 1,
+  DECIMAL128: 2,
+};
+
+function floatFormatNarrows(source: FloatFormat, refined: FloatFormat): boolean {
+  if (source === refined) return true;
+  const sourceRank = BINARY_FORMAT_RANK[source] ?? DECIMAL_FORMAT_RANK[source];
+  const refinedRank = BINARY_FORMAT_RANK[refined] ?? DECIMAL_FORMAT_RANK[refined];
+  const sameRadix = source in BINARY_FORMAT_RANK === refined in BINARY_FORMAT_RANK;
+  return (
+    sameRadix && sourceRank !== undefined && refinedRank !== undefined && refinedRank <= sourceRank
+  );
+}
 
 function floatNarrows(source: FloatType, refined: FloatType): string[] {
   const out: string[] = [];
-  checkSelectorOrder(out, 'format', source.format, refined.format, (f) => FLOAT_FORMAT_RANK[f]);
+  if (!floatFormatNarrows(source.format, refined.format)) {
+    out.push(
+      `format ${refined.format} does not narrow the source's own ${source.format} -- a refinement may only ` +
+        'move to a narrower width within the same radix (§5.7)',
+    );
+  }
   checkLower(
     out,
     bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
@@ -745,11 +789,41 @@ function ipv6Coherence(t: Ipv6Type): string[] {
   return out;
 }
 
+/**
+ * `within`/`excluding`'s own narrowing relation (§5.5, §5.7), shared by all four network
+ * families: `within` admits addresses, so a refinement narrows it by *shrinking* ({@link
+ * checkSubset}); `excluding` removes them, so a refinement narrows it by *growing* ({@link
+ * checkSuperset}) -- the mirror-image pair `checkSuperset`'s own doc states. `ipv4_type`/
+ * `ipv6_type` (the address families) and `cidr4_type`/`cidr6_type` (the network families, which
+ * add their own prefix-bound check on top, in {@link cidrNarrows}) apply exactly this one rule to
+ * the pair: neither family gets a pass, and the two agree.
+ */
+function networkNarrows(
+  out: string[],
+  source: { readonly within: readonly string[]; readonly excluding: readonly string[] },
+  refined: { readonly within: readonly string[]; readonly excluding: readonly string[] },
+): void {
+  checkSubset(out, 'within', source.within, refined.within);
+  checkSuperset(out, 'excluding', source.excluding, refined.excluding);
+}
+
+function ipv4Narrows(source: Ipv4Type, refined: Ipv4Type): string[] {
+  const out: string[] = [];
+  networkNarrows(out, source, refined);
+  return out;
+}
+
+function ipv6Narrows(source: Ipv6Type, refined: Ipv6Type): string[] {
+  const out: string[] = [];
+  networkNarrows(out, source, refined);
+  return out;
+}
+
 function cidrNarrows(source: Cidr4Type | Cidr6Type, refined: Cidr4Type | Cidr6Type): string[] {
   const out: string[] = [];
   checkAtLeast(out, 'min_prefix', source.minPrefix, refined.minPrefix, compareBigint);
   checkAtMost(out, 'max_prefix', source.maxPrefix, refined.maxPrefix, compareBigint);
-  checkSubset(out, 'within', source.within, refined.within);
+  networkNarrows(out, source, refined);
   return out;
 }
 
@@ -876,14 +950,18 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'complex_type'
         ? complexNarrows(source, refined)
         : mismatch('a complex', refined);
+    case 'ipv4_type':
+      return refined.kind === 'ipv4_type'
+        ? ipv4Narrows(source, refined)
+        : mismatch('an ipv4', refined);
+    case 'ipv6_type':
+      return refined.kind === 'ipv6_type'
+        ? ipv6Narrows(source, refined)
+        : mismatch('an ipv6', refined);
     // No orderable facet and no selector at all: `unit` (opaque, no schema-shape signal), the
-    // identifier-only `uuid_type`, and `ipv4_type`/`ipv6_type`/`mac_type` (spec-pinned, no facet
-    // of their own to compare -- `within`/`excluding` are enforced against a value and checked
-    // for schema-load coherence (§5.5), neither of which is a narrowing relation).
+    // identifier-only `uuid_type`, and `mac_type` (spec-pinned, no facet of its own to compare).
     case 'unit':
     case 'uuid_type':
-    case 'ipv4_type':
-    case 'ipv6_type':
     case 'mac_type':
       return [];
   }

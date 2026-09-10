@@ -673,12 +673,15 @@ const referenceBinding: RecordBinding<Reference> = record<Reference>({
 const scopeKindBinding: Binding<ScopeKind> = atom<ScopeKind>('scope_kind');
 
 /**
- * `scoped.schemas`'s own value type, `[type_name; 1..]?` (§7.8) -- a non-empty list, or the
- * absent sentinel meaning "every type this schema declares", collapsed onto this package's own
- * absent-equals-empty convention (`Scoped`'s own doc) at the model boundary. Never exercised by
- * any bundled fixture (`declared`/`extern`/`dynamic` all carry `scope` alone), so the absent case
- * on the wire is read as `[]` rather than reconstructed from a genuinely separate `_` marker --
- * a later work package's own reader is what will exercise this position for real.
+ * `scoped.schemas`'s own value type, `[type_name; 1..]?` (§7.8) -- a non-empty list, or the absent
+ * sentinel meaning "every type this schema declares".
+ *
+ * The two arrive here as one: `_` at this position reads as the empty list (`bind/decode.ts`'s own
+ * array case), on this package's absent-equals-empty convention, and `buildScopedReader`
+ * (`compiler/compile.ts`) treats an empty list as "any type this schema declares" -- so the
+ * spelling §7.8 describes and the model it produces agree without a separate marker to carry.
+ * None of the bundled fixtures exercises it: `declared`, `extern` and `dynamic` all carry `scope`
+ * alone.
  */
 const scopedSchemaTypesBinding: Binding<readonly string[]> = arrayOf<string>(identifierBinding);
 

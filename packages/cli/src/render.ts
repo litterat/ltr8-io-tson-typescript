@@ -13,11 +13,19 @@
 import { arrayNode, atomNode, recordNode, write, type Value } from '@ltr8/tson';
 import type { CompileRun } from './commands/compile.js';
 import type { HashRun } from './commands/hash.js';
+import type { PolicyResult } from './commands/policy.js';
 import type { ValidateRun } from './commands/validate.js';
 import { diagnosticJson, diagnosticNode, diagnosticText } from './diagnosticNode.js';
 import type { Outcome } from './outcome.js';
-import { policyJson, policyNode, policyNote, policyText } from './policyNode.js';
-import type { ProcessorPolicy } from './policyOptions.js';
+import {
+  limitsPolicyJson,
+  limitsPolicyNode,
+  limitsPolicyText,
+  policyJson,
+  policyNode,
+  policyNote,
+  policyText,
+} from './policyNode.js';
 
 export type Format = 'text' | 'json' | 'tson';
 
@@ -31,9 +39,10 @@ function optionalField(fields: Map<string, Value>, name: string, value: string |
   if (value !== undefined) fields.set(name, atomNode(value));
 }
 
-function runNode(outcome: Outcome, files: readonly Value[], policy?: Value): Value {
+function runNode(outcome: Outcome, files: readonly Value[], policy?: Value, limits?: Value): Value {
   const fields = new Map<string, Value>([['outcome', atomNode(outcome)]]);
   if (policy !== undefined) fields.set('policy', policy);
+  if (limits !== undefined) fields.set('limits_policy', limits);
   fields.set('files', arrayNode(files));
   return recordNode(fields);
 }
@@ -56,6 +65,7 @@ export function renderValidateRun(run: ValidateRun, format: Format): string {
       {
         outcome: run.outcome,
         policy: policyJson(run.policy),
+        limits_policy: limitsPolicyJson(run.limits),
         files: run.files.map((f) => ({
           file: f.file,
           outcome: f.outcome,
@@ -67,7 +77,14 @@ export function renderValidateRun(run: ValidateRun, format: Format): string {
     );
   }
   if (format === 'tson') {
-    return write(runNode(run.outcome, run.files.map(validateFileNode), policyNode(run.policy)));
+    return write(
+      runNode(
+        run.outcome,
+        run.files.map(validateFileNode),
+        policyNode(run.policy),
+        limitsPolicyNode(run.limits),
+      ),
+    );
   }
   const lines: string[] = [];
   const multiple = run.files.length > 1;
@@ -96,6 +113,7 @@ export function renderCompileRun(run: CompileRun, format: Format): string {
       {
         outcome: run.outcome,
         policy: policyJson(run.policy),
+        limits_policy: limitsPolicyJson(run.limits),
         files: run.files.map((f) => ({
           file: f.file,
           outcome: f.outcome,
@@ -119,7 +137,9 @@ export function renderCompileRun(run: CompileRun, format: Format): string {
       optionalField(fields, 'message', f.message);
       return recordNode(fields);
     });
-    return write(runNode(run.outcome, fileNodes, policyNode(run.policy)));
+    return write(
+      runNode(run.outcome, fileNodes, policyNode(run.policy), limitsPolicyNode(run.limits)),
+    );
   }
   const lines: string[] = [];
   for (const f of run.files) {
@@ -187,13 +207,23 @@ export function renderHashRun(run: HashRun, format: Format): string {
 
 // ── policy ───────────────────────────────────────────────────────────────────────────────────
 
-/** `tson policy`'s own rendering -- no run envelope, since this states this processor's configuration, not a verdict on anything. */
-export function renderPolicy(policy: ProcessorPolicy, format: Format): string {
+/** `tson policy`'s own rendering -- no run envelope, since this states this processor's configuration, not a verdict on anything. Both halves of `result` are always present: the §8.2 identifier/token policies and the §9.1 resource-limits policy, "reported... on the same terms" (§9.1). */
+export function renderPolicy(result: PolicyResult, format: Format): string {
   if (format === 'json') {
-    return JSON.stringify(policyJson(policy), null, 2);
+    return JSON.stringify(
+      { ...policyJson(result.processor), limits_policy: limitsPolicyJson(result.limits) },
+      null,
+      2,
+    );
   }
   if (format === 'tson') {
-    return write(policyNode(policy));
+    const node = policyNode(result.processor);
+    if (node.kind !== 'record') {
+      return write(node); // unreachable -- policyNode always returns a record; no fields to merge onto otherwise
+    }
+    const fields = new Map(node.fields);
+    fields.set('limits_policy', limitsPolicyNode(result.limits));
+    return write(recordNode(fields, node.typeRef, node.annotations));
   }
-  return policyText(policy);
+  return `${policyText(result.processor)}\nlimits:            ${limitsPolicyText(result.limits)}`;
 }

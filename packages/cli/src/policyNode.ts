@@ -17,7 +17,7 @@
  * omitting the field on one of them.
  */
 import { arrayNode, atomNode, recordNode, scriptName, type Value } from '@ltr8/tson';
-import type { ProcessorPolicy } from './policyOptions.js';
+import type { LimitsPolicy, ProcessorPolicy } from './policyOptions.js';
 
 interface UnicodePolicyJson {
   readonly level: string;
@@ -29,6 +29,57 @@ export interface PolicyJson {
   readonly identifier_policy: UnicodePolicyJson;
   readonly token_policy: UnicodePolicyJson;
   readonly unicode_data_version: string;
+}
+
+/**
+ * {@link LimitsPolicy} rendered for `--format json`/`tson` -- [TSON-DATA] §9.1's resource limits
+ * this run enforces, `snake_case` throughout to match {@link PolicyJson}'s own convention.
+ */
+export interface LimitsPolicyJson {
+  readonly max_nesting_depth: number;
+  readonly max_import_closure: number;
+  readonly max_schema_entries: number;
+  readonly max_reference_chain: number;
+  readonly max_supertype_chain: number;
+  readonly max_materialisation_depth: number;
+}
+
+/** {@link LimitsPolicy} rendered for `--format json`. */
+export function limitsPolicyJson(limits: LimitsPolicy): LimitsPolicyJson {
+  return {
+    max_nesting_depth: limits.maxNestingDepth,
+    max_import_closure: limits.maxImportClosure,
+    max_schema_entries: limits.maxSchemaEntries,
+    max_reference_chain: limits.maxReferenceChain,
+    max_supertype_chain: limits.maxSupertypeChain,
+    max_materialisation_depth: limits.maxMaterialisationDepth,
+  };
+}
+
+/** {@link LimitsPolicy} rendered for `--format tson`, as a `tree/nodes.ts` {@link Value} record. */
+export function limitsPolicyNode(limits: LimitsPolicy): Value {
+  return recordNode(
+    new Map<string, Value>([
+      ['max_nesting_depth', atomNode(BigInt(limits.maxNestingDepth))],
+      ['max_import_closure', atomNode(BigInt(limits.maxImportClosure))],
+      ['max_schema_entries', atomNode(BigInt(limits.maxSchemaEntries))],
+      ['max_reference_chain', atomNode(BigInt(limits.maxReferenceChain))],
+      ['max_supertype_chain', atomNode(BigInt(limits.maxSupertypeChain))],
+      ['max_materialisation_depth', atomNode(BigInt(limits.maxMaterialisationDepth))],
+    ]),
+  );
+}
+
+/** One line: `nesting depth 64, import closure 64, schema entries 65536, reference chain 64, supertype chain 64, materialisation depth 64` -- `tson policy`'s own `--format text` for the limits half of the report. */
+export function limitsPolicyText(limits: LimitsPolicy): string {
+  return (
+    `nesting depth ${String(limits.maxNestingDepth)}, ` +
+    `import closure ${String(limits.maxImportClosure)}, ` +
+    `schema entries ${String(limits.maxSchemaEntries)}, ` +
+    `reference chain ${String(limits.maxReferenceChain)}, ` +
+    `supertype chain ${String(limits.maxSupertypeChain)}, ` +
+    `materialisation depth ${String(limits.maxMaterialisationDepth)}`
+  );
 }
 
 /** One `permittedScripts` combination, resolved from `ScriptId`s back to the names `scriptNamed` accepts. */

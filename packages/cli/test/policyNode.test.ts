@@ -6,9 +6,12 @@
  * renders back).
  */
 import { describe, expect, it } from 'vitest';
-import { consumePolicyOptions, processorPolicyOf } from '../src/policyOptions.js';
+import { consumePolicyOptions, limitsPolicyOf, processorPolicyOf } from '../src/policyOptions.js';
 import {
   isDefaultPolicy,
+  limitsPolicyJson,
+  limitsPolicyNode,
+  limitsPolicyText,
   policyJson,
   policyNode,
   policySummary,
@@ -105,5 +108,38 @@ describe('isDefaultPolicy: permittedScripts', () => {
   it('is no longer the default once a combination is admitted, even at the default level', () => {
     expect(isDefaultPolicy(policyFor([]))).toBe(true);
     expect(isDefaultPolicy(policyFor(['--identifier-scripts', 'Latin+Cyrillic']))).toBe(false);
+  });
+});
+
+// ── [TSON-DATA] §9.1's resource-limits policy -- reported beside the §8.2 one, on the same terms ──
+
+describe('limitsPolicyJson / limitsPolicyNode / limitsPolicyText', () => {
+  it('limitsPolicyJson renders all six limits, snake_case', () => {
+    const json = limitsPolicyJson(limitsPolicyOf());
+    expect(json).toEqual({
+      max_nesting_depth: 64,
+      max_import_closure: 64,
+      max_schema_entries: 65_536,
+      max_reference_chain: 64,
+      max_supertype_chain: 64,
+      max_materialisation_depth: 64,
+    });
+  });
+
+  it('limitsPolicyNode renders the same six limits as a tson record', () => {
+    const node = limitsPolicyNode(limitsPolicyOf());
+    expect(node.kind).toBe('record');
+    if (node.kind !== 'record') throw new Error('unreachable');
+    expect(node.fields.get('max_schema_entries')).toMatchObject({ kind: 'atom', value: 65_536n });
+  });
+
+  it('limitsPolicyText states every limit on one line', () => {
+    const text = limitsPolicyText(limitsPolicyOf());
+    expect(text).toContain('nesting depth 64');
+    expect(text).toContain('import closure 64');
+    expect(text).toContain('schema entries 65536');
+    expect(text).toContain('reference chain 64');
+    expect(text).toContain('supertype chain 64');
+    expect(text).toContain('materialisation depth 64');
   });
 });

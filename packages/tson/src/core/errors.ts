@@ -359,12 +359,20 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
 }
 
 /**
- * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}. Closed to
- * the one limit this port enforces: `STATUS.md`'s known gaps names the other eleven [TSON-DATA]
- * §9.1 limits and five [TSON-SCHEMA] §11.5 schema limits, none of which this type or
- * {@link TsonLimitRefusedError} can be raised for today.
+ * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}. Six
+ * members: [TSON-DATA] §9.1's `'nesting-depth'` (a document limit, applying to a schema document
+ * as a document too, §11.5) plus [TSON-SCHEMA] §11.5's own five schema-side counters --
+ * `'import-closure'`, `'schema-entries'`, `'reference-chain'`, `'supertype-chain'`, and
+ * `'materialisation-depth'`, each named in §11.5's own table alongside its default. `STATUS.md`'s
+ * known gaps names the other eleven §9.1 document-side limits this type is not raised for.
  */
-export type ResourceLimitName = 'nesting-depth';
+export type ResourceLimitName =
+  | 'nesting-depth'
+  | 'import-closure'
+  | 'schema-entries'
+  | 'reference-chain'
+  | 'supertype-chain'
+  | 'materialisation-depth';
 
 /**
  * A document refused under [TSON-DATA] §9.1's resource-limits policy ([TSON-SCHEMA] §11.5 for the
@@ -379,10 +387,10 @@ export type ResourceLimitName = 'nesting-depth';
  * Unlike {@link TsonNameHygieneRefusedError}, a limit refusal is never reported through a
  * collecting diagnostics receiver first and converted on throw: everything past the point a limit
  * is exceeded is unreachable by construction (a document that nests one level past the bound has
- * nothing further below that level to collect), so every site that raises this class throws it
- * directly, under a fail-fast read and a collecting one alike -- see the throw sites themselves
- * (`core/limits.ts`'s own `nestingLimitRefusal`) for why that holds specifically for the one limit
- * built so far.
+ * nothing further below that level to collect, and a schema that names a sixty-fifth import has
+ * nothing further along that import chain to resolve), so every site that raises this class
+ * throws it directly, under a fail-fast read and a collecting one alike -- see the throw sites
+ * themselves (`core/limits.ts`'s own `nestingLimitRefusal` and its five schema-side siblings).
  */
 export class TsonLimitRefusedError extends TsonRefusedError {
   override readonly name: string = 'TsonLimitRefusedError';

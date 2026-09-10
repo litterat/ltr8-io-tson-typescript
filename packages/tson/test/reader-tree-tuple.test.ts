@@ -37,7 +37,7 @@ function slot(type: 'text' | 'int32', state: TupleElement['state'] = 'REQUIRED')
 
 function reader(elements: TupleElement[]): TypeReader<Value> {
   const body: TupleBody = { kind: 'tuple', elements };
-  return tupleTreeReader('pair', 'pair', body, resolve, LOCATION);
+  return tupleTreeReader('pair', 'pair', body, resolve, LOCATION, () => false);
 }
 
 describe('tupleTreeReader -- positions (§5.3 [TSON-SCHEMA])', () => {

@@ -24,8 +24,7 @@
  */
 import type { Task } from '../io/bytes.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
-import { lookingAhead } from '../reader/context.js';
-import { skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
+import { skipDataValue, typeRefAhead } from '../reader/tree/grammar.js';
 import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { absentNode } from '../tree/nodes.js';
@@ -53,19 +52,6 @@ function selfNames(
     }
   }
   return names;
-}
-
-/**
- * Looks ahead past a data-value's leading annotations for its own `!type-ref`, without consuming
- * anything -- so whichever reader ultimately runs (the position's own, or a subtype's) sees the
- * whole value, framing included, exactly as it would if nothing had dispatched first.
- */
-function* typeRefAhead(ctx: ReadContext): Task<string | undefined> {
-  return yield* lookingAhead(ctx, function* (aheadCtx): Task<string | undefined> {
-    yield* skipAnnotations(aheadCtx);
-    const peeked = yield* aheadCtx.peek();
-    return peeked.kind === 'type-ref' ? peeked.name : undefined;
-  });
 }
 
 /**

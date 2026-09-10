@@ -266,6 +266,61 @@ describe('cidr4_type', () => {
       }).length,
     ).toBeGreaterThan(0);
   });
+
+  it('`excluding` may only grow under refinement -- dropping an exclusion widens (§5.7)', () => {
+    const source: Cidr4Type = {
+      kind: 'cidr4_type',
+      spec: 'x',
+      within: [],
+      excluding: ['10.0.0.0/8', '192.168.0.0/16'],
+    };
+    expect(
+      checkAtomNarrows(source, { ...source, excluding: ['10.0.0.0/8'] }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      checkAtomNarrows(source, {
+        ...source,
+        excluding: ['10.0.0.0/8', '192.168.0.0/16', '172.16.0.0/12'],
+      }),
+    ).toEqual([]);
+  });
+});
+
+// ── ipv4_type / ipv6_type -- must agree with cidr4_type/cidr6_type on the same facet (§5.7) ─────
+
+describe('ipv4_type -- within/excluding narrow exactly as cidr4_type does', () => {
+  it('`within` shrinking to nothing widens to every address, and is refused -- not silently accepted', () => {
+    const source: Ipv4Type = {
+      kind: 'ipv4_type',
+      spec: 'x',
+      within: ['10.0.0.0/8'],
+      excluding: [],
+    };
+    expect(checkAtomNarrows(source, { ...source, within: [] }).length).toBeGreaterThan(0);
+  });
+
+  it('`within` shrinking to a subset narrows, and is accepted', () => {
+    const source: Ipv4Type = {
+      kind: 'ipv4_type',
+      spec: 'x',
+      within: ['10.0.0.0/8', '192.168.0.0/16'],
+      excluding: [],
+    };
+    expect(checkAtomNarrows(source, { ...source, within: ['10.0.0.0/8'] })).toEqual([]);
+  });
+
+  it('`excluding` may only grow, the same as cidr4_type', () => {
+    const source: Ipv4Type = {
+      kind: 'ipv4_type',
+      spec: 'x',
+      within: [],
+      excluding: ['10.0.0.0/8'],
+    };
+    expect(checkAtomNarrows(source, { ...source, excluding: [] }).length).toBeGreaterThan(0);
+    expect(
+      checkAtomNarrows(source, { ...source, excluding: ['10.0.0.0/8', '192.168.0.0/16'] }),
+    ).toEqual([]);
+  });
 });
 
 // §5.5's schema-load network obligation: "the pair MUST admit a value," decided exactly rather
@@ -410,6 +465,49 @@ describe('float_type', () => {
     const narrower: FloatType = { ...source, format: 'BINARY32' };
     expect(checkAtomNarrows(source, narrower)).toEqual([]);
     expect(checkAtomNarrows(narrower, source).length).toBeGreaterThan(0);
+  });
+
+  it('`format` ranks the decimal radix as its own chain -- DECIMAL128 to DECIMAL32 tightens (§5.7, §9)', () => {
+    const source: FloatType = {
+      kind: 'float_type',
+      // `ieee_format` (spec/m/meta.tn) declares six members `FloatFormat` does not -- see that
+      // type's own doc on why only BINARY32/BINARY64 are in it.
+      format: 'DECIMAL128' as FloatType['format'],
+      allowNan: true,
+      allowInfinity: true,
+      allowSubnormal: true,
+      allowNegativeZero: true,
+    };
+    const narrower: FloatType = { ...source, format: 'DECIMAL32' as FloatType['format'] };
+    expect(checkAtomNarrows(source, narrower)).toEqual([]);
+    expect(checkAtomNarrows(narrower, source).length).toBeGreaterThan(0);
+  });
+
+  it('`format` never narrows across radices, whichever direction (§5.5, §5.7)', () => {
+    const source: FloatType = {
+      kind: 'float_type',
+      format: 'BINARY64',
+      allowNan: true,
+      allowInfinity: true,
+      allowSubnormal: true,
+      allowNegativeZero: true,
+    };
+    const decimal: FloatType = { ...source, format: 'DECIMAL32' as FloatType['format'] };
+    expect(checkAtomNarrows(source, decimal).length).toBeGreaterThan(0);
+    expect(checkAtomNarrows(decimal, source).length).toBeGreaterThan(0);
+  });
+
+  it('an unrecognised `format` member fails rather than silently narrowing (§5.7)', () => {
+    const source: FloatType = {
+      kind: 'float_type',
+      format: 'BINARY64',
+      allowNan: true,
+      allowInfinity: true,
+      allowSubnormal: true,
+      allowNegativeZero: true,
+    };
+    const bogus: FloatType = { ...source, format: 'BOGUS' as unknown as FloatType['format'] };
+    expect(checkAtomNarrows(source, bogus).length).toBeGreaterThan(0);
   });
 });
 

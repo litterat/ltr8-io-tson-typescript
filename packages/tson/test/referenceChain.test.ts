@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { terminal, terminalDefinition } from '../src/compiler/referenceChain.js';
+import { TsonLimitRefusedError } from '../src/core/errors.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { Reference, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
 
@@ -90,5 +91,49 @@ describe('the reference-chain walk (§8.3)', () => {
     const namespace = new Map<string, TypeDefinition>([['a', aliasOf(ref('nowhere'))]]);
     expect(terminal('a', lookup(namespace))).toBe('nowhere');
     expect(terminalDefinition('a', lookup(namespace))).toBeUndefined();
+  });
+});
+
+// ── [TSON-SCHEMA] §11.5's "reference chain" limit ───────────────────────────────────────────────
+
+/** A straight-line alias chain `a0 -> a1 -> ... -> aN -> text`, N hops long. */
+function chainOf(hops: number): Map<string, TypeDefinition> {
+  const namespace = new Map<string, TypeDefinition>([['text', recordEntry()]]);
+  for (let i = hops - 1; i >= 0; i--) {
+    namespace.set(`a${String(i)}`, aliasOf(ref(i === hops - 1 ? 'text' : `a${String(i + 1)}`)));
+  }
+  return namespace;
+}
+
+describe('§11.5\'s "reference chain" limit', () => {
+  it('a chain exactly at the default (64 hops) resolves cleanly', () => {
+    const namespace = chainOf(64);
+    expect(terminal('a0', lookup(namespace))).toBe('text');
+  });
+
+  it('one hop past the default (65) is a limit refusal, not a resolver error', () => {
+    const namespace = chainOf(65);
+    const error = (() => {
+      try {
+        terminal('a0', lookup(namespace));
+      } catch (e) {
+        return e;
+      }
+      throw new Error('expected to throw');
+    })();
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('reference-chain');
+    expect((error as TsonLimitRefusedError).configuredThreshold).toBe(64);
+  });
+
+  it('an explicit `maxHops` overrides the default', () => {
+    const namespace = chainOf(5);
+    expect(terminal('a0', lookup(namespace), 5)).toBe('text');
+    expect(() => terminal('a0', lookup(namespace), 4)).toThrow(TsonLimitRefusedError);
+  });
+
+  it('terminalDefinition raises the same refusal, not `undefined`', () => {
+    const namespace = chainOf(3);
+    expect(() => terminalDefinition('a0', lookup(namespace), 2)).toThrow(TsonLimitRefusedError);
   });
 });

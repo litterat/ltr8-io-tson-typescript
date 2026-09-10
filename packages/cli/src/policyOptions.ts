@@ -296,3 +296,24 @@ export function processorPolicyOf(options: PolicyOptions): ProcessorPolicy {
     tokenPolicy: options.tokenPolicy,
   }).processorPolicy;
 }
+
+/**
+ * [TSON-DATA] §9.1's resource-limits policy ([TSON-SCHEMA] §11.5 for the work resolving a schema
+ * adds on top) -- `Tson.limitsPolicy`'s own type, named here the same way {@link ProcessorPolicy}
+ * is. §9.1 asks that the limits policy be "reported beside the identifier and token policies of
+ * §8.2, on the same terms: with any report that carries a refusal, and SHOULD be reachable with
+ * no document in hand" -- {@link limitsPolicyOf} is exactly that reachability, this CLI's
+ * counterpart to {@link processorPolicyOf}.
+ */
+export type LimitsPolicy = Tson['limitsPolicy'];
+
+/**
+ * The {@link LimitsPolicy} this CLI applies, read back through a real, ephemeral `createTson`
+ * instance for the same reason {@link processorPolicyOf} does. Takes no `PolicyOptions`, unlike
+ * that function: this CLI exposes no flag for any of the six limits (`@ltr8/tson`'s own
+ * `core/limits.ts` -- only `maxNestingDepth` is configurable per instance today, and this CLI
+ * does not thread it through), so every run is judged under the library's own defaults.
+ */
+export function limitsPolicyOf(): LimitsPolicy {
+  return createTson({}).limitsPolicy;
+}

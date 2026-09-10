@@ -32,41 +32,49 @@
  * template, a sugar form's lift, an alias, and an error placeholder alike. `record` closes to the
  * instantiation, `reference` to a name, everything else to a synthetic.
  *
- * **Identity (§8.2).** An instantiation entry is keyed on the flattened application recorded in
- * `source`, so two `box<text>` anywhere land on one entry. The derived name is built by
- * `derivedName.ts`'s own `ofApplication` from the application itself, which is what makes that
- * dedup fall out of naming rather than needing a second table: it is a pure function of a head
- * and an argument list, nothing else, so the same application derives the same name whichever
- * declaration happens to reach it first. `mintedNames.ts`'s own instance below decides §8.2's
- * freshness MUST over every name this materialiser mints.
+ * **Identity (§8.2).** An instantiation entry is keyed on the application recorded in `source`, so
+ * two `box<text>` anywhere land on one entry — and, since §8.2's identity follows a *reference*
+ * argument to its terminal entry (§8.3), `box<user_id>` over `user_id => uuid` lands on that same
+ * entry too ({@link canonicalArgs}, this module's own WP4.8). The derived name is built by
+ * `derivedName.ts`'s own `ofApplication`, called only after `canonicalArgs` has walked every bare
+ * reference argument through `deps.namespaceDefinitions` to its chain's terminal — so the name is
+ * a function of the head and the argument list's *resolved* identities, not of the spelling the
+ * author wrote, which is what makes the dedup fall out of naming rather than needing a second
+ * table: the same application derives the same name whichever declaration happens to reach it
+ * first, and an aliased spelling of one derives it too. `mintedNames.ts`'s own instance below
+ * decides §8.2's freshness MUST over every name this materialiser mints.
  *
  * **Knot-tying.** The memo entry is registered *before* the body is substituted, so a recursive
  * application reached during substitution (`tree<T>` inside `tree`, which becomes `tree<text>`
  * once `T` is bound) finds the entry under construction and references it by name rather than
  * recursing forever.
  *
- * **The depth backstop, and what it is not.** §5.10.1's own static check — that a recursive
- * application must pass every parameter through unchanged, so a well-formed schema's recursion
- * always ties the knot on its first repeat — is a separate, later pass over the *resolved*
- * entries before any of them are closed (the Java's `TemplateRegularity`, a later work package's
- * own file here). What this module carries instead is the guard the Java documents as a
- * **backstop, not the rule**: `MAX_CLOSING_DEPTH` bounds how many nested instantiations one
- * `close` chain may open before materialisation gives up and reports a diagnostic naming the
- * outermost application and the chain that grew rather than repeated. Ported for its semantics,
- * not its mechanism — a fixed depth counter over a `Set` of in-progress entry names, checked
- * after each new link is added — so that a hole in the earlier static check (or, in this port,
- * simply not having reached that later work package yet) fails as a `TsonSchemaValidationError`
- * a caller can report, never as a host stack overflow.
+ * **The depth backstop is [TSON-SCHEMA] §11.5's materialisation-depth limit.** §5.10.1's own
+ * static check — that a recursive application must pass every parameter through unchanged, so a
+ * well-formed schema's recursion always ties the knot on its first repeat — is a separate, later
+ * pass over the *resolved* entries before any of them are closed (the Java's `TemplateRegularity`,
+ * a later work package's own file here). What this module carries instead is the guard the Java
+ * documents as a **backstop, not the rule**: `MAX_CLOSING_DEPTH` bounds how many nested
+ * instantiations one `close` chain may open before materialisation gives up -- exactly §11.5's own
+ * "nested open synthetics closed for one application", at its own default of 64. Ported for its
+ * semantics, not its mechanism — a fixed depth counter over a `Set` of in-progress entry names,
+ * checked after each new link is added — so that a hole in the earlier static check (or, in this
+ * port, simply not having reached that later work package yet) fails as a limit refusal
+ * (`core/limits.ts`'s own `materialisationDepthLimitRefusal`) naming the outermost application and
+ * the chain that grew rather than repeated, a caller can report, never as a host stack overflow.
  */
 import {
   TsonInternalError,
+  TsonLimitRefusedError,
   TsonNotImplementedError,
   TsonReadError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
+import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '../core/limits.js';
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
 import type { TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
 import { typeParameters } from '../schema/meta/typedef.js';
+import { checkAtomCoherence, isAtom } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
@@ -229,10 +237,10 @@ export interface TemplateMaterialiser {
 
 /**
  * How deep the closing chain may go before materialisation is abandoned — a backstop, not the
- * rule. See this module's own doc for why this stays even once §5.10.1's static check lands
- * elsewhere.
+ * rule, and [TSON-SCHEMA] §11.5's own "materialisation depth" limit at its own default. See this
+ * module's own doc for why this stays even once §5.10.1's static check lands elsewhere.
  */
-const MAX_CLOSING_DEPTH = 64;
+const MAX_CLOSING_DEPTH = DEFAULT_MAX_MATERIALISATION_DEPTH;
 
 /** The constructor a held record template carries — its closure is the instantiation itself. */
 const RECORD_HEAD = 'record';
@@ -460,13 +468,19 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     if (closing.size > MAX_CLOSING_DEPTH) {
       closing.delete(name);
       // Named for the *outermost* head, which is the one the author wrote; the head in hand here
-      // is whichever link happened to tip the depth over.
-      throw new TsonSchemaValidationError(
+      // is whichever link happened to tip the depth over. A limit refusal ([TSON-SCHEMA] §11.5),
+      // not a resolver error: the application may tie its own knot eventually (arguments growing
+      // rather than repeating looks identical to this deployment's own bound from the inside), and
+      // §8.1's fifth outcome is what names that distinction rather than reporting the schema itself
+      // as malformed.
+      throw new TsonLimitRefusedError(
         `'${heads[0] ?? head}<...>' does not close: materialising it needs more than ` +
-          `${String(MAX_CLOSING_DEPTH)} nested instantiations and each one differs from the last, so the ` +
-          'arguments are growing rather than repeating and there is no finite set of types to build ' +
-          `(§5.10). The chain begins ${chain()}. A recursive template must reach an argument it has ` +
-          'already been applied to',
+          `${String(MAX_CLOSING_DEPTH)} nested instantiations, exceeding the configured ` +
+          `'${MATERIALISATION_DEPTH_LIMIT}' limit of ${String(MAX_CLOSING_DEPTH)} -- either the arguments are ` +
+          'growing rather than repeating and there is no finite set of types to build (§5.10), or this ' +
+          `deployment simply declined to spend the resources. The chain begins ${chain()}. A recursive ` +
+          'template must reach an argument it has already been applied to',
+        { limit: MATERIALISATION_DEPTH_LIMIT, configuredThreshold: MAX_CLOSING_DEPTH },
       );
     }
     heads.push(head);
@@ -550,7 +564,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     }
     try {
       const value: DataValue = { annotations: [], typeRef: target, coreValue: wire };
-      return { wire, body: deps.definitionMetaReader(target, value) };
+      const body = deps.definitionMetaReader(target, value);
+      checkMaterialisedCoherence(head, target, body);
+      return { wire, body };
     } catch (e) {
       if (e instanceof TsonReadError) {
         // The bindings a template defers are checked here and nowhere else (§8.2): `<T, N>
@@ -562,6 +578,29 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         );
       }
       throw e;
+    }
+  }
+
+  /**
+   * §7.4's "Coherence of a body's facets" re-run at materialisation, over the operands that were
+   * parameters: "every family coherence rule that §5.3 and §5.5 state for a literally written
+   * body applies again at materialisation, over the operands that were parameters" (§8.2). A
+   * literal body gets this from `definitionResolver.ts`'s own `checkCoherent`, run once the body
+   * is bound; a held body's own facets are not known until *this* function has substituted and
+   * closed them, so this is where the same question is asked a second time -- the constraint
+   * vocabulary a template's parameters close onto can admit no value just as easily as one an
+   * author writes out directly (`bounded => <N> !integer_type { min: N max: 10 }` applied as
+   * `bounded<20>` is `{ min: 20 max: 10 }` in another spelling, and the identical literal
+   * declaration is already refused by `checkCoherent`).
+   */
+  function checkMaterialisedCoherence(head: string, constructorName: string, body: Top): void {
+    if (!isAtom(body)) return;
+    const violations = checkAtomCoherence(body);
+    if (violations.length > 0) {
+      throw new TsonSchemaValidationError(
+        `'${head}<...>' closes to a '${constructorName}' body whose own constraints contradict ` +
+          `each other: ${violations.join('; ')} (§7.4, §8.2)`,
+      );
     }
   }
 
@@ -595,7 +634,8 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * body itself is a closed *synthetic*, named for the form and sourced to the constructor it
    * builds (§8.2) — an open synthetic's own name is internal, so keying it on the application
    * would make identity depend on an unstable name. But the same closure is also an
-   * *instantiation* of the template, and §8.2 keys that on the flattened application. So this
+   * *instantiation* of the template, and §8.2 keys that on the application itself (this module's
+   * own top note on {@link canonicalArgs}). So this
    * publishes the synthetic and returns the name of a reference entry pointing at it, whose
    * `source` is the application (built by {@link instantiate}'s own caller, {@link
    * instantiationOf}).

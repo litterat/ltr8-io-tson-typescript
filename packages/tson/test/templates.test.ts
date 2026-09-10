@@ -8,9 +8,14 @@ import { createHeldBody } from '../src/compiler/heldBody.js';
 import { heldRecord, refValue } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
 import { inferAll } from '../src/compiler/parameterKinds.js';
-import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/errors.js';
+import {
+  TsonLimitRefusedError,
+  TsonNotImplementedError,
+  TsonSchemaValidationError,
+} from '../src/core/errors.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
+import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 import type {
   Reference,
   Top,
@@ -813,9 +818,13 @@ describe('recursion (§5.10)', () => {
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'grow', arguments: [ref('text')], annotations: [] }),
     );
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('does not close');
-    expect((error as TsonSchemaValidationError).message).toContain('grow');
+    // A limit refusal ([TSON-SCHEMA] §11.5's "materialisation depth"), not a resolver error --
+    // this deployment declined to spend the resources, distinct from every other reason a
+    // template application fails to close.
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('materialisation-depth');
+    expect((error as TsonLimitRefusedError).message).toContain('does not close');
+    expect((error as TsonLimitRefusedError).message).toContain('grow');
   });
 });
 
@@ -885,6 +894,98 @@ describe('declaration-time checks (§5.10)', () => {
     // argument list as none to whoever links this reference next.
     expect(rewritten.source).toEqual(missingApplication);
     expect(rewritten.body.target).toEqual(missingApplication);
+  });
+});
+
+// ── §7.4 facet coherence re-runs at materialisation (§8.2) ──────────────────────────────────────
+
+describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
+  /** `testMetaReader` plus `integer_type`, enough to read `min`/`max` bindings as bigints. */
+  function integerAwareMetaReader(type: string, value: DataValue): Top {
+    if (type !== 'integer_type') {
+      return testMetaReader(type, value);
+    }
+    const record = value.coreValue as RecordValue;
+    const readBound = (name: string): bigint | undefined => {
+      const field = record.fields.find((f) => f.name === name)?.value.value.coreValue;
+      return field === undefined ? undefined : BigInt((field as TokenValue).text);
+    };
+    const min = readBound('min');
+    const max = readBound('max');
+    return {
+      kind: 'integer_type',
+      ...(min === undefined ? {} : { min }),
+      ...(max === undefined ? {} : { max }),
+    } satisfies IntegerType;
+  }
+
+  /** `bounded => <N> !integer_type { min: N max: 10 }` -- §7.4's own motivating example. */
+  function boundedTemplate(): TypeDefinition {
+    return {
+      supertypes: [],
+      subtypes: [],
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'integer_type',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'min',
+                value: {
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'N', form: 'unquoted' },
+                  },
+                },
+              },
+              {
+                name: 'max',
+                value: {
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: '10', form: 'unquoted' },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        ['N'],
+      ),
+      annotations: [],
+    };
+  }
+
+  it('bounded<20> mints a body whose bounds admit no value, and is refused just as the identical literal declaration would be', () => {
+    const { namespace, materialiser } = harness({ definitionMetaReader: integerAwareMetaReader });
+    namespace.set('bounded', boundedTemplate());
+    const error = thrownBy(() =>
+      materialiser.closeApplication({
+        name: 'bounded',
+        arguments: [literal('20')],
+        annotations: [],
+      }),
+    );
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('contradict');
+  });
+
+  it('bounded<5> stays coherent and closes cleanly', () => {
+    const { namespace, materialiser } = harness({ definitionMetaReader: integerAwareMetaReader });
+    namespace.set('bounded', boundedTemplate());
+    const name = materialiser.closeApplication({
+      name: 'bounded',
+      arguments: [literal('5')],
+      annotations: [],
+    });
+    const formName = (namespace.get(name)?.body as Reference).target.name;
+    const form = namespace.get(formName);
+    if (form === undefined || !('kind' in form.body) || form.body.kind !== 'integer_type') {
+      throw new Error('unreachable');
+    }
+    expect(form.body).toMatchObject({ min: 5n, max: 10n });
   });
 });
 

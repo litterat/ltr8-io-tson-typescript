@@ -56,7 +56,13 @@ import {
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from './core/errors.js';
-import { limitsPolicyOf } from './core/limits.js';
+import {
+  DEFAULT_MAX_IMPORT_CLOSURE,
+  DEFAULT_MAX_SCHEMA_ENTRIES,
+  importClosureLimitRefusal,
+  limitsPolicyOf,
+  schemaEntriesLimitRefusal,
+} from './core/limits.js';
 import type { LimitsPolicy, NestingLimitOptions } from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
 import type { NamePolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
@@ -303,6 +309,35 @@ function compiledMetaFor(meta: LinkedSchema): CompiledSchema {
 }
 
 /** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
+/**
+ * [TSON-SCHEMA] §11.5's "import closure" limit: every schema document reachable from `meta`/
+ * `imports` transitively through its own `!!meta`/`!!import`, counted by distinct canonical
+ * identity. Every reference in the walk must already be registered by the time this runs --
+ * {@link Tson.resolveSchema}'s own contract, and the same one `requireRegistered` enforces a few
+ * lines below this walk -- so an unregistered reference here is left alone rather than refused a
+ * second time under a different message; that walk reports it properly once the closure question
+ * is out of the way.
+ */
+function importClosureSize(
+  schemas: ReadonlyMap<string, LinkedSchema>,
+  meta: string,
+  imports: readonly string[],
+): number {
+  const seen = new Set<string>();
+  const pending: string[] = [meta, ...imports];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (next === undefined) continue;
+    const canonical = canonicalizeIdentity(next);
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    const schema = schemas.get(canonical);
+    if (schema === undefined) continue; // unregistered -- requireRegistered reports this, not this walk
+    pending.push(schema.meta, ...schema.imports);
+  }
+  return seen.size;
+}
+
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
   bytes: Uint8Array,
@@ -315,6 +350,10 @@ function resolveAgainstRegistry(
     throw new TsonSchemaValidationError(
       `'!!meta:"${document.meta}"': !!id is required to resolve this schema (§2.2.1)`,
     );
+  }
+  const closureSize = importClosureSize(schemas, document.meta, document.imports);
+  if (closureSize > DEFAULT_MAX_IMPORT_CLOSURE) {
+    throw importClosureLimitRefusal(DEFAULT_MAX_IMPORT_CLOSURE, id);
   }
   const governingMeta = requireRegistered(schemas, document.meta, id);
   const metaDefinitions: DefinitionGetter = (name) => governingMeta.entries.get(name);
@@ -331,6 +370,12 @@ function resolveAgainstRegistry(
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
   });
+  // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
+  // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
+  // doc), which is exactly what §11.5 names ("declarations in *one* schema map").
+  if (resolved.entries.size > DEFAULT_MAX_SCHEMA_ENTRIES) {
+    throw schemaEntriesLimitRefusal(DEFAULT_MAX_SCHEMA_ENTRIES, id);
+  }
   return linkSchema(resolved, {
     structureNamespace: governingMeta.entries,
     resolveImport,
@@ -388,7 +433,13 @@ export interface Tson {
    * why this never fetches, even with a {@link Config.schemaSource} configured.
    */
   resolveSchema(source: string | Uint8Array): LinkedSchema;
-  /** Builds a {@link CompiledSchema} for `schema` -- `compiler/compile.ts`'s own `compile`, re-exported here so the whole resolve-link-compile sequence is reachable off one instance. */
+  /**
+   * Builds a {@link CompiledSchema} for `schema` -- `compiler/compile.ts`'s own `compile`, so the
+   * whole resolve-link-compile sequence is reachable off one instance. Bound to this instance's
+   * own registry as the `scoped` position's foreign-schema lookup (§7.8): a scope push a read
+   * against the result reaches resolves against whatever this instance holds registered at read
+   * time, `preload`/`resolveSchema`/`register` included.
+   */
   compile(schema: LinkedSchema): CompiledSchema;
   /** Fetches `reference`'s raw schema bytes through {@link Config.schemaSource} -- throws {@link TsonSchemaFetchError} (`'not-permitted'`) when none is configured. Does not resolve, link, or register; {@link preload} does all three. */
   fetch(reference: string): Promise<Uint8Array>;
@@ -450,6 +501,24 @@ export function createTson(config: Config = {}): Tson {
     schemas.set(canonicalizeIdentity(schema.id), schema);
   }
 
+  // §7.8's own lookup seam: a `scoped` position's EXTERN cell resolves the schema a value names
+  // for itself against this instance's own registry -- never fetching, exactly like {@link
+  // resolveSchemaMethod} above, so a foreign schema a read reaches must already be registered
+  // (directly, or preloaded) before the document that names it is read. `compileMethod` hands the
+  // lookup to `compileCore` itself, so a scope push resolves through the same registry, whatever
+  // entry a caller started compiling from.
+  function foreignSchema(uri: string): LinkedSchema | undefined {
+    try {
+      return schemas.get(canonicalizeIdentity(uri));
+    } catch {
+      return undefined; // not a legal schema identity -- a miss either way
+    }
+  }
+
+  function compileMethod(schema: LinkedSchema): CompiledSchema {
+    return compileCore(schema, { foreignSchemas: foreignSchema });
+  }
+
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {
     const bytes = typeof source === 'string' ? encodeUtf8(source) : source;
     const linked = resolveAgainstRegistry(schemas, bytes, limit, config.identifierPolicy);
@@ -507,7 +576,7 @@ export function createTson(config: Config = {}): Tson {
     schemas,
     register,
     resolveSchema: resolveSchemaMethod,
-    compile: compileCore,
+    compile: compileMethod,
     fetch: fetchReference,
     preload,
     processorPolicy: processorPolicy(config.identifierPolicy, config.tokenPolicy),

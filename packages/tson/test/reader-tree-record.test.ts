@@ -53,7 +53,14 @@ function field(
 
 function reader(fields: RecordField[], groups: RecordBody['groups'] = []): TypeReader<Value> {
   const body: RecordBody = { kind: 'record', supertypes: [], fields, groups };
-  return recordTreeReader('person', 'person', body, (f) => resolve(f.type.name), LOCATION);
+  return recordTreeReader(
+    'person',
+    'person',
+    body,
+    (f) => resolve(f.type.name),
+    LOCATION,
+    () => false,
+  );
 }
 
 describe('recordTreeReader -- shape (§5.2, §5.6)', () => {

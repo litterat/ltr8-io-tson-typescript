@@ -5,6 +5,7 @@ import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import {
   TsonBindMismatchError,
   TsonInternalError,
+  TsonLimitRefusedError,
   TsonMissingBindingError,
   TsonNotImplementedError,
   TsonParseError,
@@ -555,6 +556,66 @@ describe('subtraction (§5.9)', () => {
   });
 });
 
+// ── [TSON-SCHEMA] §11.5's "supertype chain" limit ───────────────────────────────────────────────
+
+/** `base0 => {}`, `base1 => base0 & {}`, ..., `base{n} => base{n-1} & {}` -- a straight composition chain n levels deep. */
+function compositionChain(depth: number): string {
+  const lines = ['base0 => {}'];
+  for (let i = 1; i <= depth; i++) {
+    lines.push(`base${String(i)} => base${String(i - 1)} & {}`);
+  }
+  return lines.join('\n');
+}
+
+/** Resolves `base0..base{upTo}` in order into `entries`, the way `resolveAll` does for the whole document but stoppable partway through. */
+function resolveChainUpTo(
+  resolver: DefinitionResolver,
+  doc: SchemaDocument,
+  entries: Map<string, TypeDefinition>,
+  upTo: number,
+): void {
+  for (let i = 0; i <= upTo; i++) {
+    const name = `base${String(i)}`;
+    entries.set(name, resolver.resolve(declarationOf(doc, name)));
+  }
+}
+
+describe('§11.5\'s "supertype chain" limit', () => {
+  it('a chain exactly at the default (64 transitive supertypes) resolves cleanly', () => {
+    const doc = parse(compositionChain(64));
+    const { resolver, entries } = harness();
+    resolveChainUpTo(resolver, doc, entries, 63);
+    const top = resolveOne(resolver, doc, 'base64');
+    expect(top.supertypes).toHaveLength(64);
+  });
+
+  it('one level past the default (65 transitive supertypes) is a limit refusal, not a resolver error', () => {
+    const doc = parse(compositionChain(65));
+    const { resolver, entries } = harness();
+    resolveChainUpTo(resolver, doc, entries, 64);
+    const error = thrownBy(() => resolveOne(resolver, doc, 'base65'));
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('supertype-chain');
+    expect((error as TsonLimitRefusedError).configuredThreshold).toBe(64);
+  });
+
+  it("the same limit applies through refinement's own transitive supertype chain (§5.7)", () => {
+    const lines = ['base0 => {}'];
+    for (let i = 1; i <= 65; i++) {
+      lines.push(`base${String(i)} => base${String(i - 1)} ^ {}`);
+    }
+    const doc = parse(lines.join('\n'));
+    const { resolver, entries } = harness();
+    for (let i = 0; i <= 64; i++) {
+      const name = `base${String(i)}`;
+      entries.set(name, resolver.resolve(declarationOf(doc, name)));
+    }
+    const error = thrownBy(() => resolveOne(resolver, doc, 'base65'));
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('supertype-chain');
+  });
+});
+
 // ── Field groups (§5.11) ─────────────────────────────────────────────────────────────────────
 
 describe('field groups (§5.11)', () => {
@@ -622,6 +683,30 @@ describe('field groups (§5.11)', () => {
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as TsonSchemaValidationError).message).toContain('does not declare');
+  });
+
+  it('a fresh group\'s own member annotations are bound and kept (§5.11, §12.1: `*annotation field-name ws ":" ws type-ref`)', () => {
+    const doc = parse('t => { (@a1 a: token | @a2 b: token) }');
+    const { resolver } = harness();
+    const body = resolveOne(resolver, doc, 't').body;
+    if (!isRecordBody(body)) throw new Error('unreachable');
+    expect(fieldNamed(body, 'a').annotations).toEqual([{ name: 'a1' }]);
+    expect(fieldNamed(body, 'b').annotations).toEqual([{ name: 'a2' }]);
+  });
+
+  it("a restated group member carries the restatement's own annotations, in source order, followed by the inherited member's (§5.8, §5.11)", () => {
+    const doc = parse(`
+      base     => { (@a1 a: token | b: token) }
+      restated => base & { (@a2 a: token | b: token) }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const restated = resolveOne(resolver, doc, 'restated');
+    if (!isRecordBody(restated.body)) throw new Error('unreachable');
+    expect(fieldNamed(restated.body, 'a').annotations).toEqual([{ name: 'a2' }, { name: 'a1' }]);
+    // `b` carries no restated annotation of its own -- nothing is merged onto it, and the
+    // inherited (empty) list survives untouched.
+    expect(fieldNamed(restated.body, 'b').annotations).toEqual([]);
   });
 
   it("rejects a restatement that reorders the inherited group's members", () => {

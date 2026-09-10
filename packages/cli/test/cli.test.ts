@@ -362,6 +362,41 @@ describe('policy command', () => {
     expect(io.stdout()).toContain('unicode_data_version');
   });
 
+  it("--format json also carries §9.1's resource-limits policy, reachable with no document in hand", async () => {
+    const io = captureOutput();
+    const code = await main(['policy', '--format', 'json']);
+    expect(code).toBe(EXIT.OK);
+    const parsed = JSON.parse(io.stdout()) as {
+      limits_policy: {
+        max_nesting_depth: number;
+        max_import_closure: number;
+        max_schema_entries: number;
+        max_reference_chain: number;
+        max_supertype_chain: number;
+        max_materialisation_depth: number;
+      };
+    };
+    expect(parsed.limits_policy).toEqual({
+      max_nesting_depth: 64,
+      max_import_closure: 64,
+      max_schema_entries: 65_536,
+      max_reference_chain: 64,
+      max_supertype_chain: 64,
+      max_materialisation_depth: 64,
+    });
+  });
+
+  it('--format tson and --format text both carry the limits policy too', async () => {
+    const tson = captureOutput();
+    await main(['policy', '--format', 'tson']);
+    expect(tson.stdout()).toContain('limits_policy');
+    expect(tson.stdout()).toContain('max_supertype_chain');
+
+    const text = captureOutput();
+    await main(['policy']);
+    expect(text.stdout()).toContain('limits:');
+  });
+
   it('reflects --identifier-policy/--identifier-per-segment/--token-policy in all three formats', async () => {
     const io = captureOutput();
     const code = await main([
@@ -438,10 +473,14 @@ describe('policy flags reach validate/compile', () => {
     const parsed = JSON.parse(io.stdout()) as {
       outcome: string;
       policy: { identifier_policy: { level: string } };
+      limits_policy: { max_nesting_depth: number; max_supertype_chain: number };
       files: { outcome: string }[];
     };
     expect(parsed.outcome).toBe('VALID');
     expect(parsed.policy.identifier_policy.level).toBe('HIGHLY_RESTRICTIVE');
+    // §9.1's resource-limits policy rides beside the §8.2 one, on the same terms (§9.1).
+    expect(parsed.limits_policy.max_nesting_depth).toBe(64);
+    expect(parsed.limits_policy.max_supertype_chain).toBe(64);
     expect(parsed.files[0]?.outcome).toBe('VALID');
   });
 
@@ -457,8 +496,12 @@ describe('policy flags reach validate/compile', () => {
       join(dir, 'person.tn'),
     ]);
     expect(code).toBe(EXIT.OK);
-    const parsed = JSON.parse(io.stdout()) as { policy: { token_policy: { level: string } } };
+    const parsed = JSON.parse(io.stdout()) as {
+      policy: { token_policy: { level: string } };
+      limits_policy: { max_schema_entries: number };
+    };
     expect(parsed.policy.token_policy.level).toBe('SINGLE_SCRIPT');
+    expect(parsed.limits_policy.max_schema_entries).toBe(65_536);
   });
 
   it('compile: an unknown script name in --token-scripts is a usage error naming it', async () => {

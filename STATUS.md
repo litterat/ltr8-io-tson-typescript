@@ -252,36 +252,46 @@ record for 'base', found an array`) names the terminal regardless of how many al
   stack, which had no bound at all; and an annotation chain (`@a:@a:@a:…`), which is a real
   descent with no brace or bracket for a structural counter to see.
 
-- **Eleven of [TSON-DATA] §9.1's twelve resource limits, and all five of [TSON-SCHEMA] §11.5's,
-  are not enforced.** §9.1 states a limits policy of twelve named counters, each MUST-enforced at
-  its default or a configured value; this port builds the refusal mechanism and the nesting-depth
-  counter alone (`core/limits.ts`). A deliberate scope decision, not an oversight: the pinned Java
-  reference itself implements only `maxDepth` and leaves the other eleven, and `CLAUDE.md`'s
+- **Eleven of [TSON-DATA] §9.1's twelve document-side resource limits are not enforced.** §9.1
+  states a limits policy of twelve named counters, each MUST-enforced at its default or a
+  configured value; this port builds the refusal mechanism and the nesting-depth counter alone on
+  the document side (`core/limits.ts`). A deliberate scope decision, not an oversight: the pinned
+  Java reference itself implements only `maxDepth` and leaves the other eleven, and `CLAUDE.md`'s
   "structural parity is worth more than idiom while the reference moves" argument applies to limit
   _coverage_ too — a limit this port enforced and the reference did not would be a divergence
-  nobody asked for. No vector in the shared corpus exercises any of these sixteen, so nothing here
+  nobody asked for. No vector in the shared corpus exercises any of these eleven, so nothing here
   is measured red by it, but a document that exhausts one of them (a single 20 MB token, say)
-  still reaches an unbounded read rather than a clean refusal. Unenforced, with §9.1's/§11.5's own
+  still reaches an unbounded read rather than a clean refusal. Unenforced, with §9.1's own
   defaults:
 
-  | Limit                         | Applies to                                                                   | Default    |
-  | ----------------------------- | ---------------------------------------------------------------------------- | ---------- |
-  | token length                  | one token's decoded text, in code points                                     | 1,048,576  |
-  | decoded text length           | one value's text after escape processing, in code points                     | 1,048,576  |
-  | numeric literal length        | digits in one numeric token, annotated or not                                | 4,096      |
-  | decoded binary size           | one `!bytes` value's octets                                                  | 16,777,216 |
-  | document size                 | the document's bytes                                                         | 16,777,216 |
-  | elements                      | one array or set                                                             | 1,048,576  |
-  | entries                       | one map                                                                      | 1,048,576  |
-  | fields                        | one record                                                                   | 65,536     |
-  | annotations                   | on one value                                                                 | 64         |
-  | total values                  | all values in one document, containers and scalars alike                     | 16,777,216 |
-  | foreign schemas               | distinct schemas a document's scope pushes may load ([TSON-SCHEMA] §7.8)     | 16         |
-  | import closure (§11.5)        | schema documents reachable from one header through `!!meta`/`!!import`       | 64         |
-  | schema entries (§11.5)        | declarations in one schema map, synthetic and instantiation entries included | 65,536     |
-  | reference chain (§11.5)       | hops from a use site to a terminal entry (§8.3)                              | 64         |
-  | supertype chain (§11.5)       | length of one entry's transitive `supertypes` (§8.1)                         | 64         |
-  | materialisation depth (§11.5) | nested open synthetics closed for one application (§5.10, §8.2)              | 64         |
+  | Limit                  | Applies to                                                               | Default    |
+  | ---------------------- | ------------------------------------------------------------------------ | ---------- |
+  | token length           | one token's decoded text, in code points                                 | 1,048,576  |
+  | decoded text length    | one value's text after escape processing, in code points                 | 1,048,576  |
+  | numeric literal length | digits in one numeric token, annotated or not                            | 4,096      |
+  | decoded binary size    | one `!bytes` value's octets                                              | 16,777,216 |
+  | document size          | the document's bytes                                                     | 16,777,216 |
+  | elements               | one array or set                                                         | 1,048,576  |
+  | entries                | one map                                                                  | 1,048,576  |
+  | fields                 | one record                                                               | 65,536     |
+  | annotations            | on one value                                                             | 64         |
+  | total values           | all values in one document, containers and scalars alike                 | 16,777,216 |
+  | foreign schemas        | distinct schemas a document's scope pushes may load ([TSON-SCHEMA] §7.8) | 16         |
+
+  **All five of [TSON-SCHEMA] §11.5's schema-side limits are now enforced** — import closure,
+  schema entries, reference chain, supertype chain, and materialisation depth, each at its own
+  §11.5 default (`core/limits.ts`'s own `import-closure`/`schema-entries`/`reference-chain`/
+  `supertype-chain`/`materialisation-depth` refusal builders, enforced in `config.ts`'s own
+  `resolveAgainstRegistry`, `compiler/referenceChain.ts`'s `walk`, `compiler/definitionResolver.ts`'s
+  `checkSupertypeChainLimit`, and `compiler/templates.ts`'s existing depth guard respectively). Unlike
+  the document-side eleven, this is not a coverage decision matched to the reference (§11.5 has no
+  Java analogue to match, being new in this revision) — §11.5 states all five as a Class 2 MUST on
+  the same terms as the document-side limits, so this port builds all five rather than one. **Not
+  independently configurable per instance yet**, unlike `maxNestingDepth` — every run enforces each
+  at its own spec default, and `Tson.limitsPolicy` reports all six thresholds regardless
+  (`core/limits.ts`'s own top note explains the narrower scope). The CLI's `tson policy` and every
+  `validate`/`compile` report now carry this whole six-limit policy too (`limits_policy`, beside
+  `policy`), reachable with no document in hand exactly as §9.1 asks.
 
 - **`node10` type resolution fails for every subpath**, that resolver predating `exports`. The
   package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer on

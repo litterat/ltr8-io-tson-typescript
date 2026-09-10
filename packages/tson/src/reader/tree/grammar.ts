@@ -14,6 +14,7 @@
 import type { Task } from '../../io/bytes.js';
 import type { TsonEvent } from '../../stream/event.js';
 import type { ReadContext } from '../contracts.js';
+import { lookingAhead } from '../context.js';
 
 /** Consumes and discards every leading annotation (`AnnotationStart`/`AnnotationEnd` pairs), stopping at whatever follows. */
 export function* skipAnnotations(ctx: ReadContext): Task<void> {
@@ -104,6 +105,54 @@ export function* skipCoreValue(ctx: ReadContext): Task<void> {
     default:
       throw new Error(`unexpected event while skipping a core-value: ${e.kind}`);
   }
+}
+
+/**
+ * Looks ahead past a data-value's leading annotations for its own `!type-ref`, without consuming
+ * anything -- so whichever reader ultimately runs (the position's own, a subtype's via
+ * `compiler/subsumption.ts`, a `scoped` position's LOCAL/EXTERN dispatch) sees the whole value,
+ * framing included, exactly as it would if nothing had looked ahead first.
+ */
+export function* typeRefAhead(ctx: ReadContext): Task<string | undefined> {
+  return yield* lookingAhead(ctx, function* (aheadCtx): Task<string | undefined> {
+    yield* skipAnnotations(aheadCtx);
+    const peeked = yield* aheadCtx.peek();
+    return peeked.kind === 'type-ref' ? peeked.name : undefined;
+  });
+}
+
+/**
+ * §7.8's typed-position restriction, the policy half kept apart from a `scoped` position's own
+ * reader (`compiler/compile.ts`'s own scoped-body builder), which is the reading half. A nested
+ * `!!schema` is admitted at a position exactly when the position's own type resolves to a
+ * `scoped` instance -- `isScopedPosition` is that structural fact, computed once per position at
+ * compile time (`compiler/referenceChain.ts`'s own `resolvesToScoped`). Where it does, this is a
+ * no-op: the event is left exactly where it was, for that position's own reader to consume and
+ * dispatch on (which cell it lands in -- LOCAL, EXTERN, or neither -- is that reader's own
+ * concern, §7.8's own admits-EXTERN check included). Where it does not, the directive is consumed
+ * and reported, and the value it prefixed still reads -- normally, as it would have with no
+ * directive at all -- so a stray directive costs one diagnostic rather than a value.
+ *
+ * Costs nothing for the near-totality of values that carry no directive at all: everything below
+ * is guarded by "is the next event a directive in the first place".
+ */
+export function* refuseUnscopedSchemaRef(
+  ctx: ReadContext,
+  isScopedPosition: boolean,
+  typeName: string,
+): Task<void> {
+  if (isScopedPosition) return;
+  const peeked = yield* ctx.peek();
+  if (peeked.kind !== 'schema-ref') return;
+  yield* ctx.next();
+  ctx.report(
+    'VALIDATION_ERROR',
+    `'${typeName}' is not a scoped type, so a value here cannot open a schema scope with ` +
+      `'!!schema:"${peeked.uri}"' -- a position takes a value from a foreign schema only where ` +
+      `its own schema said so, by declaring it scoped (§7.8)`,
+    `a value of '${typeName}', carrying no '!!schema' of its own`,
+    peeked.uri,
+  );
 }
 
 /** A core-value's shape as a word, for a diagnostic's `actual` -- ported from `TypeRefCheck.describe`. */
