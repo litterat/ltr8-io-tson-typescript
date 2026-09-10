@@ -557,14 +557,63 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         'field is written at default is a writer question (Wave 5)',
     },
     {
-      pattern: /^(enum_set|integer_member_set)\.body\.(!|v\.(unordered|unique_items|min_items))$/,
+      pattern:
+        /^(enum_set|integer_member_set|set_type_[a-z_0-9]+)\.body\.(!|v\.(unordered|unique_items|min_items))$/,
       reason:
         'topBinding writes every host ArrayBody as `array`, so a `!set_type {}` application ' +
         'round-trips as an unordered unique array rather than as `set_type` -- `min_items` is ' +
-        'lost along with it, since plain ArrayBody carries no such field -- the wire aliases ' +
-        'need a discriminating test, and the readers that fix the other half of it are Wave 4. ' +
-        "`integer_member_set` (§5.2's new sparse-member-set constraint) is the identical gap " +
-        'under a Revision 35 name, not a second defect',
+        'lost along with it, since plain ArrayBody carries no such field. This is the `!set` ' +
+        'versus `!array` divergence `CLAUDE.md` records as reported upstream, under Revision ' +
+        "35's names: `set` is a refinement of `array` sharing its shape, so the applied name is " +
+        'not recoverable from the value being written, and both this port and the reference ' +
+        'write `!array`. `integer_member_set` and the `set_type_*` entries meta mints for ' +
+        '`set<T>` are the same gap, not further defects',
+    },
+    {
+      pattern: /^(extern_of|extern_type)\.body\.v\.template$/,
+      reason:
+        "§5.10 holds a template's application *as written*, and `compiler/heldBody.ts` " +
+        're-serialises it from the parsed form instead (`writeDataValue(application)`), so the ' +
+        "author's own spacing does not survive. The two differ only in whitespace, which §5.10 " +
+        'and §8.2 make free -- identity compares the parsed form, never the text -- so this is a ' +
+        'fidelity gap, not a meaning one. Closing it means carrying the source span through the ' +
+        'schema parser to the held body',
+    },
+    {
+      pattern: /^set_[a-z_0-9]+\.source\.arguments\[\d+\]$/,
+      reason:
+        'the kernel declares `type_argument => { ( name: type_ref | value: value ) }` -- one ' +
+        'record with a §5.11 field group -- and `typeArgumentBinding` models it as a variant of ' +
+        'two wire names `ref`/`value`, so writing emits `!ref x` where the fixture has ' +
+        '`{ name: x }`. §8.1 is explicit that `type_argument` has no positional form and its ' +
+        'braced record is load-bearing, so the written form names a type the kernel does not ' +
+        'declare. The fix is a field-group shape in `bind/`, which no binding has yet',
+    },
+    {
+      pattern: /^(bytes|period|extern|dynamic|time|datetime|duration) <key annotations>/,
+      reason:
+        "NOT this port's defect: `core.tn` and `core-resolved.tn` disagree with each other in " +
+        'the vendored copy, and this port carries the source through faithfully. `core.tn` ' +
+        'declares `@ordered:NONE @bounded:false` on `bytes`, `extern` and `dynamic` and ' +
+        '`@ordered:TOTAL @bounded:false` on `period`, all four Revision 35 additions, and the ' +
+        'fixture gives each of them no key annotations at all; and `core.tn` declares ' +
+        '`@ordered:TOTAL` on `time`, `datetime` and `duration` where the fixture still says ' +
+        '`PARTIAL`. §5.5 settles that last one against the fixture -- "Both families are totally ' +
+        'ordered -- the mandatory offset is what makes them so" -- and the temporal split is ' +
+        'what gave `duration` its total order. The resolved fixture was not regenerated for ' +
+        "either change. Reported upstream; see `REVISION-35-PLAN.md`'s own list",
+    },
+    {
+      // Two shapes reach this one: the field naming the minted type, and the two
+      // entry-presence lines (`'name': in the fixture, not resolved by this implementation`, and
+      // its inverse), which the differ quotes rather than writing as a path.
+      pattern:
+        /^'?map_uri_array_type_name_[A-Za-z_0-9]+'?(:.*)?$|^scoped\.body\.v\.fields\[1\]\.type$/,
+      reason:
+        "the minted name for `scoped.schemas`'s own map type differs in its structural hash, " +
+        'because the array it is minted over carries the `min_items` the `set_type` gap above ' +
+        'drops. A consequence of that entry, not an independent one: §8.2 keys identity on ' +
+        'structure, so a body that writes differently mints differently',
     },
   ];
 

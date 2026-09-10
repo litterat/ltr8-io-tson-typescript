@@ -430,3 +430,13 @@ construction, so leaving `kind` out of the binding does the same job with no ann
   Read against §3.3 and §7.8, it is not clear whether base resolution still applies to the unscoped
   values of a document that pushes a scope on one element. Almost certainly yes; the prose does not
   say so.
+- **`core.tn` and `core-resolved.tn` disagree with each other**, in seven places, all of them
+  Revision 35's own changes. `core.tn` declares `@ordered:NONE @bounded:false` on `bytes`,
+  `extern` and `dynamic`, and `@ordered:TOTAL @bounded:false` on `period` — four entries this
+  revision adds — and the resolved fixture gives each of them no key annotations at all. And
+  `core.tn` declares `@ordered:TOTAL` on `time`, `datetime` and `duration` where the fixture still
+  says `PARTIAL`. §5.5 settles that second group against the fixture: "Both families are totally
+  ordered — the mandatory offset is what makes them so", and the temporal split is what gave
+  `duration` a total order in the first place. The resolved fixture looks not to have been
+  regenerated for either change. Both this port and the reference read the source, so a fixture
+  test comparing written form sees it and a test binding into the value model may not.

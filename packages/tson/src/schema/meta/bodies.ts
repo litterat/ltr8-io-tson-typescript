@@ -207,12 +207,18 @@ export interface EnumBody {
  * holds the seat, not the parser, the same boundary {@link SourcePosition} draws against
  * `core/position.ts`'s `Position`.
  *
- * **It never serialises as a value of the vocabulary it will close into, and carries no `kind`
- * tag of its own.** An open entry's resolved form is its declaration round-tripped, not a
- * `type_definition` value the kernel could hold in any other shape (`body: top` is REQUIRED
- * with no exception) — so a resolved-output consumer never meets one of these where a closed
- * type is expected (§1.3), and code that must handle either narrows with `isTemplateBody` (in
- * `./typedef.js`) before switching on `kind`, as {@link Top}'s own note says.
+ * **It never serialises as a value of the vocabulary it will close into**, which is a different
+ * claim from not serialising at all. An open entry is carried in resolver output as an ordinary
+ * `type_definition` whose `body` is a `!template` instance (§8.1) — `spec/m/meta-resolved.tn`
+ * writes `set` as `body: !template { parameters: [T]  template: "!set_type { element_type: T }" }`
+ * — so `body: top` holds with no exception, and what a resolved-output consumer never meets is a
+ * half-closed `!set_type` with a parameter standing in one of its slots.
+ *
+ * **It carries no `kind` tag of its own**, because the kernel's `template` declares only
+ * `parameters` and `template` and the wire name rides on the value's own `!type-ref`. That makes
+ * it the one member of {@link Top} a `kind` discriminant cannot reach, so code switching on `kind`
+ * narrows with `isTemplateBody` (in `./typedef.js`) first, as {@link Top}'s own note says, and the
+ * binding that writes it tests for the two fields rather than for a tag.
  */
 export interface TemplateBody {
   /**

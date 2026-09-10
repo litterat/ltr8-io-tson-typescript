@@ -69,7 +69,7 @@ import {
 } from '../base/numberGrammar.js';
 import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType } from '../base/baseTypeResolver.js';
-import { TsonReadError } from '../core/errors.js';
+import { TsonInternalError, TsonReadError } from '../core/errors.js';
 
 import type { Decimal, Rational, Unit } from './meta/algebra.js';
 import type {
@@ -87,6 +87,7 @@ import type {
   TypeRef,
   Top,
 } from './meta/typedef.js';
+import { isTemplateBody } from './meta/typedef.js';
 import type {
   ChoiceBody,
   ElementState,
@@ -96,6 +97,7 @@ import type {
   MapBody,
   RecordBody,
   RecordField,
+  TemplateBody,
   TupleBody,
   TupleElement,
   ArrayBody,
@@ -860,6 +862,17 @@ const tupleBodyBinding: RecordBinding<TupleBody> = record<TupleBody>({
   },
 });
 
+/**
+ * `choice`'s own vocabulary, resolved (§5.4, §8.1). `disjoint` is a resolver-derived index over
+ * the variant list -- true or false by discrimination-class distinctness -- and lives here rather
+ * than on `type_definition` because a variant list is the only thing it is a fact about, which is
+ * what makes "recorded on every choice and absent on every other definition" structural.
+ *
+ * It is bound, and optional, for the two directions a resolved document travels: written on the
+ * way out, and read back on the way in, where §8.1 requires an ingesting processor to discard and
+ * recompute it. A binding that omitted it would refuse every resolved choice a conforming
+ * processor writes.
+ */
 const choiceBodyBinding: RecordBinding<ChoiceBody> = record<ChoiceBody>({
   fields: [
     field<ChoiceBody, 'variants'>(
@@ -868,10 +881,11 @@ const choiceBodyBinding: RecordBinding<ChoiceBody> = record<ChoiceBody>({
       'variants',
       arrayOf<TypeRef>(typeRefAnnotatedBinding),
     ),
+    optional<ChoiceBody, 'disjoint'>(1, 'disjoint', 'disjoint', booleanBinding),
   ],
   construct: (slots) => {
-    const [variants] = slots as [readonly TypeRef[]];
-    return { kind: 'choice', variants };
+    const [variants, disjoint] = slots as [readonly TypeRef[], boolean | undefined];
+    return { kind: 'choice', variants, ...opt('disjoint', disjoint) };
   },
 });
 
@@ -1448,6 +1462,34 @@ const macTypeBinding: RecordBinding<MacType> = record<MacType>({
 // -------------------------------------------------------------------------------------------
 
 /**
+ * The kernel's `template => top & { parameters: [param_name]  template: text }` (§5.10) -- the
+ * body of an entry that declares type parameters, carried in resolver output as an ordinary
+ * `type_definition` whose `body` is a `!template` instance (§8.1). `spec/m/meta-resolved.tn`
+ * writes `set` as `body: !template { parameters: [T]  template: "!set_type { element_type: T }" }`
+ * and `core-resolved.tn` writes three more, so this is a position the bundled fixtures exercise,
+ * not a speculative one.
+ *
+ * `template` is held as TEXT and this binding treats it as text: the parse belongs to
+ * `compiler/heldBody.ts`, and identity compares the parsed form, so whitespace inside the string
+ * is free (§5.10, §8.2) and is not this binding's to normalise.
+ */
+const templateBodyBinding: RecordBinding<TemplateBody> = record<TemplateBody>({
+  fields: [
+    field<TemplateBody, 'parameters'>(
+      0,
+      'parameters',
+      'parameters',
+      arrayOf<string>(identifierBinding),
+    ),
+    field<TemplateBody, 'template'>(1, 'template', 'template', textBinding),
+  ],
+  construct: (slots) => {
+    const [parameters, template] = slots as [readonly string[], string];
+    return { parameters, template };
+  },
+});
+
+/**
  * `type_definition.body: top` (§4.1, §8.1) -- the wire's own `!type-ref` before the value picks
  * the member (§3.1), confirmed directly against `spec/m/*-resolved.tn`: `enum_set`'s body reads
  * `!set { element_type: identifier  min_items: 1 }`, not `!array { ... }`, even though `set`
@@ -1456,13 +1498,15 @@ const macTypeBinding: RecordBinding<MacType> = record<MacType>({
  * {@link unitBinding} (confirmed the same way: all three read `body: !unit {}}` in
  * `meta-kernel-resolved.tn`).
  *
- * `data` (the meta layer's open extension point) and the held `TemplateBody` (§5.10, which "never
- * serialises and carries no `kind` tag" -- `Top`'s own doc) both have no member here: neither is
- * exercised by any bundled fixture, and `TemplateBody`'s own doc says outright that a resolved
- * output consumer never meets one. `Top` itself still names both, so the const below is typed
- * `VariantBinding<Top>` explicitly -- a narrower union in {@link BindingBase}'s covariant phantom
- * position is a subtype of the wider one, so the explicit annotation upcasts safely with no
- * assertion of its own.
+ * `data`, the meta layer's open extension point, has no member here: no bundled fixture exercises
+ * one. `Top` still names it, so the const below is typed `VariantBinding<Top>` explicitly -- a
+ * narrower union in {@link BindingBase}'s covariant phantom position is a subtype of the wider
+ * one, so the explicit annotation upcasts safely with no assertion of its own.
+ *
+ * The held `TemplateBody` is the one member the `kind` discriminant cannot reach, because the
+ * kernel's `template` declares no tag field for the host value to carry. It is dispatched by its
+ * own `test` instead, which `memberFor` falls back to when the tag lookup misses -- the shape
+ * `bind/combinators.ts`'s `variant` documents for exactly this case.
  */
 const topBinding: VariantBinding<Top> = variant(
   {
@@ -1500,6 +1544,7 @@ const topBinding: VariantBinding<Top> = variant(
     cidr4_type: cidr4TypeBinding,
     cidr6_type: cidr6TypeBinding,
     mac_type: macTypeBinding,
+    template: templateBodyBinding,
   },
   // Discriminated on the host value's own `kind`. Without a discriminant (and with no per-member
   // test) `memberFor` can only ever return undefined, which bind/binding.ts defines as a write
@@ -1511,6 +1556,16 @@ const topBinding: VariantBinding<Top> = variant(
   // `void` share the unit binding. Reading still reaches them through byWireName.
   'kind',
 );
+
+// The `template` member's own recognition, attached after construction because `variant`'s shape
+// argument carries bindings alone. Two fields and no tag is exactly what `isTemplateBody`
+// (`schema/meta/typedef.ts`) tests, and it is the one test in this variant: every other member
+// answers to `kind`, so nothing else can match here and no ordering question arises.
+const templateMember = topBinding.members.find((member) => member.wireName === 'template');
+if (templateMember === undefined) {
+  throw new TsonInternalError("the resolved-schema body variant declares no 'template' member");
+}
+Object.assign(templateMember, { test: (value: unknown) => isTemplateBody(value as Top) });
 
 // -------------------------------------------------------------------------------------------
 // TypeDefinition
@@ -1702,6 +1757,7 @@ export const metaBindings: BindingRegistry = registry({
   cidr4_type: cidr4TypeBinding,
   cidr6_type: cidr6TypeBinding,
   mac_type: macTypeBinding,
+  template: templateBodyBinding,
   integer_size: integerSizeBinding,
   record_field: recordFieldBinding,
   field_group: fieldGroupBinding,

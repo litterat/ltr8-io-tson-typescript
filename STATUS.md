@@ -159,6 +159,23 @@ day it does not match is the day it matters.
 
 ## Known gaps
 
+- **`type_argument` is bound as a variant where the kernel declares a field group.** The kernel has
+  `type_argument => { ( name: type_ref | value: value ) }` — one record whose two members form a
+  §5.11 group — and `schema/bindings.ts`'s `typeArgumentBinding` models it as a variant of two wire
+  names, `ref` and `value`. So resolved output writes `!ref scope_kind` where the fixture has
+  `{ name: scope_kind }`, naming a type `ref` the kernel does not declare. §8.1 is explicit that
+  `type_argument` has no positional form and its braced record is load-bearing. Reading is
+  unaffected — every bundled fixture and every corpus vector reads — so this is a write-side gap.
+  Closing it needs a field-group shape in `bind/`, which no binding has yet.
+
+- **A template's held application is re-serialised, not preserved as written.** §5.10 holds the
+  application _as written_, and `compiler/heldBody.ts` builds the text with
+  `writeDataValue(application)` from the parsed form, so the author's own spacing does not survive
+  (`[ EXTERN ]` where `core.tn` wrote `[EXTERN]`). §5.10 and §8.2 make whitespace free for
+  identity — comparison is over the parsed form — so nothing compares wrongly; the resolved output
+  simply does not round-trip the source byte for byte. Closing it means carrying the source span
+  through the schema parser to the held body.
+
 - **A chained atom refinement records one hop of ancestry where composition records the whole
   chain.** `definitionResolver.ts`'s `resolveAtomRefinement` writes `supertypes: [sourceName]`,
   while `resolveComposition` writes the full transitive chain — so `tiny => !smaller ^ { max: 10 }`
