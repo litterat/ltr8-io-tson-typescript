@@ -1,6 +1,7 @@
 /**
- * The temporal atom families' resolved constraint vocabularies (§5.4, §9): `date`, `time`,
- * `datetime` (all RFC 3339), and `duration` (ISO 8601).
+ * The temporal atom families' resolved constraint vocabularies (§9): `date`, `time`,
+ * `datetime` (all RFC 3339), `duration` (RFC 3339 Appendix A, seconds), and `period` (RFC 3339
+ * Appendix A, months).
  */
 
 /**
@@ -73,7 +74,7 @@ export interface DateType {
  * validation constraint, never a truncation instruction: the atom is exact and a value is
  * preserved as written. `precision: 0` admits no fractional part. Stated as an upper bound,
  * the facet is an ordered bound under §5.7 and refines like every other one (§5.5).
- * `precision` is `bigint` because the kernel's own field is typed `integer`.
+ * `precision` is `bigint` because the kernel's own field is typed `non_negative_integer`.
  *
  * Also an {@link Atom} variant: `time => !time_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
@@ -102,21 +103,66 @@ export interface DateTimeType {
 }
 
 /**
- * The meta-kernel's `duration_type` constructor (§5.4's `duration` atom, ISO 8601's
- * `PnYnMnDTnHnMnS`).
+ * The meta-kernel's `duration_type` constructor (§5.5's `duration` atom, RFC 3339 Appendix A,
+ * restricted to no `Y`/month-`M` component). Elapsed time — a signed exact count of seconds,
+ * bounded at both ends by a signed 64-bit count of nanoseconds (about 292 years); `!period`
+ * (`PeriodType`) carries the calendar half this family no longer does, which is what makes
+ * `duration` totally ordered and this family's bounds enforceable at all.
  *
- * `min`/`max` are the raw ISO 8601 duration text, not the parsed {@link IsoDuration}
- * (`./algebra.js`) shape — deliberately: ordering `"P1M"` against `"P30D"` requires parsing,
- * and this family's narrowing/coherence questions are left to a later work package's atom
- * reader rather than answered by this value model. A plain string also needs no dependency
- * on a richer duration type.
+ * **Every numeric field holds the *value*, not the token.** `min`/`exclusiveMin`,
+ * `max`/`exclusiveMax` and `multipleOf` are the kernel's own `value` escape hatch —
+ * `duration`'s own value space, in nanoseconds — read by the resolver once the atom is in
+ * scope and stored here as the result (§5.2, §7.4): `PT90M`, `PT1H30M` and `P0DT5400S` are one
+ * value and so one `bigint`, whatever the source token spelled. `min`/`exclusiveMin` and
+ * `max`/`exclusiveMax` are mutually exclusive pairs, the same unenforced invariant
+ * {@link IntegerType} (`./atoms-numeric.js`) carries.
+ *
+ * `precision` bounds the fractional-second digits exactly as {@link TimeType}'s does — a
+ * whole number of 10⁻ᴺ seconds, `bigint` because the kernel types it `non_negative_integer`,
+ * and it may not exceed nine, there being no tenth digit the value space carries.
+ *
+ * No `spec` field: this family composes with `atom_specification` and pins `spec` to RFC 3339
+ * Appendix A, but — like {@link DateType}/{@link TimeType}/{@link DateTimeType} — a fixed spec
+ * pin common to every instance of the constructor carries no per-instance information, so this
+ * package does not model it (matching the reference implementation's own choice).
  *
  * Also an {@link Atom} variant: `duration => !duration_type {}` is a
- * constructor-application instance (§5.5) whose resolved body is this shape with both
- * bounds absent.
+ * constructor-application instance (§5.5) whose resolved body is this shape with every field
+ * absent.
  */
 export interface DurationType {
   readonly kind: 'duration_type';
-  readonly min?: string;
-  readonly max?: string;
+  readonly min?: bigint;
+  readonly exclusiveMin?: bigint;
+  readonly max?: bigint;
+  readonly exclusiveMax?: bigint;
+  readonly precision?: bigint;
+  readonly multipleOf?: bigint;
+}
+
+/**
+ * The meta-kernel's `period_type` constructor (§5.5's `period` atom, RFC 3339 Appendix A,
+ * restricted to a `Y` component, an `M` component, or both — no fraction, no `W`/`D` component,
+ * no `T` part). Calendar span — a signed integer count of months, so `P1Y` and `P12M` are one
+ * value. The calendar half of what one duration used to carry, and the reason `!duration`
+ * (`DurationType`) can be totally ordered: a month has no fixed length, so months and seconds
+ * are two value spaces rather than one partially ordered one.
+ *
+ * **Every numeric field holds the *value*, not the token** — the same `value`-escape-hatch
+ * convention {@link DurationType}'s own doc states in full, `period`'s value space (signed
+ * months) in place of `duration`'s (signed nanoseconds). No `precision` facet: a month count
+ * has no fractional part to bound.
+ *
+ * No `spec` field, on {@link DurationType}'s own terms.
+ *
+ * Also an {@link Atom} variant: `period => !period_type {}` is a constructor-application
+ * instance (§5.5) whose resolved body is this shape with every field absent.
+ */
+export interface PeriodType {
+  readonly kind: 'period_type';
+  readonly min?: bigint;
+  readonly exclusiveMin?: bigint;
+  readonly max?: bigint;
+  readonly exclusiveMax?: bigint;
+  readonly multipleOf?: bigint;
 }

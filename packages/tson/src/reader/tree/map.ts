@@ -16,6 +16,7 @@ import { absentNode, mapNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
+  refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
   skipScopedValue,
@@ -30,16 +31,23 @@ function keySegmentFor(e: TsonEvent): string {
   return e.kind === 'token' ? e.text : '?';
 }
 
-/** Builds a `map` tree reader for one compiled schema entry. `resolveType` resolves the key and value types' own readers, once, at construction. */
+/**
+ * Builds a `map` tree reader for one compiled schema entry. `resolveType` resolves the key and
+ * value types' own readers, once, at construction; `isScopedType` answers §7.8's typed-position
+ * question for the value type at that same step -- a map key is a plain `data-value`, never a
+ * `scoped-value` (§2.6), so it never carries a nested `!!schema` for this to guard.
+ */
 export function mapTreeReader(
   name: string,
   displayName: string,
   body: MapBody,
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
+  isScopedType: (typeName: string) => boolean,
 ): TypeReader<Value> {
   const keyParser = resolveType(body.keyType.name);
   const valueParser = resolveType(body.valueType.name);
+  const scopedValue = isScopedType(body.valueType.name);
 
   function validateSize(size: number, ctx: ReadContext): void {
     const count = BigInt(size);
@@ -120,10 +128,8 @@ export function mapTreeReader(
         }
       }
       yield* ctx.next(); // map-arrow
-      const maybeRef = yield* ctx.peek();
-      if (maybeRef.kind === 'schema-ref') {
-        yield* ctx.next();
-      }
+      const valueCtx = ctx.field(keySegment);
+      yield* refuseUnscopedSchemaRef(valueCtx, scopedValue, body.valueType.name);
       const valuePeek = yield* ctx.peek();
       let value: Value;
       if (valuePeek.kind === 'absent') {
@@ -131,18 +137,16 @@ export function mapTreeReader(
         // way (§5.3); what the state decides is whether the absence is permitted at all (§7.6).
         yield* ctx.next();
         if (body.state === 'REQUIRED') {
-          ctx
-            .field(keySegment)
-            .report(
-              'FIELD_REQUIRED',
-              `'${displayName}' entry '${keySegment}' is absent, but values are required`,
-              'a value',
-              '(absent)',
-            );
+          valueCtx.report(
+            'FIELD_REQUIRED',
+            `'${displayName}' entry '${keySegment}' is absent, but values are required`,
+            'a value',
+            '(absent)',
+          );
         }
         value = absentNode();
       } else {
-        value = yield* valueParser.read(ctx.field(keySegment));
+        value = yield* valueParser.read(valueCtx);
       }
       sink(key, value);
       count += 1;

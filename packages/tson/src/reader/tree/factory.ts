@@ -28,7 +28,18 @@ import type { TreeTypeResolver } from './support.js';
 export interface TreeReaderContext {
   readonly resolve: TreeTypeResolver;
   readonly locationOf: (name: string, definition: TypeDefinition) => SchemaLocation;
+  /**
+   * §7.8's typed-position question for one declared type name -- whether it resolves to a
+   * `scoped` instance, so a nested `!!schema` may stand at a position of that type at all.
+   * Optional and defaulting to "never" here: answering it for real means walking the whole
+   * schema's own namespace (`compiler/referenceChain.ts`'s own `resolvesToScoped`), which this
+   * deliberately narrow module has no such namespace to walk -- `compiler/compile.ts` is what
+   * supplies a real one.
+   */
+  readonly isScopedType?: (typeName: string) => boolean;
 }
+
+const NEVER_SCOPED = (): boolean => false;
 
 /** A body's own constructor name for an error message -- `Top`'s one member with none, `TemplateBody`, renders as a fixed label instead. */
 function bodyKindLabel(body: Top): string {
@@ -63,6 +74,7 @@ export const recordReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderC
       definition.body,
       (field) => context.resolve(field.type.name),
       context.locationOf(name, definition),
+      context.isScopedType ?? NEVER_SCOPED,
     );
   },
 };
@@ -79,6 +91,7 @@ export const mapReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderCont
       definition.body,
       context.resolve,
       context.locationOf(name, definition),
+      context.isScopedType ?? NEVER_SCOPED,
     );
   },
 };
@@ -95,6 +108,7 @@ export const arrayReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderCo
       definition.body,
       context.resolve,
       context.locationOf(name, definition),
+      context.isScopedType ?? NEVER_SCOPED,
     );
   },
 };
@@ -111,6 +125,7 @@ export const tupleReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderCo
       definition.body,
       context.resolve,
       context.locationOf(name, definition),
+      context.isScopedType ?? NEVER_SCOPED,
     );
   },
 };

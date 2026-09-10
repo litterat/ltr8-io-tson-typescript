@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { validateReferences } from '../src/link/referenceValidation.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonBindMismatchError, TsonSchemaValidationError } from '../src/core/errors.js';
-import type { RecordField } from '../src/schema/meta/bodies.js';
+import { createHeldBody } from '../src/compiler/heldBody.js';
+import { heldRecord } from '../src/compiler/wireForm.js';
+import type { RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type { Token, Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+
+function isRecordBody(body: Top): body is RecordBody {
+  return 'fields' in body;
+}
 
 function ref(name: string, args: TypeRef['arguments'] = []): TypeRef {
   return { name, arguments: args, annotations: [] };
@@ -30,22 +36,40 @@ function def(
     readonly source?: TypeRef;
     readonly supertypes?: readonly string[];
     readonly subtypes?: readonly string[];
-    readonly kind?: TypeDefinition['kind'];
   } = {},
 ): TypeDefinition {
+  // A non-empty `parameters` makes this an open entry (§5.10): its body must be a held
+  // `TemplateBody` for `typeParameters`/`typeKind` to see the parameter list at all, the same
+  // fold `definitionResolver.ts`'s own `holdIfOpen` performs.
+  const parameters = options.parameters ?? [];
+  const finalBody: Top =
+    parameters.length === 0 || !isRecordBody(body)
+      ? body
+      : createHeldBody(heldRecord(body), parameters);
   return {
-    kind: options.kind ?? 'PRODUCT',
-    parameters: options.parameters ?? [],
-    constructor: false,
     supertypes: options.supertypes ?? [],
     subtypes: options.subtypes ?? [],
-    body,
+    body: finalBody,
     annotations: [],
     ...(options.source === undefined ? {} : { source: options.source }),
   };
 }
 
 const text = def({ kind: 'text_type' });
+
+/**
+ * `top`/`data` themselves, minimally, so a DATA-kind test entry's own `supertypes: ['data',
+ * 'top']` resolves under `validateEntry`'s own supertype-resolution check -- `typeKind`'s
+ * derivation needs the literal name `top` to appear for `isConstructor` to hold, and
+ * `validateEntry` separately checks every named supertype actually resolves in scope.
+ */
+const DATA_KIND_FIXTURE: readonly (readonly [string, TypeDefinition])[] = [
+  ['top', def({ kind: 'record', supertypes: [], fields: [], groups: [] })],
+  [
+    'data',
+    def({ kind: 'record', supertypes: [], fields: [], groups: [] }, { supertypes: ['top'] }),
+  ],
+];
 
 describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   it('throws (fail-fast) on a field type that resolves to nothing', () => {
@@ -118,7 +142,8 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
 
   it('rejects a reference to an entry whose kind is DATA (§4.1)', () => {
     const merged = new Map<string, TypeDefinition>([
-      ['op', def({ kind: 'operation' }, { kind: 'DATA' })],
+      ...DATA_KIND_FIXTURE,
+      ['op', def({ kind: 'operation' }, { supertypes: ['data', 'top'] })],
       ['user', def({ kind: 'reference', target: ref('op') })],
     ]);
     expect(() => {
@@ -158,7 +183,8 @@ describe("validateReferences: a Data body's own references() contract (§4.1)", 
 
   it('names the entry and throws TsonBindMismatchError when references() returns undefined', () => {
     const merged = new Map<string, TypeDefinition>([
-      ['op', def(brokenDataBody(undefined), { kind: 'DATA' })],
+      ...DATA_KIND_FIXTURE,
+      ['op', def(brokenDataBody(undefined), { supertypes: ['data', 'top'] })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -170,7 +196,8 @@ describe("validateReferences: a Data body's own references() contract (§4.1)", 
 
   it('names the entry and throws TsonBindMismatchError when references() returns null', () => {
     const merged = new Map<string, TypeDefinition>([
-      ['op', def(brokenDataBody(null), { kind: 'DATA' })],
+      ...DATA_KIND_FIXTURE,
+      ['op', def(brokenDataBody(null), { supertypes: ['data', 'top'] })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -179,7 +206,8 @@ describe("validateReferences: a Data body's own references() contract (§4.1)", 
 
   it('reports BIND_MISMATCH (not SCHEMA_ERROR) through a receiver', () => {
     const merged = new Map<string, TypeDefinition>([
-      ['op', def(brokenDataBody(undefined), { kind: 'DATA' })],
+      ...DATA_KIND_FIXTURE,
+      ['op', def(brokenDataBody(undefined), { supertypes: ['data', 'top'] })],
     ]);
     const diagnostics = collector();
     validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
@@ -189,7 +217,8 @@ describe("validateReferences: a Data body's own references() contract (§4.1)", 
 
   it('an omitted references() method (the ordinary case) is simply treated as no references', () => {
     const merged = new Map<string, TypeDefinition>([
-      ['op', def({ kind: 'operation' }, { kind: 'DATA' })],
+      ...DATA_KIND_FIXTURE,
+      ['op', def({ kind: 'operation' }, { supertypes: ['data', 'top'] })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -199,7 +228,8 @@ describe("validateReferences: a Data body's own references() contract (§4.1)", 
   it('a well-behaved references() still has its named types validated', () => {
     const merged = new Map<string, TypeDefinition>([
       ['text', text],
-      ['op', def(brokenDataBody([ref('nowhere')]), { kind: 'DATA' })],
+      ...DATA_KIND_FIXTURE,
+      ['op', def(brokenDataBody([ref('nowhere')]), { supertypes: ['data', 'top'] })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -535,6 +565,46 @@ describe('validateReferences: field values (§5.2)', () => {
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).toThrow(/not a value of that type/u);
+  });
+
+  it("checks a fixed value against the terminal of the field's own type when that type is itself an alias (§5.2, §8.3)", () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['int', int],
+      ['count', def({ kind: 'reference', target: ref('int') })],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('not-a-number'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+      // The message still names the field's own declared type, `count` -- the author's own
+      // spelling, not `int`, the terminal the value is actually checked against.
+    }).toThrow(/is declared 'count'.*not a value of that type/su);
+  });
+
+  it("accepts a fixed value that is a value of the terminal an alias-typed field's own chain leads to (§5.2, §8.3)", () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['int', int],
+      ['count', def({ kind: 'reference', target: ref('int') })],
+      [
+        'widget',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('3'))],
+          groups: [],
+        }),
+      ],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
   });
 
   it('skips a field whose own type names one of the enclosing template’s parameters', () => {

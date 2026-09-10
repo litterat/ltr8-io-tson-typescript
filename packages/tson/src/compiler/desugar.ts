@@ -314,7 +314,6 @@ function absorbed(declaration: Declaration): TypeDef {
   return {
     kind: 'structuralTypeDef',
     typeParams: typeParamsOf(declaration.typeDef),
-    constructor: false,
     body: { kind: 'recordDef', entries: [] },
   };
 }
@@ -361,7 +360,7 @@ function typeDefPass(typeDef: TypeDef, context: DesugarContext): TypeDef {
  */
 function structuralTypeDefPass(typeDef: StructuralTypeDef, context: DesugarContext): TypeDef {
   const body = structuralDefPass(typeDef.body, context);
-  if (typeDef.typeParams.length > 0 && !typeDef.constructor && body.kind === 'recordDef') {
+  if (typeDef.typeParams.length > 0 && body.kind === 'recordDef') {
     return instanceOf(recordBinding(body, context.currentParameters), typeDef.typeParams);
   }
   return body === typeDef.body ? typeDef : { ...typeDef, body };

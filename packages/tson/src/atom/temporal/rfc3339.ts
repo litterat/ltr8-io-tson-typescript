@@ -116,11 +116,12 @@ export function readFullDate(
  * bound as RFC 3339's real, `java.time.ZoneOffset`-confirmed limit, not merely the two-digit
  * field widths.
  *
- * **A fractional second past nine digits is rejected**, rather than silently truncated. §5.2
- * requires a parsed value's information content to be preserved; `PlainTime.nanosecond` cannot
- * hold a tenth digit, and dropping it silently would violate that requirement rather than
- * satisfy it. This is this port's own choice where the spec's grammar is silent on a maximum
- * `time-secfrac` width -- see this package's spec-feedback notes.
+ * **A fractional second past nine digits is rejected**, rather than silently truncated. The cap
+ * is the grammar's: `time-secfrac` is `"." 1*9DIGIT` (§5.4), stated once for `full-time`,
+ * `date-time` and `dur-time` alike, since no host runtime represents finer than a nanosecond and
+ * a value below that floor is not exactness anyone can use. Rejecting rather than truncating is
+ * what §5.2 then requires: a parsed value's information content is preserved, and dropping a
+ * tenth digit silently would violate that rather than satisfy it.
  */
 export function readFullTime(text: string, pos: number): TimeFields | undefined {
   const hour = readDigits(text, pos, 2);

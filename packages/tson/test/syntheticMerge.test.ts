@@ -60,9 +60,6 @@ function stubMaterialiser(
 function record(name: string, body: TypeDefinition['body'], source?: TypeRef): TypeDefinition {
   return {
     ...(source === undefined ? {} : { source }),
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
     body,

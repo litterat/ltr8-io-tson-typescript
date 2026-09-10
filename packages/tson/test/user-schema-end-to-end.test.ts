@@ -31,6 +31,7 @@ import { TsonReadError } from '../src/core/errors.js';
 import { fromBytes, runSync } from '../src/io/bytes.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
+import { typeKind } from '../src/schema/meta/typedef.js';
 import { tsonDocument } from '../src/tree/nodes.js';
 import { writeDocument } from '../src/write/astWriter.js';
 import { writeTree, writeTreeValue } from '../src/write/treeWriter.js';
@@ -40,8 +41,8 @@ import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.j
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   reading => {
     id: uuid
@@ -236,8 +237,14 @@ describe('the governing chain is three schemas deep', () => {
   it('resolves a core type through a constructor two schemas further down', () => {
     // core.tn spells `int32 => !integer ^ { size: { bits: 32  signed: true } }`, a refinement of
     // its own `integer => !integer_type {}`, whose constructor is meta-kernel.tn's `integer_type`.
-    expect(linked.entries.get('int32')).toMatchObject({
-      kind: 'ATOM',
+    const int32 = linked.entries.get('int32');
+    if (int32 === undefined) throw new Error('unreachable');
+    const meta = resolvedBundled('meta');
+    const kernel = resolvedBundled('meta-kernel');
+    expect(typeKind(int32, (name) => linked.entries.get(name) ?? kernel.entries.get(name))).toBe(
+      'ATOM',
+    );
+    expect(int32).toMatchObject({
       supertypes: ['integer'],
       body: { kind: 'integer_type', size: { bits: 32n, signed: true } },
     });
@@ -248,8 +255,6 @@ describe('the governing chain is three schemas deep', () => {
     // The two layers the constructors actually come from: `integer_type` and `enum` are the
     // kernel's, `uuid_type` and `datetime_type` are meta's, and the document below is validated
     // by all of them at once.
-    const meta = resolvedBundled('meta');
-    const kernel = resolvedBundled('meta-kernel');
     expect(linked.entries.get('uuid')).toMatchObject({ source: { name: 'uuid_type' } });
     expect(linked.entries.get('datetime')).toMatchObject({ source: { name: 'datetime_type' } });
     for (const constructorName of ['uuid_type', 'datetime_type', 'float_type']) {

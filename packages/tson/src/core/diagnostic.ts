@@ -9,6 +9,8 @@ import type { Position } from './position.js';
  * new code is an API change rather than a new string appearing in a message.
  */
 export type DiagnosticCode =
+  /** A resource limit was exceeded ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5) -- §8.1's fifth outcome, naming the limit and the threshold it was checked against. */
+  | 'LIMIT_REFUSED'
   /** A required field was absent from the data. */
   | 'FIELD_REQUIRED'
   /** A field the schema fixes carried a different value. */
@@ -144,7 +146,16 @@ const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
  * it pass*.
  *
  * A §8.2 name-hygiene refusal **is** a verdict, though not a validity one: the processor looked
- * and declined, and the sender holds the fix.
+ * and declined, and the sender holds the fix. §9.1 / [TSON-SCHEMA] §11.5's resource-limit
+ * refusals are §8.1's fifth outcome's other cause and are verdicts on the same reasoning, which is
+ * why `LIMIT_REFUSED` sits on the verdict side of the set beside
+ * `CONFUSABLE_NAMES`/`RESTRICTED_CHARACTER`/`RESTRICTED_SCRIPT`. §8.1 requires the two to travel
+ * together -- "It is reported in the *same* report as the four categories: a consumer reads a
+ * report to repair a document, and a repair channel split in two is repaired in two passes" -- so
+ * a consumer holding a report never has to look somewhere else to find a refusal. The limit this
+ * library enforces today (`core/limits.ts`'s nesting-depth bound) additionally *throws*
+ * `TsonLimitRefusedError`, because everything past the point a limit is exceeded is unreachable to
+ * collect; the code is what puts that same refusal in the report a collecting caller reads.
  *
  * Stated here so no consumer keeps its own copy of the set. Two already would -- the CLI's exit
  * code and its report outcome -- and a private copy each is how two consumers come to disagree

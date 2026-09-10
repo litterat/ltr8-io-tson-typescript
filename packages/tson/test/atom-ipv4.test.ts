@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TsonAtomParseError } from '../src/core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createIpv4Parser } from '../src/atom/network/ipv4.js';
 import type { AtomToken } from '../src/atom/contract.js';
 import type { Ipv4Type } from '../src/schema/meta/atoms-network.js';
@@ -82,5 +82,60 @@ describe('§5.5 !ipv4 -- write', () => {
   it('round trips through read, in canonical dotted-decimal form', () => {
     const parser = createIpv4Parser('ipv4', UNCONSTRAINED);
     expect(parser.write(parser.read(token('192.168.0.1')))).toBe('192.168.0.1');
+  });
+});
+
+// §5.5's network rule for an ADDRESS: "inside at least one `within` network when the field is
+// present, and inside no `excluding` network."
+describe('§5.5 !ipv4 -- within/excluding are enforced against the address', () => {
+  it('an address inside the sole `within` network is accepted', () => {
+    const parser = createIpv4Parser('ipv4', {
+      kind: 'ipv4_type',
+      spec: 'rfc3986',
+      within: ['10.0.0.0/8'],
+      excluding: [],
+    });
+    expect(parser.read(token('10.1.2.3'))).toEqual({
+      kind: 'ipv4',
+      octets: Uint8Array.from([10, 1, 2, 3]),
+    });
+  });
+
+  it('an address outside every `within` network is a validation error', () => {
+    const parser = createIpv4Parser('ipv4', {
+      kind: 'ipv4_type',
+      spec: 'rfc3986',
+      within: ['10.0.0.0/8'],
+      excluding: [],
+    });
+    expect(() => parser.read(token('192.168.0.1'))).toThrow(TsonAtomValidationError);
+  });
+
+  it('an address inside an `excluding` network is a validation error even with no `within`', () => {
+    const parser = createIpv4Parser('ipv4', {
+      kind: 'ipv4_type',
+      spec: 'rfc3986',
+      within: [],
+      excluding: ['10.0.0.0/8'],
+    });
+    expect(() => parser.read(token('10.5.5.5'))).toThrow(TsonAtomValidationError);
+    expect(parser.read(token('192.168.0.1'))).toEqual({
+      kind: 'ipv4',
+      octets: Uint8Array.from([192, 168, 0, 1]),
+    });
+  });
+
+  it('`excluding` carves a hole out of `within`', () => {
+    const parser = createIpv4Parser('ipv4', {
+      kind: 'ipv4_type',
+      spec: 'rfc3986',
+      within: ['10.0.0.0/8'],
+      excluding: ['10.0.0.0/9'],
+    });
+    expect(parser.read(token('10.128.0.1'))).toEqual({
+      kind: 'ipv4',
+      octets: Uint8Array.from([10, 128, 0, 1]),
+    });
+    expect(() => parser.read(token('10.0.0.1'))).toThrow(TsonAtomValidationError);
   });
 });

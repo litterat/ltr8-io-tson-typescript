@@ -110,11 +110,17 @@ describe('§5.5 !time -- precision', () => {
     expect(parser.read(token('10:15:30Z')).nanosecond).toBe(0);
   });
 
-  it('rejects a token with more written digits than the bound, even with trailing zeros', () => {
+  it('admits a value spelled with more digits than the bound, when trailing zeros make it exact on the grid (§5.5)', () => {
     const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
-    // Four written digits, even though the trailing zero means the same nanosecond count as
-    // `.100` would -- precision is judged on the written token (§5.5), not the parsed value.
-    expect(() => parser.read(token('10:15:30.1000Z'))).toThrow(TsonAtomValidationError);
+    // Four written digits, but the same nanosecond count `.100` denotes -- precision constrains
+    // the value, not the spelling, so this is admitted rather than refused for its digit count.
+    expect(parser.read(token('10:15:30.1000Z')).nanosecond).toBe(100000000);
+  });
+
+  it('rejects a value that is not a whole number of 10^-N seconds, however few digits it is spelled with', () => {
+    const parser = createTimeParser('time', { kind: 'time_type', precision: 1n });
+    // 0.51s is not a whole number of tenths -- off the grid, whatever the spelling.
+    expect(() => parser.read(token('10:15:30.51Z'))).toThrow(TsonAtomValidationError);
   });
 
   it('precision: 0 admits no fractional part at all', () => {

@@ -36,12 +36,9 @@ function template(
   coreValue: CoreValue,
 ): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters,
-    constructor: false,
     supertypes: [],
     subtypes: [],
-    body: createHeldBody({ annotations: [], typeRef, coreValue }),
+    body: createHeldBody({ annotations: [], typeRef, coreValue }, parameters),
     annotations: [],
   };
 }
@@ -61,10 +58,8 @@ function recordVocab(
     })),
   };
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
+    supertypes: ['product', 'top'],
     subtypes: [],
     body,
     annotations: [],
@@ -73,10 +68,7 @@ function recordVocab(
 
 function arrayVocab(elementType: string): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    supertypes: ['product', 'top'],
     subtypes: [],
     body: {
       kind: 'array',
@@ -91,10 +83,7 @@ function arrayVocab(elementType: string): TypeDefinition {
 
 function atomVocab(): TypeDefinition {
   return {
-    kind: 'ATOM',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    supertypes: ['atom', 'top'],
     subtypes: [],
     body: { kind: 'unit' },
     annotations: [],
@@ -170,9 +159,6 @@ describe('inferOne', () => {
 
   it('a non-template (no parameters) or a non-held body yields no kinds', () => {
     const plain: TypeDefinition = {
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'record', supertypes: [], fields: [], groups: [] },
@@ -296,9 +282,6 @@ describe('inferAll', () => {
   it('skips a non-parameterised entry and one with no held body entirely', () => {
     const meta = baseMeta();
     const plain: TypeDefinition = {
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'record', supertypes: [], fields: [], groups: [] },

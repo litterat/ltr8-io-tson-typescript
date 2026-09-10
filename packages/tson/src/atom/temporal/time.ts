@@ -9,12 +9,13 @@
  * (`time-second` of 60 rejected -- `CONFORMANCE.md`'s "one accepted, unfixable gap") and the
  * ±18:00 offset bound this inherits from `java.time.ZoneOffset`.
  *
- * **`precision` bounds the written fractional-second digits (§5.5), never a truncation
- * instruction.** `precision: N` admits a token whose fractional-second part has at most `N`
- * digits, judged on the token as written -- `12:00:00.100` has three digits whatever instant it
- * denotes, so this is counted from `token.text` directly rather than derived from the parsed
- * `nanosecond` value, which would lose exactly that distinction (`.1`/`.10`/`.100` all parse to
- * the same nanosecond count). `precision: 0` admits no fractional part at all.
+ * **`precision` bounds the *value*, never the spelling (§5.5).** `precision: N` admits a value
+ * that is a whole number of 10⁻ᴺ seconds -- tested on the parsed `nanosecond` field, not on how
+ * many fractional digits the token happened to write: `12:00:00.500` and a hypothetical
+ * `12:00:00.5000` denote the same nanosecond count and are both admitted or both refused
+ * together under `precision: 1`. `precision: 0` admits only a whole second. `formatFullTime`'s
+ * own trailing-zero trimming already writes at most `N` digits for any value that passes this
+ * check, so there is nothing further for the writer to do.
  *
  * **No `requireTimezone` facet exists** -- RFC 3339 `full-time`, which this atom's `spec` pins,
  * already makes the offset mandatory, so a facet requiring it would be vacuous and one relaxing
@@ -27,26 +28,10 @@ import type { PlainTime } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { type ComparableTime, compareTime, formatFullTime, readFullTime } from './rfc3339.js';
 
-/**
- * The written fractional-second digit count of a `full-time`/`date-time` token's time part --
- * `.100` counts three, trailing zeros included, matching §5.5's "judged on the written token"
- * rule for `precision` exactly. Zero when there is no fractional part at all. A local re-scan
- * rather than a value `readFullTime` itself returns: that function already discards this exact
- * distinction on the way to a single `nanosecond` integer (`.1`/`.10`/`.100` all parse to
- * 100000000ns), so recovering it means looking at the text again, not at the parsed value.
- */
-function writtenFractionDigits(text: string): number {
-  const dot = text.indexOf('.');
-  if (dot === -1) return 0;
-  let count = 0;
-  let i = dot + 1;
-  while (i < text.length) {
-    const code = text.charCodeAt(i);
-    if (code < 0x30 || code > 0x39) break;
-    count++;
-    i++;
-  }
-  return count;
+/** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `precision: N` value grid (§5.5), shared by `datetime.ts`'s identical check. */
+function onPrecisionGrid(nanosecond: number, precision: bigint): boolean {
+  const divisor = 10 ** (9 - Number(precision));
+  return nanosecond % divisor === 0;
 }
 
 function toComparable(value: PlainTime): ComparableTime {
@@ -82,16 +67,15 @@ export function createTimeParser(typeRef: string, constraints: TimeType): AtomTy
       nanosecond: fields.nanosecond,
       offset: { totalMinutes: fields.offsetMinutes },
     };
-    if (constraints.precision !== undefined) {
-      const digits = writtenFractionDigits(text);
-      if (BigInt(digits) > constraints.precision) {
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' has ${String(digits)} fractional-second digits, more than the maximum ` +
-            `${constraints.precision.toString()} (§5.5)`,
-          `at most ${constraints.precision.toString()} fractional-second digits`,
-        );
-      }
+    if (
+      constraints.precision !== undefined &&
+      !onPrecisionGrid(value.nanosecond, constraints.precision)
+    ) {
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' is not a whole number of 10^-${constraints.precision.toString()} seconds (§5.5)`,
+        `on the precision-${constraints.precision.toString()} grid`,
+      );
     }
     if (constraints.min !== undefined) {
       const bound = constraints.min;

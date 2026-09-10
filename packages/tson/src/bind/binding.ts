@@ -307,7 +307,12 @@ export interface VariantMember<T = unknown> {
   /** The schema type name this member reads/writes as -- what a wire type-ref names. */
   readonly wireName: string;
   readonly binding: BindingRef<T>;
-  /** Recognises a host value as this member for writing. Ignored when {@link VariantBinding.discriminant} is set. */
+  /**
+   * Recognises a host value as this member for writing. With no {@link VariantBinding.discriminant}
+   * it is the only dispatch there is; with one, it is the fallback for a member the tag cannot
+   * reach -- a member whose own wire vocabulary declares no tag field, so the host value has none
+   * to carry.
+   */
   readonly test?: (value: unknown) => boolean;
 }
 

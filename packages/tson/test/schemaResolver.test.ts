@@ -21,6 +21,7 @@ import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
 import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type { Top, TypeArgument, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import { typeKind, typeParameters } from '../src/schema/meta/typedef.js';
 
 // ── Parsing helper ───────────────────────────────────────────────────────────────────────────
 
@@ -97,10 +98,8 @@ const neverCalled = (type: string): Top => {
 function testStructureNamespace(): (name: string) => TypeDefinition | undefined {
   const anyType: TypeRef = { name: 'any', arguments: [], annotations: [] };
   const constructorEntry = (fields: readonly RecordField[]): TypeDefinition => ({
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
+    supertypes: ['product', 'top'],
     subtypes: [],
     body: { kind: 'record', supertypes: [], fields, groups: [] },
     annotations: [],
@@ -151,6 +150,11 @@ function entryOf(schema: Schema, name: string): TypeDefinition {
   const entry = schema.entries.get(name);
   if (entry === undefined) throw new Error(`resolved schema has no entry '${name}'`);
   return entry;
+}
+
+/** {@link typeKind} over `schema.entries` -- the local-only namespace, sufficient for these fixtures since none reaches the fourth branch's structure-namespace lookup. */
+function kindOf(schema: Schema, name: string) {
+  return typeKind(entryOf(schema, name), (n) => schema.entries.get(n));
 }
 
 function recordBodyOf(schema: Schema, name: string): RecordBody {
@@ -235,9 +239,6 @@ describe('!!import merging into the type-name namespace', () => {
       [
         'base',
         {
-          kind: 'PRODUCT',
-          parameters: [],
-          constructor: false,
           supertypes: [],
           subtypes: [],
           body: { kind: 'record', supertypes: [], fields: [], groups: [] },
@@ -269,9 +270,6 @@ describe('!!import merging into the type-name namespace', () => {
       [
         'base',
         {
-          kind: 'PRODUCT',
-          parameters: [],
-          constructor: false,
           supertypes: [],
           subtypes: [],
           body: { kind: 'record', supertypes: [], fields: [], groups: [] },
@@ -333,10 +331,8 @@ describe('collecting mode (a DiagnosticsReceiver in options)', () => {
 /** A structure namespace exposing one constructor entry, `ctorName`, for `!ctorName { }` declarations to resolve against. */
 function structureNamespaceWith(ctorName: string): (name: string) => TypeDefinition | undefined {
   const entry: TypeDefinition = {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
+    supertypes: ['product', 'top'],
     subtypes: [],
     body: { kind: 'record', supertypes: [], fields: [], groups: [] },
     annotations: [],
@@ -456,10 +452,10 @@ describe('template materialisation (§5.10), end to end through the real Templat
     const doc = document('box => <T> { v: T } text_box => box<text>');
     const schema = resolveSchema(doc, depsWithReader());
     // `box` itself stays a template (it is still open, with a parameter list).
-    expect(entryOf(schema, 'box').parameters).toEqual(['T']);
+    expect(typeParameters(entryOf(schema, 'box'))).toEqual(['T']);
     // `text_box` is a REFERENCE onto whatever entry the application closed to.
     const alias = entryOf(schema, 'text_box');
-    expect(alias.kind).toBe('REFERENCE');
+    expect(kindOf(schema, 'text_box')).toBe('REFERENCE');
     const target = (alias.body as { readonly target: TypeRef }).target;
     const instantiation = entryOf(schema, target.name);
     expect(instantiation.source).toEqual({
@@ -569,10 +565,8 @@ function richMetaReader(type: string, value: DataValue): Top {
 function richStructureNamespace(): (name: string) => TypeDefinition | undefined {
   const typeRefType: TypeRef = { name: 'type_ref', arguments: [], annotations: [] };
   const constructorEntry = (fields: readonly RecordField[]): TypeDefinition => ({
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: true,
-    supertypes: [],
+    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
+    supertypes: ['product', 'top'],
     subtypes: [],
     body: { kind: 'record', supertypes: [], fields, groups: [] },
     annotations: [],
@@ -602,10 +596,7 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
     [
       'enum_set',
       {
-        kind: 'PRODUCT',
-        parameters: [],
-        constructor: true,
-        supertypes: [],
+        supertypes: ['product', 'top'],
         subtypes: [],
         body: {
           kind: 'array',
@@ -620,10 +611,7 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
     [
       'identifier',
       {
-        kind: 'ATOM',
-        parameters: [],
-        constructor: true,
-        supertypes: [],
+        supertypes: ['atom', 'top'],
         subtypes: [],
         body: { kind: 'unit' },
         annotations: [],
@@ -646,9 +634,9 @@ describe('§5.10 parameter kinds, end to end through the real schemaResolver', (
     () => {
       const doc = document('e => <M> !enum { members: [a b M] } used => e<c>');
       const schema = resolveSchema(doc, richDeps());
-      expect(entryOf(schema, 'e').parameters).toEqual(['M']);
+      expect(typeParameters(entryOf(schema, 'e'))).toEqual(['M']);
       const used = entryOf(schema, 'used');
-      expect(used.kind).toBe('REFERENCE');
+      expect(kindOf(schema, 'used')).toBe('REFERENCE');
       const target = (used.body as { readonly target: TypeRef }).target;
       const instantiation = entryOf(schema, target.name);
       expect(instantiation.source).toEqual({

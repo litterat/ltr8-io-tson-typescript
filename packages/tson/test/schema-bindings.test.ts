@@ -3,7 +3,7 @@ import type { Infer } from '../src/bind/binding.js';
 import {
   annotationBinding,
   arrayBodyBinding,
-  binaryTypeBinding,
+  bytesTypeBinding,
   bigintBinding,
   booleanBinding,
   choiceBodyBinding,
@@ -15,15 +15,15 @@ import {
   decimalBinding,
   decimalTypeBinding,
   durationTypeBinding,
+  periodTypeBinding,
   elementStateBinding,
   emailTypeBinding,
   enumBodyBinding,
-  externBinding,
+  scopedBinding,
   fieldGroupBinding,
   fieldStateBinding,
   floatTypeBinding,
   identifierBinding,
-  int32Binding,
   integerSizeBinding,
   integerTypeBinding,
   ipv4TypeBinding,
@@ -50,11 +50,9 @@ import {
   typeArgumentRefBinding,
   typeArgumentValueBinding,
   typeDefinitionBinding,
-  typeKindBinding,
   typeRefBinding,
   typeRefAnnotatedBinding,
   unitBinding,
-  unknownTypeBinding,
   uriTypeBinding,
   uuidTypeBinding,
   valueBinding,
@@ -62,18 +60,17 @@ import {
 import type { Decimal, Rational, Unit } from '../src/schema/meta/algebra.js';
 import type {
   Annotation,
-  Extern,
   Reference,
+  Scoped,
   Token,
   TypeArgument,
   TypeArgumentRef,
   TypeArgumentValue,
   TypeDefinition,
-  TypeKind,
   TypeRef,
   Top,
-  UnknownType,
 } from '../src/schema/meta/typedef.js';
+import { typeKind } from '../src/schema/meta/typedef.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -87,8 +84,8 @@ import type {
   TupleBody,
   TupleElement,
 } from '../src/schema/meta/bodies.js';
+import type { BytesType } from '../src/schema/meta/atoms-bytes.js';
 import type {
-  BinaryType,
   EmailType,
   RegexType,
   TextType,
@@ -109,6 +106,7 @@ import type {
   DurationType,
   OffsetDateTime,
   OffsetTime,
+  PeriodType,
 } from '../src/schema/meta/atoms-temporal.js';
 import type {
   Cidr4Type,
@@ -149,8 +147,6 @@ const _check6: AssertExact<Infer<typeof identifierBinding>, string> = true;
 const _check7: AssertExact<Infer<typeof textBinding>, string> = true;
 const _check8: AssertExact<Infer<typeof booleanBinding>, boolean> = true;
 const _check9: AssertExact<Infer<typeof bigintBinding>, bigint> = true;
-const _check10: AssertExact<Infer<typeof int32Binding>, number> = true;
-const _check11: AssertExact<Infer<typeof typeKindBinding>, TypeKind> = true;
 const _check12: AssertExact<Infer<typeof fieldStateBinding>, FieldState> = true;
 const _check13: AssertExact<Infer<typeof elementStateBinding>, ElementState> = true;
 const _check14: AssertExact<Infer<typeof sourcePositionBinding>, SourcePosition> = true;
@@ -159,8 +155,7 @@ const _check16: AssertExact<Infer<typeof typeArgumentRefBinding>, TypeArgumentRe
 const _check17: AssertExact<Infer<typeof typeArgumentValueBinding>, TypeArgumentValue> = true;
 const _check18: AssertExact<Infer<typeof typeArgumentBinding>, TypeArgument> = true;
 const _check19: AssertExact<Infer<typeof referenceBinding>, Reference> = true;
-const _check20: AssertExact<Infer<typeof externBinding>, Extern> = true;
-const _check21: AssertExact<Infer<typeof unknownTypeBinding>, UnknownType> = true;
+const _check20: AssertExact<Infer<typeof scopedBinding>, Scoped> = true;
 const _check22: AssertExact<Infer<typeof integerSizeBinding>, IntegerSize> = true;
 const _check23: AssertExact<Infer<typeof recordFieldBinding>, RecordField> = true;
 const _check24: AssertExact<Infer<typeof fieldGroupBinding>, FieldGroup> = true;
@@ -177,7 +172,7 @@ const _check34: AssertExact<Infer<typeof decimalTypeBinding>, DecimalType> = tru
 const _check35: AssertExact<Infer<typeof rationalTypeBinding>, RationalType> = true;
 const _check36: AssertExact<Infer<typeof complexTypeBinding>, ComplexType> = true;
 const _check37: AssertExact<Infer<typeof textTypeBinding>, TextType> = true;
-const _check38: AssertExact<Infer<typeof binaryTypeBinding>, BinaryType> = true;
+const _check38: AssertExact<Infer<typeof bytesTypeBinding>, BytesType> = true;
 const _check39: AssertExact<Infer<typeof regexTypeBinding>, RegexType> = true;
 const _check40: AssertExact<Infer<typeof uriTypeBinding>, UriType> = true;
 const _check41: AssertExact<Infer<typeof emailTypeBinding>, EmailType> = true;
@@ -187,6 +182,7 @@ const _check44: AssertExact<Infer<typeof offsetTimeBinding>, OffsetTime> = true;
 const _check45: AssertExact<Infer<typeof offsetDateTimeBinding>, OffsetDateTime> = true;
 const _check46: AssertExact<Infer<typeof dateTimeTypeBinding>, DateTimeType> = true;
 const _check47: AssertExact<Infer<typeof durationTypeBinding>, DurationType> = true;
+const _check47b: AssertExact<Infer<typeof periodTypeBinding>, PeriodType> = true;
 const _check48: AssertExact<Infer<typeof ipv4TypeBinding>, Ipv4Type> = true;
 const _check49: AssertExact<Infer<typeof ipv6TypeBinding>, Ipv6Type> = true;
 const _check50: AssertExact<Infer<typeof cidr4TypeBinding>, Cidr4Type> = true;
@@ -246,12 +242,6 @@ describe('bridge leaves round-trip host <-> wire ([TSON-SCHEMA] §5.6, §9)', ()
     if (identifierBinding.kind !== 'bridge') throw new Error('expected a bridge');
     expect(identifierBinding.toWire('int32')).toEqual({ text: 'int32', form: 'unquoted' });
     expect(identifierBinding.fromWire({ text: 'int32', form: 'unquoted' })).toBe('int32');
-  });
-
-  it('int32Binding: bigint <-> number, both directions', () => {
-    if (int32Binding.kind !== 'bridge') throw new Error('expected a bridge');
-    expect(int32Binding.toWire(4)).toBe(4n);
-    expect(int32Binding.fromWire(4n)).toBe(4);
   });
 
   it('sourcePositionBinding: "line:column:offset" per SourcePositionStringBridge.java', () => {
@@ -324,7 +314,7 @@ describe('the TypeRef <-> TypeArgument declaration-order cycle ([TSON-SCHEMA] §
   });
 });
 
-describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([TSON-SCHEMA] §3.1, §8.3)", () => {
+describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([TSON-SCHEMA] §3.1)", () => {
   it('is what every type_ref-typed field slot in this module actually binds through', () => {
     expect(typeArgumentRefBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
     expect(referenceBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
@@ -340,10 +330,10 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
     const built = typeRefAnnotatedBinding.construct(inner, {
       values: [
         {
-          name: 'alias',
+          name: 'since',
           value: {
             annotations: [],
-            coreValue: { kind: 'token', text: 'user_id', form: 'unquoted' },
+            coreValue: { kind: 'token', text: '0.35.0', form: 'unquoted' },
           },
         },
       ],
@@ -351,7 +341,7 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
     expect(built).toEqual({
       name: 'user_id',
       arguments: [],
-      annotations: [{ name: 'alias', value: 'user_id' }],
+      annotations: [{ name: 'since', value: '0.35.0' }],
     });
   });
 
@@ -364,20 +354,20 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
     expect(firstAnnotation === undefined ? undefined : 'value' in firstAnnotation).toBe(false);
   });
 
-  it('unwrap()/annotationsOf() round-trip a TypeRef carrying its own @alias back to wire shape', () => {
+  it('unwrap()/annotationsOf() round-trip a TypeRef carrying its own annotation back to wire shape', () => {
     const typeRef: TypeRef = {
       name: 'text',
       arguments: [],
-      annotations: [{ name: 'alias', value: 'user_id' }],
+      annotations: [{ name: 'since', value: '0.35.0' }],
     };
     expect(typeRefAnnotatedBinding.unwrap(typeRef)).toBe(typeRef);
     expect(typeRefAnnotatedBinding.annotationsOf(typeRef)).toEqual({
       values: [
         {
-          name: 'alias',
+          name: 'since',
           value: {
             annotations: [],
-            coreValue: { kind: 'token', text: 'user_id', form: 'unquoted' },
+            coreValue: { kind: 'token', text: '0.35.0', form: 'unquoted' },
           },
         },
       ],
@@ -438,25 +428,27 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     expect(built).toEqual({ kind: 'integer_type', min: 1n });
   });
 
-  it('typeDefinitionBinding.construct synthesises no kind of its own (kind is a real, required field here) and omits absent optionals', () => {
+  it("typeDefinitionBinding.construct carries exactly the kernel's own four fields, plus position/annotations, and omits absent optionals -- no kind/parameters/constructor/disjoint of its own (§8.1)", () => {
     const body = unitBinding.construct([]);
     const built = typeDefinitionBinding.construct([
       undefined, // source
-      'ATOM', // kind
-      [], // parameters
-      false, // constructor
-      ['top'], // supertypes
+      ['atom', 'top'], // supertypes
       [], // subtypes
-      undefined, // disjoint
       body, // body
       undefined, // position
       [], // annotations
     ]);
-    expect(built.kind).toBe('ATOM');
+    expect(typeKind(built, () => undefined)).toBe('ATOM');
     expect('source' in built).toBe(false);
+    expect('kind' in built).toBe(false);
+    expect('parameters' in built).toBe(false);
+    // `'constructor' in built` is always `true` -- every object inherits one from
+    // `Object.prototype` -- so `hasOwnProperty` is what actually asks whether this object's own
+    // construction supplied the field.
+    expect(Object.prototype.hasOwnProperty.call(built, 'constructor')).toBe(false);
     expect('disjoint' in built).toBe(false);
     expect('position' in built).toBe(false);
-    expect(built.supertypes).toEqual(['top']);
+    expect(built.supertypes).toEqual(['atom', 'top']);
   });
 
   it('the position slot is unbound (never matched against the wire by name), per @Unbound in TypeDefinition.java', () => {

@@ -56,20 +56,34 @@ describe('§5.6 !number -- decimal_type constraints', () => {
   });
 
   it('total_digits bounds the significant digit count', () => {
-    const limited: DecimalType = { kind: 'decimal_type', totalDigits: 3 };
+    const limited: DecimalType = { kind: 'decimal_type', totalDigits: 3n };
     const parser = createDecimalParser('limited', limited);
     expect(parser.read(token('123'))).toEqual({ unscaled: 123n, exponent: 0 });
     expect(() => parser.read(token('1234'))).toThrow(TsonAtomValidationError);
   });
 
   it('fraction_digits bounds digits after the decimal point, clamped at 0 for a positive-exponent value', () => {
-    const limited: DecimalType = { kind: 'decimal_type', fractionDigits: 2 };
+    const limited: DecimalType = { kind: 'decimal_type', fractionDigits: 2n };
     const parser = createDecimalParser('limited', limited);
     expect(parser.read(token('1.23'))).toEqual({ unscaled: 123n, exponent: -2 });
     expect(() => parser.read(token('1.234'))).toThrow(TsonAtomValidationError);
     // 1E+2 has scale -2 (exponent 2) -- a whole number with no fraction digits at all, not -2 of
     // them, so it must not be rejected by a fraction_digits: 2 bound.
     expect(parser.read(token('100'))).toEqual({ unscaled: 100n, exponent: 0 });
+  });
+
+  it('a sparse member set (§5.6, §7.4) admits only its own members by value -- 1 and 1.0 are one member', () => {
+    const price: DecimalType = {
+      kind: 'decimal_type',
+      members: [
+        { unscaledValue: 1n, scale: 0 },
+        { unscaledValue: 250n, scale: 2 },
+      ], // 1, 2.50
+    };
+    const parser = createDecimalParser('price', price);
+    expect(parser.read(token('1.00'))).toEqual({ unscaled: 100n, exponent: -2 });
+    expect(parser.read(token('2.5'))).toEqual({ unscaled: 25n, exponent: -1 });
+    expect(() => parser.read(token('3'))).toThrow(TsonAtomValidationError);
   });
 });
 

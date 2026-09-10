@@ -130,11 +130,17 @@ export function variant<const M extends Shape>(
       ? undefined
       : new Map(memberList.map((member) => [member.wireName, member]));
 
+  // A discriminant answers for every member that carries the tag, and a member's own `test` is
+  // the fallback for one that cannot: the resolved-schema model has exactly one such member, the
+  // held `TemplateBody`, whose wire vocabulary (`template => top & { parameters, template }`)
+  // declares no tag field for the host value to carry. Trying the tag first keeps the common case
+  // one map lookup; a miss is not an answer, so it falls through rather than failing.
   function memberFor(value: unknown): VariantMember | undefined {
     if (discriminant !== undefined && byDiscriminant !== undefined) {
       if (typeof value !== 'object' || value === null) return undefined;
       const tag = (value as Record<PropertyKey, unknown>)[discriminant];
-      return typeof tag === 'string' ? byDiscriminant.get(tag) : undefined;
+      const tagged = typeof tag === 'string' ? byDiscriminant.get(tag) : undefined;
+      if (tagged !== undefined) return tagged;
     }
     return memberList.find((member) => member.test?.(value) === true);
   }

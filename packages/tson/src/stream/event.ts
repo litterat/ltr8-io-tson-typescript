@@ -164,7 +164,7 @@ export interface TokenEvent {
   readonly position: Position;
 }
 
-/** `"_"` (§2.9): the explicitly-absent sentinel, distinct from any typed value including base-type null. */
+/** `"_"` (§2.9): the explicitly-absent sentinel, the format's one spelling of absence and distinct from every typed value -- including the unquoted token `null`, an ordinary string under base type resolution (§4.4). */
 export interface AbsentEvent {
   readonly kind: 'absent';
   readonly position: Position;

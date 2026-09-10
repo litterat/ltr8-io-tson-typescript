@@ -24,7 +24,7 @@ vectors both are tested against are
 
 **Versioning is `0.<spec revision>.<patch>`.** `0.34.x` implements the **2026 Revision 34** spec
 series. A new revision moves the minor, and the spec is a working draft with no compatibility
-guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/34/m/core.tn` is
+guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/35/m/core.tn` is
 revision-specific and must match the library's own revision. The CLI depends on the library at an
 exact pin, never a range.
 
@@ -116,7 +116,8 @@ a plain headerless document.
 A failed step yields `missingNode`: `{ kind: 'missing', path: '/customer/email' }`. The path is the
 pointer _up to and including the step that failed_, and every further `get`/`at` returns that same
 node — the first failure is the informative one. `'missing'` (nothing there) is not `'absent'`
-(the document wrote `_` or `null` there).
+(the document wrote `_` there -- the format's one spelling of absence, §4.4: `null` is an
+ordinary word that resolves to the string `"null"`).
 
 Casting and converting differ: an `int32` atom holds a `number` and does not satisfy a `bigint`
 guard, while `asInt` on a `234.56E2` decimal succeeds because its value is integral.
@@ -131,8 +132,8 @@ import { validate } from '@ltr8/tson';
 import { standardLibrary } from '@ltr8/tson/stdlib';
 
 const SCHEMA = `!!id:"https://example.com/order.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   order => {
     order_id: int32
@@ -181,7 +182,7 @@ import { createTson } from '@ltr8/tson';
 import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
-await tson.preload(['https://tson.io/2026/34/m/meta.tn', 'https://tson.io/2026/34/m/core.tn']);
+await tson.preload(['https://tson.io/2026/35/m/meta.tn', 'https://tson.io/2026/35/m/core.tn']);
 ```
 
 `preload` verifies a `?sha256=` pin whenever one is declared, and cross-checks that the fetched
@@ -289,15 +290,15 @@ as a bug report, not as invalid input. Full code list and error-class hierarchy:
 
 ## Resource limits and name policy
 
-`maxNestingDepth` (default **512**, §9.1) bounds nesting, per call or once per instance. The
+`maxNestingDepth` (default **64**, §9.1's own default) bounds nesting, per call or once per instance. The
 recursion is real — one host call frame per level — so lowering it is free and raising it is bounded
 by the host stack. A document past the limit is refused with a typed error and a position, never a
 host `RangeError`.
 
 ```ts
-parse(bytes, { maxNestingDepth: 64 });
-readTree(bytes, { schema, root: 'order', maxNestingDepth: 64 });
-createTson({ maxNestingDepth: 64 }); // every schema it resolves and document it reads
+parse(bytes, { maxNestingDepth: 128 });
+readTree(bytes, { schema, root: 'order', maxNestingDepth: 128 });
+createTson({ maxNestingDepth: 128 }); // every schema it resolves and document it reads
 ```
 
 §8.2's three name-hygiene mechanisms are on by default (skeleton distinctness, `Identifier_Status`,
@@ -471,7 +472,7 @@ writeBinding(personBinding, person); // '{ name: "Ada" age: 36 }'
 | `createTson()` then a schema-governed read                                                  | a fresh instance's registry is **empty**                                                          | `standardLibrary()`, or register the kernel yourself               |
 | `httpSchemaSource({})`                                                                      | no `allowHosts` means nothing is permitted                                                        | name the hosts explicitly                                          |
 | Trusting a data file's own `!!schema` to pick a schema                                      | that reference is attacker-controlled                                                             | name the schema at the call site                                   |
-| Treating `'missing'` and `'absent'` as the same                                             | `absent` was written (`_`/`null`); `missing` is a failed lookup                                   | discriminate on `kind`                                             |
+| Treating `'missing'` and `'absent'` as the same                                             | `absent` was written (`_`, the only spelling); `missing` is a failed lookup                       | discriminate on `kind`                                             |
 | `as`/`asString` where a conversion was meant                                                | casts do not convert                                                                              | `asInt`/`asLong`/`asDouble`                                        |
 | `CONFUSABLE_NAMES`/`RESTRICTED_CHARACTER`/`RESTRICTED_SCRIPT` treated as "invalid document" | each is policy, a fifth outcome (`isVerdict` is still `true` for it, just not a validity verdict) | report it separately; relax `identifierPolicy` in code if intended |
 | Relaxing name policy from an env var                                                        | ambient authority, invisible at the call site                                                     | pass `identifierPolicy`/`tokenPolicy` explicitly                   |
@@ -496,8 +497,8 @@ as it stands, not how to extend it.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/34/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/34/tson-part2-schema.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/35/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/35/tson-part2-schema.md
 
 Both are working revisions and change without compatibility guarantees until the spec freezes at
 version 1. Re-fetch and check the revision number at the top rather than trusting a cached copy.

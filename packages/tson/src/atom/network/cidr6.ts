@@ -9,6 +9,12 @@
  * The address half is `ipv6.ts`'s own RFC 4291 §2.2 parse, reused whole, so a zone identifier
  * (`fe80::1%eth0`) is excluded here for the reason it is excluded there, and the IPv4-mapped tail
  * form (`::ffff:192.0.2.0/120`) is admitted on the same terms.
+ *
+ * `write` reproduces the address exactly as authored (`Cidr.addressText`), not `ipv6.ts`'s own
+ * canonical uncompressed spelling: RFC 4291 §2.2 admits several spellings of one network address,
+ * and unlike a bare `!ipv6` value a `!cidr6` value is compared against a corpus fixture by its
+ * literal text, so re-deriving the spelling from the decoded bytes would be lossy here in a way
+ * it isn't for `!ipv6`.
  */
 
 import { TsonAtomParseError } from '../../core/errors.js';
@@ -16,7 +22,14 @@ import type { Cidr6Type } from '../../schema/meta/atoms-network.js';
 import type { Cidr } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { parseIpv6Bytes } from './ipv6.js';
-import { tryParsePrefixLength, validateNetwork } from './cidrParsing.js';
+import {
+  checkNetworkAdmitted,
+  networkBlock,
+  overlaps,
+  parseNetworkList,
+  tryParsePrefixLength,
+  validateNetwork,
+} from './cidrParsing.js';
 
 function malformed(typeRef: string, text: string): TsonAtomParseError {
   return new TsonAtomParseError(
@@ -32,8 +45,8 @@ function malformed(typeRef: string, text: string): TsonAtomParseError {
  * type for error reporting, e.g. `'cidr6'` for §5.5's unconstrained `cidr6 => !cidr6_type {}`.
  */
 export function createCidr6Parser(typeRef: string, constraints: Cidr6Type): AtomType<Cidr> {
-  // `within`/`excluding` are accepted but not enforced -- see `ipv4.ts`'s own TSDoc for why.
-  const { within: _within, excluding: _excluding } = constraints;
+  const within = parseNetworkList(constraints.within, parseIpv6Bytes);
+  const excluding = parseNetworkList(constraints.excluding, parseIpv6Bytes);
 
   function read(token: AtomToken): Cidr {
     const text = token.text;
@@ -41,7 +54,8 @@ export function createCidr6Parser(typeRef: string, constraints: Cidr6Type): Atom
     if (slash < 0 || text.includes('/', slash + 1)) {
       throw malformed(typeRef, text);
     }
-    const address = parseIpv6Bytes(text.slice(0, slash));
+    const addressText = text.slice(0, slash);
+    const address = parseIpv6Bytes(addressText);
     const prefixLength = tryParsePrefixLength(text.slice(slash + 1));
     if (address === undefined || prefixLength === undefined) {
       throw malformed(typeRef, text);
@@ -51,14 +65,23 @@ export function createCidr6Parser(typeRef: string, constraints: Cidr6Type): Atom
       text,
       address,
       prefixLength,
-      constraints.minPrefix,
-      constraints.maxPrefix,
+      constraints.minPrefix === undefined ? undefined : Number(constraints.minPrefix),
+      constraints.maxPrefix === undefined ? undefined : Number(constraints.maxPrefix),
     );
-    return { kind: 'cidr6', text };
+    checkNetworkAdmitted(
+      typeRef,
+      text,
+      networkBlock(address, prefixLength),
+      within,
+      excluding,
+      128,
+      overlaps,
+    );
+    return { kind: 'cidr6', addressText, address, prefixLength };
   }
 
   function write(value: Cidr): string {
-    return value.text;
+    return `${value.addressText}/${String(value.prefixLength)}`;
   }
 
   return { read, write };

@@ -39,14 +39,11 @@ import type { NestingLimitOptions } from '../core/limits.js';
 import { createDataStream } from '../stream/dataStream.js';
 import { createReadContext } from '../reader/context.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
+import type { SchemaRef } from '../stream/event.js';
 import type { LinkedSchema } from '../link/link.js';
-import type {
-  Extern,
-  Reference,
-  Top,
-  TypeDefinition,
-  UnknownType,
-} from '../schema/meta/typedef.js';
+import { canonicalizeIdentity } from '../link/identity.js';
+import type { Reference, Scoped, Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { choiceDisjoint, typeKind } from '../schema/meta/typedef.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -55,15 +52,17 @@ import type {
   TupleBody,
 } from '../schema/meta/bodies.js';
 import type { Value } from '../tree/nodes.js';
+import { absentNode } from '../tree/nodes.js';
 import { recordTreeReader } from '../reader/tree/record.js';
 import { mapTreeReader } from '../reader/tree/map.js';
 import { arrayTreeReader } from '../reader/tree/array.js';
 import { tupleTreeReader } from '../reader/tree/tuple.js';
-import { schemalessTreeReader } from '../reader/schemaless/tree.js';
+import { skipDataValue, typeRefAhead } from '../reader/tree/grammar.js';
 import { choiceTreeReader } from './choiceReader.js';
 import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
+import { resolvesToScoped } from './referenceChain.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
 
@@ -87,9 +86,9 @@ export interface CompiledSchema {
    * that does not resolve, so a caller reaching this with an unresolved name is asking this
    * schema a question its own linking already answered "no" to, not presenting a document
    * problem. Throws {@link TsonNotImplementedError} for a well-formed entry this compiler has no
-   * reader for yet (`extern`, an unmaterialised `TemplateBody`, or a `DATA`-kind entry named
-   * where a type is expected) -- see this module's own top note and `atomBuilder.ts`'s for the
-   * two atom-level cases (`unit`'s unnamed instances aside, every one of those is fully covered).
+   * reader for yet (an unmaterialised `TemplateBody`, or a `DATA`-kind entry named where a type
+   * is expected) -- see this module's own top note and `atomBuilder.ts`'s for the two atom-level
+   * cases (`unit`'s unnamed instances aside, every one of those is fully covered).
    */
   reader(name: string): TypeReader<Value>;
 }
@@ -129,11 +128,33 @@ function isChoiceBody(body: Top): body is ChoiceBody {
 function isReference(body: Top): body is Reference {
   return 'kind' in body && body.kind === 'reference';
 }
-function isUnknownType(body: Top): body is UnknownType {
-  return 'kind' in body && body.kind === 'unknown_type';
+function isScoped(body: Top): body is Scoped {
+  return 'kind' in body && body.kind === 'scoped';
 }
-function isExtern(body: Top): body is Extern {
-  return 'kind' in body && body.kind === 'extern';
+
+/**
+ * How a compile reaches a schema a document names *inside itself* -- §7.8's scope push, where an
+ * EXTERN value carries its own `!!schema` and the type it names has to be resolved and compiled
+ * before that value can be read.
+ *
+ * **Read-time, unlike every other name a compile resolves.** A compiled reader's children are
+ * wired as real references at compile time, because the schema being compiled names all of them.
+ * Which foreign schema an EXTERN value pushes is the *document's* choice, so it cannot be known
+ * until the value arrives; what can be fixed in advance is where to look. `compile`'s own {@link
+ * CompileDeps.foreignSchemas} hands this lookup to every compile it performs (§10.1's ordinary
+ * library), so a scope push resolves through the schema registry the caller already holds --
+ * `config.ts`'s own `Tson.compile` is what actually supplies one.
+ *
+ * A lookup rather than a fetch: `undefined` means this compile has no way to obtain `uri` at all
+ * (never registered, and nothing here fetches -- see `config.ts`'s own top note on why schema
+ * resolution never fetches), which is a fact about this deployment, never a verdict on the
+ * document that named it.
+ */
+export type ForeignSchemas = (uri: string) => LinkedSchema | undefined;
+
+/** {@link compile}'s own dependencies -- currently the one seam a `scoped` position needs (§7.8). */
+export interface CompileDeps {
+  readonly foreignSchemas?: ForeignSchemas;
 }
 
 /**
@@ -141,16 +162,25 @@ function isExtern(body: Top): body is Extern {
  * TypeDefinition.body}'s shape. `resolve` is the whole-schema `name -> reader` lookup this
  * function's own children (a record field, an array element, a choice variant, ...) are built
  * against -- passed down rather than closed over directly by this function so `resolve` alone
- * owns the cycle-breaking cache.
+ * owns the cycle-breaking cache. `compileForeign` is threaded through to a `scoped` body alone
+ * (§7.8); every other branch ignores it.
  */
 function buildReader(
   schema: LinkedSchema,
   name: string,
   definition: TypeDefinition,
   resolve: (name: string) => TypeReader<Value>,
+  compileForeign: (uri: string) => CompiledSchema | undefined,
+  foreignSchemasConfigured: boolean,
 ): TypeReader<Value> {
   const body = definition.body;
   const location = (): SchemaLocation => locationOf(schema, name);
+  // §7.8's typed-position restriction, derived structurally: whether `typeName` resolves (§8.3)
+  // to a `scoped` instance at all -- a container consults this to decide whether a nested
+  // `!!schema` may stand at that position (`reader/tree/grammar.ts`'s own
+  // `refuseUnscopedSchemaRef`); which cell it lands in is `buildScopedReader`'s own concern.
+  const isScopedType = (typeName: string): boolean =>
+    resolvesToScoped(typeName, (n) => schema.entries.get(n));
 
   if (!('kind' in body)) {
     // A `TemplateBody` reaching compilation at all means an open (parameterised) entry was named
@@ -165,7 +195,7 @@ function buildReader(
   // §7.2's subsumption rule -- a value's own `!type-ref` must be admitted by the position's
   // declared type -- applied at every position it governs (every `Atom`/`Product` body) rather
   // than only where a record happens to declare subtypes; see `subsumption.ts`'s own doc for which
-  // kinds it deliberately leaves alone (`choice`, `reference`, `extern`, `unknown`).
+  // kinds it deliberately leaves alone (`choice`, `reference`, `scoped`).
   if (isRecordBody(body)) {
     const built = recordTreeReader(
       name,
@@ -173,19 +203,20 @@ function buildReader(
       body,
       (field) => resolve(field.type.name),
       location(),
+      isScopedType,
     );
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isArrayBody(body)) {
-    const built = arrayTreeReader(name, name, body, resolve, location());
+    const built = arrayTreeReader(name, name, body, resolve, location(), isScopedType);
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isMapBody(body)) {
-    const built = mapTreeReader(name, name, body, resolve, location());
+    const built = mapTreeReader(name, name, body, resolve, location(), isScopedType);
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isTupleBody(body)) {
-    const built = tupleTreeReader(name, name, body, resolve, location());
+    const built = tupleTreeReader(name, name, body, resolve, location(), isScopedType);
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isChoiceBody(body)) {
@@ -195,7 +226,7 @@ function buildReader(
       body,
       resolve,
       location(),
-      definition.disjoint === true,
+      choiceDisjoint(definition) === true,
       schema.entries,
     );
   }
@@ -205,20 +236,14 @@ function buildReader(
     // (safe even when the alias and its target form part of a cycle).
     return resolve(body.target.name);
   }
-  if (isUnknownType(body)) {
-    // `unknown` (§4.2): "the universe of types," accepting any well-formed value of any type --
-    // exactly `reader/schemaless/tree.ts`'s own no-schema-in-scope contract, reused rather than
-    // restated. Every import this pulls in terminates in `atom/`/`base/`/`tree/`/`stream/`/
-    // `core/` (that module's own top note), so this stays clear of `compiler/`'s `bind/` zone.
-    return schemalessTreeReader();
-  }
-  if (isExtern(body)) {
-    // meta.tn's own `extern` (a reference into a separately-governed schema, §7.8): "no compiled
-    // reader exists for this constructor, a documented gap in the reference implementation"
-    // (`typedef.ts`'s own doc on `Extern`) -- carried over unchanged rather than closed here,
-    // since closing it means resolving a second schema library this module is never handed.
-    throw new TsonNotImplementedError(
-      `'${name}' is an 'extern' reference into a separately-governed schema (§7.8) -- no compiled reader exists for this constructor yet`,
+  if (isScoped(body)) {
+    return buildScopedReader(
+      name,
+      schema.entries,
+      body,
+      resolve,
+      compileForeign,
+      foreignSchemasConfigured,
     );
   }
   if (isAtom(body)) {
@@ -230,13 +255,208 @@ function buildReader(
   // reaching it here through an already-linked schema means something upstream let it through;
   // reported as this module's own gap rather than silently misread as a type.
   throw new TsonNotImplementedError(
-    `'${name}' (kind ${definition.kind}) is not a data type -- it describes meta-schema vocabulary, not a value, and has no compiled reader`,
+    `'${name}' (kind ${typeKind(definition, (n) => schema.entries.get(n))}) is not a data type -- ` +
+      'it describes meta-schema vocabulary, not a value, and has no compiled reader',
   );
 }
 
-/** Builds a {@link CompiledSchema} for `schema` -- see this module's own top note for what compiling means and how cycles resolve. */
-export function compile(schema: LinkedSchema): CompiledSchema {
+/**
+ * meta.tn's `scoped` constructor's own vocabulary, resolved (§7.8): the open sum, in which the
+ * value names its own type and the instance names the namespaces that name may be resolved in.
+ * One reader for every instance -- core's `declared`, `extern` and `dynamic`, and every narrowing
+ * `extern_of`/`extern_type` materialises -- because what separates them is two constraint values,
+ * `body.scope`/`body.schemas`, and not a shape.
+ *
+ * **The value's own shape picks the cell** (§7.8's "data rule"): a value carrying a nested
+ * `!!schema` is EXTERN; a value carrying a `!type-ref` alone is LOCAL; a value carrying neither
+ * names no type and is a validation error, there being nothing at an open position for a type to
+ * be inferred from. A cell `body.scope` does not hold refuses the value it would have taken --
+ * `declared` (`[LOCAL]`) refuses a pushed scope, `extern` (`[EXTERN]`) refuses its absence, both
+ * from this one reader.
+ *
+ * **LOCAL is fixed at compile time and EXTERN is not.** This entry belongs to exactly one schema,
+ * so "the governing namespace" is `entries`, resolved through the same `resolve` every other
+ * dispatch in this schema uses. Which foreign schema an EXTERN value names is the document's
+ * choice, so it is looked up as the value arrives, through `compileForeign` -- the ordinary
+ * library (§10.1), so a schema nothing would supply is one of §8.1's five schema-fetch codes and
+ * never a verdict on the document.
+ *
+ * **The scope pops by returning.** There is no scope stack: the reader for the foreign type is
+ * the foreign schema's own compiled reader, wired to that schema's own entries, so everything
+ * below the pushed value resolves there by construction and everything after it resolves here
+ * again -- and per the reference implementation's own note, nothing here threads this schema's
+ * own declaration into the EXTERN read: the foreign reader offers its own declaration on entry
+ * like every other reader, so a diagnostic from inside the pushed value already names the schema
+ * that judged it.
+ *
+ * Tree mode only (bind mode is a separate work package over the same {@link Scoped}): the value
+ * read against the foreign schema is returned exactly as that schema's own reader produced it --
+ * the wire URI that governed it is not itself retained on the returned {@link Value}.
+ */
+function buildScopedReader(
+  displayName: string,
+  entries: ReadonlyMap<string, TypeDefinition>,
+  body: Scoped,
+  resolve: (name: string) => TypeReader<Value>,
+  compileForeign: (uri: string) => CompiledSchema | undefined,
+  foreignSchemasConfigured: boolean,
+): TypeReader<Value> {
+  // `body.schemas`, keyed by canonical identity ([TSON-DATA] §2.2.1) -- absent (an empty map, this
+  // package's own absent-equals-empty convention) means "any foreign schema".
+  const admittedSchemas = new Map<string, readonly string[]>();
+  if (body.schemas !== undefined) {
+    for (const [uri, types] of body.schemas) {
+      admittedSchemas.set(canonicalizeIdentity(uri), types);
+    }
+  }
+  const admittedSchemaNames = (): string => [...admittedSchemas.keys()].join(', ');
+
+  function* abandon(ctx: ReadContext): Task<Value> {
+    yield* skipDataValue(ctx);
+    return absentNode();
+  }
+
+  /** §7.8's "the discriminant is required": an open position has nothing to infer a type from. */
+  function* missingTypeRef(ctx: ReadContext): Task<Value> {
+    ctx.report(
+      'VALIDATION_ERROR',
+      `'${displayName}' is a scoped type -- the value names its own type, so it requires an ` +
+        'explicit type annotation (!typeName)',
+      "a type annotation naming the value's own type",
+      'no type annotation',
+    );
+    return yield* abandon(ctx);
+  }
+
+  /** A value naming a type in the governing namespace -- no directive, so the type-ref is the whole of what the value says about itself. */
+  function* readLocal(ctx: ReadContext): Task<Value> {
+    if (!body.scope.includes('LOCAL')) {
+      ctx.report(
+        'VALIDATION_ERROR',
+        `'${displayName}' takes a value from a foreign schema, so the value must open a scope ` +
+          "with its own '!!schema' naming the schema its type comes from (§7.8)",
+        "a value prefixed by '!!schema'",
+        'no !!schema',
+      );
+      return yield* abandon(ctx);
+    }
+    const typeRef = yield* typeRefAhead(ctx);
+    if (typeRef === undefined) {
+      return yield* missingTypeRef(ctx);
+    }
+    if (!entries.has(typeRef)) {
+      ctx.report(
+        'UNKNOWN_TYPE',
+        `'${typeRef}' is not a type this schema declares or imports, and '${displayName}' ` +
+          "resolves a value's own type name there (§2.2.3)",
+        'a type declared by the governing schema',
+        typeRef,
+      );
+      return yield* abandon(ctx);
+    }
+    return yield* resolve(typeRef).read(ctx);
+  }
+
+  /** §7.8's scope push: the directive names the schema, the value's own type-ref names the type within it, and the foreign schema's compiled reader validates the value in full. */
+  function* readExtern(ctx: ReadContext, ref: SchemaRef): Task<Value> {
+    yield* ctx.next(); // the directive, whose scope is this value and nothing after it
+    if (!body.scope.includes('EXTERN')) {
+      ctx.report(
+        'VALIDATION_ERROR',
+        `'${displayName}' takes a type this schema declares or imports, so a value here cannot ` +
+          `open a scope onto '${ref.uri}' (§7.8)`,
+        "a value carrying no '!!schema'",
+        ref.uri,
+      );
+      return yield* abandon(ctx);
+    }
+    // Absent `schemas` is "any foreign schema"; present, it is a closed set, matched by canonical
+    // identity so a pinned key and an unpinned directive are one schema (§2.2.1) -- the pin itself
+    // is `compileForeign`'s own loader's to verify, exactly as for any other schema reference.
+    const identity = canonicalizeIdentity(ref.uri);
+    if (admittedSchemas.size > 0 && !admittedSchemas.has(identity)) {
+      ctx.report(
+        'VALIDATION_ERROR',
+        `'${displayName}' admits values from ${admittedSchemaNames()}, and '${ref.uri}' is not one of them`,
+        `one of ${admittedSchemaNames()}`,
+        ref.uri,
+      );
+      return yield* abandon(ctx);
+    }
+    const typeRef = yield* typeRefAhead(ctx);
+    if (typeRef === undefined) {
+      return yield* missingTypeRef(ctx);
+    }
+    const admittedTypes = admittedSchemas.get(identity);
+    if (
+      admittedTypes !== undefined &&
+      admittedTypes.length > 0 &&
+      !admittedTypes.includes(typeRef)
+    ) {
+      const typeNames = admittedTypes.join(', ');
+      ctx.report(
+        'VALIDATION_ERROR',
+        `'${displayName}' admits ${typeNames} from '${ref.uri}', and '${typeRef}' is not one of them`,
+        `one of ${typeNames}`,
+        typeRef,
+      );
+      return yield* abandon(ctx);
+    }
+    const foreign = compileForeign(ref.uri);
+    if (foreign === undefined) {
+      ctx.report(
+        foreignSchemasConfigured ? 'SCHEMA_NOT_FOUND' : 'SCHEMA_NOT_PERMITTED',
+        foreignSchemasConfigured
+          ? `'${ref.uri}' is not registered on this instance -- register (or preload) it before ` +
+              'reading a value that opens a scope onto it (§7.8, §10.1)'
+          : `this read has no foreign-schema lookup configured, so the scope onto '${ref.uri}' ` +
+              'cannot be resolved (§7.8) -- read through a Tson facade, whose registry supplies one',
+        'a schema that can be obtained',
+        ref.uri,
+      );
+      return yield* abandon(ctx);
+    }
+    if (!foreign.linked.entries.has(typeRef)) {
+      ctx.report(
+        'UNKNOWN_TYPE',
+        `'${typeRef}' is not a type '${ref.uri}' declares or imports`,
+        [...foreign.linked.entries.keys()].join(' | '),
+        typeRef,
+      );
+      return yield* abandon(ctx);
+    }
+    return yield* foreign.reader(typeRef).read(ctx);
+  }
+
+  return {
+    *read(ctx: ReadContext): Task<Value> {
+      const peeked = yield* ctx.peek();
+      return peeked.kind === 'schema-ref' ? yield* readExtern(ctx, peeked) : yield* readLocal(ctx);
+    },
+  };
+}
+
+/**
+ * Builds a {@link CompiledSchema} for `schema` -- see this module's own top note for what
+ * compiling means and how cycles resolve. `deps.foreignSchemas`, when supplied, is what every
+ * `scoped` position's own reader (§7.8) looks a document-named schema up through; each distinct
+ * URI a read actually pushes is resolved and compiled once per `compile` call and cached from
+ * then on, so a document naming the same foreign schema many times compiles it once.
+ */
+export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledSchema {
   const cache = new Map<string, TypeReader<Value>>();
+  const foreignCompiled = new Map<string, CompiledSchema>();
+
+  function compileForeign(uri: string): CompiledSchema | undefined {
+    const identity = canonicalizeIdentity(uri);
+    const cached = foreignCompiled.get(identity);
+    if (cached !== undefined) return cached;
+    const linked = deps.foreignSchemas?.(uri);
+    if (linked === undefined) return undefined;
+    const compiled = compile(linked, deps);
+    foreignCompiled.set(identity, compiled);
+    return compiled;
+  }
 
   function resolve(name: string): TypeReader<Value> {
     const cached = cache.get(name);
@@ -273,7 +493,14 @@ export function compile(schema: LinkedSchema): CompiledSchema {
       },
     };
     cache.set(name, placeholder);
-    const inner = buildReader(schema, name, definition, resolve);
+    const inner = buildReader(
+      schema,
+      name,
+      definition,
+      resolve,
+      compileForeign,
+      deps.foreignSchemas !== undefined,
+    );
     box.inner = inner;
     cache.set(name, inner); // supersede the placeholder for every caller from here on
     return inner;

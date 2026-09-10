@@ -44,19 +44,19 @@ describe('§5.5 !uri -- malformed shapes are parse errors', () => {
 
 describe('§5.5 !uri -- uri_type facets', () => {
   it('minLength rejects a shorter URI as a validation error', () => {
-    const parser = createUriParser('uri', { ...UNCONSTRAINED, minLength: 20 });
+    const parser = createUriParser('uri', { ...UNCONSTRAINED, minLength: 20n });
     expect(parser.read(token('https://example.com/'))).toBe('https://example.com/');
     expect(() => parser.read(token('urn:x'))).toThrow(TsonAtomValidationError);
   });
 
   it('maxLength rejects a longer URI as a validation error', () => {
-    const parser = createUriParser('uri', { ...UNCONSTRAINED, maxLength: 6 });
+    const parser = createUriParser('uri', { ...UNCONSTRAINED, maxLength: 6n });
     expect(parser.read(token('urn:x'))).toBe('urn:x');
     expect(() => parser.read(token('https://example.com/'))).toThrow(TsonAtomValidationError);
   });
 
   it('length rejects anything else', () => {
-    const parser = createUriParser('uri', { ...UNCONSTRAINED, length: 19 });
+    const parser = createUriParser('uri', { ...UNCONSTRAINED, length: 19n });
     expect(parser.read(token('https://example.com'))).toBe('https://example.com');
     expect(() => parser.read(token('https://example.com/a'))).toThrow(TsonAtomValidationError);
   });

@@ -57,6 +57,7 @@ import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
+import { toNfc } from '../unicode/nfc.js';
 import type { DocumentStart, EventSource, TsonEvent } from './event.js';
 
 /** Creates an {@link EventSource} over `input`. Nothing is read until {@link EventSource.next}/{@link EventSource.peek} is driven. */
@@ -356,8 +357,12 @@ function sameStart(a: Position, b: Position): boolean {
 
 /**
  * Between elements of a record/map/array (§2.4): a separator (whitespace, a comma, or both) is
- * required unless the closing delimiter is immediately next; a trailing separator right before
- * the closing delimiter is likewise a parse error.
+ * required unless the closing delimiter is immediately next. **A comma may follow a value**, so a
+ * separator landing right before the closing delimiter simply ends the list -- a trailing comma
+ * is ordinary, not a syntax error. What still fails is a comma with nothing behind it: a comma
+ * following another comma is caught one level up, where the caller tries to parse the next
+ * element and finds a comma sitting in value position, which needs no rule of its own (§2.4) --
+ * a comma is not a value.
  */
 function* consumeSeparatorOrCloseCheck(state: StreamState, closing: TokenType): Task<boolean> {
   if (yield* check(state, closing)) return false;
@@ -372,11 +377,7 @@ function* consumeSeparatorOrCloseCheck(state: StreamState, closing: TokenType): 
     const here = yield* peekToken(state);
     throw parseError(here, 'adjacent values must be separated by whitespace, a comma, or both');
   }
-  if (yield* check(state, closing)) {
-    const here = yield* peekToken(state);
-    throw parseError(here, `a trailing separator is not permitted before ${describe(here)}`);
-  }
-  return true;
+  return !(yield* check(state, closing));
 }
 
 /** Looks ahead at an upcoming `!!name` directive's name without consuming anything. */
@@ -501,14 +502,35 @@ function* parseTypeRefName(state: StreamState): Task<string> {
   return name.text;
 }
 
-/** `field-name = unquoted-token / single-line-token` (§7.4): the multi-line form names no field. */
+/**
+ * A field name is an identifier at every layer (§2.5, §7.7): `token`'s decoded text,
+ * NFC-normalised, matched in full against the identifier grammar. Quoting escapes a lexical
+ * accident -- relief from what the unquoted form cannot spell, never a wider name set -- so both
+ * spellings {@link isFieldNameTokenType} admits are held to exactly this one check, and it is the
+ * *normalised* text that identity and every later comparison sees.
+ */
+function fieldNameText(token: Token, construct: string): string {
+  if (!isFieldNameTokenType(token.type)) {
+    throw mismatch(construct, token);
+  }
+  const text = toNfc(token.text);
+  if (!isIdentifierText(text)) {
+    throw parseError(
+      token,
+      `'${token.text}' is not an identifier, so it names no field (§2.5, §7.7): a name starts ` +
+        "with an XID_Start character and continues with XID_Continue or '-', in NFC -- a key " +
+        "that is not a name belongs in a map ('key => value')",
+    );
+  }
+  return text;
+}
+
+/** `field-name = unquoted-token / single-line-token` (§2.5, §7.4), held to the identifier grammar (§7.7). */
 function* expectFieldNameToken(state: StreamState, construct: string): Task<Token> {
   const name = yield* peekToken(state);
-  if (!isFieldNameTokenType(name.type)) {
-    throw mismatch(construct, name);
-  }
+  const text = fieldNameText(name, construct);
   yield* advance(state);
-  return name;
+  return text === name.text ? name : { ...name, text };
 }
 
 // ── The frame steps ──────────────────────────────────────────────────────
@@ -669,13 +691,14 @@ function* parseBraceValue(state: StreamState): Task<void> {
   if (isBareTokenType(t1.type)) {
     const t2 = yield* peekSecond(state);
     if (t2.type === 'colon') {
-      if (!isFieldNameTokenType(t1.type)) {
-        throw mismatch('a record field name', t1);
-      }
+      // §2.8: the record interpretation is selected only when the consumed data-value is a bare
+      // token whose decoded text is an identifier -- anything else is a parse error, not a
+      // silent fallback to a map, so the author rewrites `:` as `=>` themselves (§2.5).
+      const name = fieldNameText(t1, 'a record field name');
       yield* advance(state); // field-name token
       yield* advance(state); // ':'
       state.ready.push({ kind: 'record-start', position: lbrace.start });
-      state.ready.push({ kind: 'field-name', name: t1.text, position: t1.start });
+      state.ready.push({ kind: 'field-name', name, position: t1.start });
       pushFrame(state, { kind: 'record' });
       pushFrame(state, { kind: 'scoped-value' });
       return;
@@ -738,7 +761,12 @@ function* stepRecord(state: StreamState): Task<void> {
     state.ready.push({ kind: 'record-end', position: rb.start });
     return;
   }
-  yield* consumeSeparatorOrCloseCheck(state, 'rbrace');
+  if (!(yield* consumeSeparatorOrCloseCheck(state, 'rbrace'))) {
+    // A trailing comma (§2.4) consumed cleanly right up to the close.
+    const rb = yield* advance(state);
+    state.ready.push({ kind: 'record-end', position: rb.start });
+    return;
+  }
   const name = yield* expectFieldNameToken(state, 'a record field name');
   yield* expect(state, 'colon', "a record field's ':'");
   state.ready.push({ kind: 'field-name', name: name.text, position: name.start });
@@ -753,7 +781,12 @@ function* stepMap(state: StreamState, mode: 'after-entry' | 'awaiting-arrow'): T
       state.ready.push({ kind: 'map-end', position: rb.start });
       return;
     }
-    yield* consumeSeparatorOrCloseCheck(state, 'rbrace');
+    if (!(yield* consumeSeparatorOrCloseCheck(state, 'rbrace'))) {
+      // A trailing comma (§2.4) consumed cleanly right up to the close.
+      const rb = yield* advance(state);
+      state.ready.push({ kind: 'map-end', position: rb.start });
+      return;
+    }
     pushFrame(state, { kind: 'map', mode: 'awaiting-arrow' });
     pushFrame(state, { kind: 'data-value' }); // the next key
     return;
@@ -770,8 +803,11 @@ function* stepArray(state: StreamState, first: boolean): Task<void> {
     state.ready.push({ kind: 'array-end', position: rb.start });
     return;
   }
-  if (!first) {
-    yield* consumeSeparatorOrCloseCheck(state, 'rbracket');
+  if (!first && !(yield* consumeSeparatorOrCloseCheck(state, 'rbracket'))) {
+    // A trailing comma (§2.4) consumed cleanly right up to the close.
+    const rb = yield* advance(state);
+    state.ready.push({ kind: 'array-end', position: rb.start });
+    return;
   }
   pushFrame(state, { kind: 'array', first: false });
   pushFrame(state, { kind: 'scoped-value' });

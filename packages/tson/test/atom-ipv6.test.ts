@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TsonAtomParseError } from '../src/core/errors.js';
+import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createIpv6Parser } from '../src/atom/network/ipv6.js';
 import type { AtomToken } from '../src/atom/contract.js';
 import type { Ipv6Type } from '../src/schema/meta/atoms-network.js';
@@ -130,6 +130,37 @@ describe('§5.5 !ipv6 -- write', () => {
     expect(parser.read(token(written))).toEqual({
       kind: 'ipv6',
       octets: bytes('20010db8000000000000000000000001'),
+    });
+  });
+});
+
+// §5.5's network rule for an ADDRESS, over the 128-bit family.
+describe('§5.5 !ipv6 -- within/excluding are enforced against the address', () => {
+  it('an address inside the sole `within` network is accepted, outside is a validation error', () => {
+    const parser = createIpv6Parser('ipv6', {
+      kind: 'ipv6_type',
+      spec: 'rfc4291',
+      within: ['2001:db8::/32'],
+      excluding: [],
+    });
+    expect(parser.read(token('2001:db8::1'))).toEqual({
+      kind: 'ipv6',
+      octets: bytes('20010db8000000000000000000000001'),
+    });
+    expect(() => parser.read(token('::1'))).toThrow(TsonAtomValidationError);
+  });
+
+  it('an address inside an `excluding` network is a validation error', () => {
+    const parser = createIpv6Parser('ipv6', {
+      kind: 'ipv6_type',
+      spec: 'rfc4291',
+      within: [],
+      excluding: ['2001:db8::/32'],
+    });
+    expect(() => parser.read(token('2001:db8::1'))).toThrow(TsonAtomValidationError);
+    expect(parser.read(token('::1'))).toEqual({
+      kind: 'ipv6',
+      octets: bytes('00000000000000000000000000000001'),
     });
   });
 });

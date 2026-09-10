@@ -111,11 +111,11 @@ export function createUuidParser(typeRef: string, constraints: UuidType): AtomTy
     }
     if (constraints.version !== undefined) {
       const version = versionOf(bytes);
-      if (version !== constraints.version) {
+      if (BigInt(version) !== constraints.version) {
         throw new TsonAtomValidationError(
           typeRef,
-          `'${text}' is version ${String(version)}, expected version ${String(constraints.version)}`,
-          `version ${String(constraints.version)}`,
+          `'${text}' is version ${String(version)}, expected version ${constraints.version.toString()}`,
+          `version ${constraints.version.toString()}`,
         );
       }
     }

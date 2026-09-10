@@ -62,7 +62,7 @@ describe('§5.5 !email -- rejects the RFC 5322 forms this subset deliberately le
 
 describe('§5.5 !email -- the text_type length facets it composes', () => {
   it('applies maxLength as a validation error, distinct from a malformed-shape parse error', () => {
-    const parser = createEmailParser('email', { ...UNCONSTRAINED, maxLength: 6 });
+    const parser = createEmailParser('email', { ...UNCONSTRAINED, maxLength: 6n });
     expect(parser.read(token('a@b.co'))).toBe('a@b.co');
     expect(() => parser.read(token('ada@example.com'))).toThrow(TsonAtomValidationError);
     expect(() => parser.read(token('nope'))).toThrow(TsonAtomParseError);

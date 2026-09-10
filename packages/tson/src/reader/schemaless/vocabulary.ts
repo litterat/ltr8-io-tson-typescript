@@ -8,9 +8,18 @@
  * **Every entry mirrors one `core.tn` line verbatim** (`spec/m/core.tn`, the vendored copy this
  * package ships and is checked against by `vendored-spec.test.ts`), not an independently-derived
  * "sensible default": `int32 => !integer ^ { size: { bits: 32  signed: true } }`,
- * `float32 => !float_type { format: BINARY32 }`, `base64 => !binary BASE64`, and so on. Where
- * `core.tn` applies a bare constructor with no refinement (`uuid => !uuid_type {}`), the matching
- * entry here passes a constraints record with every optional field absent.
+ * `float32 => !float_type { format: BINARY32 }`, `bytes => !bytes_type { encoding: BASE64 }`, and
+ * so on. Where `core.tn` applies a bare constructor with no refinement (`uuid => !uuid_type {}`),
+ * the matching entry here passes a constraints record with every optional field absent.
+ *
+ * **`bytes` is the one binary entry.** `!bytes` is Part 1's only binary annotation (§5.3): an
+ * alphabet is a spelling of an octet sequence, not a kind of value, and a schemaless document has
+ * no schema to carry a selector, so base64 (RFC 4648 §4) is the only spelling this table offers.
+ * `base64`, `base64url`, `base32` and `hex` are not Part 1 vocabulary and are not registered here
+ * -- naming one of them as a type-ref is `UNKNOWN_TYPE_REF`, exactly like any other undeclared
+ * name (`typeRefCheck.ts`). The other three RFC 4648 alphabets remain live decoders in
+ * `atom/numeric/binary.ts`/`base32.ts`/`base64.ts`, reachable by an explicit `encoding` selector,
+ * for the schema layer's `bytes_type.encoding` facet to hand to.
  *
  * **Deliberately incomplete, matching the Java reference's own table exactly, gap for gap.**
  * `BuiltinTypeVocabulary.java`'s own Javadoc lists what it seeds and stops there; three `core.tn`
@@ -54,6 +63,7 @@ import { createDateParser } from '../../atom/temporal/date.js';
 import { createTimeParser } from '../../atom/temporal/time.js';
 import { createDateTimeParser } from '../../atom/temporal/datetime.js';
 import { createDurationParser } from '../../atom/temporal/duration.js';
+import { createPeriodParser } from '../../atom/temporal/period.js';
 import type { AtomType } from '../../atom/contract.js';
 
 /** RFC pins, verbatim from `spec/m/meta.tn`/`meta-kernel.tn` -- see this module's own TSDoc. */
@@ -134,18 +144,13 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
 
   types.set('text', createTextParser('text', { kind: 'text_type' }));
 
-  types.set('base64', createBinaryParser('base64', { kind: 'binary', encoding: 'BASE64' }));
-  types.set(
-    'base64url',
-    createBinaryParser('base64url', { kind: 'binary', encoding: 'BASE64URL' }),
-  );
-  types.set('base32', createBinaryParser('base32', { kind: 'binary', encoding: 'BASE32' }));
-  types.set('hex', createBinaryParser('hex', { kind: 'binary', encoding: 'HEX' }));
+  types.set('bytes', createBinaryParser('bytes', { kind: 'bytes_type', encoding: 'BASE64' }));
 
   types.set('date', createDateParser('date', { kind: 'date_type' }));
   types.set('time', createTimeParser('time', { kind: 'time_type' }));
   types.set('datetime', createDateTimeParser('datetime', { kind: 'datetime_type' }));
   types.set('duration', createDurationParser('duration', { kind: 'duration_type' }));
+  types.set('period', createPeriodParser('period', { kind: 'period_type' }));
 
   types.set('uuid', createUuidParser('uuid', { kind: 'uuid_type' }));
   types.set('uri', createUriParser('uri', { kind: 'uri_type', spec: RFC.uri }));

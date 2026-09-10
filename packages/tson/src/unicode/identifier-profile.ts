@@ -51,11 +51,11 @@ import { isXidContinue, isXidStart } from './xid.js';
  *    one — `_` and `_id` fail {@link isIdentifierText} by falling straight out of the production,
  *    with no special case written for them anywhere in this module.
  *
- * §7.7 lists the naming positions this applies to as a parse error: annotation names and
- * type-annotation names (§7.4's `identifier` marks, resolved in the data grammar at §3.1/§3.2) and
- * every naming position of the schema grammar. Record field names are explicitly exempted — they
- * stay lexical (§2.5) and are never matched against this profile — and map keys are values, not
- * names, and are never matched against it either (§2.6).
+ * §7.7 lists the naming positions this applies to as a parse error: record field names at either
+ * spelling (§2.5 — quoting escapes a lexical accident, not a wider name set), annotation names and
+ * type-annotation names (§7.4's `identifier` marks, resolved in the data grammar at §3.1/§3.2),
+ * and every naming position of the schema grammar. Map keys are values, not names, and are never
+ * matched against this profile (§2.6).
  *
  * The grammar is built only on properties the Unicode Standard has frozen, so every host at every
  * Unicode version returns the same verdict on the same text — which is what lets a

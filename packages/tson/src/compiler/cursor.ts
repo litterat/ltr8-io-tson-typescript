@@ -18,8 +18,7 @@
 import { TsonInternalError, TsonParseError } from '../core/errors.js';
 import {
   maxNestingDepthOf,
-  nestingLimitExpectation,
-  nestingLimitMessage,
+  nestingLimitRefusal,
   type NestingLimitOptions,
 } from '../core/limits.js';
 import { START, type Position } from '../core/position.js';
@@ -28,6 +27,8 @@ import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
 import { parseIpv6Bytes } from '../atom/network/ipv6.js';
 import { tryParseUri } from '../atom/network/uriGrammar.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
+import { toNfc } from '../unicode/nfc.js';
 
 /** The cursor's whole mutable state, threaded through this module's generator functions. */
 export interface CursorState {
@@ -65,7 +66,8 @@ export function createCursor(input: ByteInput, options?: NestingLimitOptions): C
 }
 
 /**
- * Runs `body` one level deeper, refusing a document that nests past the cursor's limit (§9.1).
+ * Runs `body` one level deeper, refusing (§9.1's fifth outcome, `TsonLimitRefusedError`) a
+ * document that nests past the cursor's limit.
  *
  * Wrapped around each production that can re-enter itself -- `parseTypeRef` in the schema grammar
  * and `parseCoreValue` in the data-value grammar -- which between them sit on every cycle in
@@ -80,10 +82,7 @@ export function createCursor(input: ByteInput, options?: NestingLimitOptions): C
  */
 export function* nested<T>(state: CursorState, at: Token, body: () => Task<T>): Task<T> {
   if (state.depth >= state.maxNestingDepth) {
-    throw new TsonParseError(nestingLimitMessage(state.maxNestingDepth), at.start, {
-      expected: nestingLimitExpectation(state.maxNestingDepth),
-      actual: 'deeper',
-    });
+    throw nestingLimitRefusal(state.maxNestingDepth, at.start);
   }
   state.depth += 1;
   try {
@@ -204,10 +203,14 @@ export function samePosition(a: Position, b: Position): boolean {
 
 /**
  * Between elements of a record/map/array (§2.4): a separator (whitespace, a comma, or both) is
- * required unless the closing delimiter is immediately next; a trailing separator right before
- * the closing delimiter is likewise a parse error. Shared verbatim by the schema grammar's own
- * comma/whitespace-separated lists (type params, type args, record entries, removal names,
- * tuple/array elements, group members) -- §12.1's `separator` production is [TSON-DATA]'s own.
+ * required unless the closing delimiter is immediately next. **A comma may follow a value**, so a
+ * separator that lands right before the closing delimiter simply ends the list -- a trailing
+ * comma is ordinary, not a syntax error. What still fails is a comma with nothing behind it: a
+ * comma following another comma is caught one level up, where the caller tries to parse the next
+ * element and finds a comma sitting in value position, which needs no rule of its own (§2.4) --
+ * a comma is not a value. Shared verbatim by the schema grammar's own comma/whitespace-separated
+ * lists (type params, type args, record entries, removal names, tuple/array elements) -- §12.1
+ * states plainly that a comma may follow the last element of every list in that grammar too.
  */
 export function* consumeSeparatorOrCloseCheck(
   state: CursorState,
@@ -225,11 +228,7 @@ export function* consumeSeparatorOrCloseCheck(
     const here = yield* peekToken(state);
     throw parseError(here, 'adjacent values must be separated by whitespace, a comma, or both');
   }
-  if (yield* check(state, closing)) {
-    const here = yield* peekToken(state);
-    throw parseError(here, `a trailing separator is not permitted before ${describe(here)}`);
-  }
-  return true;
+  return !(yield* check(state, closing));
 }
 
 /** Looks ahead at an upcoming `!!name` directive's name without consuming anything. */
@@ -299,12 +298,47 @@ function isIpv6Candidate(candidate: string): boolean {
   return parseIpv6Bytes(candidate) !== undefined;
 }
 
-/** `field-name = token` (§7.4): any of the three token forms. */
+/**
+ * Whether `type` may spell a field name: `field-name = unquoted-token / single-line-token`
+ * (§2.5, §7.4). Narrower than {@link isBareTokenType} by one form -- a map key is a *value* and
+ * keeps all three, so the two predicates part company exactly at the §2.8 brace dispatch, where
+ * one consumed token and one of lookahead decide which reading a `{` opens.
+ */
+export function isFieldNameTokenType(type: TokenType): boolean {
+  return type === 'unquoted-token' || type === 'single-line-token';
+}
+
+/**
+ * A field name is an identifier at every layer, schemaless or governed (§2.5, §7.7): `token`'s
+ * decoded text, NFC-normalised, matched in full against the identifier grammar. Quoting escapes a
+ * lexical accident -- it is relief from what the unquoted form cannot spell, never a wider name
+ * set -- so both of {@link isFieldNameTokenType}'s spellings are held to exactly this one check,
+ * and it is the *normalised* text that identity and every later comparison sees.
+ *
+ * Throws naming `construct` when `token`'s form is not one a field name may take at all, and
+ * with a dedicated message when the form is right but the decoded text fails the identifier
+ * grammar -- the position §2.5 says a key that is not a name belongs in instead.
+ */
+export function fieldNameText(token: Token, construct: string): string {
+  if (!isFieldNameTokenType(token.type)) {
+    throw mismatch(construct, token);
+  }
+  const text = toNfc(token.text);
+  if (!isIdentifierText(text)) {
+    throw parseError(
+      token,
+      `'${token.text}' is not an identifier, so it names no field (§2.5, §7.7): a name starts ` +
+        "with an XID_Start character and continues with XID_Continue or '-', in NFC -- a key " +
+        "that is not a name belongs in a map ('key => value')",
+    );
+  }
+  return text;
+}
+
+/** `field-name = unquoted-token / single-line-token` (§2.5, §7.4), held to the identifier grammar (§7.7). */
 export function* expectFieldNameToken(state: CursorState, construct: string): Task<Token> {
   const name = yield* peekToken(state);
-  if (!isBareTokenType(name.type)) {
-    throw mismatch(construct, name);
-  }
+  const text = fieldNameText(name, construct);
   yield* advance(state);
-  return name;
+  return text === name.text ? name : { ...name, text };
 }

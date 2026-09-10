@@ -28,8 +28,8 @@
  */
 import { TsonAtomParseError, TsonAtomValidationError, TsonWriteError } from '../core/errors.js';
 import { createUriParser } from '../atom/network/uri.js';
-import { isNfc } from '../unicode/nfc.js';
-import { isUnquotedTokenContinue, isUnquotedTokenStart } from '../unicode/token-profile.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
+import { toNfc } from '../unicode/nfc.js';
 
 /** Where an {@link Emitter}'s text goes, one chunk at a time -- the port of Java's `Appendable`. */
 export type TextSink = (chunk: string) => void;
@@ -62,15 +62,15 @@ export interface Emitter {
   /**
    * `name:` -- inserts the inter-element separator itself; the value follows directly.
    *
-   * A field name is lexical, not identifier-constrained (§2.5: "any token the production
-   * admits names a field"), so `name` is written unquoted whenever its exact text survives
-   * that round trip and quoted otherwise -- {@link canWriteFieldNameUnquoted} is the exact
-   * predicate. The spec leaves the choice of spelling to the writer wherever both are legal;
-   * this implementation always prefers unquoted and falls back to quoted only where unquoted
-   * would not re-read as `name` itself. The case this exists for: `_id` cannot be spelled
-   * unquoted at all, because a token-initial `_` is the absent sentinel (§2.9), not a token
-   * character (§7.1) -- an unquoted `_id` lexes as `_` followed by a separate `id` token, not
-   * as one field name.
+   * A field name is an identifier at every layer, schemaless or governed (§2.5, §7.7), so `name`
+   * is NFC-normalised and held to the identifier grammar, and written unquoted: §7.1 makes every
+   * identifier a well-formed unquoted token, so no identifier needs quoting on its own account
+   * and there is no second spelling to choose between. Quoting is relief from what the unquoted
+   * form cannot spell, never a wider name set, so a `name` that is not an identifier has no legal
+   * spelling at all and throws {@link TsonWriteError} rather than being quoted into a document
+   * this implementation's own parser would reject. `_id` is one such: `_` is `XID_Continue` and
+   * never `XID_Start`, so no identifier begins with one, and a key that is not a name belongs in
+   * a map (§2.5).
    */
   field(name: string): void;
   /** Call before writing a map entry's key (itself a full data-value, §2.6). */
@@ -131,9 +131,7 @@ export interface Emitter {
   typeRef(name: string): void;
 
   // ── Leaf tokens ─────────────────────────────────────────────────────────────────────────────
-  /** `null`, the base type (§4.1) -- distinct from {@link absentValue}. */
-  nullValue(): void;
-  /** `_`, the absent sentinel (§2.9) -- distinct from {@link nullValue}. */
+  /** `_`, the absent sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
   absentValue(): void;
   booleanValue(value: boolean): void;
   /**
@@ -148,9 +146,24 @@ export interface Emitter {
   multiLineString(text: string): void;
 }
 
-/** A C0 control character, the range §7.2.2 requires escaped. */
-function isControl(codeUnit: number): boolean {
-  return codeUnit <= 0x1f;
+const CODE_UNIT_NEL = 0x85;
+const CODE_UNIT_LINE_SEPARATOR = 0x2028;
+const CODE_UNIT_PARAGRAPH_SEPARATOR = 0x2029;
+
+/**
+ * Whether §7.2.2 excludes `codeUnit` raw from a single-line token, admitting it only through an
+ * escape: everything below U+0020, and the three line terminators NEL, LINE SEPARATOR and
+ * PARAGRAPH SEPARATOR. A single-line token is genuinely single-line -- every line terminator of
+ * §7.2 rule 1 ends it -- which is why the three above are excluded raw and nothing else above
+ * U+001F is.
+ */
+function mustEscapeRaw(codeUnit: number): boolean {
+  return (
+    codeUnit <= 0x1f ||
+    codeUnit === CODE_UNIT_NEL ||
+    codeUnit === CODE_UNIT_LINE_SEPARATOR ||
+    codeUnit === CODE_UNIT_PARAGRAPH_SEPARATOR
+  );
 }
 
 function hex4(codeUnit: number): string {
@@ -159,8 +172,10 @@ function hex4(codeUnit: number): string {
 
 /**
  * Escapes exactly what must be escaped for `text` to lex back to the same value -- `"`, `\`, and
- * C0 control characters (named escapes where the lexer recognises one, `\uXXXX` otherwise) --
- * leaving everything else, including non-ASCII text, literal.
+ * every code unit §7.2.2 excludes raw from a single-line token (named escapes where the lexer
+ * recognises one, `\uXXXX` otherwise) -- leaving everything else, including non-ASCII text,
+ * literal. {@link mustEscapeRaw} is that exclusion, the three line terminators included: a token
+ * carrying one of those raw is a document this implementation's own lexer refuses.
  */
 function escapeSingleLine(text: string): string {
   let out = '';
@@ -190,7 +205,7 @@ function escapeSingleLine(text: string): string {
         break;
       default: {
         const code = text.charCodeAt(i);
-        out += isControl(code) ? `\\u${hex4(code)}` : c;
+        out += mustEscapeRaw(code) ? `\\u${hex4(code)}` : c;
       }
     }
   }
@@ -201,8 +216,10 @@ function escapeSingleLine(text: string): string {
  * One content line of a multi-line token, escaped so §7.2.3's own reading order (strip trailing
  * whitespace, then decode escapes) returns it unchanged. A line's trailing spaces/tabs are
  * written as a `\uXXXX` escape, since they would otherwise be stripped back off on read; every
- * other control character (tab included -- always escaped here for uniformity, though the
- * grammar itself admits a literal one) gets the same treatment. A line that would otherwise read
+ * code unit §7.2.2 excludes raw ({@link mustEscapeRaw}, the three line terminators included, each
+ * of which would otherwise start a line the reader never sees as content) gets the same
+ * treatment, tab among them -- always escaped here for uniformity, though the grammar itself
+ * admits a literal one. A line that would otherwise read
  * as the closing delimiter (`"""` right after its own leading whitespace) has its first quote
  * escaped instead.
  */
@@ -221,7 +238,7 @@ function escapeMultiLineContent(line: string): string {
     const isTrailingBlank = i >= trailing;
     if (c === '\\') {
       out += '\\\\';
-    } else if (isTrailingBlank || c === '\r' || isControl(code)) {
+    } else if (isTrailingBlank || mustEscapeRaw(code)) {
       out += `\\u${hex4(code)}`;
     } else {
       out += c;
@@ -237,87 +254,32 @@ function escapeMultiLineContent(line: string): string {
   return out;
 }
 
-const CODE_POINT_FULL_STOP = 0x2e;
-const CODE_POINT_HYPHEN = 0x2d;
-const CODE_POINT_PLUS = 0x2b;
-
-/** `.`, `-`, `+` -- the three token-profile extension characters that trigger compound-token lookahead at a token boundary (§7.2.4). */
-function isBoundarySign(codePoint: number): boolean {
-  return (
-    codePoint === CODE_POINT_FULL_STOP ||
-    codePoint === CODE_POINT_HYPHEN ||
-    codePoint === CODE_POINT_PLUS
-  );
-}
-
 /**
- * Whether `name` can be written as an unquoted token and read back as the field name `name`,
- * unchanged -- the predicate {@link createEmitter}'s `field` applies to choose between an
- * unquoted and a quoted spelling. Field names are lexical (§2.5): `field-name = unquoted-token
- * / single-line-token`, with no identifier constraint, so the question is purely "does this
- * text lex back to one unquoted token equal to itself", answered against §7.1's profile and
- * §7.2's lexer rather than §7.7's identifier grammar.
+ * `name`, NFC-normalised, checked against §7.7's identifier grammar -- the one form a field name
+ * may take at either spelling (§2.5, §7.7). Throws {@link TsonWriteError} when it is not one.
  *
- * Checked in order, each a distinct way an unquoted spelling stops meaning `name`:
+ * There is no spelling choice to make afterwards. §7.1 makes every identifier a well-formed
+ * unquoted token, so an identifier never needs quoting on its own account, and quoting would not
+ * rescue a name that is not one: quoting escapes a lexical accident -- relief from what the
+ * unquoted form cannot spell -- and does not admit a broader name set. Writing a non-identifier
+ * key quoted, as a lexical field name once allowed, now produces a document this implementation's
+ * own parser rejects (`compiler/cursor.ts`'s `fieldNameText`), which is the silent failure this
+ * throw exists to prevent. `_` is `XID_Continue` and never `XID_Start`, so `_id` and `_` fall
+ * straight out of the production with no special case; a key that is not a name belongs in a map.
  *
- * 1. **Empty.** `unquoted-token = unquoted-start *unquoted-char` (§7.1) requires at least one
- *    character; there is no empty unquoted token to write.
- * 2. **First character not a token-start character**, `XID_Start ∪ Nd ∪ { - + . }` (§7.1). This
- *    is what excludes a token-initial `_`: underscore is `XID_Continue` but not `XID_Start`,
- *    and is reserved to the absent sentinel (§2.9) -- `_id` unquoted lexes as the absent token
- *    `_` followed by a second, separate token `id`, never as one field name.
- * 3. **A lone boundary sign.** `.`, `-`, and `+` reach the token profile only to serve the
- *    number grammar, and the lexer's own compound-token lookahead (§7.2.4) requires the
- *    character immediately after one to already be in the continuation set before it will
- *    start an unquoted token at all: with nothing (or something else) after it, `.` and `+`
- *    are lexer errors and `-` is the special subtraction token -- never a field-name token. A
- *    name that is exactly `.`, `-`, or `+`, or that starts with one followed by a
- *    non-continuation character, therefore fails here.
- * 4. **A later character outside the continuation set**, `XID_Continue ∪ { - + . }` (§7.1).
- * 5. **Two adjacent `.` characters anywhere.** The lexer's termination rule (§7.2 rule 3) stops
- *    an unquoted token before a run of consecutive dots, emitting a separate range token
- *    instead (§7.2.4) -- `a..b` would round-trip as `a`, `..`, `b`, not one field name.
- * 6. **Not NFC-normalized.** An unquoted token that isn't NFC in the source text is a lexer
- *    error (§7.2.1); only a quoted token is exempt from that requirement.
- *
- * Every legal identifier passes every check (§7.1: "every identifier is a well-formed unquoted
- * token"), so this only ever chooses quoting for spellings identifiers already couldn't use.
+ * The normalised text is what is written, because that is what identity and every later
+ * comparison between names sees (§7.7).
  */
-/** `text`'s code points, decoded the way `for...of` already does -- one entry per Unicode scalar value, surrogate pairs included, never a lone UTF-16 unit. */
-function toCodePoints(text: string): number[] {
-  const codePoints: number[] = [];
-  for (const character of text) {
-    const codePoint = character.codePointAt(0);
-    // `character` is one code point yielded by iterating `text`, so `codePointAt(0)` is always
-    // defined; the guard keeps this total without asserting.
-    if (codePoint !== undefined) codePoints.push(codePoint);
+function fieldNameSpelling(name: string): string {
+  const text = toNfc(name);
+  if (!isIdentifierText(text)) {
+    throw new TsonWriteError(
+      `'${name}' is not an identifier, so it names no field (§2.5, §7.7): a name starts with an ` +
+        "XID_Start character and continues with XID_Continue or '-', in NFC -- a key that is not " +
+        "a name belongs in a map ('key => value')",
+    );
   }
-  return codePoints;
-}
-
-function canWriteFieldNameUnquoted(name: string): boolean {
-  const codePoints = toCodePoints(name);
-  if (codePoints.length === 0) return false;
-
-  const first = codePoints[0];
-  if (first === undefined || !isUnquotedTokenStart(first)) return false;
-
-  if (isBoundarySign(first)) {
-    const second = codePoints[1];
-    if (second === undefined || !isUnquotedTokenContinue(second)) return false;
-  }
-
-  for (let i = 1; i < codePoints.length; i += 1) {
-    const codePoint = codePoints[i];
-    if (codePoint === undefined || !isUnquotedTokenContinue(codePoint)) return false;
-  }
-  for (let i = 0; i + 1 < codePoints.length; i += 1) {
-    if (codePoints[i] === CODE_POINT_FULL_STOP && codePoints[i + 1] === CODE_POINT_FULL_STOP) {
-      return false;
-    }
-  }
-
-  return isNfc(name);
+  return text;
 }
 
 /** Validates a directive argument against the same URI grammar the reader enforces (§3.3). */
@@ -396,13 +358,7 @@ export function createEmitter(sink: TextSink): Emitter {
     },
     field: (name: string) => {
       beforeElement();
-      if (canWriteFieldNameUnquoted(name)) {
-        emit(name);
-      } else {
-        emit('"');
-        emit(escapeSingleLine(name));
-        emit('"');
-      }
+      emit(fieldNameSpelling(name));
       emit(': ');
     },
     beforeMapEntry: () => {
@@ -451,10 +407,6 @@ export function createEmitter(sink: TextSink): Emitter {
       emit('!');
       emit(name);
       emit(' ');
-    },
-    nullValue: () => {
-      startCoreValue();
-      emit('null');
     },
     absentValue: () => {
       startCoreValue();

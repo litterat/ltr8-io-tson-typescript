@@ -51,7 +51,7 @@ export interface AtomToken {
  * combinator is for.
  *
  * **The spec's own split between two failure shapes is load-bearing, not a nicety**: a token that
- * is not shaped like the type at all -- malformed digits, a non-hex `!binary` body, an unparseable
+ * is not shaped like the type at all -- malformed digits, a non-base64 `!bytes` body, an unparseable
  * `!uuid` -- is a {@link TsonAtomParseError}; a token that is correctly shaped but whose value falls
  * outside a constraint the schema declares (an `int32` literal that overflows 32 bits, a `date`
  * before a declared `minimum`) is a {@link TsonAtomValidationError}. The conformance suite asserts

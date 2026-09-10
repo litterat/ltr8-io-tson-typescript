@@ -17,9 +17,6 @@ import { runSync } from '../src/io/bytes.js';
 describe('recordReaderFactory', () => {
   it('builds a working tree reader from a resolved TypeDefinition', () => {
     const definition: TypeDefinition = {
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       annotations: [],
@@ -59,9 +56,6 @@ describe('recordReaderFactory', () => {
 
   it('throws when the definition is not record-shaped -- an authoring bug in the caller, not a document problem', () => {
     const definition: TypeDefinition = {
-      kind: 'ATOM',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       annotations: [],

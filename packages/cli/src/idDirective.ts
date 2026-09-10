@@ -13,18 +13,20 @@
  * inside it is malformed would be answering a question nobody asked.
  *
  * {@link readIdDirective} is therefore deliberately narrower than a real lexer: it decodes only
- * the fixed single-character escape table §7.2.2 defines (`\"` `\\` `\/` `\b` `\f` `\n` `\r`
- * `\t` `\s`) inside the first line's quoted token, and returns `undefined` rather than guess at
- * anything else (a `\uXXXX` escape, or a surrogate pair split across two of them). A real `!!id`
- * value is a plain URI with nothing in it that needs escaping in the first place, so this covers
- * everything the bundled schemas and any schema this command is likely to see actually write.
+ * the fixed single-character escape table §7.2.2 defines (`\"` `\\` `\b` `\f` `\n` `\r` `\t`
+ * `\s`) inside the first line's quoted token, and returns `undefined` rather than guess at
+ * anything else -- either spelling of a character escape, `\uXXXX` or `\u{1*6HEXDIG}`. Narrower
+ * is not more permissive: a solidus needs no escape and has none (§7.2.2), so `\/` is not in the
+ * table here either, and this decoder declines exactly the document the real lexer refuses. A
+ * real `!!id` value is a plain URI with nothing in it that needs escaping in the first place, so
+ * this covers everything the bundled schemas and any schema this command is likely to see
+ * actually write.
  */
 const BOM = [0xef, 0xbb, 0xbf];
 
 const SINGLE_CHAR_ESCAPES: Readonly<Record<number, number>> = {
   0x22: 0x22, // \"
   0x5c: 0x5c, // \\
-  0x2f: 0x2f, // \/
   0x62: 0x08, // \b
   0x66: 0x0c, // \f
   0x6e: 0x0a, // \n
@@ -36,8 +38,10 @@ const SINGLE_CHAR_ESCAPES: Readonly<Record<number, number>> = {
 /**
  * Decodes a single-line quoted token's content (§7.2.2) starting at `bytes[start]`, up to the
  * closing (unescaped) `"`. Returns the decoded text and the index just past the closing quote, or
- * `undefined` if the token is unterminated or uses an escape this narrow decoder does not cover
- * (a `\uXXXX` pair is the only such case among the ones this scanner declines).
+ * `undefined` if the token is unterminated or uses an escape this narrow decoder does not cover --
+ * a character escape in either spelling, `\uXXXX` or `\u{1*6HEXDIG}`, being the only such case,
+ * and an escape §7.2.2 does not define at all (`\/` among them) reaching the same answer here as
+ * it does in the lexer: this is not a document whose id can be read.
  */
 function decodeQuotedAscii(
   bytes: Uint8Array,

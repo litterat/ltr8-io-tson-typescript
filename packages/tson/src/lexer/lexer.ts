@@ -644,12 +644,33 @@ function specialTokenType(cp: number): TokenType | undefined {
 // Both always report against this token's own start: decoding runs after the live cursor has
 // already moved past the whole token, so there is no "current position" left to report against.
 
-function isHighSurrogateUnit(codeUnit: number): boolean {
-  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+const MAX_SCALAR_VALUE = 0x10ffff;
+const ESCAPE_SURROGATE_MIN = 0xd800;
+const ESCAPE_SURROGATE_MAX = 0xdfff;
+
+function isSurrogateCodePoint(codePoint: number): boolean {
+  return codePoint >= ESCAPE_SURROGATE_MIN && codePoint <= ESCAPE_SURROGATE_MAX;
 }
 
-function isLowSurrogateUnit(codeUnit: number): boolean {
-  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
+/**
+ * Rejects an escape that denotes anything but a Unicode scalar value (§7.2.2): out of range, or a
+ * surrogate code point. There are no surrogate pairs in this series -- an escape names a scalar
+ * value directly or it names nothing, so a lone or paired surrogate escape is an error either way.
+ */
+function requireScalarValue(state: LexerState, codePoint: number): number {
+  if (codePoint > MAX_SCALAR_VALUE) {
+    throw errorAtTokenStart(
+      state,
+      `unicode escape U+${hex(codePoint, 6)} exceeds U+10FFFF, the last Unicode code point`,
+    );
+  }
+  if (isSurrogateCodePoint(codePoint)) {
+    throw errorAtTokenStart(
+      state,
+      `unicode escape U+${hex(codePoint, 4)} is a surrogate code point, not a Unicode scalar value -- there are no surrogate-pair escapes`,
+    );
+  }
+  return codePoint;
 }
 
 function hexDigitValue(char: string): number {
@@ -672,34 +693,58 @@ function readHex4(state: LexerState, text: string, idx: number): readonly [numbe
   return [value, idx + 4];
 }
 
-/** Decodes a `\uXXXX` escape (surrogate pairs included) starting just past the `u`. Returns the decoded text and the index past it. */
+/**
+ * Decodes the braced spelling `{1*6HEXDIG}` starting just past the `{`. Returns the decoded text
+ * and the index past the closing `}`.
+ *
+ * A brace form with no digits, more than six, or no closing `}` before the token's decoded text
+ * runs out is a lexer error -- the last case is what a `"` or line terminator that closes the
+ * surrounding token early turns an unclosed brace into, rather than a silently-accepted token.
+ */
+function decodeBracedUnicodeEscape(
+  state: LexerState,
+  text: string,
+  idx: number,
+): readonly [string, number] {
+  let i = idx;
+  let value = 0;
+  let digitCount = 0;
+  while (i < text.length && text.charAt(i) !== '}') {
+    const digit = hexDigitValue(text.charAt(i));
+    if (digit < 0) {
+      throw errorAtTokenStart(state, `invalid hex digit in braced unicode escape '\\u{...}'`);
+    }
+    digitCount += 1;
+    if (digitCount > 6) {
+      throw errorAtTokenStart(state, 'braced unicode escape holds more than six hex digits');
+    }
+    value = (value << 4) | digit;
+    i += 1;
+  }
+  if (i >= text.length) {
+    throw errorAtTokenStart(state, "unclosed braced unicode escape: missing closing '}'");
+  }
+  if (digitCount === 0) {
+    throw errorAtTokenStart(state, 'braced unicode escape holds no hex digits');
+  }
+  return [String.fromCodePoint(requireScalarValue(state, value)), i + 1];
+}
+
+/**
+ * Decodes a `\u` escape starting just past the `u`, in either spelling (§7.2.2): four hex digits,
+ * or one to six in braces -- the `{` decides the spelling at the first character, so the two never
+ * conflict. Returns the decoded text and the index past it.
+ */
 function decodeUnicodeEscape(
   state: LexerState,
   text: string,
   idx: number,
 ): readonly [string, number] {
-  const [unit, afterFirst] = readHex4(state, text, idx);
-  if (isHighSurrogateUnit(unit)) {
-    if (
-      afterFirst + 1 < text.length &&
-      text.charAt(afterFirst) === '\\' &&
-      text.charAt(afterFirst + 1) === 'u'
-    ) {
-      const [unit2, afterSecond] = readHex4(state, text, afterFirst + 2);
-      if (!isLowSurrogateUnit(unit2)) {
-        throw errorAtTokenStart(
-          state,
-          'high surrogate escape not followed by a low surrogate escape',
-        );
-      }
-      return [String.fromCharCode(unit, unit2), afterSecond];
-    }
-    throw errorAtTokenStart(state, 'high surrogate escape not followed by a low surrogate escape');
+  if (text.charAt(idx) === '{') {
+    return decodeBracedUnicodeEscape(state, text, idx + 1);
   }
-  if (isLowSurrogateUnit(unit)) {
-    throw errorAtTokenStart(state, 'lone low surrogate escape');
-  }
-  return [String.fromCharCode(unit), afterFirst];
+  const [value, next] = readHex4(state, text, idx);
+  return [String.fromCodePoint(requireScalarValue(state, value)), next];
 }
 
 /** Decodes one escape sequence starting at `text[i] === '\\'`. Returns the decoded text and the index past it. */
@@ -716,8 +761,6 @@ function decodeEscapeSequence(
       return ['"', idx + 1];
     case '\\':
       return ['\\', idx + 1];
-    case '/':
-      return ['/', idx + 1];
     case 'b':
       return ['\b', idx + 1];
     case 'f':

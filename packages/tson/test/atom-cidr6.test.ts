@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
 import { createCidr6Parser } from '../src/atom/network/cidr6.js';
+import { parseIpv6Bytes } from '../src/atom/network/ipv6.js';
 import type { AtomToken } from '../src/atom/contract.js';
+import type { Cidr } from '../src/value/types.js';
 import type { Cidr6Type } from '../src/schema/meta/atoms-network.js';
+
+/** `atom-cidr4.test.ts`'s own `cidr4` helper, over the 128-bit family. */
+function cidr6(addressText: string, prefixLength: number): Cidr {
+  const address = parseIpv6Bytes(addressText);
+  if (address === undefined)
+    throw new Error(`test fixture error: '${addressText}' is not an IPv6 address`);
+  return { kind: 'cidr6', addressText, address, prefixLength };
+}
 
 // §5.5's `!cidr6` atom (RFC 4291 §2.3) -- `!cidr4`'s exact IPv6 counterpart. What is exercised
 // here beyond atom-cidr4.test.ts is the wider 0-128 prefix range and the address forms only this
@@ -19,7 +29,7 @@ const UNCONSTRAINED: Cidr6Type = {
   excluding: [],
 };
 
-function withPrefixBounds(minPrefix?: number, maxPrefix?: number): Cidr6Type {
+function withPrefixBounds(minPrefix?: bigint, maxPrefix?: bigint): Cidr6Type {
   return {
     ...UNCONSTRAINED,
     ...(minPrefix !== undefined && { minPrefix }),
@@ -27,7 +37,7 @@ function withPrefixBounds(minPrefix?: number, maxPrefix?: number): Cidr6Type {
   };
 }
 
-describe('§5.5 !cidr6 -- accepted networks, text preserved exactly (compression not expanded)', () => {
+describe('§5.5 !cidr6 -- accepted networks, addressText preserved exactly (compression not expanded)', () => {
   const parser = createCidr6Parser('cidr6', UNCONSTRAINED);
 
   it.each([
@@ -37,13 +47,16 @@ describe('§5.5 !cidr6 -- accepted networks, text preserved exactly (compression
     '2001:db8:abcd:1234:5678:9abc:def0:1/128', // a single host
     '::/0', // the whole space
     '::ffff:192.0.2.0/120', // RFC 4291 §2.2's embedded IPv4 tail
-  ])('accepts %s and returns the authored text unchanged', (text) => {
-    expect(parser.read(token(text))).toEqual({ kind: 'cidr6', text });
+  ])('accepts %s as address/prefix, addressText preserved exactly', (text) => {
+    const slash = text.lastIndexOf('/');
+    expect(parser.read(token(text))).toEqual(
+      cidr6(text.slice(0, slash), Number(text.slice(slash + 1))),
+    );
   });
 
-  it('"::" is not expanded on a round trip', () => {
-    expect(parser.read(token('2001:db8::/32'))).toEqual({ kind: 'cidr6', text: '2001:db8::/32' });
-    expect(parser.write({ kind: 'cidr6', text: '2001:db8::/32' })).toBe('2001:db8::/32');
+  it('"::" is not expanded on a round trip -- write reproduces addressText, not a re-derived spelling', () => {
+    expect(parser.read(token('2001:db8::/32'))).toEqual(cidr6('2001:db8::', 32));
+    expect(parser.write(cidr6('2001:db8::', 32))).toBe('2001:db8::/32');
   });
 });
 
@@ -84,10 +97,7 @@ describe('§5.5 !cidr6 -- prefix range and host-bits validation errors', () => {
   );
 
   it('accepts a prefix the IPv4 family would reject -- the range is per family', () => {
-    expect(parser.read(token('2001:db8:8000::/33'))).toEqual({
-      kind: 'cidr6',
-      text: '2001:db8:8000::/33',
-    });
+    expect(parser.read(token('2001:db8:8000::/33'))).toEqual(cidr6('2001:db8:8000::', 33));
   });
 
   it.each([
@@ -107,8 +117,8 @@ describe('§5.5 !cidr6 -- prefix range and host-bits validation errors', () => {
 
 describe('§5.5 !cidr6 -- cidr6_type minPrefix/maxPrefix facets', () => {
   it('applies both bounds', () => {
-    const parser = createCidr6Parser('cidr6', withPrefixBounds(32, 48));
-    expect(parser.read(token('2001:db8::/32'))).toEqual({ kind: 'cidr6', text: '2001:db8::/32' });
+    const parser = createCidr6Parser('cidr6', withPrefixBounds(32n, 48n));
+    expect(parser.read(token('2001:db8::/32'))).toEqual(cidr6('2001:db8::', 32));
     try {
       parser.read(token('2000::/16'));
       expect.fail('expected a validation error');
@@ -121,5 +131,31 @@ describe('§5.5 !cidr6 -- cidr6_type minPrefix/maxPrefix facets', () => {
     } catch (error) {
       expect((error as TsonAtomValidationError).expected).toBe('<= 48');
     }
+  });
+});
+
+// §5.5's overlap rule, over the 128-bit family.
+describe('§5.5 !cidr6 -- within/excluding are enforced against the network, by overlap', () => {
+  it('a network that is a subnet of `within` is accepted; one that is not is a validation error', () => {
+    const parser = createCidr6Parser('cidr6', {
+      kind: 'cidr6_type',
+      spec: 'rfc4291',
+      within: ['2001:db8::/32'],
+      excluding: [],
+    });
+    expect(parser.read(token('2001:db8:1::/48'))).toEqual(cidr6('2001:db8:1::', 48));
+    expect(() => parser.read(token('2001:db9::/32'))).toThrow(TsonAtomValidationError);
+  });
+
+  it('a network wider than an `excluding` block still overlaps it and is refused', () => {
+    const parser = createCidr6Parser('cidr6', {
+      kind: 'cidr6_type',
+      spec: 'rfc4291',
+      within: [],
+      excluding: ['2001:db8:1::/48'],
+    });
+    expect(() => parser.read(token('2001:db8::/32'))).toThrow(TsonAtomValidationError);
+    expect(() => parser.read(token('2001:db8:1::/64'))).toThrow(TsonAtomValidationError);
+    expect(parser.read(token('2001:db8:2::/48'))).toEqual(cidr6('2001:db8:2::', 48));
   });
 });

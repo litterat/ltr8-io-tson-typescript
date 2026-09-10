@@ -13,7 +13,7 @@
  *
  * A pure format check with no shape requirement of its own: any token is a valid `text` (§4.4's
  * "any quoted token resolves to a string" already makes this true of an untyped leaf, and `!text`
- * on an unquoted token simply keeps that token's own text rather than letting §4's null/boolean/
+ * on an unquoted token simply keeps that token's own text rather than letting §4's boolean and
  * number checks reinterpret it). What `text_type` narrows is length and pattern, not shape.
  *
  * **`pattern` (I-Regexp, RFC 9485) is accepted but not yet enforced**, matching `email.ts`'s own
@@ -40,25 +40,26 @@ import type { AtomToken, AtomType } from '../contract.js';
 export function createTextParser(typeRef: string, constraints: TextType): AtomType<string> {
   function read(token: AtomToken): string {
     const text = token.text;
-    if (constraints.length !== undefined && text.length !== constraints.length) {
+    const length = BigInt(text.length);
+    if (constraints.length !== undefined && length !== constraints.length) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is ${String(text.length)} characters, expected exactly ${String(constraints.length)}`,
-        `exactly ${String(constraints.length)} characters`,
+        `'${text}' is ${length.toString()} characters, expected exactly ${constraints.length.toString()}`,
+        `exactly ${constraints.length.toString()} characters`,
       );
     }
-    if (constraints.minLength !== undefined && text.length < constraints.minLength) {
+    if (constraints.minLength !== undefined && length < constraints.minLength) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is ${String(text.length)} characters, less than the minimum ${String(constraints.minLength)}`,
-        `at least ${String(constraints.minLength)} characters`,
+        `'${text}' is ${length.toString()} characters, less than the minimum ${constraints.minLength.toString()}`,
+        `at least ${constraints.minLength.toString()} characters`,
       );
     }
-    if (constraints.maxLength !== undefined && text.length > constraints.maxLength) {
+    if (constraints.maxLength !== undefined && length > constraints.maxLength) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is ${String(text.length)} characters, more than the maximum ${String(constraints.maxLength)}`,
-        `at most ${String(constraints.maxLength)} characters`,
+        `'${text}' is ${length.toString()} characters, more than the maximum ${constraints.maxLength.toString()}`,
+        `at most ${constraints.maxLength.toString()} characters`,
       );
     }
     // `pattern` (I-Regexp) is deferred until `regex/` lands a matcher -- see this module's TSDoc.

@@ -9,6 +9,7 @@ to one of the reasons a run could not reach one.
 
 | Code                        | Means                                                                                                                                   |         `isVerdict`          |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------: |
+| `LIMIT_REFUSED`             | a resource limit was exceeded (§9.1, [TSON-SCHEMA] §11.5) — §8.1's fifth outcome, naming the limit and the threshold                    | yes (not a validity verdict) |
 | `FIELD_REQUIRED`            | a required field was absent from the data                                                                                               |             yes              |
 | `FIELD_FIXED`               | a field the schema fixes carried a different value                                                                                      |             yes              |
 | `TYPE_MISMATCH`             | the value's shape does not match the type in scope                                                                                      |             yes              |
@@ -110,7 +111,11 @@ Error
     ├── TsonContentHashMismatchError .schemaId, .expected, .actual
     ├── TsonNotImplementedError      a library gap
     ├── TsonInternalError            a broken invariant — a bug here, not bad input
-    └── TsonNameHygieneRefusedError  .mechanism, .names, .uts39Version
+    └── TsonRefusedError             §8.1's fifth outcome — never TsonLexError/TsonParseError/
+        │                            TsonReadError/TsonAtomTypeError, so a category-mapping
+        │                            caller gets `false` from all four for anything refused
+        ├── TsonNameHygieneRefusedError  .mechanism, .names, .uts39Version
+        └── TsonLimitRefusedError        .limit, .configuredThreshold, .position?
 ```
 
 `SchemaFetchReason` is `'not-permitted' | 'not-found' | 'transport' | 'timeout' | 'too-large'`.
@@ -118,28 +123,35 @@ Error
 
 `NameHygieneMechanism` is `'skeleton-distinctness' | 'identifier-status' | 'restriction-level'`.
 
+`ResourceLimitName` names which §9.1/[TSON-SCHEMA] §11.5 limit a `TsonLimitRefusedError` refused
+under — `'nesting-depth'` today; `STATUS.md`'s known gaps names the rest.
+
 The `Tson` prefix survives on errors — and only on errors — because a class name appears verbatim in
 a stack trace and in `instanceof` checks across bundle boundaries, where a bare `ParseError` names
 nothing. Every class restores its prototype chain, so `instanceof` holds when compiled down-level.
 
 ### Which error comes out of where
 
-| Call                                               | Throws                                                                                                   |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `parse`                                            | `TsonLexError`, `TsonParseError` — directly, unwrapped                                                   |
-| `readTree`                                         | `TsonReadError` for everything, with the narrower error on `.cause`                                      |
-| `readTree` under a refused name                    | `TsonNameHygieneRefusedError`                                                                            |
-| `validate`                                         | nothing, for any document — a lex failure arrives as `VALIDATION_ERROR` with the root as a `missingNode` |
-| `CompiledSchema.reader(name)`                      | `TsonInternalError` (no such entry) or `TsonNotImplementedError` (no reader yet)                         |
-| `Tson.fetch`/`preload` with no source              | `TsonSchemaFetchError`, reason `'not-permitted'`                                                         |
-| `Tson.resolveSchema` naming an unregistered import | `TsonSchemaValidationError`                                                                              |
+| Call                                               | Throws                                                                                                                                                                                                                                 |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parse`                                            | `TsonLexError`, `TsonParseError` — directly, unwrapped                                                                                                                                                                                 |
+| `readTree`                                         | `TsonReadError` for everything, with the narrower error on `.cause`                                                                                                                                                                    |
+| `readTree` under a refused name                    | `TsonNameHygieneRefusedError`                                                                                                                                                                                                          |
+| `readTree`/`validate` past a resource limit        | `TsonLimitRefusedError` — thrown directly, never collected, fail-fast or collecting alike (§9.1's "MUST NOT be reported as a validity error")                                                                                          |
+| `validate`                                         | a lex/parse/read failure arrives as a diagnostic (`VALIDATION_ERROR` with the root as a `missingNode`); a refusal — name hygiene or a resource limit — still throws, since §8.1's fifth outcome is never collected into `.diagnostics` |
+| `CompiledSchema.reader(name)`                      | `TsonInternalError` (no such entry) or `TsonNotImplementedError` (no reader yet)                                                                                                                                                       |
+| `Tson.fetch`/`preload` with no source              | `TsonSchemaFetchError`, reason `'not-permitted'`                                                                                                                                                                                       |
+| `Tson.resolveSchema` naming an unregistered import | `TsonSchemaValidationError`                                                                                                                                                                                                            |
 
-`TsonNameHygieneRefusedError` extends `TsonError` **directly** — never `TsonLexError`,
-`TsonParseError`, `TsonReadError` or `TsonAtomTypeError` — so a caller mapping errors onto §8.1's
-four categories gets `false` from all four. That is structural, not conventional: a refused document
-is never also reported as invalid. §8.2 requires a refusal to name the UTS #39 data version it was
-computed against, because the underlying data is not frozen and two conforming processors can
-legitimately disagree.
+`TsonNameHygieneRefusedError` and `TsonLimitRefusedError` both extend `TsonRefusedError`, which
+extends `TsonError` **directly** — never `TsonLexError`, `TsonParseError`, `TsonReadError` or
+`TsonAtomTypeError` — so a caller mapping errors onto §8.1's four categories gets `false` from all
+four for either. That is structural, not conventional: a refused document is never also reported as
+invalid. §8.2 requires a name-hygiene refusal to name the UTS #39 data version it was computed
+against, because the underlying data is not frozen and two conforming processors can legitimately
+disagree; §9.1/[TSON-SCHEMA] §11.5 likewise require a limit refusal to name the limit and the
+configured threshold, since the same document may be well-formed, valid, and accepted in full by
+the next processor along that simply spends more on it.
 
 ## CLI exit codes
 

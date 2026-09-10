@@ -210,8 +210,9 @@ describe('createHeldBody', () => {
         ],
       },
     };
-    const held = createHeldBody(application);
+    const held = createHeldBody(application, ['T']);
     expect(held.names()).toEqual(new Set(['T']));
+    expect(held.parameters).toEqual(['T']);
   });
 
   it('applications() finds a type_ref record form without descending into its own arguments', () => {
@@ -239,7 +240,7 @@ describe('createHeldBody', () => {
         ],
       },
     };
-    const held = createHeldBody(application);
+    const held = createHeldBody(application, ['T']);
     const applications = held.applications();
     expect(applications).toHaveLength(1);
     expect(applications[0]?.name).toBe('box');
@@ -254,7 +255,19 @@ describe('createHeldBody', () => {
       typeRef: 'record',
       coreValue: { kind: 'record' as const, fields: [] },
     };
-    expect(createHeldBody(value).application).toBe(value);
+    expect(createHeldBody(value, ['T']).application).toBe(value);
+  });
+
+  it('template is the same DataValue written back as text', () => {
+    const value = {
+      annotations: [],
+      typeRef: 'record',
+      coreValue: { kind: 'record' as const, fields: [] },
+    };
+    const held = createHeldBody(value, ['T']);
+    expect(held.parameters).toEqual(['T']);
+    expect(typeof held.template).toBe('string');
+    expect(held.template.length).toBeGreaterThan(0);
   });
 });
 

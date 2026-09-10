@@ -5,18 +5,16 @@
  * copied -- a network's address is an address, and a second, drifting copy would reopen exactly
  * the leniency gap that module documents.
  *
- * **Host value holds the authored text verbatim, not a decoded address/prefix pair.**
- * `CONFORMANCE.md` is explicit about why: "the host value is the token's own text rather than an
- * invented address/prefix pair -- validated, never rewritten, so a round trip is exact." The
- * address and prefix are still validated at parse time (reusing the address grammars above);
- * that check simply does not change what gets stored -- see `value/types.ts`'s {@link Cidr}.
+ * **Host value is a decoded network, not retained text** -- see `value/types.ts`'s {@link Cidr}
+ * for the shape and why it still keeps the authored address spelling alongside the decoded bytes.
+ * Becoming a network value is what lets `within`/`excluding` and the prefix facets all judge the
+ * same parsed `address`/`prefixLength` pair rather than each re-parsing the token's text.
  *
- * `minPrefix`/`maxPrefix` *are* applied -- they are scalar facets, unlike `within`/`excluding`,
- * which stay unmodeled here for the reason `ipv4.ts` records. Whether a declared bound itself
- * falls inside the family range ("invalid at the schema level", per meta.tn) is a
- * constraint-family coherence rule and is not checked here; an out-of-range bound is inert
- * either way, since the family range is enforced regardless and so a wider bound cannot widen
- * what this accepts.
+ * `minPrefix`/`maxPrefix` narrow the prefix length; `within`/`excluding` are enforced against the
+ * value as a network block -- a subnet of at least one `within` entry when the field is present,
+ * overlapping none of `excluding` ([TSON-SCHEMA] §5.5: "overlap, not containment"). Whether the
+ * declared bounds and lists between them admit any value at all is a schema-load coherence
+ * question (`../../compiler/atomChecks.ts`), not this module's.
  */
 
 import { TsonAtomParseError } from '../../core/errors.js';
@@ -24,7 +22,14 @@ import type { Cidr4Type } from '../../schema/meta/atoms-network.js';
 import type { Cidr } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { parseIpv4Octets } from './ipv4.js';
-import { tryParsePrefixLength, validateNetwork } from './cidrParsing.js';
+import {
+  checkNetworkAdmitted,
+  networkBlock,
+  overlaps,
+  parseNetworkList,
+  tryParsePrefixLength,
+  validateNetwork,
+} from './cidrParsing.js';
 
 function malformed(typeRef: string, text: string): TsonAtomParseError {
   return new TsonAtomParseError(
@@ -40,8 +45,8 @@ function malformed(typeRef: string, text: string): TsonAtomParseError {
  * type for error reporting, e.g. `'cidr4'` for §5.5's unconstrained `cidr4 => !cidr4_type {}`.
  */
 export function createCidr4Parser(typeRef: string, constraints: Cidr4Type): AtomType<Cidr> {
-  // `within`/`excluding` are accepted but not enforced -- see `ipv4.ts`'s own TSDoc for why.
-  const { within: _within, excluding: _excluding } = constraints;
+  const within = parseNetworkList(constraints.within, parseIpv4Octets);
+  const excluding = parseNetworkList(constraints.excluding, parseIpv4Octets);
 
   function read(token: AtomToken): Cidr {
     const text = token.text;
@@ -49,7 +54,8 @@ export function createCidr4Parser(typeRef: string, constraints: Cidr4Type): Atom
     if (slash < 0 || text.includes('/', slash + 1)) {
       throw malformed(typeRef, text);
     }
-    const address = parseIpv4Octets(text.slice(0, slash));
+    const addressText = text.slice(0, slash);
+    const address = parseIpv4Octets(addressText);
     const prefixLength = tryParsePrefixLength(text.slice(slash + 1));
     if (address === undefined || prefixLength === undefined) {
       throw malformed(typeRef, text);
@@ -59,14 +65,23 @@ export function createCidr4Parser(typeRef: string, constraints: Cidr4Type): Atom
       text,
       address,
       prefixLength,
-      constraints.minPrefix,
-      constraints.maxPrefix,
+      constraints.minPrefix === undefined ? undefined : Number(constraints.minPrefix),
+      constraints.maxPrefix === undefined ? undefined : Number(constraints.maxPrefix),
     );
-    return { kind: 'cidr4', text };
+    checkNetworkAdmitted(
+      typeRef,
+      text,
+      networkBlock(address, prefixLength),
+      within,
+      excluding,
+      32,
+      overlaps,
+    );
+    return { kind: 'cidr4', addressText, address, prefixLength };
   }
 
   function write(value: Cidr): string {
-    return value.text;
+    return `${value.addressText}/${String(value.prefixLength)}`;
   }
 
   return { read, write };

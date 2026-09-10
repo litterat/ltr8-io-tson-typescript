@@ -65,6 +65,7 @@ import { createDateParser } from '../atom/temporal/date.js';
 import { createTimeParser } from '../atom/temporal/time.js';
 import { createDateTimeParser } from '../atom/temporal/datetime.js';
 import { createDurationParser } from '../atom/temporal/duration.js';
+import { createPeriodParser } from '../atom/temporal/period.js';
 
 /** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every non-`unit` atom family. */
 function wrap<T extends AtomValue>(atomType: AtomType<T>, typeRef: string): TypeReader<Value> {
@@ -107,11 +108,9 @@ function tokenTextAtomType(): AtomType<string> {
   };
 }
 
-/** §4's base value narrowed to the natural host value it implies, `null` standing for the base `null` token -- this module's own copy of `reader/schemaless/tree.ts`'s `narrowBaseValue`/`narrowNumberForm`, duplicated rather than imported for the same reason that module states its own duplication: a small structural rule, nothing library-specific, and sub-agents share no context to import across. */
-function narrowBaseValue(value: BaseValue): AtomValue | null {
+/** §4's base value narrowed to the natural host value it implies -- this module's own copy of `reader/schemaless/tree.ts`'s `narrowBaseValue`/`narrowNumberForm`, duplicated rather than imported for the same reason that module states its own duplication: a small structural rule, nothing library-specific, and sub-agents share no context to import across. */
+function narrowBaseValue(value: BaseValue): AtomValue {
   switch (value.kind) {
-    case 'null':
-      return null;
     case 'boolean':
       return value.value;
     case 'string':
@@ -134,12 +133,17 @@ function narrowNumberForm(form: NumberForm): AtomValue {
 }
 
 /**
- * `value`'s own reading contract (meta-kernel.tn: "the result of base type resolution ([TSON-DATA]
- * §4) applied to a source token, with no further interpretation"). Not routed through {@link wrap}:
- * base resolution's `null` case has no member of {@link AtomValue} to stand for it (the tree model
- * has one no-value node, not a null atom), so this reads a `Value` directly -- an {@link AbsentNode}
- * for the base `null`, an {@link AtomNode} for everything else -- mirroring `reader/schemaless/
- * tree.ts`'s own `leaf` exactly, for the one type whose contract is "read like an untyped leaf".
+ * `value`'s own reading contract (meta-kernel.tn: "the token, uninterpreted, read by the type the
+ * position hands it to"). Not routed through {@link wrap} since its host inhabitants span three of
+ * `AtomValue`'s cases rather than being fixed to one -- this is the one type whose contract is
+ * "carry the token and let the position decide". There is no absent outcome here, since `_` is a
+ * distinct event kind this reader never sees as a `token`.
+ *
+ * The escape hatch is a *carrier*, not a resolution step: base type resolution applies only in
+ * schemaless documents ([TSON-DATA] §4.1), and under a schema every value is typed by its position
+ * or by its tag. A `value`-typed facet is therefore read under the atom the slot stands for, once
+ * that atom is in scope ([TSON-SCHEMA] §5.2, §7.4) -- which is why `decimal_type.min`'s `1` and
+ * `1.0` are one number rather than an integer beside a float.
  */
 function unitValueTreeReader(displayName: string): TypeReader<Value> {
   return {
@@ -159,9 +163,7 @@ function unitValueTreeReader(displayName: string): TypeReader<Value> {
       }
       yield* ctx.next();
       const narrowed = narrowBaseValue(resolveBaseType({ text: e.text, form: e.form }));
-      return narrowed === null
-        ? absentNode(undefined, annotations)
-        : atomNode(narrowed, undefined, annotations);
+      return atomNode(narrowed, undefined, annotations);
     },
   };
 }
@@ -233,7 +235,7 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
       return wrap(createRationalParser(name, atom), name);
     case 'uuid_type':
       return wrap(createUuidParser(name, atom), name);
-    case 'binary':
+    case 'bytes_type':
       return wrap(createBinaryParser(name, atom), name);
     case 'date_type':
       return wrap(createDateParser(name, atom), name);
@@ -243,6 +245,8 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
       return wrap(createDateTimeParser(name, atom), name);
     case 'duration_type':
       return wrap(createDurationParser(name, atom), name);
+    case 'period_type':
+      return wrap(createPeriodParser(name, atom), name);
     case 'cidr4_type':
       return wrap(createCidr4Parser(name, atom), name);
     case 'cidr6_type':

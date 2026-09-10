@@ -54,8 +54,16 @@ export function createDecimalParser(
   }
 
   function validate(value: TsonDecimal, text: string): void {
-    const { min, exclusiveMin, max, exclusiveMax, multipleOf, totalDigits, fractionDigits } =
-      constraints;
+    const {
+      min,
+      exclusiveMin,
+      max,
+      exclusiveMax,
+      multipleOf,
+      totalDigits,
+      fractionDigits,
+      members,
+    } = constraints;
     if (min !== undefined && compareDecimal(value, decimalOf(min)) < 0) {
       const bound = writeDecimal(decimalOf(min));
       throw new TsonAtomValidationError(
@@ -111,6 +119,17 @@ export function createDecimalParser(
         `'${text}' has more than the maximum ${limit} digits after the decimal point`,
         `at most ${limit} digits after the decimal point`,
       );
+    }
+    if (members !== undefined && members.length > 0) {
+      const isMember = members.some((member) => compareDecimal(value, decimalOf(member)) === 0);
+      if (!isMember) {
+        const membership = `one of (${members.map((member) => writeDecimal(decimalOf(member))).join(', ')})`;
+        throw new TsonAtomValidationError(
+          typeRef,
+          `'${text}' is not a member of the sparse set -- expected ${membership}`,
+          membership,
+        );
+      }
     }
   }
 

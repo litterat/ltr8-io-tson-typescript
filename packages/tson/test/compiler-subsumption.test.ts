@@ -15,8 +15,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const USER_SCHEMA = `
 !!id:"test://subsumption.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   person    => { name: text }
   employee  => person & { badge: text }
@@ -76,8 +76,8 @@ describe('subsumption -- §7.2 at every position it governs', () => {
   it('refuses an unrelated type at a tuple position', () => {
     const tupleSchema = `
 !!id:"test://subsumption-tuple.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   pair => [text, text]
   holder => { p: pair }
@@ -121,7 +121,7 @@ describe('subsumption -- §7.2 at every position it governs', () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("admits an alias of the position's own type (§7.2 compares after flattening both)", () => {
+  it("admits an alias of the position's own type (§7.2 compares after following both to a terminal)", () => {
     const aliasSchema = resolveUserSchema(USER_SCHEMA);
     const aliasCompiled = compile(aliasSchema);
     const viaAlias = validate(aliasCompiled, 'h2', bytes(`{ f: !other { name: "x" } }`));

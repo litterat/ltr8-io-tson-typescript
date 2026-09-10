@@ -42,8 +42,8 @@ export type {
 /**
  * Attempts to match `text` against the `number` production in full. `undefined` if it matches
  * none of the four alternatives — callers fall through to string, per §4.4 ("Any unquoted token
- * that does not match null, boolean, or the number production resolves to a string value... There
- * are no exceptions").
+ * that does not match boolean or the number production resolves to a string value... There are
+ * no exceptions").
  */
 export function tryParseNumber(text: string): NumberForm | undefined {
   const scanner = createNumberScanner(text);

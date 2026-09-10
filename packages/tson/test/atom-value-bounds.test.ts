@@ -1,9 +1,11 @@
 /**
  * §5.2/§9: `decimal_type`, `float_type` and `rational_type` all declare their `min`/
  * `exclusive_min`/`max`/`exclusive_max`/`multiple_of` bounds as meta-kernel's universal-atom
- * `value` (`spec/m/meta.tn`), not as their own family's atom (`number`/`rational`) -- so the
- * token is settled by [TSON-DATA] §4 base type resolution, never by the constrained family's own
- * atom parser (§5.2). `schema/bindings.ts`'s `decimalBinding`/`rationalBinding` bridge from
+ * `value` (`spec/m/meta.tn`), not as their own family's atom (`number`/`rational`) -- so §5.2
+ * settles the token: "a `value`-typed field is read by the atom the position stands for once that
+ * atom is in scope (§7.4)", which is why `1` and `1.0` at `decimal_type.min` are one number rather
+ * than an integer beside a float. [TSON-DATA] §4 base type resolution is not the fallback here;
+ * §7.3 removes it from schema scope. `schema/bindings.ts`'s `decimalBinding`/`rationalBinding` bridge from
  * whatever that position's own decoder currently hands back, which is always plain token text
  * today (`schema/metaReader.ts`'s `metaAtomDecoder` has no case for `'number'`/`'rational'`) --
  * this file is the regression gate for that bridge staying total over every spelling §4 admits,
@@ -17,8 +19,8 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { DecimalType, FloatType, RationalType } from '../src/schema/meta/atoms-numeric.js';
 
 const HEADER = `!!id:"https://example.com/t.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 `;
 
 function bodyOf(source: string, name = 'q'): unknown {

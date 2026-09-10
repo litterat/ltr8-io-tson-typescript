@@ -47,6 +47,7 @@ import { createDateParser } from './temporal/date.js';
 import { createTimeParser } from './temporal/time.js';
 import { createDateTimeParser } from './temporal/datetime.js';
 import { createDurationParser } from './temporal/duration.js';
+import { createPeriodParser } from './temporal/period.js';
 
 /**
  * Every non-held `Top` member this module ever receives, {@link Data} excluded. A held
@@ -82,11 +83,12 @@ export function isScalarBody(declaredName: string, body: ScalarCandidate): boole
     case 'float_type':
     case 'rational_type':
     case 'uuid_type':
-    case 'binary':
+    case 'bytes_type':
     case 'date_type':
     case 'time_type':
     case 'datetime_type':
     case 'duration_type':
+    case 'period_type':
     case 'cidr4_type':
     case 'cidr6_type':
     case 'email_type':
@@ -96,7 +98,7 @@ export function isScalarBody(declaredName: string, body: ScalarCandidate): boole
     case 'complex_type':
       return true;
     default:
-      return false; // record, array, map, tuple, choice, reference, unknown_type, extern, and Data
+      return false; // record, array, map, tuple, choice, reference, scoped, and Data
   }
 }
 
@@ -186,7 +188,7 @@ export function atomParserFor(
       return createRationalParser(declaredName, body);
     case 'uuid_type':
       return createUuidParser(declaredName, body);
-    case 'binary':
+    case 'bytes_type':
       return createBinaryParser(declaredName, body);
     case 'date_type':
       return createDateParser(declaredName, body);
@@ -196,6 +198,8 @@ export function atomParserFor(
       return createDateTimeParser(declaredName, body);
     case 'duration_type':
       return createDurationParser(declaredName, body);
+    case 'period_type':
+      return createPeriodParser(declaredName, body);
     case 'cidr4_type':
       return createCidr4Parser(declaredName, body);
     case 'cidr6_type':
@@ -209,6 +213,6 @@ export function atomParserFor(
     case 'complex_type':
       return createComplexParser(declaredName);
     default:
-      return undefined; // 'unit' (value/token instances), record, array, map, tuple, choice, reference, unknown_type, extern, Data
+      return undefined; // 'unit' (value/identifier instances), record, array, map, tuple, choice, reference, scoped, Data
   }
 }

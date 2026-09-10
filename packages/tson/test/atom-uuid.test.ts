@@ -72,12 +72,12 @@ describe('§5.5 !uuid -- version constraint (no built-in instance sets it, but i
   const v4 = '9f1c8e2a-4b7d-4e6f-9a3b-2c5d8e7f1a09'; // version nibble ('4') is the 13th hex digit
 
   it('accepts a matching version', () => {
-    const parser = createUuidParser('uuid', { kind: 'uuid_type', version: 4 });
+    const parser = createUuidParser('uuid', { kind: 'uuid_type', version: 4n });
     expect(parser.read(token(v4))).toEqual({ bytes: bytesOf(v4) });
   });
 
   it('rejects a mismatched version as a validation error', () => {
-    const parser = createUuidParser('uuid', { kind: 'uuid_type', version: 1 });
+    const parser = createUuidParser('uuid', { kind: 'uuid_type', version: 1n });
     expect(() => parser.read(token(v4))).toThrow(TsonAtomValidationError);
   });
 });

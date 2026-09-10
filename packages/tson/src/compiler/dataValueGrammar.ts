@@ -37,6 +37,7 @@ import {
   describe,
   expect,
   expectFieldNameToken,
+  fieldNameText,
   isAlwaysMapStart,
   isBareTokenType,
   nested,
@@ -238,10 +239,14 @@ function* parseBraceValue(state: CursorState): Task<RecordValue | MapValue | Emp
   if (isBareTokenType(t1.type)) {
     const t2 = yield* peekSecond(state);
     if (t2.type === 'colon') {
+      // §2.8: the record interpretation is selected only when the consumed data-value is a bare
+      // token whose decoded text is an identifier -- anything else is a parse error, not a
+      // silent fallback to a map, so the author rewrites `:` as `=>` themselves (§2.5).
+      const name = fieldNameText(t1, 'a record field name');
       yield* advance(state); // field-name token
       yield* advance(state); // ':'
       const value = yield* parseScopedValue(state);
-      return yield* parseRecordTail(state, [{ name: t1.text, value }]);
+      return yield* parseRecordTail(state, [{ name, value }]);
     }
     if (t2.type === 'map-arrow-token') {
       yield* advance(state); // key token

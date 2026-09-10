@@ -12,6 +12,7 @@ import type {
   Rational,
   TsonDecimal,
   TsonDuration,
+  TsonPeriod,
   Uuid,
 } from '../value/types.js';
 
@@ -128,6 +129,7 @@ export type AtomValue =
   | PlainTime
   | PlainDateTime
   | TsonDuration
+  | TsonPeriod
   | Ipv4Address
   | Ipv6Address
   | Cidr
@@ -149,9 +151,9 @@ export interface AtomNode {
 }
 
 /**
- * The absent sentinel as a node (§2.9) — a position that was written but holds no value, spelled `_` or,
- * equivalently, `null`. Distinct from {@link MissingNode} (no such node at all): this one was written.
- * Mirrors `TsonAbsent`.
+ * The absent sentinel as a node (§2.9) — a position that was written but holds no value, spelled `_`,
+ * the format's one spelling of absence. Distinct from {@link MissingNode} (no such node at all): this
+ * one was written. Mirrors `TsonAbsent`.
  *
  * Also the placeholder a tree-mode reader leaves where a value failed to read in collecting mode — what
  * went wrong is carried by the diagnostic (`core/diagnostic.ts`), not by the node standing in for it.
@@ -165,7 +167,7 @@ export interface AbsentNode {
 /**
  * The result of navigating to something that isn't in the tree — a query artifact, not a real value, so
  * repeated navigation keeps returning it and a deep accessor chain never throws. Distinct from
- * {@link AbsentNode} (the sentinel `_`/`null`), which is a position the document actually wrote. Mirrors
+ * {@link AbsentNode} (the sentinel `_`), which is a position the document actually wrote. Mirrors
  * `TsonMissing`.
  *
  * `path` is the RFC 6901 pointer of the step that failed, relative to the node navigation started from —

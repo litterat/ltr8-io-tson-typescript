@@ -17,13 +17,16 @@
  * - `rational`: the suite compares by *reduced* value (`-2/4` and `-1/2` are the same vector's
  *   answer, README: "compared by value, not written form"), where `write` deliberately preserves
  *   the unreduced form it was given (`rational.ts`'s own doc).
- * - The binary family and `ipv6`: the suite wants a raw hex dump of the decoded bytes, not a
- *   re-encoding in the atom's own alphabet (`write` on a `base64` atom re-emits base64) or the
- *   colon-grouped text form (`formatIpv6`) -- README: "a plain hex string... not an RFC 4291 §2.2
- *   text form", specifically to sidestep a host `InetAddress`-shaped ambiguity no implementation
- *   here has anyway.
+ * - `bytes` and `ipv6`: the suite wants a raw hex dump of the decoded octets, not a re-encoding in
+ *   the atom's own alphabet (`write` on a `bytes` atom re-emits base64) or the colon-grouped text
+ *   form (`formatIpv6`) -- README: "a plain hex string... not an RFC 4291 §2.2 text form",
+ *   specifically to sidestep a host `InetAddress`-shaped ambiguity no implementation here has
+ *   anyway. An alphabet is a spelling of an octet sequence (§5.3), so the octets are the answer.
  * - `complex`: the suite wants the two exact-decimal components split out (`{ real, imaginary }`),
  *   not `write`'s own combined `a+bi` notation.
+ * - `duration`/`period`: the suite wants the value itself -- a decimal count of seconds or of
+ *   months -- not `write`'s own canonical `PTnHnMnS`/`PnYnM` spelling, since the value space is
+ *   what a bound or an equality check acts on and the spelling carries nothing beyond it (§5.4).
  *
  * Every other family's `write(read(token))` already *is* the suite's canonical text, so those go
  * through unchanged.
@@ -43,6 +46,8 @@ import { createRationalParser } from '../../packages/tson/src/atom/numeric/ratio
 import { createDateParser } from '../../packages/tson/src/atom/temporal/date.js';
 import { createDateTimeParser } from '../../packages/tson/src/atom/temporal/datetime.js';
 import { createDurationParser } from '../../packages/tson/src/atom/temporal/duration.js';
+import { createPeriodParser } from '../../packages/tson/src/atom/temporal/period.js';
+import { fractionDigits } from '../../packages/tson/src/atom/temporal/rfc3339.js';
 import { createTimeParser } from '../../packages/tson/src/atom/temporal/time.js';
 import { createCidr4Parser } from '../../packages/tson/src/atom/network/cidr4.js';
 import { createCidr6Parser } from '../../packages/tson/src/atom/network/cidr6.js';
@@ -130,14 +135,12 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
   });
   const rational = createRationalParser('rational', { kind: 'rational_type' });
   const complex = createComplexParser('complex');
-  const base32 = createBinaryParser('base32', { kind: 'binary', encoding: 'BASE32' });
-  const base64 = createBinaryParser('base64', { kind: 'binary', encoding: 'BASE64' });
-  const base64url = createBinaryParser('base64url', { kind: 'binary', encoding: 'BASE64URL' });
-  const hex = createBinaryParser('hex', { kind: 'binary', encoding: 'HEX' });
+  const bytes = createBinaryParser('bytes', { kind: 'bytes_type', encoding: 'BASE64' });
   const date = createDateParser('date', { kind: 'date_type' });
   const time = createTimeParser('time', { kind: 'time_type' });
   const datetime = createDateTimeParser('datetime', { kind: 'datetime_type' });
   const duration = createDurationParser('duration', { kind: 'duration_type' });
+  const period = createPeriodParser('period');
   const ipv4 = createIpv4Parser('ipv4', {
     kind: 'ipv4_type',
     spec: 'https://www.rfc-editor.org/rfc/rfc3986',
@@ -201,17 +204,20 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
       const value = complex.read(token);
       return { real: writeDecimal(value.real), imaginary: writeDecimal(value.imaginary) };
     },
-    base32: (token) => hexEncode(base32.read(token)),
-    base64: (token) => hexEncode(base64.read(token)),
-    base64url: (token) => hexEncode(base64url.read(token)),
-    hex: (token) => hexEncode(hex.read(token)),
+    bytes: (token) => hexEncode(bytes.read(token)),
     date: (token) => date.write(date.read(token)),
     time: (token) => time.write(time.read(token)),
     datetime: (token) => datetime.write(datetime.read(token)),
     duration: (token) => {
-      const value = duration.read(token);
-      return { period: value.period, clock: value.clock };
+      const { nanoseconds } = duration.read(token);
+      const negative = nanoseconds < 0n;
+      const magnitude = negative ? -nanoseconds : nanoseconds;
+      const wholeSeconds = magnitude / 1_000_000_000n;
+      const fractionNanos = magnitude % 1_000_000_000n;
+      const fraction = fractionNanos === 0n ? '' : `.${fractionDigits(Number(fractionNanos))}`;
+      return `${negative ? '-' : ''}${wholeSeconds.toString()}${fraction}`;
     },
+    period: (token) => period.read(token).months.toString(),
     ipv4: (token) => ipv4.write(ipv4.read(token)),
     ipv6: (token) => hexEncode(ipv6.read(token).octets),
     cidr4: (token) => cidr4.write(cidr4.read(token)),

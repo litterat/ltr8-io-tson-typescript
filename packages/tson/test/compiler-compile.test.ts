@@ -31,9 +31,6 @@ const CYCLIC_SCHEMA = linkedSchema(
     [
       'text',
       {
-        kind: 'ATOM',
-        parameters: [],
-        constructor: false,
         supertypes: [],
         subtypes: [],
         annotations: [],
@@ -43,9 +40,6 @@ const CYCLIC_SCHEMA = linkedSchema(
     [
       'node',
       {
-        kind: 'PRODUCT',
-        parameters: [],
-        constructor: false,
         supertypes: [],
         subtypes: [],
         annotations: [],
@@ -138,8 +132,8 @@ describe('validate -- collects diagnostics rather than throwing', () => {
 
 const USER_SCHEMA = `
 !!id:"test://person.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 {
   person => {
     name: text

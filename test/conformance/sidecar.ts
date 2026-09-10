@@ -203,7 +203,6 @@ export type ExpectedNumberForm =
  * member of the `base_value` field group.
  */
 export type ExpectedBaseValue =
-  | { readonly kind: 'null' }
   | { readonly kind: 'boolean'; readonly value: boolean }
   | { readonly kind: 'string'; readonly text: string }
   | { readonly kind: 'number'; readonly form: ExpectedNumberForm };
@@ -228,12 +227,9 @@ export interface ResolverSidecar extends CommonSidecarFields {
  *   `"numerator/denominator"`, or the value's own canonical text — see `vocabulary-sidecar.tn`'s
  *   own doc for which atoms use which).
  * - `complex`: `{ real, imaginary }`, each an exact decimal string.
- * - `duration`: `{ period, clock }`, each an independently-parseable ISO 8601 substring.
  */
 export type ExpectedVocabularyValue =
-  | string
-  | { readonly real: string; readonly imaginary: string }
-  | { readonly period: string; readonly clock: string };
+  string | { readonly real: string; readonly imaginary: string };
 
 export interface VocabularySidecar extends CommonSidecarFields {
   readonly outcome: 'valid' | 'error';
@@ -591,7 +587,7 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
 
 // ── Resolver-layer: ExpectedBaseValue ────────────────────────────────────────────────────────
 
-const BASE_VALUE_KINDS = ['null', 'boolean', 'string', 'number'] as const;
+const BASE_VALUE_KINDS = ['boolean', 'string', 'number'] as const;
 const NUMBER_FORM_SHAPES = ['integer', 'based-integer', 'float', 'special-value'] as const;
 
 /** `dv` is a `base_value` field group (`resolver-sidecar.tn`). */
@@ -599,8 +595,6 @@ function toExpectedBaseValue(dv: DataValue): ExpectedBaseValue {
   const fields = recordFields(dv, 'base-value');
   const { name: kind, value: payload } = soleMember(fields, BASE_VALUE_KINDS, 'base-value');
   switch (kind) {
-    case 'null':
-      return { kind: 'null' };
     case 'boolean':
       return { kind: 'boolean', value: boolText(payload, 'base-value.boolean') };
     case 'string': {
@@ -677,7 +671,7 @@ function toExponent(dv: DataValue): { readonly sign?: NumberSign; readonly digit
 
 // ── Vocabulary-layer: ExpectedVocabularyValue ────────────────────────────────────────────────
 
-const ATOM_VALUE_KINDS = ['decimal', 'hex', 'rational', 'text', 'complex', 'duration'] as const;
+const ATOM_VALUE_KINDS = ['decimal', 'hex', 'rational', 'text', 'complex'] as const;
 
 /** `dv` is an `atom_value` field group (`vocabulary-sidecar.tn`). */
 function toExpectedVocabularyValue(dv: DataValue): ExpectedVocabularyValue {
@@ -694,13 +688,6 @@ function toExpectedVocabularyValue(dv: DataValue): ExpectedVocabularyValue {
       return {
         real: requiredText(payloadFields, 'real', 'vocabulary value.complex'),
         imaginary: requiredText(payloadFields, 'imaginary', 'vocabulary value.complex'),
-      };
-    }
-    case 'duration': {
-      const payloadFields = recordFields(payload, 'vocabulary value.duration');
-      return {
-        period: requiredText(payloadFields, 'period', 'vocabulary value.duration'),
-        clock: requiredText(payloadFields, 'clock', 'vocabulary value.duration'),
       };
     }
     default:

@@ -17,7 +17,7 @@
  *   entry's own scope, checked once per entry in `merged`.
  *
  * **A fifth scope, not in §11.4's text at all: a template's own type parameters**
- * (`TypeDefinition.parameters`), checked over every entry that declares any. This is this
+ * (`typeParameters`, `schema/meta/typedef.ts`), checked over every entry that declares any. This is this
  * implementation's own choice, not the spec's — the reference implementation's
  * `SPEC-FEEDBACK.md` #5 records it as an open proposal, reasoning that a parameter is a name and
  * `<T, Т>` (Latin/Cyrillic) is exactly the substitution hazard §8.2 exists to refuse, whether or
@@ -57,6 +57,7 @@ import { UTS39_VERSION } from '../unicode/uts39.js';
 import { isDataBody } from './bodyKind.js';
 import type { SourcePosition } from '../schema/meta/position.js';
 import type { TypeDefinition } from '../schema/meta/typedef.js';
+import { typeParameters } from '../schema/meta/typedef.js';
 
 /** Dependencies {@link checkNameHygiene} needs beyond the merged namespace itself. */
 export interface CheckNameHygieneOptions {
@@ -115,8 +116,9 @@ export function checkNameHygiene(
         reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
       }
     }
-    if (def.parameters.length > 0) {
-      const refusal = nameHygieneRefusal(def.parameters, identifierPolicy);
+    const parameters = typeParameters(def);
+    if (parameters.length > 0) {
+      const refusal = nameHygieneRefusal(parameters, identifierPolicy);
       if (refusal !== undefined) {
         const message =
           `'${name}' has its own type parameters refused under [TSON-DATA] §8.2's ` +

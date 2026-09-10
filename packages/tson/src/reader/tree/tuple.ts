@@ -19,28 +19,37 @@ import { absentNode, tupleNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
+  refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
-  skipDataValue,
+  skipScopedValue,
 } from './grammar.js';
 import type { TreeTypeResolver } from './support.js';
 
 interface CompiledSlot {
   readonly schema: TupleElement;
   readonly parser: TypeReader<Value>;
+  /** Whether this slot's own declared type resolves to a `scoped` instance (§7.8). */
+  readonly scoped: boolean;
 }
 
-/** Builds a `tuple` tree reader for one compiled schema entry. `resolveType` resolves every position's own reader once, at construction. */
+/**
+ * Builds a `tuple` tree reader for one compiled schema entry. `resolveType` resolves every
+ * position's own reader once, at construction; `isScopedType` answers §7.8's typed-position
+ * question for that same position's declared type, at the same step.
+ */
 export function tupleTreeReader(
   name: string,
   displayName: string,
   body: TupleBody,
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
+  isScopedType: (typeName: string) => boolean,
 ): TypeReader<Value> {
   const slots: readonly CompiledSlot[] = body.elements.map((schema) => ({
     schema,
     parser: resolveType(schema.elementType.name),
+    scoped: isScopedType(schema.elementType.name),
   }));
 
   function* expectTupleStart(ctx: ReadContext): Task<boolean> {
@@ -70,9 +79,6 @@ export function tupleTreeReader(
     for (;;) {
       const peeked = yield* ctx.peek();
       if (peeked.kind === 'array-end') break;
-      if (peeked.kind === 'schema-ref') {
-        yield* ctx.next();
-      }
       if (index >= slots.length) {
         if (!reportedExtra) {
           ctx.report(
@@ -83,7 +89,7 @@ export function tupleTreeReader(
           );
           reportedExtra = true;
         }
-        yield* skipDataValue(ctx);
+        yield* skipScopedValue(ctx); // ref included -- no declared position to admit or refuse one
         index += 1;
         continue;
       }
@@ -93,21 +99,21 @@ export function tupleTreeReader(
           `internal error: no compiled slot at index ${String(index)} on '${displayName}'`,
         );
       }
+      const slotCtx = ctx.index(index);
+      yield* refuseUnscopedSchemaRef(slotCtx, slot.scoped, slot.schema.elementType.name);
       const elementPeek = yield* ctx.peek();
       if (elementPeek.kind === 'absent') {
         yield* ctx.next(); // consume the absent event regardless of REQUIRED/OPTIONAL
         if (slot.schema.state === 'REQUIRED') {
-          ctx
-            .index(index)
-            .report(
-              'FIELD_REQUIRED',
-              `'${displayName}' position [${String(index)}] is absent, but this position is required`,
-              'a value',
-              '(absent)',
-            );
+          slotCtx.report(
+            'FIELD_REQUIRED',
+            `'${displayName}' position [${String(index)}] is absent, but this position is required`,
+            'a value',
+            '(absent)',
+          );
         }
       } else {
-        result[index] = yield* slot.parser.read(ctx.index(index));
+        result[index] = yield* slot.parser.read(slotCtx);
       }
       index += 1;
     }

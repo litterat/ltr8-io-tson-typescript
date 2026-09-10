@@ -310,8 +310,17 @@ export function fromCoreValue<T>(
     }
 
     case 'array': {
+      // `_` reads as the empty list, the same rule a collection-shaped *field* already follows
+      // ("absent and empty list are the same"). It reaches this position wherever a collection is
+      // the declared type of something optional that is not a field -- a map's value, say, which
+      // is exactly how [TSON-SCHEMA] §7.8 spells "every type this schema declares"
+      // (`schemas: { uri => _ }`).
       const elements: ArrayValue['elements'] | undefined =
-        value.kind === 'empty-brace' ? [] : value.kind === 'array' ? value.elements : undefined;
+        value.kind === 'empty-brace' || value.kind === 'absent'
+          ? []
+          : value.kind === 'array'
+            ? value.elements
+            : undefined;
       if (elements === undefined) {
         throw readError('TYPE_MISMATCH', `expected an array (or '{}'), found a ${value.kind}`);
       }

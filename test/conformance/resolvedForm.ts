@@ -116,7 +116,12 @@ function readTypeDefinition(dv: DataValue, reader: DefinitionMetaReader): TypeDe
   }
   const body: Top = reader(bodyTypeRef, bodyValue);
   const withoutBody = withReplacedField(dv, 'body', VOID_PLACEHOLDER);
-  const definition = reader('type_definition', withoutBody) as TypeDefinition;
+  // The meta reader is typed to return `Top` -- the body union -- because that is what every
+  // other call asks it for. `type_definition` is the one entry whose bound value is the record
+  // itself rather than a body, so its static type does not overlap `Top` at all and the cast has
+  // to go through `unknown`. Narrowing the reader's signature to say so is Stage 6's, along with
+  // the resolved-form comparison this feeds.
+  const definition = reader('type_definition', withoutBody) as unknown as TypeDefinition;
   return { ...definition, body };
 }
 

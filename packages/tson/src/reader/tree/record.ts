@@ -24,6 +24,7 @@ import { absentNode, recordNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
+  refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
   skipDataValue,
@@ -35,6 +36,8 @@ import { readSchemaLiteral, renderValue } from './support.js';
 interface CompiledField {
   readonly schema: RecordField;
   readonly parser: TypeReader<Value>;
+  /** Whether this field's own declared type resolves to a `scoped` instance (§7.8) -- whether a nested `!!schema` may stand at this field's value at all. */
+  readonly scoped: boolean;
 }
 
 /** §5.2's sixth spelling (`type? = _`): nothing to parse, and the only conforming document omits the field or writes `_`. */
@@ -65,7 +68,8 @@ function at<T>(array: readonly (T | undefined)[], index: number, what: string): 
  * `resolveField` is asked once per field, at construction, for that field's own declared type's
  * reader -- the port of `RecordAbstractReader.FieldReaders.byType`, tree mode's only field-reader
  * strategy (object-binding mode, which additionally consults the bound component, is a separate work
- * package over the same {@link RecordBody}).
+ * package over the same {@link RecordBody}). `isScopedType` answers §7.8's typed-position question
+ * for one field's own declared type, once, at the same construction step.
  */
 export function recordTreeReader(
   name: string,
@@ -73,10 +77,12 @@ export function recordTreeReader(
   body: RecordBody,
   resolveField: (field: RecordField) => TypeReader<Value>,
   schemaLocation: SchemaLocation,
+  isScopedType: (typeName: string) => boolean,
 ): TypeReader<Value> {
   const fields: CompiledField[] = body.fields.map((schema) => ({
     schema,
     parser: resolveField(schema),
+    scoped: isScopedType(schema.type.name),
   }));
   const fieldIndex = new Map<string, number>();
   const groups: readonly FieldGroup[] = body.groups;
@@ -203,13 +209,11 @@ export function recordTreeReader(
     fieldName: string,
     sink: (schemaIndex: number, decoded: Value | undefined) => void,
   ): Task<void> {
-    const maybeRef = yield* ctx.peek();
-    if (maybeRef.kind === 'schema-ref') {
-      yield* ctx.next();
-    }
-    const check = at(fixedCheck, schemaIndex, 'fixed-check');
-    const schema = at(fields, schemaIndex, 'field').schema;
+    const field = at(fields, schemaIndex, 'field');
     const fieldCtx = ctx.schemaField(fieldName);
+    yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
+    const check = at(fixedCheck, schemaIndex, 'fixed-check');
+    const schema = field.schema;
     const peeked = yield* ctx.peek();
     if (peeked.kind === 'absent') {
       yield* ctx.next();
@@ -293,19 +297,16 @@ export function recordTreeReader(
         seen[schemaIndex] = true;
         continue;
       }
-      const maybeRef = yield* ctx.peek();
-      if (maybeRef.kind === 'schema-ref') {
-        yield* ctx.next();
-      }
-      const afterRef = yield* ctx.peek();
+      const field = at(fields, schemaIndex, 'field');
+      const fieldCtx = ctx.schemaField(fieldNameEvent.name);
+      yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
+      const valuePeek = yield* ctx.peek();
       let decoded: Value | undefined;
-      if (afterRef.kind === 'absent') {
+      if (valuePeek.kind === 'absent') {
         yield* ctx.next();
         decoded = valueForStatedAbsentField(ctx, schemaIndex);
       } else {
-        decoded = yield* at(fields, schemaIndex, 'field').parser.read(
-          ctx.schemaField(fieldNameEvent.name),
-        );
+        decoded = yield* field.parser.read(fieldCtx);
       }
       sink(schemaIndex, decoded);
       seen[schemaIndex] = true;

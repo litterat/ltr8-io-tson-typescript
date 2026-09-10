@@ -515,14 +515,27 @@ function differences(name: string): string[] {
 
 describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixtures", () => {
   // A fixture's entry count is its schema's authored declaration count plus whatever §5.3's sugar
-  // forms lift to a closed synthetic entry: meta-kernel declares 49 and lifts 8, meta declares 30
-  // and lifts 1 (`array_value_xxhash`), core declares 48 and lifts none. Pinned because the two
-  // counts are easy to conflate, and a schema whose declaration count drifts is a vendoring
-  // failure `vendored-spec.test.ts` should have caught first.
+  // forms lift to a closed synthetic entry: meta-kernel declares 50 and lifts 8, meta declares 38
+  // and lifts 7, core declares 50 and lifts none. Pinned because the two counts are easy to
+  // conflate, and a schema whose declaration count drifts is a vendoring failure
+  // `vendored-spec.test.ts` should have caught first.
+  //
+  // Revision 35's own declaration-count deltas, name for name against the Revision 34 vendor:
+  // meta-kernel drops `alias` (§8.3: a reference is a hop, never a rewrite -- nothing left to
+  // mark), `set` (moved to meta/core as an ordinary instance) and `type_kind` (no longer resolver
+  // output, §8.1), and gains `template` (§5.10's held-body constructor), `set_type` (the
+  // constructor `set` now instantiates), `integer_member_set` and `non_negative_integer` (§5.2's
+  // sparse member sets and the type of every counting facet). meta drops `binary`/
+  // `binary_encoding` and `extern`/`unknown_type` (§5.3, §7.8's rebuild) and gains
+  // `bytes_type`/`bytes_encoding`, `scoped`/`scope_kind`, `period_type`, `set`, and the six
+  // annotations §6 adds as checked/advisory vocabulary (`discriminator`, `rest`, `title`,
+  // `examples`, `read_only`, `write_only`). core drops `alias`, its four alphabet siblings
+  // (`base32`/`base64`/`base64url`/`hex`) and `unknown`, and gains `bytes`, `period`, `set`, and
+  // the `scoped` instances `declared`/`extern`/`dynamic` plus `extern_of`/`extern_type`.
   it.each([
-    ['meta-kernel', 49, 57],
-    ['meta', 30, 31],
-    ['core', 48, 48],
+    ['meta-kernel', 50, 58],
+    ['meta', 38, 45],
+    ['core', 50, 50],
   ])('%s.tn declares %i names and its fixture holds %i entries', (name, declared, entries) => {
     const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
     expect(document.body.declarations.size).toBe(declared);
@@ -544,11 +557,63 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
         'field is written at default is a writer question (Wave 5)',
     },
     {
-      pattern: /^enum_set\.body\.(!|v\.(unordered|unique_items))$/,
+      pattern:
+        /^(enum_set|integer_member_set|set_type_[a-z_0-9]+)\.body\.(!|v\.(unordered|unique_items|min_items))$/,
       reason:
-        'topBinding writes every host ArrayBody as `array`, so a set round-trips as an unordered ' +
-        'unique array rather than as `set` — the wire aliases need a discriminating test, and ' +
-        'the readers that fix the other half of it are Wave 4',
+        'topBinding writes every host ArrayBody as `array`, so a `!set_type {}` application ' +
+        'round-trips as an unordered unique array rather than as `set_type` -- `min_items` is ' +
+        'lost along with it, since plain ArrayBody carries no such field. This is the `!set` ' +
+        'versus `!array` divergence `CLAUDE.md` records as reported upstream, under Revision ' +
+        "35's names: `set` is a refinement of `array` sharing its shape, so the applied name is " +
+        'not recoverable from the value being written, and both this port and the reference ' +
+        'write `!array`. `integer_member_set` and the `set_type_*` entries meta mints for ' +
+        '`set<T>` are the same gap, not further defects',
+    },
+    {
+      pattern: /^(extern_of|extern_type)\.body\.v\.template$/,
+      reason:
+        "§5.10 holds a template's application *as written*, and `compiler/heldBody.ts` " +
+        're-serialises it from the parsed form instead (`writeDataValue(application)`), so the ' +
+        "author's own spacing does not survive. The two differ only in whitespace, which §5.10 " +
+        'and §8.2 make free -- identity compares the parsed form, never the text -- so this is a ' +
+        'fidelity gap, not a meaning one. Closing it means carrying the source span through the ' +
+        'schema parser to the held body',
+    },
+    {
+      pattern: /^set_[a-z_0-9]+\.source\.arguments\[\d+\]$/,
+      reason:
+        'the kernel declares `type_argument => { ( name: type_ref | value: value ) }` -- one ' +
+        'record with a §5.11 field group -- and `typeArgumentBinding` models it as a variant of ' +
+        'two wire names `ref`/`value`, so writing emits `!ref x` where the fixture has ' +
+        '`{ name: x }`. §8.1 is explicit that `type_argument` has no positional form and its ' +
+        'braced record is load-bearing, so the written form names a type the kernel does not ' +
+        'declare. The fix is a field-group shape in `bind/`, which no binding has yet',
+    },
+    {
+      pattern: /^(bytes|period|extern|dynamic|time|datetime|duration) <key annotations>/,
+      reason:
+        "NOT this port's defect: `core.tn` and `core-resolved.tn` disagree with each other in " +
+        'the vendored copy, and this port carries the source through faithfully. `core.tn` ' +
+        'declares `@ordered:NONE @bounded:false` on `bytes`, `extern` and `dynamic` and ' +
+        '`@ordered:TOTAL @bounded:false` on `period`, all four Revision 35 additions, and the ' +
+        'fixture gives each of them no key annotations at all; and `core.tn` declares ' +
+        '`@ordered:TOTAL` on `time`, `datetime` and `duration` where the fixture still says ' +
+        '`PARTIAL`. §5.5 settles that last one against the fixture -- "Both families are totally ' +
+        'ordered -- the mandatory offset is what makes them so" -- and the temporal split is ' +
+        'what gave `duration` its total order. The resolved fixture was not regenerated for ' +
+        "either change. Reported upstream; see `REVISION-35-PLAN.md`'s own list",
+    },
+    {
+      // Two shapes reach this one: the field naming the minted type, and the two
+      // entry-presence lines (`'name': in the fixture, not resolved by this implementation`, and
+      // its inverse), which the differ quotes rather than writing as a path.
+      pattern:
+        /^'?map_uri_array_type_name_[A-Za-z_0-9]+'?(:.*)?$|^scoped\.body\.v\.fields\[1\]\.type$/,
+      reason:
+        "the minted name for `scoped.schemas`'s own map type differs in its structural hash, " +
+        'because the array it is minted over carries the `min_items` the `set_type` gap above ' +
+        'drops. A consequence of that entry, not an independent one: §8.2 keys identity on ' +
+        'structure, so a body that writes differently mints differently',
     },
   ];
 
@@ -601,7 +666,12 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
   it('populates subtypes for meta-kernel.tn exactly as the fixture records (Wave 4 work package 15)', () => {
     const entries = resolved('meta-kernel').entries;
     const subtypeCount = (name: string): number => entries.get(name)?.subtypes.length ?? -1;
-    expect(subtypeCount('top')).toBe(17);
+    // Revision 35 adds two entries that IS-A `top`: `template` (§5.10's held-body constructor,
+    // composing with `top` directly like `reference`) and `set_type` (§5.6's "the nearest
+    // constructor in the source chain for every container closure" for a `set<T>` application --
+    // `array ^ { ... }`, a *constructor* refinement, §4.2, which preserves IS-A per §5.7's
+    // operations table).
+    expect(subtypeCount('top')).toBe(18);
     expect(subtypeCount('atom')).toBe(6);
     expect(subtypeCount('product')).toBe(5);
     expect(subtypeCount('sum')).toBe(1);

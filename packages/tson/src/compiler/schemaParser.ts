@@ -52,7 +52,6 @@ import type {
   ConstructionDef,
   RecordDef,
   ReferenceTypeDef,
-  StructuralDef,
   StructuralTypeDef,
   TypeDef,
 } from '../ast/schema/typedef.js';
@@ -187,13 +186,18 @@ function* parseTypeDef(state: CursorState): Task<TypeDef> {
     return yield* parseAtomRefinementOrInstance(state, typeParams);
   }
   if (yield* check(state, 'tilde')) {
-    yield* advance(state);
-    return {
-      kind: 'structuralTypeDef',
-      typeParams,
-      constructor: true,
-      body: yield* parseMandatoryStructuralDef(state),
-    } satisfies StructuralTypeDef;
+    // §12.1: "there is no constructor marker: an entry is a constructor by being IS-A `top`
+    // (§4.2), and `~` is a special token with no role at type-def position." `~` keeps exactly
+    // one grammar role, the field-modifier default-value marker (§5.2) -- a source document
+    // that writes one here (`class2/schema/invalid/a-constructor-marker-is-not-grammar`) fails
+    // here rather than being read as a marker this revision no longer has.
+    const here = yield* peekToken(state);
+    throw parseError(
+      here,
+      "'~' has no role at type-def position (§4.2, §12.1) -- an entry is a constructor by " +
+        "composing or refining IS-A 'top', never by a marker; '~' is otherwise the field-modifier " +
+        "default-value operator ('port: integer ~ 8080', §5.2)",
+    );
   }
   if (yield* check(state, 'lbrace')) {
     return yield* braceTypeDef(state, typeParams);
@@ -219,7 +223,6 @@ function* parseTypeDef(state: CursorState): Task<TypeDef> {
     return {
       kind: 'structuralTypeDef',
       typeParams,
-      constructor: false,
       body: { kind: 'refinedDef', target: head, body: yield* parseRecordDef(state) },
     } satisfies StructuralTypeDef;
   }
@@ -227,7 +230,6 @@ function* parseTypeDef(state: CursorState): Task<TypeDef> {
     return {
       kind: 'structuralTypeDef',
       typeParams,
-      constructor: false,
       body: yield* parseConstructionDefContinuation(state, head),
     } satisfies StructuralTypeDef;
   }
@@ -239,23 +241,6 @@ function* parseTypeDef(state: CursorState): Task<TypeDef> {
     );
   }
   return { kind: 'referenceTypeDef', typeParams, ref: head } satisfies ReferenceTypeDef;
-}
-
-/** The `structural-def` reached after a leading `~` -- unlike {@link parseTypeDef}'s own dispatch, a bare type-ref here (nothing following) is a parse error: `~` promises a refinement, composition, or record body. */
-function* parseMandatoryStructuralDef(state: CursorState): Task<StructuralDef> {
-  if (yield* check(state, 'lbrace')) {
-    return yield* parseRecordDef(state);
-  }
-  const head = yield* parseTypeRefHead(state);
-  if (yield* check(state, 'caret')) {
-    yield* advance(state);
-    return { kind: 'refinedDef', target: head, body: yield* parseRecordDef(state) };
-  }
-  if ((yield* check(state, 'ampersand')) || (yield* check(state, 'minus'))) {
-    return yield* parseConstructionDefContinuation(state, head);
-  }
-  const here = yield* peekToken(state);
-  throw parseError(here, "expected '^', '&', '-', or a record body after '~' (constructor marker)");
 }
 
 /**
@@ -276,7 +261,6 @@ function* braceTypeDef(state: CursorState, typeParams: readonly string[]): Task<
   return {
     kind: 'structuralTypeDef',
     typeParams,
-    constructor: false,
     body: yield* parseRecordBody(state),
   } satisfies StructuralTypeDef;
 }

@@ -18,12 +18,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REF_DIR="$REPO_ROOT/.references"
 
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
-JAVA_PIN="a576b62966b78ce9e4f7f656b679b238c0353b79"
+JAVA_PIN="6655418d666e26e333e8f3a17f3374c2e603951d"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-# 233 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. Adds
-# §8.2's refused outcome as a fifth bucket, the whole class2/ tree (schema, link, validate), and
-# §7.7/§9.5 coverage of the identifier grammar and the bidi controls.
-SUITE_PIN="bde7d70048bcb03049069a982d8ae0d9583a382f"
+# 277 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
+# 2026 Revision 35 baseline: the reshaped type_definition, duration split from period, !bytes as
+# the one binary tag, value-space equality, and the scoped-value vectors under class2/validate/.
+SUITE_PIN="96f4f7870d23c3bb0b4f0061c6945e8c2e3d2ed6"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"

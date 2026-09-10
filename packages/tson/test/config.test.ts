@@ -20,9 +20,11 @@ import {
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
-import { linkSchema } from '../src/link/link.js';
+import { linkSchema, type LinkedSchema } from '../src/link/link.js';
+import type { Annotations, TypeDefinition } from '../src/schema/meta/typedef.js';
 import {
   TsonInternalError,
+  TsonLimitRefusedError,
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
@@ -80,6 +82,15 @@ function bundledOnlySource(): SchemaSource {
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
+function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (e) {
+    return e;
+  }
+  throw new Error('expected to throw, but it completed');
+}
+
 describe('createTson: registry primitives', () => {
   it('starts with an empty registry', () => {
     const tson = createTson();
@@ -91,7 +102,7 @@ describe('createTson: registry primitives', () => {
     const kernel = linkSchema(bootstrapMetaKernel(KERNEL_BYTES));
     expect(kernel.id).toBe(KERNEL_ID);
     tson.register(kernel);
-    expect(tson.schemas.get('tson.io/2026/34/m/meta-kernel.tn')).toBe(kernel);
+    expect(tson.schemas.get('tson.io/2026/35/m/meta-kernel.tn')).toBe(kernel);
   });
 
   it('resolveSchema refuses a schema whose governing !!meta is not registered', () => {
@@ -104,7 +115,7 @@ describe('createTson: registry primitives', () => {
     tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
     const meta = tson.resolveSchema(META_BYTES);
     expect(meta.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/34/m/meta.tn')).toBe(meta);
+    expect(tson.schemas.get('tson.io/2026/35/m/meta.tn')).toBe(meta);
 
     const core = tson.resolveSchema(CORE_BYTES);
     expect(core.id).toBe(CORE_ID);
@@ -166,8 +177,8 @@ describe('createTson: preload against a configured schemaSource', () => {
 
     await tson.preload([META_ID, CORE_ID]);
 
-    expect(tson.schemas.get('tson.io/2026/34/m/meta.tn')?.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/34/m/core.tn')?.id).toBe(CORE_ID);
+    expect(tson.schemas.get('tson.io/2026/35/m/meta.tn')?.id).toBe(META_ID);
+    expect(tson.schemas.get('tson.io/2026/35/m/core.tn')?.id).toBe(CORE_ID);
 
     // Idempotent: a second preload of the same references touches the source again but adds
     // nothing new and does not throw (already registered, so resolution is skipped entirely).
@@ -301,4 +312,86 @@ describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
     // answer. A version discoverable only from a refusal arrives one round trip too late.
     expect(createTson().processorPolicy.unicodeDataVersion).toBe(UTS39_VERSION);
   });
+});
+
+describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => {
+  /** A minimal, hand-registered `LinkedSchema` stub -- `!!meta`/`!!import` are what the closure walk follows, and neither needs to be a real, resolvable schema for that walk alone to be exercised (`register` accepts any `LinkedSchema`, real parse or not). */
+  function stubSchema(id: string, meta: string, imports: readonly string[]): LinkedSchema {
+    return {
+      id,
+      meta,
+      imports,
+      entries: new Map<string, TypeDefinition>(),
+      keyAnnotations: new Map<string, Annotations>(),
+      bootstrap: false,
+      origins: new Map<string, string>(),
+    };
+  }
+
+  const PLACEHOLDER_META = 'test://placeholder-meta.tn';
+
+  /** Registers a straight `!!import` chain `s0 <- s1 <- ... <- s{depth-1}`, each governed by the same unregistered `PLACEHOLDER_META` (so the closure counts it once, however many chain links reach it). Returns the id of the last link, the one a caller's own document should `!!import`. */
+  function registerChain(tson: ReturnType<typeof createTson>, depth: number): string {
+    let previous: string | undefined;
+    let last = '';
+    for (let i = 0; i < depth; i++) {
+      const id = `test://s${String(i)}.tn`;
+      tson.register(stubSchema(id, PLACEHOLDER_META, previous === undefined ? [] : [previous]));
+      previous = id;
+      last = id;
+    }
+    return last;
+  }
+
+  function documentImporting(chainTail: string): Uint8Array {
+    return new TextEncoder().encode(
+      `!!id:"test://top.tn"\n!!meta:"${PLACEHOLDER_META}"\n!!import:"${chainTail}"\n{ t => {} }`,
+    );
+  }
+
+  it('a closure of exactly 64 distinct schema documents (the default) is not refused on that ground', () => {
+    const tson = createTson();
+    // 63 chain links + the shared placeholder meta = 64.
+    const tail = registerChain(tson, 63);
+    const error = (() => {
+      try {
+        tson.resolveSchema(documentImporting(tail));
+        return undefined;
+      } catch (e) {
+        return e;
+      }
+    })();
+    // The placeholder meta is never registered, so resolution still fails downstream -- just not
+    // for reaching too many schema documents, which is the one thing this test checks.
+    expect(error).not.toBeInstanceOf(TsonLimitRefusedError);
+  });
+
+  it('a closure of 65 distinct schema documents is a limit refusal, not a resolver error', () => {
+    const tson = createTson();
+    // 64 chain links + the shared placeholder meta = 65.
+    const tail = registerChain(tson, 64);
+    const error = thrownBy(() => tson.resolveSchema(documentImporting(tail)));
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('import-closure');
+    expect((error as TsonLimitRefusedError).configuredThreshold).toBe(64);
+  });
+});
+
+describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "entries" limit', () => {
+  it('a schema resolving to more than the default (65,536) declarations is a limit refusal, not a resolver error', () => {
+    const tson = createTson();
+    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    tson.register(tson.resolveSchema(META_BYTES));
+    tson.register(tson.resolveSchema(CORE_BYTES));
+    // One more declaration than the default admits -- every one a bare, fieldless record, the
+    // cheapest possible entry to resolve, since only the count is under test here.
+    const lines = ['!!id:"test://huge.tn"', `!!meta:"${META_ID}"`, `!!import:"${CORE_ID}"`, '{'];
+    for (let i = 0; i <= 65_536; i++) lines.push(`d${String(i)} => {}`);
+    lines.push('}');
+    const bytes = new TextEncoder().encode(lines.join('\n'));
+    const error = thrownBy(() => tson.resolveSchema(bytes));
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('schema-entries');
+    expect((error as TsonLimitRefusedError).configuredThreshold).toBe(65_536);
+  }, 20_000);
 });

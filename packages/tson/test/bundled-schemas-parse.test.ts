@@ -21,9 +21,9 @@ function parseBundled(name: string): number {
 
 describe('the bundled schemas parse (spec/m)', () => {
   it.each([
-    ['meta-kernel.tn', 49],
-    ['meta.tn', 30],
-    ['core.tn', 48],
+    ['meta-kernel.tn', 50],
+    ['meta.tn', 38],
+    ['core.tn', 50],
   ])('%s parses', (name, expectedDeclarations) => {
     expect(parseBundled(name)).toBe(expectedDeclarations);
   });

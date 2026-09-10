@@ -1,38 +1,35 @@
 /**
  * §7.2's rule that a value's own type annotation must be admitted by the position it stands in:
  * "at a position whose declared type is `T`, a value annotated `!S` is valid if and only if,
- * after reference flattening of both (§8.3), `S` is `T` or `T` appears in `S`'s transitive
- * `type_definition.supertypes`". Ported from the reference implementation's `Subsumption`
- * (`tson-compiler/.../reader/Subsumption.java`) and the dispatch half of its
+ * after following the reference chain of both (§8.3) to its terminal, `S` is `T` or `T` appears
+ * in `S`'s transitive `type_definition.supertypes`". Ported from the reference implementation's
+ * `Subsumption` (`tson-compiler/.../reader/Subsumption.java`) and the dispatch half of its
  * `VariantSchemaReader`; see those files' own module docs for the exhaustive rationale.
  *
  * **The guard follows the body, not `definition.kind`.** {@link TypeDefinition.kind} and
  * {@link TypeDefinition.body} are two independent facts about one entry -- a hand-built entry can
  * carry a `ChoiceBody` while claiming `kind: 'PRODUCT'` -- and only an `Atom` or `Product` (record,
  * array, map, tuple) body takes this guard. §7.2 excludes every other shape by name: a `choice`
- * discriminates by variant membership (§5.4) and an `extern` by the foreign schema's namespace
+ * discriminates by variant membership (§5.4) and a `scoped` instance by its own value shape
  * (§7.8), each with its own dispatcher whose membership this guard must not override, and a value
- * is never typed by a `Reference` position at all -- every use site is flattened past one (§8.3).
+ * is never typed by a `Reference` position at all -- every use site's own type resolves through
+ * one to a terminal type before this guard is even built (§8.3).
  *
- * **An entry's aliases are the entry.** §7.2 compares "after reference flattening of *both*", so
- * `!created` at a `created`-typed position, where `created => event_created` aliases another
- * entry, names the position's own type even though the reader running there belongs to
- * `event_created`'s own instantiation. The accepted set -- `name` plus every entry that flattens
- * to it -- is computed once, at compile time, since the reader itself cannot know which of its
- * aliases a given position was written as.
+ * **An entry's aliases are the entry.** §7.2 compares "after following the chain of *both* to its
+ * terminal", so `!created` at a `created`-typed position, where `created => event_created`
+ * aliases another entry, names the position's own type even though the reader running there
+ * belongs to `event_created`'s own instantiation. The accepted set -- `name` plus every entry
+ * whose own chain terminates at it -- is computed once, at compile time, since the reader itself
+ * cannot know which of its aliases a given position was written as.
  */
 import type { Task } from '../io/bytes.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
-import { lookingAhead } from '../reader/context.js';
-import { skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
-import type { Reference, Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { skipDataValue, typeRefAhead } from '../reader/tree/grammar.js';
+import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { absentNode } from '../tree/nodes.js';
 import { isAtom } from './atomChecks.js';
-
-function isReferenceBody(body: Top): body is Reference {
-  return 'kind' in body && body.kind === 'reference';
-}
+import { terminal } from './referenceChain.js';
 
 const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
 
@@ -42,55 +39,19 @@ function isGuardedBody(body: Top): boolean {
   return 'kind' in body && PRODUCT_KINDS.has(body.kind);
 }
 
-/**
- * `name`'s reference chain followed to its end: the first entry that either isn't a bare
- * `REFERENCE` (§8.3's alias form, `x => y` with no `<...>` application) or applies arguments of
- * its own. A cycle stops at whichever name re-enters it rather than spinning -- an unsatisfiable
- * alias loop is a linking-time verdict (`link.ts`), not this pass's to give.
- */
-function flatten(name: string, entries: ReadonlyMap<string, TypeDefinition>): string {
-  const walked = new Set<string>();
-  let current = name;
-  while (!walked.has(current)) {
-    walked.add(current);
-    const definition = entries.get(current);
-    if (
-      definition === undefined ||
-      !isReferenceBody(definition.body) ||
-      definition.body.target.arguments.length > 0
-    ) {
-      return current;
-    }
-    current = definition.body.target.name;
-  }
-  return current;
-}
-
-/** The written names that mean `name`: itself, plus every entry that {@link flatten}s to it. */
+/** The written names that mean `name`: itself, plus every entry whose own chain (`referenceChain.ts`'s shared §8.3 walk) terminates at it. */
 function selfNames(
   name: string,
   entries: ReadonlyMap<string, TypeDefinition>,
 ): ReadonlySet<string> {
+  const lookup = (n: string): TypeDefinition | undefined => entries.get(n);
   const names = new Set<string>([name]);
   for (const alias of entries.keys()) {
-    if (flatten(alias, entries) === name) {
+    if (terminal(alias, lookup) === name) {
       names.add(alias);
     }
   }
   return names;
-}
-
-/**
- * Looks ahead past a data-value's leading annotations for its own `!type-ref`, without consuming
- * anything -- so whichever reader ultimately runs (the position's own, or a subtype's) sees the
- * whole value, framing included, exactly as it would if nothing had dispatched first.
- */
-function* typeRefAhead(ctx: ReadContext): Task<string | undefined> {
-  return yield* lookingAhead(ctx, function* (aheadCtx): Task<string | undefined> {
-    yield* skipAnnotations(aheadCtx);
-    const peeked = yield* aheadCtx.peek();
-    return peeked.kind === 'type-ref' ? peeked.name : undefined;
-  });
 }
 
 /**
@@ -119,7 +80,13 @@ export function guardSubsumption(
   }
   const own = selfNames(name, entries);
   const subtypeNames = definition.subtypes;
-  const subtypeSet = new Set(subtypeNames);
+  // §7.2 follows BOTH chains: the position's own type through `selfNames`, and the annotated name
+  // through the same walk. The set is keyed on terminals so that `!d_alias` is admitted wherever
+  // the entry it aliases is -- an alias is a hop, not a different type (§8.3) -- while the
+  // diagnostic below still names the annotation the author actually wrote.
+  const subtypeTerminals = new Map(
+    subtypeNames.map((subtype) => [terminal(subtype, (n) => entries.get(n)), subtype] as const),
+  );
   const subtypeList = subtypeNames.join(', ');
 
   return {
@@ -128,8 +95,13 @@ export function guardSubsumption(
       if (ref === undefined || own.has(ref)) {
         return yield* reader.read(ctx);
       }
-      if (subtypeSet.has(ref)) {
-        return yield* resolve(ref).read(ctx);
+      const annotated = terminal(ref, (n) => entries.get(n));
+      if (own.has(annotated)) {
+        return yield* reader.read(ctx);
+      }
+      const subtype = subtypeTerminals.get(annotated);
+      if (subtype !== undefined) {
+        return yield* resolve(subtype).read(ctx);
       }
       ctx.report(
         'UNKNOWN_TYPE_REF',

@@ -13,34 +13,55 @@
  * idiomatic for a closed union switched on `kind`, where Java needed one class per case to hang
  * an override off of.
  *
- * Both functions are total over `Atom`'s own members: a family with no orderable facet at all
- * (`Unit`, and every pure-selector family — `ComplexType`, `UuidType`, `Ipv4Type`, `Ipv6Type`,
- * `MacType`) or one whose bounds are unparsed text (`DurationType`, deliberately left ordered by
- * nothing — see its own doc) returns no violations, matching each Java override's own default or
- * explicit no-op.
+ * Both functions are total over `Atom`'s own members: a family with no orderable facet and no
+ * selector at all (`Unit`, `UuidType`, `MacType`) returns no violations for both questions, and
+ * `ComplexType` (a pure selector, `component`) returns no *coherence* violations — a single
+ * field has nothing else to contradict — but does narrow, along `component`'s own partial order
+ * (§5.7). The four network families (`Ipv4Type`, `Ipv6Type`, `Cidr4Type`, `Cidr6Type`) all narrow
+ * their shared `within`/`excluding` pair the same way ({@link networkNarrows}) — `cidr4_type`/
+ * `cidr6_type` add their own prefix-bound narrowing on top — and all four carry a *coherence*
+ * obligation: §5.5's `within`/`excluding` pair, plus a network family's own prefix bounds, MUST
+ * between them admit a value ({@link networkCoherence}).
  */
 import type { Atom, Top } from '../schema/meta/typedef.js';
 import type {
+  ComplexComponent,
+  ComplexType,
   DecimalType,
+  FloatFormat,
   FloatType,
   IntegerSize,
   IntegerType,
   RationalType,
 } from '../schema/meta/atoms-numeric.js';
-import type { BinaryType } from '../schema/meta/atoms-text.js';
-import type { DateTimeType, DateType, TimeType } from '../schema/meta/atoms-temporal.js';
-import type { Cidr4Type, Cidr6Type } from '../schema/meta/atoms-network.js';
+import type { BytesType } from '../schema/meta/atoms-bytes.js';
+import type {
+  DateTimeType,
+  DateType,
+  DurationType,
+  PeriodType,
+  TimeType,
+} from '../schema/meta/atoms-temporal.js';
+import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type } from '../schema/meta/atoms-network.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
+import { parseNetworkBlock, whyNoValue } from '../atom/network/cidrParsing.js';
+import { parseIpv4Octets } from '../atom/network/ipv4.js';
+import { parseIpv6Bytes } from '../atom/network/ipv6.js';
 import {
+  admitsLower,
+  admitsUpper,
   type Bound,
   bound,
   checkAtLeast,
   checkAtMost,
   checkLower,
+  checkMemberSubset,
   checkOnlyWithdraws,
   checkSubset,
+  checkSuperset,
   checkUpper,
+  renderBoundValue,
   tighterLower,
   tighterUpper,
 } from './atomNarrowing.js';
@@ -55,11 +76,11 @@ import {
   compareBigint,
   compareCalendarDate,
   compareDecimal,
-  compareNumber,
   compareOffsetDateTime,
   compareOffsetTime,
   compareRational,
 } from './atomComparators.js';
+import { decimalFractionDigits, decimalOf, decimalPrecision } from '../atom/numeric/decimalMath.js';
 
 // ── integer_type ─────────────────────────────────────────────────────────────────────────────
 
@@ -115,11 +136,61 @@ function integerNarrows(source: IntegerType, refined: IntegerType): string[] {
       `multiple_of ${String(refined.multipleOf)} is not itself a multiple of the source's own ${String(source.multipleOf)}`,
     );
   }
+  checkMemberSubset(out, 'members', source.members, refined.members, (a, b) => a === b);
   return out;
 }
 
 function integerSignum(v: bigint): number {
   return v > 0n ? 1 : v < 0n ? -1 : 0;
+}
+
+/**
+ * §7.4's coherence rule over `integer_type.members`, in the three parts the set's own type states.
+ *
+ * `members` is typed `integer_member_set => !set_type { element_type: integer }`, and the kernel's
+ * `@doc` on it says what that buys: "uniqueness comes from `set`'s own contract, non-emptiness
+ * from `min_items` (an empty member set is a body admitting no value at all), and member identity
+ * is [TSON-DATA] §4.3's, so `80` and `0x50` are one member and a duplicate rather than two." So:
+ *
+ * 1. **Non-empty**, inherited from `set_type`'s `min_items ~ 1` — an empty set is §7.4's "a body's
+ *    facets MUST between them admit a value" failing outright, the same shape `enumCoherence`
+ *    already refuses for `!enum []`.
+ * 2. **Unique by VALUE**, not by spelling: the members arrive already `value`-read under the
+ *    constrained atom (§5.2), which is the whole reason that reading exists, so `[80 0x50]` is one
+ *    member written twice and `[1 1]` likewise.
+ * 3. **Each member satisfies the body's other facets** — the bounds and the step, folding an
+ *    implied `size` range in exactly as {@link integerCoherence}'s own range check does.
+ */
+function integerMemberCoherence(t: IntegerType): string[] {
+  const out: string[] = [];
+  if (t.members === undefined) return out;
+  if (t.members.length === 0) {
+    return ["'members' is empty, so the body admits no value -- a member set states at least one"];
+  }
+  const seen = new Set<bigint>();
+  for (const member of t.members) {
+    if (seen.has(member)) {
+      out.push(
+        `members states ${renderBoundValue(member)} more than once -- members are compared by value, ` +
+          'so two spellings of one number are one member',
+      );
+    }
+    seen.add(member);
+  }
+  const lower = integerEffectiveLower(t);
+  const upper = integerEffectiveUpper(t);
+  for (const member of t.members) {
+    if (!admitsLower(lower, member, compareBigint) || !admitsUpper(upper, member, compareBigint)) {
+      out.push(
+        `members includes ${renderBoundValue(member)}, which the body's own bounds do not admit`,
+      );
+    } else if (t.multipleOf !== undefined && member % t.multipleOf !== 0n) {
+      out.push(
+        `members includes ${renderBoundValue(member)}, not itself a multiple of ${String(t.multipleOf)}`,
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -132,13 +203,61 @@ function integerCoherence(t: IntegerType): string[] {
   const out: string[] = [];
   checkRange(out, integerEffectiveLower(t), integerEffectiveUpper(t), compareBigint);
   checkPositiveStep(out, 'multiple_of', t.multipleOf, integerSignum);
+  out.push(...integerMemberCoherence(t));
   return out;
 }
 
 // ── float_type ───────────────────────────────────────────────────────────────────────────────
 
+/**
+ * `float_type.format`'s own narrowing relation (§5.5, §5.7, §9): two chains, ranked separately by
+ * width -- the binary radix (`BINARY16 ⊂ BINARY32 ⊂ BINARY64 ⊂ BINARY128 ⊂ BINARY256`) and the
+ * decimal radix (`DECIMAL32 ⊂ DECIMAL64 ⊂ DECIMAL128`) -- since a narrower format's every value is
+ * exactly representable in a wider one *of the same radix*, and the two radices are incomparable:
+ * decimal32's grid (base 10) shares no containment either way with any binary format's (base 2).
+ * Mirrors {@link EXACT_COMPONENT_RANK}/{@link APPROXIMATE_COMPONENT_RANK}'s own two-chain shape:
+ * a refinement may move to a lower rank in the *same* chain only.
+ *
+ * Keyed by `string`, not {@link FloatFormat} -- `ieee_format` (`spec/m/meta.tn`) declares all
+ * eight members this table lists, but `FloatFormat` itself names only the two a built-in
+ * annotation (`float32`/`float64`) produces (that type's own doc), so a refinement naming one of
+ * the other six reaches this function as a value outside its own declared TypeScript type. Both
+ * tables are `Partial`, and a member absent from both -- unreachable today, since this table is
+ * total over `ieee_format`'s own members, but a future ninth member would land here -- fails
+ * rather than silently narrowing, the same fail-closed reading {@link complexNarrows} gives an
+ * unrecognised {@link ComplexComponent}.
+ */
+const BINARY_FORMAT_RANK: Readonly<Partial<Record<string, number>>> = {
+  BINARY16: 0,
+  BINARY32: 1,
+  BINARY64: 2,
+  BINARY128: 3,
+  BINARY256: 4,
+};
+const DECIMAL_FORMAT_RANK: Readonly<Partial<Record<string, number>>> = {
+  DECIMAL32: 0,
+  DECIMAL64: 1,
+  DECIMAL128: 2,
+};
+
+function floatFormatNarrows(source: FloatFormat, refined: FloatFormat): boolean {
+  if (source === refined) return true;
+  const sourceRank = BINARY_FORMAT_RANK[source] ?? DECIMAL_FORMAT_RANK[source];
+  const refinedRank = BINARY_FORMAT_RANK[refined] ?? DECIMAL_FORMAT_RANK[refined];
+  const sameRadix = source in BINARY_FORMAT_RANK === refined in BINARY_FORMAT_RANK;
+  return (
+    sameRadix && sourceRank !== undefined && refinedRank !== undefined && refinedRank <= sourceRank
+  );
+}
+
 function floatNarrows(source: FloatType, refined: FloatType): string[] {
   const out: string[] = [];
+  if (!floatFormatNarrows(source.format, refined.format)) {
+    out.push(
+      `format ${refined.format} does not narrow the source's own ${source.format} -- a refinement may only ` +
+        'move to a narrower width within the same radix (§5.7)',
+    );
+  }
   checkLower(
     out,
     bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
@@ -202,8 +321,8 @@ function decimalNarrows(source: DecimalType, refined: DecimalType): string[] {
     bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
     compareDecimal,
   );
-  checkAtMost(out, 'total_digits', source.totalDigits, refined.totalDigits, compareNumber);
-  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareNumber);
+  checkAtMost(out, 'total_digits', source.totalDigits, refined.totalDigits, compareBigint);
+  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareBigint);
   if (
     source.multipleOf !== undefined &&
     refined.multipleOf !== undefined &&
@@ -213,6 +332,76 @@ function decimalNarrows(source: DecimalType, refined: DecimalType): string[] {
     out.push(
       `multiple_of ${String(refined.multipleOf.unscaledValue)}e${String(-refined.multipleOf.scale)} is not itself a multiple of the source's own ${String(source.multipleOf.unscaledValue)}e${String(-source.multipleOf.scale)}`,
     );
+  }
+  checkMemberSubset(
+    out,
+    'members',
+    source.members,
+    refined.members,
+    (a, b) => compareDecimal(a, b) === 0,
+  );
+  return out;
+}
+
+/**
+ * {@link integerMemberCoherence}'s twin, over the same three parts: non-empty, unique by value, and
+ * every member satisfying the body's own bounds, step and digit-count facets.
+ *
+ * Uniqueness is where the two differ in mechanism and not in rule. §5.5 makes the exact numeric
+ * tiers values with no scale — "`1`, `1.0` and `1.00` are one value" — so `[1 1.0]` is a duplicate,
+ * and the check has to compare through {@link compareDecimal} rather than through a host `Set`,
+ * which would key on the scale the spelling happened to carry.
+ */
+function decimalMemberCoherence(t: DecimalType): string[] {
+  const out: string[] = [];
+  if (t.members === undefined) return out;
+  if (t.members.length === 0) {
+    return ["'members' is empty, so the body admits no value -- a member set states at least one"];
+  }
+  t.members.forEach((member, index) => {
+    if (t.members?.slice(0, index).some((earlier) => compareDecimal(earlier, member) === 0)) {
+      out.push(
+        `members states ${renderBoundValue(member)} more than once -- members are compared by value, ` +
+          'so 1 and 1.0 are one member (§5.5)',
+      );
+    }
+  });
+  const lower = bound(t.min, t.exclusiveMin, 'min', 'exclusive_min');
+  const upper = bound(t.max, t.exclusiveMax, 'max', 'exclusive_max');
+  for (const member of t.members) {
+    if (
+      !admitsLower(lower, member, compareDecimal) ||
+      !admitsUpper(upper, member, compareDecimal)
+    ) {
+      out.push(
+        `members includes ${renderBoundValue(member)}, which the body's own bounds do not admit`,
+      );
+      continue;
+    }
+    if (
+      t.multipleOf !== undefined &&
+      decimalSignum(t.multipleOf) !== 0 &&
+      !decimalIsMultiple(member, t.multipleOf)
+    ) {
+      out.push(
+        `members includes ${renderBoundValue(member)}, not itself a multiple of the body's own multiple_of`,
+      );
+      continue;
+    }
+    const asExact = decimalOf(member);
+    if (t.totalDigits !== undefined && BigInt(decimalPrecision(asExact.unscaled)) > t.totalDigits) {
+      out.push(
+        `members includes ${renderBoundValue(member)}, with more than the body's own total_digits`,
+      );
+    }
+    if (
+      t.fractionDigits !== undefined &&
+      BigInt(decimalFractionDigits(asExact)) > t.fractionDigits
+    ) {
+      out.push(
+        `members includes ${renderBoundValue(member)}, with more than the body's own fraction_digits`,
+      );
+    }
   }
   return out;
 }
@@ -234,8 +423,9 @@ function decimalCoherence(t: DecimalType): string[] {
     t.fractionDigits,
     'total_digits',
     t.totalDigits,
-    compareNumber,
+    compareBigint,
   );
+  out.push(...decimalMemberCoherence(t));
   return out;
 }
 
@@ -291,29 +481,29 @@ function rationalCoherence(t: RationalType): string[] {
   return out;
 }
 
-// ── text-shaped families: text_type, binary, regex_type, uri_type, email_type ──────────────────
+// ── text-shaped families: text_type, bytes_type, regex_type, uri_type, email_type ──────────────
 
 interface TextConstraints {
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly length?: number;
+  readonly minLength?: bigint;
+  readonly maxLength?: bigint;
+  readonly length?: bigint;
 }
 
-function effectiveMinLength(t: TextConstraints): number | undefined {
+function effectiveMinLength(t: TextConstraints): bigint | undefined {
   return t.minLength ?? t.length;
 }
 
-function effectiveMaxLength(t: TextConstraints): number | undefined {
+function effectiveMaxLength(t: TextConstraints): bigint | undefined {
   return t.maxLength ?? t.length;
 }
 
 /** `text_type`'s own narrowing rule — reused verbatim by `regex_type`/`uri_type`/`email_type`, which compose `text_type`'s length facets flat (§5.7). */
 function textNarrows(source: TextConstraints, refined: TextConstraints): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min_length', effectiveMinLength(source), refined.minLength, compareNumber);
-  checkAtLeast(out, 'length', effectiveMinLength(source), refined.length, compareNumber);
-  checkAtMost(out, 'max_length', effectiveMaxLength(source), refined.maxLength, compareNumber);
-  checkAtMost(out, 'length', effectiveMaxLength(source), refined.length, compareNumber);
+  checkAtLeast(out, 'min_length', effectiveMinLength(source), refined.minLength, compareBigint);
+  checkAtLeast(out, 'length', effectiveMinLength(source), refined.length, compareBigint);
+  checkAtMost(out, 'max_length', effectiveMaxLength(source), refined.maxLength, compareBigint);
+  checkAtMost(out, 'length', effectiveMaxLength(source), refined.length, compareBigint);
   return out;
 }
 
@@ -323,24 +513,30 @@ function textCoherence(t: TextConstraints): string[] {
   checkNonNegative(out, 'min_length', t.minLength);
   checkNonNegative(out, 'max_length', t.maxLength);
   checkNonNegative(out, 'length', t.length);
-  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareNumber);
-  checkOrdered(out, 'min_length', t.minLength, 'length', t.length, compareNumber);
-  checkOrdered(out, 'length', t.length, 'max_length', t.maxLength, compareNumber);
+  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareBigint);
+  checkOrdered(out, 'min_length', t.minLength, 'length', t.length, compareBigint);
+  checkOrdered(out, 'length', t.length, 'max_length', t.maxLength, compareBigint);
   return out;
 }
 
-function binaryNarrows(source: BinaryType, refined: BinaryType): string[] {
+/** `bytes_type.encoding` carries no narrowing relation at all (§5.5, §5.7): a refinement may neither set nor change it, so the only legal comparison is equality -- an alphabet is a spelling, and another one is a fresh instance, never a tightening of this one. */
+function bytesNarrows(source: BytesType, refined: BytesType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min_length', source.minLength, refined.minLength, compareNumber);
-  checkAtMost(out, 'max_length', source.maxLength, refined.maxLength, compareNumber);
+  if (source.encoding !== refined.encoding) {
+    out.push(
+      `encoding ${refined.encoding} carries no narrowing relation to the source's own ${source.encoding} (§5.5) -- another alphabet is a fresh instance, never a refinement`,
+    );
+  }
+  checkAtLeast(out, 'min_length', source.minLength, refined.minLength, compareBigint);
+  checkAtMost(out, 'max_length', source.maxLength, refined.maxLength, compareBigint);
   return out;
 }
 
-function binaryCoherence(t: BinaryType): string[] {
+function bytesCoherence(t: BytesType): string[] {
   const out: string[] = [];
   checkNonNegative(out, 'min_length', t.minLength);
   checkNonNegative(out, 'max_length', t.maxLength);
-  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareNumber);
+  checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareBigint);
   return out;
 }
 
@@ -363,8 +559,9 @@ function timeNarrows(source: TimeType, refined: TimeType): string[] {
   const out: string[] = [];
   checkAtLeast(out, 'min', source.min, refined.min, compareOffsetTime);
   checkAtMost(out, 'max', source.max, refined.max, compareOffsetTime);
-  // `precision` is an upper bound on written fractional-second digits (§5.5), so it refines the
-  // way every other upper bound does: a refinement may lower it, never raise it.
+  // `precision` is an upper bound on the value's own fractional-second grid (§5.5: "a
+  // constraint on the value, not on a spelling"), so it refines the way every other upper bound
+  // does: a refinement may lower it (a coarser grid), never raise it.
   checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
   return out;
 }
@@ -372,6 +569,7 @@ function timeNarrows(source: TimeType, refined: TimeType): string[] {
 function timeCoherence(t: TimeType): string[] {
   const out: string[] = [];
   checkOrdered(out, 'min', t.min, 'max', t.max, compareOffsetTime);
+  checkWithin(out, 'precision', t.precision, 0n, 9n);
   return out;
 }
 
@@ -379,7 +577,7 @@ function dateTimeNarrows(source: DateTimeType, refined: DateTimeType): string[] 
   const out: string[] = [];
   checkAtLeast(out, 'min', source.min, refined.min, compareOffsetDateTime);
   checkAtMost(out, 'max', source.max, refined.max, compareOffsetDateTime);
-  // As for `time`: an upper bound on written digits refines downward only (§5.5).
+  // As for `time`: an upper bound on the value's own grid refines downward only (§5.5).
   checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
   return out;
 }
@@ -387,24 +585,263 @@ function dateTimeNarrows(source: DateTimeType, refined: DateTimeType): string[] 
 function dateTimeCoherence(t: DateTimeType): string[] {
   const out: string[] = [];
   checkOrdered(out, 'min', t.min, 'max', t.max, compareOffsetDateTime);
+  checkWithin(out, 'precision', t.precision, 0n, 9n);
   return out;
 }
 
-// ── cidr4_type / cidr6_type ──────────────────────────────────────────────────────────────────
+// ── duration_type / period_type ─────────────────────────────────────────────────────────────
+
+/**
+ * `duration`'s bounds, step and `precision` are all bigint (nanoseconds, §5.5), so this reuses
+ * {@link compareBigint} and {@link integerSignum} directly rather than a family-specific
+ * comparator -- the same value space {@link IntegerType}'s own facets share, only the unit
+ * differs.
+ */
+function durationNarrows(source: DurationType, refined: DurationType): string[] {
+  const out: string[] = [];
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareBigint,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareBigint,
+  );
+  checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
+  if (
+    source.multipleOf !== undefined &&
+    refined.multipleOf !== undefined &&
+    refined.multipleOf % source.multipleOf !== 0n
+  ) {
+    out.push(
+      `multiple_of ${String(refined.multipleOf)} is not itself a multiple of the source's own ${String(source.multipleOf)}`,
+    );
+  }
+  return out;
+}
+
+function durationCoherence(t: DurationType): string[] {
+  const out: string[] = [];
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareBigint,
+  );
+  checkPositiveStep(out, 'multiple_of', t.multipleOf, integerSignum);
+  checkWithin(out, 'precision', t.precision, 0n, 9n);
+  return out;
+}
+
+/** `period`'s bounds and step are bigint months (§5.5); no `precision` facet -- a month count has no fractional part. */
+function periodNarrows(source: PeriodType, refined: PeriodType): string[] {
+  const out: string[] = [];
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareBigint,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareBigint,
+  );
+  if (
+    source.multipleOf !== undefined &&
+    refined.multipleOf !== undefined &&
+    refined.multipleOf % source.multipleOf !== 0n
+  ) {
+    out.push(
+      `multiple_of ${String(refined.multipleOf)} is not itself a multiple of the source's own ${String(source.multipleOf)}`,
+    );
+  }
+  return out;
+}
+
+function periodCoherence(t: PeriodType): string[] {
+  const out: string[] = [];
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareBigint,
+  );
+  checkPositiveStep(out, 'multiple_of', t.multipleOf, integerSignum);
+  return out;
+}
+
+// ── complex_type ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `complex_type.component`'s own narrowing relation (§5.7, §9): two chains, ranked separately --
+ * the exact tiers (`INTEGER ⊂ NUMBER ⊂ RATIONAL`) and the approximate ones (`FLOAT32 ⊂
+ * FLOAT64`), incomparable across chains since binary64 carries `±inf`/`NaN` no exact decimal
+ * represents. A refinement may move to a lower rank in the *same* chain only; the identical
+ * value is always a (vacuous) narrowing regardless of chain.
+ */
+const EXACT_COMPONENT_RANK: Readonly<Partial<Record<ComplexComponent, number>>> = {
+  INTEGER: 0,
+  NUMBER: 1,
+  RATIONAL: 2,
+};
+const APPROXIMATE_COMPONENT_RANK: Readonly<Partial<Record<ComplexComponent, number>>> = {
+  FLOAT32: 0,
+  FLOAT64: 1,
+};
+
+function complexNarrows(source: ComplexType, refined: ComplexType): string[] {
+  if (source.component === refined.component) return [];
+  const sourceRank =
+    EXACT_COMPONENT_RANK[source.component] ?? APPROXIMATE_COMPONENT_RANK[source.component];
+  const refinedRank =
+    EXACT_COMPONENT_RANK[refined.component] ?? APPROXIMATE_COMPONENT_RANK[refined.component];
+  const sameChain =
+    source.component in EXACT_COMPONENT_RANK === refined.component in EXACT_COMPONENT_RANK;
+  if (
+    !sameChain ||
+    sourceRank === undefined ||
+    refinedRank === undefined ||
+    refinedRank > sourceRank
+  ) {
+    return [
+      `component ${refined.component} does not narrow the source's own ${source.component} (§5.7)`,
+    ];
+  }
+  return [];
+}
+
+// ── ipv4_type / ipv6_type / cidr4_type / cidr6_type ─────────────────────────────────────────────
+
+/**
+ * §5.5's schema-load network obligation, common to all four families: `within` and `excluding`
+ * MUST between them admit at least one value, decided exactly rather than pairwise
+ * (`cidrParsing.ts`'s own `admitsSomeValue` walks a prefix tree rather than comparing each
+ * pair in isolation, for the reason its own doc states). A `within`/`excluding` entry that isn't
+ * itself a valid network in the family's own CIDR notation is reported and stops the question
+ * there — admission can't be judged over an entry that couldn't be parsed as a network at all.
+ *
+ * `lowPrefix`/`highPrefix` bound the candidate's own prefix length: an address family calls this
+ * with both equal to `addressBits` (an address is a single-point block, §5.5's ADDRESS rule), a
+ * network family with its own `min_prefix`/`max_prefix` (defaulted to `0`/`addressBits`), since
+ * "for a network family the prefix bounds participate" in the same question.
+ */
+function networkCoherence(
+  out: string[],
+  within: readonly string[],
+  excluding: readonly string[],
+  parseAddress: (text: string) => Uint8Array | undefined,
+  addressBits: number,
+  lowPrefix: number,
+  highPrefix: number,
+): void {
+  const before = out.length;
+  const withinBlocks = [];
+  for (const text of within) {
+    const block = parseNetworkBlock(text, parseAddress);
+    if (block === undefined) {
+      out.push(`'within' entry '${text}' is not a valid network in CIDR notation (§5.5)`);
+    } else {
+      withinBlocks.push(block);
+    }
+  }
+  const excludingBlocks = [];
+  for (const text of excluding) {
+    const block = parseNetworkBlock(text, parseAddress);
+    if (block === undefined) {
+      out.push(`'excluding' entry '${text}' is not a valid network in CIDR notation (§5.5)`);
+    } else {
+      excludingBlocks.push(block);
+    }
+  }
+  if (out.length > before) return;
+  // §5.5 asks the diagnostic to name which of the two causes it found, "since the two want
+  // different edits": widening `excluding` is one repair and loosening the prefix bounds is
+  // another, and a message offering both alternatives tells an author neither.
+  const cause = whyNoValue(withinBlocks, excludingBlocks, lowPrefix, highPrefix, addressBits);
+  if (cause === 'excluded') {
+    out.push(
+      "'within' and 'excluding' admit no value between them (§5.5): 'excluding' covers every " +
+        "'within' network entirely",
+    );
+  } else if (cause === 'prefix-bounds') {
+    out.push(
+      "'within' and 'excluding' admit no value between them (§5.5): what 'excluding' leaves " +
+        `uncovered is narrower than the prefix bounds [${String(lowPrefix)}, ${String(highPrefix)}] allow`,
+    );
+  }
+}
+
+function ipv4Coherence(t: Ipv4Type): string[] {
+  const out: string[] = [];
+  networkCoherence(out, t.within, t.excluding, parseIpv4Octets, 32, 32, 32);
+  return out;
+}
+
+function ipv6Coherence(t: Ipv6Type): string[] {
+  const out: string[] = [];
+  networkCoherence(out, t.within, t.excluding, parseIpv6Bytes, 128, 128, 128);
+  return out;
+}
+
+/**
+ * `within`/`excluding`'s own narrowing relation (§5.5, §5.7), shared by all four network
+ * families: `within` admits addresses, so a refinement narrows it by *shrinking* ({@link
+ * checkSubset}); `excluding` removes them, so a refinement narrows it by *growing* ({@link
+ * checkSuperset}) -- the mirror-image pair `checkSuperset`'s own doc states. `ipv4_type`/
+ * `ipv6_type` (the address families) and `cidr4_type`/`cidr6_type` (the network families, which
+ * add their own prefix-bound check on top, in {@link cidrNarrows}) apply exactly this one rule to
+ * the pair: neither family gets a pass, and the two agree.
+ */
+function networkNarrows(
+  out: string[],
+  source: { readonly within: readonly string[]; readonly excluding: readonly string[] },
+  refined: { readonly within: readonly string[]; readonly excluding: readonly string[] },
+): void {
+  checkSubset(out, 'within', source.within, refined.within);
+  checkSuperset(out, 'excluding', source.excluding, refined.excluding);
+}
+
+function ipv4Narrows(source: Ipv4Type, refined: Ipv4Type): string[] {
+  const out: string[] = [];
+  networkNarrows(out, source, refined);
+  return out;
+}
+
+function ipv6Narrows(source: Ipv6Type, refined: Ipv6Type): string[] {
+  const out: string[] = [];
+  networkNarrows(out, source, refined);
+  return out;
+}
 
 function cidrNarrows(source: Cidr4Type | Cidr6Type, refined: Cidr4Type | Cidr6Type): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min_prefix', source.minPrefix, refined.minPrefix, compareNumber);
-  checkAtMost(out, 'max_prefix', source.maxPrefix, refined.maxPrefix, compareNumber);
-  checkSubset(out, 'within', source.within, refined.within);
+  checkAtLeast(out, 'min_prefix', source.minPrefix, refined.minPrefix, compareBigint);
+  checkAtMost(out, 'max_prefix', source.maxPrefix, refined.maxPrefix, compareBigint);
+  networkNarrows(out, source, refined);
   return out;
 }
 
-function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: number): string[] {
+function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: bigint): string[] {
   const out: string[] = [];
-  checkWithin(out, 'min_prefix', t.minPrefix, 0, prefixBits);
-  checkWithin(out, 'max_prefix', t.maxPrefix, 0, prefixBits);
-  checkOrdered(out, 'min_prefix', t.minPrefix, 'max_prefix', t.maxPrefix, compareNumber);
+  checkWithin(out, 'min_prefix', t.minPrefix, 0n, prefixBits);
+  checkWithin(out, 'max_prefix', t.maxPrefix, 0n, prefixBits);
+  checkOrdered(out, 'min_prefix', t.minPrefix, 'max_prefix', t.maxPrefix, compareBigint);
+  // The admits-a-value question needs a coherent, in-range prefix bound pair to mean anything --
+  // asking it against a bound already reported above would only produce a second, redundant
+  // complaint about the same mistake.
+  if (out.length === 0) {
+    const addressBits = Number(prefixBits);
+    const parseAddress = addressBits === 32 ? parseIpv4Octets : parseIpv6Bytes;
+    const lowPrefix = t.minPrefix === undefined ? 0 : Number(t.minPrefix);
+    const highPrefix = t.maxPrefix === undefined ? addressBits : Number(t.maxPrefix);
+    networkCoherence(out, t.within, t.excluding, parseAddress, addressBits, lowPrefix, highPrefix);
+  }
   return out;
 }
 
@@ -463,10 +900,10 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'text_type'
         ? textNarrows(source, refined)
         : mismatch('text', refined);
-    case 'binary':
-      return refined.kind === 'binary'
-        ? binaryNarrows(source, refined)
-        : mismatch('binary', refined);
+    case 'bytes_type':
+      return refined.kind === 'bytes_type'
+        ? bytesNarrows(source, refined)
+        : mismatch('bytes', refined);
     case 'regex_type':
       return refined.kind === 'regex_type'
         ? textNarrows(source, refined)
@@ -501,16 +938,31 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
         : mismatch('a cidr6', refined);
     case 'enum':
       return refined.kind === 'enum' ? enumNarrows(source, refined) : mismatch('an enum', refined);
-    // No orderable facet at all: unit, uuid_type, complex_type (a pure selector), uuid/ipv4/ipv6/
-    // mac (selector- or spec-only), duration_type (unparsed-text bounds, left ordered by nothing
-    // for the reason `atoms-temporal.ts`'s own `DurationType` doc gives).
+    case 'duration_type':
+      return refined.kind === 'duration_type'
+        ? durationNarrows(source, refined)
+        : mismatch('a duration', refined);
+    case 'period_type':
+      return refined.kind === 'period_type'
+        ? periodNarrows(source, refined)
+        : mismatch('a period', refined);
+    case 'complex_type':
+      return refined.kind === 'complex_type'
+        ? complexNarrows(source, refined)
+        : mismatch('a complex', refined);
+    case 'ipv4_type':
+      return refined.kind === 'ipv4_type'
+        ? ipv4Narrows(source, refined)
+        : mismatch('an ipv4', refined);
+    case 'ipv6_type':
+      return refined.kind === 'ipv6_type'
+        ? ipv6Narrows(source, refined)
+        : mismatch('an ipv6', refined);
+    // No orderable facet and no selector at all: `unit` (opaque, no schema-shape signal), the
+    // identifier-only `uuid_type`, and `mac_type` (spec-pinned, no facet of its own to compare).
     case 'unit':
     case 'uuid_type':
-    case 'complex_type':
-    case 'ipv4_type':
-    case 'ipv6_type':
     case 'mac_type':
-    case 'duration_type':
       return [];
   }
 }
@@ -531,11 +983,12 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'float_type',
   'rational_type',
   'uuid_type',
-  'binary',
+  'bytes_type',
   'date_type',
   'time_type',
   'datetime_type',
   'duration_type',
+  'period_type',
   'cidr4_type',
   'cidr6_type',
   'email_type',
@@ -576,8 +1029,8 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
       return rationalCoherence(atom);
     case 'text_type':
       return textCoherence(atom);
-    case 'binary':
-      return binaryCoherence(atom);
+    case 'bytes_type':
+      return bytesCoherence(atom);
     case 'regex_type':
       return textCoherence(atom);
     case 'uri_type':
@@ -591,18 +1044,25 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'datetime_type':
       return dateTimeCoherence(atom);
     case 'cidr4_type':
-      return cidrCoherence(atom, 32);
+      return cidrCoherence(atom, 32n);
     case 'cidr6_type':
-      return cidrCoherence(atom, 128);
+      return cidrCoherence(atom, 128n);
+    case 'ipv4_type':
+      return ipv4Coherence(atom);
+    case 'ipv6_type':
+      return ipv6Coherence(atom);
     case 'enum':
       return enumCoherence(atom);
+    case 'duration_type':
+      return durationCoherence(atom);
+    case 'period_type':
+      return periodCoherence(atom);
+    // `component` is `complex_type`'s only field: a single selector has nothing else to
+    // contradict.
     case 'unit':
     case 'uuid_type':
     case 'complex_type':
-    case 'ipv4_type':
-    case 'ipv6_type':
     case 'mac_type':
-    case 'duration_type':
       return [];
   }
 }

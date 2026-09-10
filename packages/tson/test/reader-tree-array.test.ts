@@ -34,7 +34,7 @@ function reader(
     ...(options.minItems !== undefined ? { minItems: options.minItems } : {}),
     ...(options.maxItems !== undefined ? { maxItems: options.maxItems } : {}),
   };
-  return arrayTreeReader('numbers', 'numbers', body, resolve, LOCATION);
+  return arrayTreeReader('numbers', 'numbers', body, resolve, LOCATION, () => false);
 }
 
 describe('arrayTreeReader -- shape and elements (§2.7)', () => {

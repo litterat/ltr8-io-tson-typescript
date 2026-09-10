@@ -8,9 +8,14 @@ import { createHeldBody } from '../src/compiler/heldBody.js';
 import { heldRecord, refValue } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
 import { inferAll } from '../src/compiler/parameterKinds.js';
-import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/errors.js';
+import {
+  TsonLimitRefusedError,
+  TsonNotImplementedError,
+  TsonSchemaValidationError,
+} from '../src/core/errors.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
+import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 import type {
   Reference,
   Top,
@@ -18,6 +23,7 @@ import type {
   TypeDefinition,
   TypeRef,
 } from '../src/schema/meta/typedef.js';
+import { typeKind } from '../src/schema/meta/typedef.js';
 
 // ── Test fixtures ────────────────────────────────────────────────────────────────────────────
 
@@ -37,12 +43,9 @@ function literal(text: string): TypeArgument {
 /** `<params> => { field: type ... }` -- a record template, held the way `definitionResolver.ts` holds one. */
 function recordTemplate(parameters: readonly string[], body: RecordBody): TypeDefinition {
   return {
-    kind: 'PRODUCT',
-    parameters,
-    constructor: false,
     supertypes: [],
     subtypes: [],
-    body: createHeldBody(heldRecord(body)),
+    body: createHeldBody(heldRecord(body), parameters),
     annotations: [],
   };
 }
@@ -157,6 +160,37 @@ function thrownBy(fn: () => unknown): unknown {
   throw new Error('expected to throw, but it completed');
 }
 
+/**
+ * {@link typeKind} over `namespace`, falling back to a minimal stand-in for the well-known kernel
+ * constructor names this file's own fixtures apply -- see `definitionResolver.test.ts`'s own
+ * identical helper for the full rationale.
+ */
+function kindOf(def: TypeDefinition, namespace: ReadonlyMap<string, TypeDefinition>) {
+  return typeKind(def, (name) => namespace.get(name) ?? stubConstructor(name));
+}
+
+function stubConstructor(name: string): TypeDefinition | undefined {
+  const supertypes =
+    name === 'record' || name === 'array' || name === 'map' || name === 'tuple'
+      ? ['product', 'top']
+      : name === 'choice' || name === 'scoped'
+        ? ['sum', 'top']
+        : name === 'data'
+          ? ['data', 'top']
+          : name === 'unit' || name === 'enum' || name.endsWith('_type')
+            ? ['atom', 'top']
+            : name === 'reference' || name === 'template'
+              ? ['top']
+              : undefined;
+  if (supertypes === undefined) return undefined;
+  return {
+    supertypes,
+    subtypes: [],
+    body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+    annotations: [],
+  };
+}
+
 function isRecordBody(body: Top): body is RecordBody {
   return 'fields' in body;
 }
@@ -190,7 +224,7 @@ describe('a record template closes to the instantiation entry itself', () => {
     });
     const entry = namespace.get(name);
     if (entry === undefined || !isRecordBody(entry.body)) throw new Error('unreachable');
-    expect(entry.kind).toBe('PRODUCT');
+    expect(kindOf(entry, namespace)).toBe('PRODUCT');
     expect(entry.source).toEqual({ name: 'box', arguments: [ref('text')], annotations: [] });
     expect(entry.body.fields[0]).toMatchObject({
       name: 'value',
@@ -257,6 +291,87 @@ describe('a record template closes to the instantiation entry itself', () => {
     expect(asFloat).not.toBe(decimal);
   });
 
+  it('an argument that is an alias follows its reference chain to its terminal entry, so `box<user_id>` over `user_id => uuid` mints the same entry as `box<uuid>` (§8.2)', () => {
+    const { namespace, materialiser } = harness();
+    namespace.set('uuid', {
+      supertypes: ['atom', 'top'],
+      subtypes: [],
+      body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+      annotations: [],
+    });
+    namespace.set('user_id', {
+      supertypes: [],
+      subtypes: [],
+      body: { kind: 'reference', target: { name: 'uuid', arguments: [], annotations: [] } },
+      annotations: [],
+    });
+    namespace.set(
+      'box',
+      recordTemplate(['T'], {
+        kind: 'record',
+        supertypes: [],
+        groups: [],
+        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+      }),
+    );
+    const overAlias = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('user_id')],
+      annotations: [],
+    });
+    const overTerminal = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('uuid')],
+      annotations: [],
+    });
+    expect(overAlias).toBe(overTerminal);
+    // Self-describing (§8.1): the minted entry's own `source` states the canonical application --
+    // the terminal entry `uuid`, not the alias `user_id` the first caller happened to write.
+    const entry = namespace.get(overAlias);
+    if (entry === undefined) throw new Error('unreachable');
+    expect(entry.source).toEqual({ name: 'box', arguments: [ref('uuid')], annotations: [] });
+  });
+
+  it('a refinement or a fresh instance is not an alias and keeps its own identity, even over an otherwise-identical body (§8.2)', () => {
+    const { namespace, materialiser } = harness();
+    // Two distinct entries with the same shape, standing in for `!uuid ^ {}` and `!uuid_type {}`
+    // already lifted by desugaring -- neither is a `Reference` body, so `terminal` stops on each
+    // immediately rather than following anywhere.
+    const atomBody: Top = { kind: 'record', supertypes: [], fields: [], groups: [] };
+    namespace.set('uuid_refined', {
+      supertypes: ['uuid', 'atom', 'top'],
+      subtypes: [],
+      body: atomBody,
+      annotations: [],
+    });
+    namespace.set('uuid_fresh', {
+      supertypes: ['atom', 'top'],
+      subtypes: [],
+      body: atomBody,
+      annotations: [],
+    });
+    namespace.set(
+      'box',
+      recordTemplate(['T'], {
+        kind: 'record',
+        supertypes: [],
+        groups: [],
+        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+      }),
+    );
+    const overRefined = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('uuid_refined')],
+      annotations: [],
+    });
+    const overFresh = materialiser.closeApplication({
+      name: 'box',
+      arguments: [ref('uuid_fresh')],
+      annotations: [],
+    });
+    expect(overRefined).not.toBe(overFresh);
+  });
+
   it('closes arguments innermost-first, so a nested application names the inner entry before the outer one', () => {
     const { namespace, materialiser } = harness();
     namespace.set(
@@ -292,29 +407,29 @@ describe('an open-instance template mints a synthetic form plus a reference inst
     // `<T> !array { element_type: T }` -- held directly, since the array constructor's own
     // vocabulary (not `record`) is what dispatches `closeHeldTemplate` rather than `closeHeldRecord`.
     namespace.set('wrapped', {
-      kind: 'PRODUCT',
-      parameters: ['T'],
-      constructor: false,
       supertypes: [],
       subtypes: [],
-      body: createHeldBody({
-        annotations: [],
-        typeRef: 'array',
-        coreValue: {
-          kind: 'record',
-          fields: [
-            {
-              name: 'element_type',
-              value: {
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'array',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'element_type',
                 value: {
-                  annotations: [],
-                  coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                  },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
-      }),
+        ['T'],
+      ),
       annotations: [],
     });
     const instantiationName = materialiser.closeApplication({
@@ -326,7 +441,7 @@ describe('an open-instance template mints a synthetic form plus a reference inst
     if (instantiation === undefined || !isReferenceBody(instantiation.body)) {
       throw new Error('unreachable');
     }
-    expect(instantiation.kind).toBe('REFERENCE');
+    expect(kindOf(instantiation, namespace)).toBe('REFERENCE');
     expect(instantiation.source).toEqual({
       name: 'wrapped',
       arguments: [ref('text')],
@@ -342,29 +457,29 @@ describe('an open-instance template mints a synthetic form plus a reference inst
   it('a generated head (desugar-injected) closes to its own form with no extra instantiation entry', () => {
     const { namespace, materialiser } = harness({ generatedNames: new Set(['array_p0']) });
     namespace.set('array_p0', {
-      kind: 'PRODUCT',
-      parameters: ['T'],
-      constructor: false,
       supertypes: [],
       subtypes: [],
-      body: createHeldBody({
-        annotations: [],
-        typeRef: 'array',
-        coreValue: {
-          kind: 'record',
-          fields: [
-            {
-              name: 'element_type',
-              value: {
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'array',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'element_type',
                 value: {
-                  annotations: [],
-                  coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                  },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
-      }),
+        ['T'],
+      ),
       annotations: [],
     });
     const result = materialiser.closeApplication({
@@ -373,36 +488,38 @@ describe('an open-instance template mints a synthetic form plus a reference inst
       annotations: [],
     });
     // The form entry *is* the answer -- no second, REFERENCE-kind entry naming `array_p0<uuid>`.
-    expect(namespace.get(result)?.kind).toBe('PRODUCT');
+    const resultEntry = namespace.get(result);
+    if (resultEntry === undefined) throw new Error('unreachable');
+    expect(kindOf(resultEntry, namespace)).toBe('PRODUCT');
     expect(materialiser.syntheticNames().has(result)).toBe(true);
   });
 
   it('throws TsonNotImplementedError closing an open-instance template with no compiled meta reader supplied', () => {
     const { materialiser, namespace } = harness({ omitReader: true });
     namespace.set('wrapped', {
-      kind: 'PRODUCT',
-      parameters: ['T'],
-      constructor: false,
       supertypes: [],
       subtypes: [],
-      body: createHeldBody({
-        annotations: [],
-        typeRef: 'array',
-        coreValue: {
-          kind: 'record',
-          fields: [
-            {
-              name: 'element_type',
-              value: {
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'array',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'element_type',
                 value: {
-                  annotations: [],
-                  coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                  },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
-      }),
+        ['T'],
+      ),
       annotations: [],
     });
     const error = thrownBy(() =>
@@ -430,101 +547,101 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
       }),
     );
     namespace.set('uuid_pair', {
-      kind: 'REFERENCE',
-      parameters: ['B'],
-      constructor: false,
       supertypes: [],
       subtypes: [],
-      body: createHeldBody({
-        annotations: [],
-        typeRef: 'reference',
-        coreValue: {
-          kind: 'record',
-          fields: [
-            {
-              name: 'target',
-              value: {
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'reference',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'target',
                 value: {
-                  annotations: [],
-                  coreValue: {
-                    kind: 'record',
-                    fields: [
-                      {
-                        name: 'name',
-                        value: {
+                  value: {
+                    annotations: [],
+                    coreValue: {
+                      kind: 'record',
+                      fields: [
+                        {
+                          name: 'name',
                           value: {
-                            annotations: [],
-                            coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
-                          },
-                        },
-                      },
-                      {
-                        name: 'arguments',
-                        value: {
-                          value: {
-                            annotations: [],
-                            coreValue: {
-                              kind: 'array',
-                              elements: [
-                                {
-                                  value: {
-                                    annotations: [],
-                                    coreValue: {
-                                      kind: 'record',
-                                      fields: [
-                                        {
-                                          name: 'name',
-                                          value: {
-                                            value: {
-                                              annotations: [],
-                                              coreValue: {
-                                                kind: 'token',
-                                                text: 'uuid',
-                                                form: 'unquoted',
-                                              },
-                                            },
-                                          },
-                                        },
-                                      ],
-                                    },
-                                  },
-                                },
-                                {
-                                  value: {
-                                    annotations: [],
-                                    coreValue: {
-                                      kind: 'record',
-                                      fields: [
-                                        {
-                                          name: 'name',
-                                          value: {
-                                            value: {
-                                              annotations: [],
-                                              coreValue: {
-                                                kind: 'token',
-                                                text: 'B',
-                                                form: 'unquoted',
-                                              },
-                                            },
-                                          },
-                                        },
-                                      ],
-                                    },
-                                  },
-                                },
-                              ],
+                            value: {
+                              annotations: [],
+                              coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
                             },
                           },
                         },
-                      },
-                    ],
+                        {
+                          name: 'arguments',
+                          value: {
+                            value: {
+                              annotations: [],
+                              coreValue: {
+                                kind: 'array',
+                                elements: [
+                                  {
+                                    value: {
+                                      annotations: [],
+                                      coreValue: {
+                                        kind: 'record',
+                                        fields: [
+                                          {
+                                            name: 'name',
+                                            value: {
+                                              value: {
+                                                annotations: [],
+                                                coreValue: {
+                                                  kind: 'token',
+                                                  text: 'uuid',
+                                                  form: 'unquoted',
+                                                },
+                                              },
+                                            },
+                                          },
+                                        ],
+                                      },
+                                    },
+                                  },
+                                  {
+                                    value: {
+                                      annotations: [],
+                                      coreValue: {
+                                        kind: 'record',
+                                        fields: [
+                                          {
+                                            name: 'name',
+                                            value: {
+                                              value: {
+                                                annotations: [],
+                                                coreValue: {
+                                                  kind: 'token',
+                                                  text: 'B',
+                                                  form: 'unquoted',
+                                                },
+                                              },
+                                            },
+                                          },
+                                        ],
+                                      },
+                                    },
+                                  },
+                                ],
+                              },
+                            },
+                          },
+                        },
+                      ],
+                    },
                   },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
-      }),
+        ['B'],
+      ),
       annotations: [],
     });
     const before = namespace.size;
@@ -547,78 +664,78 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
   it('a self-applying alias is a reported cycle, not a knot tied on nothing (§5.10)', () => {
     const { namespace, materialiser } = harness();
     namespace.set('loop', {
-      kind: 'REFERENCE',
-      parameters: ['T'],
-      constructor: false,
       supertypes: [],
       subtypes: [],
-      body: createHeldBody({
-        annotations: [],
-        typeRef: 'reference',
-        coreValue: {
-          kind: 'record',
-          fields: [
-            {
-              name: 'target',
-              value: {
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'reference',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'target',
                 value: {
-                  annotations: [],
-                  coreValue: {
-                    kind: 'record',
-                    fields: [
-                      {
-                        name: 'name',
-                        value: {
+                  value: {
+                    annotations: [],
+                    coreValue: {
+                      kind: 'record',
+                      fields: [
+                        {
+                          name: 'name',
                           value: {
-                            annotations: [],
-                            coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
-                          },
-                        },
-                      },
-                      {
-                        name: 'arguments',
-                        value: {
-                          value: {
-                            annotations: [],
-                            coreValue: {
-                              kind: 'array',
-                              elements: [
-                                {
-                                  value: {
-                                    annotations: [],
-                                    coreValue: {
-                                      kind: 'record',
-                                      fields: [
-                                        {
-                                          name: 'name',
-                                          value: {
-                                            value: {
-                                              annotations: [],
-                                              coreValue: {
-                                                kind: 'token',
-                                                text: 'T',
-                                                form: 'unquoted',
-                                              },
-                                            },
-                                          },
-                                        },
-                                      ],
-                                    },
-                                  },
-                                },
-                              ],
+                            value: {
+                              annotations: [],
+                              coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
                             },
                           },
                         },
-                      },
-                    ],
+                        {
+                          name: 'arguments',
+                          value: {
+                            value: {
+                              annotations: [],
+                              coreValue: {
+                                kind: 'array',
+                                elements: [
+                                  {
+                                    value: {
+                                      annotations: [],
+                                      coreValue: {
+                                        kind: 'record',
+                                        fields: [
+                                          {
+                                            name: 'name',
+                                            value: {
+                                              value: {
+                                                annotations: [],
+                                                coreValue: {
+                                                  kind: 'token',
+                                                  text: 'T',
+                                                  form: 'unquoted',
+                                                },
+                                              },
+                                            },
+                                          },
+                                        ],
+                                      },
+                                    },
+                                  },
+                                ],
+                              },
+                            },
+                          },
+                        },
+                      ],
+                    },
                   },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
-      }),
+        ['T'],
+      ),
       annotations: [],
     });
     const error = thrownBy(() =>
@@ -701,9 +818,13 @@ describe('recursion (§5.10)', () => {
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'grow', arguments: [ref('text')], annotations: [] }),
     );
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('does not close');
-    expect((error as TsonSchemaValidationError).message).toContain('grow');
+    // A limit refusal ([TSON-SCHEMA] §11.5's "materialisation depth"), not a resolver error --
+    // this deployment declined to spend the resources, distinct from every other reason a
+    // template application fails to close.
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect((error as TsonLimitRefusedError).limit).toBe('materialisation-depth');
+    expect((error as TsonLimitRefusedError).message).toContain('does not close');
+    expect((error as TsonLimitRefusedError).message).toContain('grow');
   });
 });
 
@@ -713,9 +834,6 @@ describe('declaration-time checks (§5.10)', () => {
   it('rejects applying arguments to a name that declares no type parameters', () => {
     const { namespace, materialiser } = harness();
     namespace.set('plain', {
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       body: { kind: 'record', supertypes: [], fields: [], groups: [] },
@@ -761,9 +879,6 @@ describe('declaration-time checks (§5.10)', () => {
         [
           'ghost',
           {
-            kind: 'REFERENCE' as const,
-            parameters: [],
-            constructor: false,
             supertypes: [],
             subtypes: [],
             source: missingApplication,
@@ -782,6 +897,98 @@ describe('declaration-time checks (§5.10)', () => {
   });
 });
 
+// ── §7.4 facet coherence re-runs at materialisation (§8.2) ──────────────────────────────────────
+
+describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
+  /** `testMetaReader` plus `integer_type`, enough to read `min`/`max` bindings as bigints. */
+  function integerAwareMetaReader(type: string, value: DataValue): Top {
+    if (type !== 'integer_type') {
+      return testMetaReader(type, value);
+    }
+    const record = value.coreValue as RecordValue;
+    const readBound = (name: string): bigint | undefined => {
+      const field = record.fields.find((f) => f.name === name)?.value.value.coreValue;
+      return field === undefined ? undefined : BigInt((field as TokenValue).text);
+    };
+    const min = readBound('min');
+    const max = readBound('max');
+    return {
+      kind: 'integer_type',
+      ...(min === undefined ? {} : { min }),
+      ...(max === undefined ? {} : { max }),
+    } satisfies IntegerType;
+  }
+
+  /** `bounded => <N> !integer_type { min: N max: 10 }` -- §7.4's own motivating example. */
+  function boundedTemplate(): TypeDefinition {
+    return {
+      supertypes: [],
+      subtypes: [],
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'integer_type',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'min',
+                value: {
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'N', form: 'unquoted' },
+                  },
+                },
+              },
+              {
+                name: 'max',
+                value: {
+                  value: {
+                    annotations: [],
+                    coreValue: { kind: 'token', text: '10', form: 'unquoted' },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        ['N'],
+      ),
+      annotations: [],
+    };
+  }
+
+  it('bounded<20> mints a body whose bounds admit no value, and is refused just as the identical literal declaration would be', () => {
+    const { namespace, materialiser } = harness({ definitionMetaReader: integerAwareMetaReader });
+    namespace.set('bounded', boundedTemplate());
+    const error = thrownBy(() =>
+      materialiser.closeApplication({
+        name: 'bounded',
+        arguments: [literal('20')],
+        annotations: [],
+      }),
+    );
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('contradict');
+  });
+
+  it('bounded<5> stays coherent and closes cleanly', () => {
+    const { namespace, materialiser } = harness({ definitionMetaReader: integerAwareMetaReader });
+    namespace.set('bounded', boundedTemplate());
+    const name = materialiser.closeApplication({
+      name: 'bounded',
+      arguments: [literal('5')],
+      annotations: [],
+    });
+    const formName = (namespace.get(name)?.body as Reference).target.name;
+    const form = namespace.get(formName);
+    if (form === undefined || !('kind' in form.body) || form.body.kind !== 'integer_type') {
+      throw new Error('unreachable');
+    }
+    expect(form.body).toMatchObject({ min: 5n, max: 10n });
+  });
+});
+
 // ── The whole-schema batch pass ──────────────────────────────────────────────────────────────
 
 describe('materialise (the whole-schema batch pass)', () => {
@@ -796,9 +1003,6 @@ describe('materialise (the whole-schema batch pass)', () => {
 
   function boxedTextReference(): TypeDefinition {
     return {
-      kind: 'REFERENCE',
-      parameters: [],
-      constructor: false,
       supertypes: [],
       subtypes: [],
       source: { name: 'box', arguments: [ref('text')], annotations: [] },
@@ -866,9 +1070,6 @@ describe('materialise (the whole-schema batch pass)', () => {
       [
         'bad',
         {
-          kind: 'REFERENCE',
-          parameters: [],
-          constructor: false,
           supertypes: [],
           subtypes: [],
           // `box` takes one parameter; this applies two.
@@ -901,9 +1102,6 @@ describe('materialise (the whole-schema batch pass)', () => {
       [
         'bad',
         {
-          kind: 'REFERENCE',
-          parameters: [],
-          constructor: false,
           supertypes: [],
           subtypes: [],
           body: {
@@ -931,37 +1129,37 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
   /** `e => <M> !enum { members: [a b M] }` -- §5.10's own motivating case for a VALUE parameter. */
   function enumTemplate(): TypeDefinition {
     return {
-      kind: 'PRODUCT',
-      parameters: ['M'],
-      constructor: false,
       supertypes: [],
       subtypes: [],
-      body: createHeldBody({
-        annotations: [],
-        typeRef: 'enum',
-        coreValue: {
-          kind: 'record',
-          fields: [
-            {
-              name: 'members',
-              value: {
+      body: createHeldBody(
+        {
+          annotations: [],
+          typeRef: 'enum',
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'members',
                 value: {
-                  annotations: [],
-                  coreValue: {
-                    kind: 'array',
-                    elements: (['a', 'b', 'M'] as const).map((text) => ({
-                      value: {
-                        annotations: [],
-                        coreValue: { kind: 'token', text, form: 'unquoted' },
-                      },
-                    })),
+                  value: {
+                    annotations: [],
+                    coreValue: {
+                      kind: 'array',
+                      elements: (['a', 'b', 'M'] as const).map((text) => ({
+                        value: {
+                          annotations: [],
+                          coreValue: { kind: 'token', text, form: 'unquoted' },
+                        },
+                      })),
+                    },
                   },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
-      }),
+        ['M'],
+      ),
       annotations: [],
     };
   }
@@ -985,10 +1183,8 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
   /** Just enough of the governing meta's own vocabulary for `enum.members` to resolve to a set of `identifier`. */
   function metaTypesFor(): (name: string) => TypeDefinition | undefined {
     const vocabRecord = (fields: readonly { name: string; type: string }[]): TypeDefinition => ({
-      kind: 'PRODUCT',
-      parameters: [],
-      constructor: true,
-      supertypes: [],
+      // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
+      supertypes: ['product', 'top'],
       subtypes: [],
       body: {
         kind: 'record',
@@ -1003,10 +1199,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
       [
         'enum_set',
         {
-          kind: 'PRODUCT',
-          parameters: [],
-          constructor: true,
-          supertypes: [],
+          supertypes: ['product', 'top'],
           subtypes: [],
           body: {
             kind: 'array',
@@ -1021,10 +1214,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
       [
         'identifier',
         {
-          kind: 'ATOM',
-          parameters: [],
-          constructor: true,
-          supertypes: [],
+          supertypes: ['atom', 'top'],
           subtypes: [],
           body: { kind: 'unit' },
           annotations: [],

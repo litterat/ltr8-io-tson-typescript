@@ -1,179 +1,174 @@
 /**
- * The ISO 8601 `PnYnMnDTnHnMnS` duration grammar, hand-written -- the port of
- * `DurationParser.java`'s own `parseDuration`/`write`, restructured around `duration.ts`'s
- * actual host value: `TsonDuration` (`value/types.ts`), `{ period, clock }`, rather than the
- * paired `java.time.Period`/`java.time.Duration` the Java's own `schema.meta.IsoDuration` record
- * wraps -- no `RegExp`, for the same reason the RFC 3339 grammar in `rfc3339.ts` has none: a
- * token is already fully decoded text by the time an atom sees it, so a hand-scanned character
- * walk is both the simplest and the most auditable way to enforce a grammar this exact, and it
- * keeps this atom family from inheriting whatever ISO 8601 extensions a regex-based or
- * JDK-delegated compiler happens to accept beyond the strict grammar (`CONFORMANCE.md`:
- * `Duration.parse`/`Period.parse` both accept a leading `-` sign and lowercase `p`/`t`, neither
- * of which `PnYnMnDTnHnMnS` shows).
+ * The `!duration` grammar and its inverse (§5.4) -- RFC 3339 Appendix A's `dur-date`/`dur-time`/
+ * `dur-week`, restricted to the components a fixed length gives a total order over: no `Y` or
+ * month-`M` component (a calendar span with neither is `!period`, `isoPeriod.ts`), an optional
+ * leading `-`, and a fraction confined to the seconds component. Hand-scanned, no `RegExp`, for
+ * the same reason `rfc3339.ts`'s own top note gives, sharing `durationDigits.ts`'s designator
+ * scanner with `isoPeriod.ts`.
  *
- * **Uppercase designators only, no leading sign** -- `CONFORMANCE.md`'s own duration entry.
- * Scanning ASCII digits and exact-case designator letters one at a time means there's nothing
- * here to accept a sign or a lowercase letter through by accident, the same way `rfc3339.ts`'s
- * hand-scanned year has nothing to leak ISO 8601's extended-year form through.
+ * **The week form stands alone.** `"P" (dur-date / dur-time / dur-week)` is an alternation, so a
+ * week never combines with a day/time component -- `P1W2D` and `P1WT1H` both fail here precisely
+ * because the week branch below requires nothing but `W` to follow the digits and the whole token
+ * to end there; anything else falls through to the day/time branch, where `W` is never a letter
+ * either designator scan accepts.
  *
- * **Not the alternative `PnW` week form.** §5.4's own table gives the accepted format as
- * literally `PnYnMnDTnHnMnS`, with no `W` -- read here as exhaustive rather than illustrative,
- * the same conservative reading `DurationParser.java`'s own Javadoc records as a genuine
- * ambiguity rather than a confident call (`CONFORMANCE.md`, "one open question"). A `W` is
- * simply never one of the letters `scanDesignator`/`scanSecondsDesignator` look for, so a `PnW`
- * token fails as unconsumed trailing text.
+ * **A week is exactly 7 days and a day exactly 86400 s.** Both are folded into a nanosecond count
+ * at parse time (`SECONDS_PER_WEEK`/`SECONDS_PER_DAY` below), which is what makes `P2W`, `P14D`
+ * and `PT336H` the same value with no canonical-spelling question to answer: the value space is
+ * nanoseconds, not a written form, so there is nothing to prefer between them.
  *
- * **Designator digit runs are preserved verbatim, never renormalised.** `{@link TsonDuration}`'s
- * own TSDoc gives its shape as two independently round-trippable ISO 8601 substrings; this
- * module honours that literally -- `P0009D` reads back as `P0009D`, not `P9D` -- the same
- * "preserved as written" precedent `schema/meta`'s `Rational` sets for `!rational` (2/4 stays
- * 2/4). Only the *split itself* is new text this format has to synthesise: `P0D`/`PT0S` mark an
- * absent calendar/clock half, per `TsonDuration`'s own contract.
+ * **Uppercase designators only, no lowercase, no leading `+`.** Scanning exact-case ASCII letters
+ * one at a time means there is nothing here to let `java.time.Duration.parse`'s own leniency (a
+ * lowercase `p`/`t`) through by accident -- `CONFORMANCE.md`'s own duration entry.
+ *
+ * **A fractional second past nine digits is rejected inside the scan itself**, not truncated --
+ * `scanSeconds` below refuses a fractional run of zero or more than nine digits the same way
+ * `rfc3339.ts`'s `readFullTime` does for `full-time`/`date-time`, so all three of this family's
+ * fractional-second productions share one ceiling (§5.4).
  */
 
-import type { TsonDuration } from '../../value/types.js';
+import { isDigit, scanDesignator } from './durationDigits.js';
+import { fractionDigits } from './rfc3339.js';
 
+const CODE_MINUS = 0x2d; // '-'
 const CODE_P = 0x50; // 'P'
 const CODE_T = 0x54; // 'T'
-const CODE_Y = 0x59; // 'Y'
-const CODE_M = 0x4d; // 'M'
+const CODE_W = 0x57; // 'W'
 const CODE_D = 0x44; // 'D'
 const CODE_H = 0x48; // 'H'
+const CODE_M = 0x4d; // 'M'
 const CODE_S = 0x53; // 'S'
 const CODE_DOT = 0x2e; // '.'
-const ASCII_ZERO = 0x30;
-const ASCII_NINE = 0x39;
 
-function isDigit(code: number): boolean {
-  return code >= ASCII_ZERO && code <= ASCII_NINE;
-}
+const NANOS_PER_SECOND = 1_000_000_000n;
+const SECONDS_PER_MINUTE = 60n;
+const SECONDS_PER_HOUR = 3_600n;
+const SECONDS_PER_DAY = 86_400n;
+const SECONDS_PER_WEEK = 604_800n;
 
-/** Scans `1*DIGIT letter` at `pos` -- e.g. `scanDesignator(text, pos, CODE_Y)` for `"12Y"`.
- * Returns the matched substring (digits and letter together) and the index just past it, or
- * `undefined` with `pos` conceptually unmoved (the caller simply doesn't advance) when there is
- * no digit run at `pos` at all, or the digit run isn't followed by `letter` -- both are "this
- * designator isn't here", not a hard failure, since ISO 8601 lets any calendar/clock designator
- * be entirely absent. */
-function scanDesignator(
+/** `1*DIGIT ["." 1*9DIGIT] "S"` at `pos` -- the one designator whose grammar admits a fraction,
+ * capped at nine digits per this module's own top note. Returns the whole-seconds count and the
+ * fraction as an exact nanosecond count (`0` when there is no fractional part), or `undefined`
+ * when there is no seconds designator at `pos` at all, or its fraction is malformed or too long. */
+function scanSeconds(
   text: string,
   pos: number,
-  letter: number,
-): { text: string; next: number } | undefined {
+): { readonly seconds: bigint; readonly fractionNanos: bigint; readonly next: number } | undefined {
   let i = pos;
   while (i < text.length && isDigit(text.charCodeAt(i))) i++;
   if (i === pos) return undefined;
-  if (text.charCodeAt(i) !== letter) return undefined;
-  return { text: text.slice(pos, i + 1), next: i + 1 };
-}
+  const seconds = BigInt(text.slice(pos, i));
 
-/** `scanDesignator`'s seconds-designator variant: `1*DIGIT ["." 1*DIGIT] "S"`, the one
- * designator whose grammar admits a fractional part. */
-function scanSecondsDesignator(
-  text: string,
-  pos: number,
-): { text: string; next: number } | undefined {
-  let i = pos;
-  while (i < text.length && isDigit(text.charCodeAt(i))) i++;
-  if (i === pos) return undefined;
+  let fractionNanos = 0n;
   if (text.charCodeAt(i) === CODE_DOT) {
     let j = i + 1;
-    while (j < text.length && isDigit(text.charCodeAt(j))) j++;
-    if (j === i + 1) return undefined; // '.' with no fractional digits after it
+    let digits = 0;
+    while (j < text.length && isDigit(text.charCodeAt(j))) {
+      digits++;
+      j++;
+    }
+    if (digits === 0 || digits > 9) return undefined;
+    fractionNanos = BigInt(text.slice(i + 1, j)) * 10n ** BigInt(9 - digits);
     i = j;
   }
+
   if (text.charCodeAt(i) !== CODE_S) return undefined;
-  return { text: text.slice(pos, i + 1), next: i + 1 };
+  return { seconds, fractionNanos, next: i + 1 };
 }
 
 /**
- * Parses `text` against `P(nY)?(nM)?(nD)?(T(nH)?(nM)?(n[.n]S)?)?`, requiring at least one
- * designator overall and, if `T` is present, at least one clock designator after it (a dangling
- * `T` with nothing following is not itself a designator). Returns `undefined` for anything that
- * doesn't match -- including trailing unconsumed text, so `P3W` fails here precisely because `W`
- * is never a letter either scanner accepts (see this module's own TSDoc).
+ * Parses `text` as a `!duration` token, returning its value as a signed exact count of
+ * nanoseconds (unchecked against the family's own magnitude ceiling -- `duration.ts`'s own job),
+ * or `undefined` for anything that doesn't match this grammar at all, including a `PnW` mixed with
+ * any other component and trailing unconsumed text.
  */
-export function tryParseIsoDuration(text: string): TsonDuration | undefined {
-  if (text.charCodeAt(0) !== CODE_P) return undefined;
-  let pos = 1;
+export function tryParseIsoDuration(text: string): bigint | undefined {
+  let pos = 0;
+  let negative = false;
+  if (text.charCodeAt(0) === CODE_MINUS) {
+    negative = true;
+    pos = 1;
+  }
+  if (text.charCodeAt(pos) !== CODE_P) return undefined;
+  pos += 1;
 
-  let years: string | undefined;
-  let months: string | undefined;
-  let days: string | undefined;
-  const y = scanDesignator(text, pos, CODE_Y);
-  if (y !== undefined) {
-    years = y.text;
-    pos = y.next;
+  const week = scanDesignator(text, pos, CODE_W);
+  if (week?.next === text.length) {
+    const nanoseconds = week.value * SECONDS_PER_WEEK * NANOS_PER_SECOND;
+    return negative ? -nanoseconds : nanoseconds;
   }
-  const m = scanDesignator(text, pos, CODE_M);
-  if (m !== undefined) {
-    months = m.text;
-    pos = m.next;
-  }
+
+  let days: bigint | undefined;
   const d = scanDesignator(text, pos, CODE_D);
   if (d !== undefined) {
-    days = d.text;
+    days = d.value;
     pos = d.next;
   }
 
-  let hours: string | undefined;
-  let minutes: string | undefined;
-  let seconds: string | undefined;
+  let hours: bigint | undefined;
+  let minutes: bigint | undefined;
+  let seconds: bigint | undefined;
+  let fractionNanos = 0n;
   if (text.charCodeAt(pos) === CODE_T) {
     pos += 1;
     const h = scanDesignator(text, pos, CODE_H);
     if (h !== undefined) {
-      hours = h.text;
+      hours = h.value;
       pos = h.next;
     }
-    const min = scanDesignator(text, pos, CODE_M);
-    if (min !== undefined) {
-      minutes = min.text;
-      pos = min.next;
+    const m = scanDesignator(text, pos, CODE_M);
+    if (m !== undefined) {
+      minutes = m.value;
+      pos = m.next;
     }
-    const s = scanSecondsDesignator(text, pos);
+    const s = scanSeconds(text, pos);
     if (s !== undefined) {
-      seconds = s.text;
+      seconds = s.seconds;
+      fractionNanos = s.fractionNanos;
       pos = s.next;
     }
     if (hours === undefined && minutes === undefined && seconds === undefined) return undefined;
   }
 
   if (pos !== text.length) return undefined;
-  if (
-    years === undefined &&
-    months === undefined &&
-    days === undefined &&
-    hours === undefined &&
-    minutes === undefined &&
-    seconds === undefined
-  ) {
+  if (days === undefined && hours === undefined && minutes === undefined && seconds === undefined) {
     return undefined;
   }
 
-  const period =
-    years !== undefined || months !== undefined || days !== undefined
-      ? `P${years ?? ''}${months ?? ''}${days ?? ''}`
-      : 'P0D';
-  const clock =
-    hours !== undefined || minutes !== undefined || seconds !== undefined
-      ? `PT${hours ?? ''}${minutes ?? ''}${seconds ?? ''}`
-      : 'PT0S';
-  return { period, clock };
+  const totalSeconds =
+    (days ?? 0n) * SECONDS_PER_DAY +
+    (hours ?? 0n) * SECONDS_PER_HOUR +
+    (minutes ?? 0n) * SECONDS_PER_MINUTE +
+    (seconds ?? 0n);
+  const nanoseconds = totalSeconds * NANOS_PER_SECOND + fractionNanos;
+  return negative ? -nanoseconds : nanoseconds;
 }
 
 /**
- * `tryParseIsoDuration`'s inverse: the single combined `PnYnMnDTnHnMnS` token that reads back to
- * `value`. `P0D`/`PT0S` are each read as "this half was absent", the same sentinel
- * `tryParseIsoDuration` writes for a token that had none -- so a purely clock-only value like `{
- * period: "P0D", clock: "PT1H30M" }` writes back as `PT1H30M`, not `P0DT1H30M`. If both halves
- * are the sentinel (a `TsonDuration` built by hand rather than by `tryParseIsoDuration`, which
- * itself never produces both at once -- it requires at least one real designator), the result
- * falls back to `PT0S`, mirroring `DurationParser.java`'s own `write` doing the same for an
- * all-zero value.
+ * `tryParseIsoDuration`'s inverse, in the one canonical form this family ever writes:
+ * `[-]PTnHnMnS`, hours and minutes omitted when zero, the seconds designator itself omitted only
+ * when both the whole-seconds count and the fraction are zero. Written in the form `java.time.
+ * Duration` itself uses -- a day is not a distinct unit of the value, so hours carry it -- since a
+ * writer cannot recover whether `value` was written in weeks, days, or already this form (§5.4:
+ * "a text encoding emits `PTnHnMnS` and nothing else").
  */
-export function formatIsoDuration(value: TsonDuration): string {
-  const calendarText = value.period === 'P0D' ? '' : value.period.slice(1);
-  const clockText = value.clock === 'PT0S' ? '' : value.clock.slice(1);
-  const combined = `P${calendarText}${clockText}`;
-  return combined === 'P' ? 'PT0S' : combined;
+export function formatIsoDuration(nanoseconds: bigint): string {
+  if (nanoseconds === 0n) return 'PT0S';
+  const negative = nanoseconds < 0n;
+  const magnitude = negative ? -nanoseconds : nanoseconds;
+  const totalSeconds = magnitude / NANOS_PER_SECOND;
+  const fractionNanos = magnitude % NANOS_PER_SECOND;
+  const hours = totalSeconds / SECONDS_PER_HOUR;
+  const minutes = (totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+  const seconds = totalSeconds % SECONDS_PER_MINUTE;
+
+  let out = negative ? '-PT' : 'PT';
+  if (hours !== 0n) out += `${hours.toString()}H`;
+  if (minutes !== 0n) out += `${minutes.toString()}M`;
+  if (seconds !== 0n || fractionNanos !== 0n) {
+    out += seconds.toString();
+    if (fractionNanos !== 0n) out += `.${fractionDigits(Number(fractionNanos))}`;
+    out += 'S';
+  }
+  return out;
 }

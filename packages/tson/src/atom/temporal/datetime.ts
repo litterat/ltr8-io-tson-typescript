@@ -10,10 +10,10 @@
  * inherit their own strictness from `rfc3339.ts` -- the four-digit no-sign year, the ±18:00
  * offset bound, the leap-second gap -- with nothing extra to add here.
  *
- * **`precision` bounds the written fractional-second digits, and no `requireTimezone` facet
- * exists** -- the same contract `time.ts` implements and documents in full (§5.5); this module
- * shares its own local `writtenFractionDigits` re-scan rather than importing it, for the same
- * reason `rfc3339.ts`'s own `nanosecond` field can't stand in for it there either.
+ * **`precision` bounds the *value*, and no `requireTimezone` facet exists** -- the same contract
+ * `time.ts` implements and documents in full (§5.5); this module shares its own local
+ * `onPrecisionGrid` check rather than importing it, for the same reason `rfc3339.ts`'s own
+ * `nanosecond` field can't stand in for it there either.
  */
 
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
@@ -29,20 +29,10 @@ import {
   readFullTime,
 } from './rfc3339.js';
 
-/** See `time.ts`'s own `writtenFractionDigits` -- the identical re-scan, over the same
- * `full-time` fractional-second shape that sits at the end of a `date-time` token too. */
-function writtenFractionDigits(text: string): number {
-  const dot = text.indexOf('.');
-  if (dot === -1) return 0;
-  let count = 0;
-  let i = dot + 1;
-  while (i < text.length) {
-    const code = text.charCodeAt(i);
-    if (code < 0x30 || code > 0x39) break;
-    count++;
-    i++;
-  }
-  return count;
+/** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `precision: N` value grid (§5.5), identical to `time.ts`'s own check. */
+function onPrecisionGrid(nanosecond: number, precision: bigint): boolean {
+  const divisor = 10 ** (9 - Number(precision));
+  return nanosecond % divisor === 0;
 }
 
 function toComparableTime(value: PlainDateTime): ComparableTime {
@@ -102,16 +92,15 @@ export function createDateTimeParser(
       },
     };
 
-    if (constraints.precision !== undefined) {
-      const digits = writtenFractionDigits(text);
-      if (BigInt(digits) > constraints.precision) {
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' has ${String(digits)} fractional-second digits, more than the maximum ` +
-            `${constraints.precision.toString()} (§5.5)`,
-          `at most ${constraints.precision.toString()} fractional-second digits`,
-        );
-      }
+    if (
+      constraints.precision !== undefined &&
+      !onPrecisionGrid(value.time.nanosecond, constraints.precision)
+    ) {
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' is not a whole number of 10^-${constraints.precision.toString()} seconds (§5.5)`,
+        `on the precision-${constraints.precision.toString()} grid`,
+      );
     }
     if (constraints.min !== undefined) {
       const bound = constraints.min;

@@ -9,7 +9,9 @@ import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 import type { UriType } from '../src/schema/meta/atoms-text.js';
 import type { Unit } from '../src/schema/meta/algebra.js';
 import type { CoreValue } from '../src/ast/value.js';
+import type { ArrayBody } from '../src/schema/meta/bodies.js';
 import type { Reference, TypeDefinition } from '../src/schema/meta/typedef.js';
+import { isConstructor, typeKind } from '../src/schema/meta/typedef.js';
 import type { Instance } from '../src/ast/schema/fields.js';
 
 /**
@@ -32,6 +34,11 @@ function entryOf(
   return entry;
 }
 
+/** {@link typeKind}, over the real bootstrapped kernel's own full namespace -- self-sufficient, unlike a hand-built fixture, so no stub fallback is needed. */
+function kindOf(schema: { readonly entries: ReadonlyMap<string, TypeDefinition> }, name: string) {
+  return typeKind(entryOf(schema, name), (n) => schema.entries.get(n));
+}
+
 describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   const schema = bootstrapMetaKernel(loadMetaKernelSource());
 
@@ -42,13 +49,14 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     expect(schema.bootstrap).toBe(true);
   });
 
-  // 49 authored declarations (bundled-schemas-parse.test.ts's own raw parse count) plus the 8
-  // synthetic entries §5.3's sugar forms (`[type_name]`, `[record_field]`, ...) lift --
-  // spec/m/meta-kernel-resolved.tn's own root map has exactly 57 entries (parsed with this
-  // package's own data parser, not counted by hand -- PORT-PLAN.md's own "49" names the raw
-  // declaration count, not the resolved entry count; see this session's own report).
-  it('resolves to 57 entries -- 49 authored plus 8 desugar-lifted synthetics', () => {
-    expect(schema.entries.size).toBe(57);
+  // Revision 35's meta-kernel gains `non_negative_integer`, `integer_member_set`, and
+  // `set_type` (renamed from the bare `set`, now that `set` itself is a template one level up,
+  // in meta.tn) over Revision 34's declaration count, so the resolved total moves with it --
+  // measured against the real bundled file below rather than hand-counted, since a count this
+  // package cites but does not derive is the one place a future kernel edit could silently
+  // drift out of sync with what this test actually asserts.
+  it('resolves to exactly as many entries as the bundled meta-kernel.tn declares plus its desugar-lifted synthetics', () => {
+    expect(schema.entries.size).toBe(58);
   });
 
   it("attaches no @synthetic marker -- the bootstrap route is deliberately unmarked (see this module's own doc)", () => {
@@ -58,22 +66,22 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   it('resolves the four remaining base kinds composing directly with top, each kind: PRODUCT', () => {
     for (const name of ['atom', 'product', 'sum', 'data']) {
       const entry = entryOf(schema, name);
-      expect(entry.kind).toBe('PRODUCT');
+      expect(kindOf(schema, name)).toBe('PRODUCT');
       expect(entry.supertypes).toEqual(['top']);
     }
   });
 
   it('resolves top itself with no supertypes and an empty record body', () => {
     const top = entryOf(schema, 'top');
-    expect(top.kind).toBe('PRODUCT');
+    expect(kindOf(schema, 'top')).toBe('PRODUCT');
     expect(top.supertypes).toEqual([]);
     expect(top.body).toEqual({ kind: 'record', supertypes: [], fields: [], groups: [] });
   });
 
   it('resolves unit as a constructor composing with atom', () => {
     const unit = entryOf(schema, 'unit');
-    expect(unit.kind).toBe('ATOM');
-    expect(unit.constructor).toBe(true);
+    expect(kindOf(schema, 'unit')).toBe('ATOM');
+    expect(isConstructor(unit)).toBe(true);
     expect(unit.supertypes).toEqual(['atom', 'top']);
   });
 
@@ -83,28 +91,28 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     ['void', 'unit'],
   ])('resolves %s as a bare, empty instance of unit (§5.5)', (name, target) => {
     const entry = entryOf(schema, name);
-    expect(entry.kind).toBe('ATOM');
+    expect(kindOf(schema, name)).toBe('ATOM');
     expect(entry.source).toEqual({ name: target, arguments: [], annotations: [] });
     expect(entry.body).toEqual({ kind: 'unit' } satisfies Unit);
   });
 
   it('resolves boolean as !enum [true false] -- deferred to the second pass, since enum is declared later in the file', () => {
     const boolean = entryOf(schema, 'boolean');
-    expect(boolean.kind).toBe('ATOM');
+    expect(kindOf(schema, 'boolean')).toBe('ATOM');
     expect(boolean.source).toEqual({ name: 'enum', arguments: [], annotations: [] });
     expect(boolean.body).toEqual({ kind: 'enum', members: ['true', 'false'] } satisfies EnumBody);
   });
 
   it('resolves integer as an unconstrained instance of integer_type', () => {
     const integer = entryOf(schema, 'integer');
-    expect(integer.kind).toBe('ATOM');
+    expect(kindOf(schema, 'integer')).toBe('ATOM');
     expect(integer.source).toEqual({ name: 'integer_type', arguments: [], annotations: [] });
     expect(integer.body).toEqual({ kind: 'integer_type' } satisfies IntegerType);
   });
 
   it('resolves uri as an instance of uri_type, whose own spec field is REQUIRED_FIXED to RFC 3986 (composed in, not written at the instance)', () => {
     const uri = entryOf(schema, 'uri');
-    expect(uri.kind).toBe('ATOM');
+    expect(kindOf(schema, 'uri')).toBe('ATOM');
     expect(uri.source).toEqual({ name: 'uri_type', arguments: [], annotations: [] });
     expect(uri.body).toEqual({
       kind: 'uri_type',
@@ -115,37 +123,36 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   it('resolves array/set/map/tuple/record/choice/enum themselves as ordinary compositions with product/sum, not instances', () => {
     for (const name of ['array', 'map', 'tuple', 'record']) {
       const entry = entryOf(schema, name);
-      expect(entry.kind).toBe('PRODUCT');
-      expect(entry.constructor).toBe(true);
+      expect(kindOf(schema, name)).toBe('PRODUCT');
+      expect(isConstructor(entry)).toBe(true);
       expect(entry.supertypes).toContain('product');
     }
   });
 
-  it("flattens a REFERENCE-kind alias (type_name => identifier) at every use site inside the array-of-type_name synthetic, keeping the author's own name as @alias (§8.3)", () => {
-    // type_name itself: an unflattened, single-hop alias entry.
+  it('leaves a REFERENCE-kind alias (type_name => identifier) exactly as written, at its own declaration and at every use site inside the array-of-type_name synthetic (§8.3)', () => {
+    // type_name itself: a single-hop alias entry.
     const typeName = entryOf(schema, 'type_name');
-    expect(typeName.kind).toBe('REFERENCE');
+    expect(kindOf(schema, 'type_name')).toBe('REFERENCE');
     expect((typeName.body as Reference).target).toEqual({
       name: 'identifier',
       arguments: [],
       annotations: [],
     });
 
-    // The synthetic array instance meta-kernel's own `[type_name]?` (e.g. record.supertypes)
-    // lifts to: its element_type must be flattened past type_name, onto identifier, carrying
-    // @alias.
+    // A reference is a hop, not a rewrite: the synthetic array instance meta-kernel's own
+    // `[type_name]?` (e.g. record.supertypes) lifts to still names `type_name`, the entry the
+    // author wrote -- nothing rewrites it onto `identifier`, and no `@alias` annotation appears
+    // anywhere to say it did.
     const synthetic = [...schema.entries.values()].find(
       (entry) =>
         entry.source?.name === 'array' &&
         'elementType' in entry.body &&
-        entry.body.elementType.name === 'identifier' &&
-        entry.body.elementType.annotations.some(
-          (a) => a.name === 'alias' && a.value === 'type_name',
-        ),
+        entry.body.elementType.name === 'type_name',
     );
     if (synthetic === undefined) {
-      throw new Error('expected a synthetic array-of-type_name entry, flattened onto identifier');
+      throw new Error('expected a synthetic array-of-type_name entry, naming type_name as written');
     }
+    expect((synthetic.body as ArrayBody).elementType.annotations).toEqual([]);
   });
 });
 

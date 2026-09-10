@@ -150,28 +150,47 @@ export interface PlainDateTime {
 }
 
 /**
- * A duration — the host value for `!duration` (§5.4, ISO 8601 `PnYnMnDTnHnMnS`).
+ * A duration — the host value for `!duration` (§5.4): elapsed time, a signed exact count of
+ * nanoseconds. A month has no fixed length beside a second that has one, so `!duration` admits no
+ * `Y` or month-`M` component at all — a calendar span is `!period` ({@link TsonPeriod}) instead —
+ * which is what makes this value space totally ordered and a single `bigint` sufficient to hold
+ * it exactly: the format's own fraction is confined to the seconds component and capped at nine
+ * digits (§5.4), so every legal duration is already a whole number of nanoseconds, and the format
+ * bounds the magnitude to at most 2^63−1 of them (about 292 years) — comfortably inside `bigint`'s
+ * unbounded precision, so nothing here can silently round or overflow the way a fixed-width host
+ * duration type would.
  *
- * **Shape fixed by the conformance suite itself, not chosen here.** `period` and `clock` are each an
- * independent ISO 8601 substring — the calendar half (`PnYnMnD`) and the clock half (`PTnHnMnS`) — rather
- * than a single decomposed structure, because (per the suite's own `duration-combined` sidecar
- * description) "no single common library type covers this combined form directly" — `java.time.Period`
- * rejects any `T`-time part and `java.time.Duration` rejects any `Y`/`M` part — so the reference
- * implementation splits the value into two independently-parseable ISO 8601 strings instead of assuming
- * a shared representation across implementations. A part that the token omits is still present here, as
- * the applicable zero value: `P0D` for an omitted calendar part, `PT0S` for an omitted clock part.
+ * `PT90M`, `PT1H30M` and `P0DT5400S` are one value (`5400` seconds, i.e. `5_400_000_000_000n`
+ * nanoseconds) — the written spelling (weeks, days, or an `H`/`M`/`S` breakdown) carries no
+ * information beyond the count itself, so nothing here preserves it.
  *
  * Verified against
- * `.references/ltr8-io-tson-test-suite/tests/vocabulary/valid/duration-calendar-only-expected.tn`
- * (`{ period: "P1Y2M3D", clock: "PT0S" }`),
- * `.../duration-clock-only-expected.tn` (`{ period: "P0D", clock: "PT1H30M" }`), and
- * `.../duration-combined-expected.tn` (`{ period: "P1Y2M3D", clock: "PT4H5M6S" }`).
+ * `.references/ltr8-io-tson-test-suite/tests/class1/vocabulary/valid/duration-clock-only-expected.tn`
+ * (`PT1H30M`, 5400 s) and `.../duration-widest-magnitude-expected.tn`
+ * (`PT9223372036.854775807S`, exactly 2^63−1 ns).
  */
 export interface TsonDuration {
-  /** The calendar part, `PnYnMnD` — `"P0D"` when the token has none. */
-  readonly period: string;
-  /** The clock part, `PTnHnMnS` — `"PT0S"` when the token has none. */
-  readonly clock: string;
+  /** Signed nanoseconds elapsed; magnitude at most 2^63−1 (§5.4). */
+  readonly nanoseconds: bigint;
+}
+
+/**
+ * A period — the host value for `!period` (§5.4): a calendar span, a signed integer count of
+ * months. `P1Y` is exactly twelve months by definition (not an approximation the way a month
+ * measured in seconds would be), so `P1Y` and `P12M` are one value and there is no fixed-length
+ * question here the way there is for `!duration`.
+ *
+ * `months` is a `bigint` rather than a bounded integer: unlike `!duration`, §5.4 states no
+ * magnitude ceiling for a period, so this value space is left as unbounded as the grammar itself
+ * (`1*DIGIT` admits arbitrarily many digits on the `Y`/`M` components).
+ *
+ * Verified against
+ * `.references/ltr8-io-tson-test-suite/tests/class1/vocabulary/valid/period-years-and-months-expected.tn`
+ * (`P1Y6M`, 18 months) and `.../period-negative-expected.tn` (`-P3M`, −3 months).
+ */
+export interface TsonPeriod {
+  /** Signed months. */
+  readonly months: bigint;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,21 +235,32 @@ export interface Ipv6Address {
 /**
  * A CIDR network — the host value for `!cidr4`/`!cidr6` (§5.5, RFC 4632 and its IPv6 analogue).
  *
- * **Holds the authored text verbatim, not a decoded address/prefix pair.** `CONFORMANCE.md` is explicit
- * about why: "Java has no CIDR type, so the host value is the token's own text rather than an invented
- * address/prefix pair — validated, never rewritten, so a round trip is exact (which for IPv6 also avoids
- * expanding `2001:db8::/32` into its uncompressed eight-group spelling on the way out)." The address and
- * prefix are still validated at parse time (reusing the same address grammars as `!ipv4`/`!ipv6`, per
- * `CONFORMANCE.md`) — that check simply doesn't change what gets stored.
+ * **A network value, not retained text**: `address` and `prefixLength` are the decoded pair
+ * ([TSON-SCHEMA] §5.5's "network value"), host bits already zeroed, which is what lets
+ * `cidr4.ts`/`cidr6.ts` judge `within`/`excluding`/`max_prefix` against the value itself rather
+ * than re-parsing a string every time a facet needs an answer.
+ *
+ * `addressText` carries the address portion exactly as authored, ahead of `write`'s own
+ * `${addressText}/${prefixLength}`. This is not redundant with `address`: IPv4's `dec-octet`
+ * grammar admits exactly one spelling per octet, so `address` alone would round-trip it, but RFC
+ * 4291 §2.2 admits several spellings of one IPv6 address (`::` compression, a hex group's leading
+ * zeros), and only the text an author chose distinguishes "2001:db8::/32" from
+ * "2001:0db8:0000:0000:0000:0000:0000:0000/32" on the way back out — both decode to the same
+ * 16-byte network. `formatIpv4`/`formatIpv6` deliberately don't own `write` here for that reason.
  *
  * Verified against
- * `.references/ltr8-io-tson-test-suite/tests/vocabulary/valid/cidr4-plain-expected.tn` (`value:
- * "192.0.2.0/24"`) and `.../cidr6-compressed-expected.tn` (`value: "2001:db8::/32"`, compression intact).
+ * `.references/ltr8-io-tson-test-suite/tests/class1/vocabulary/valid/cidr4-plain-expected.tn`
+ * (`value: { text: "192.0.2.0/24" }`) and `.../cidr6-compressed-expected.tn` (`value: { text:
+ * "2001:db8::/32" }`, compression intact).
  */
 export interface Cidr {
   readonly kind: 'cidr4' | 'cidr6';
-  /** The address followed by `/` and the prefix length, exactly as authored. */
-  readonly text: string;
+  /** The address portion exactly as authored, before the `/`. */
+  readonly addressText: string;
+  /** The decoded network address, host bits zeroed: 4 bytes for `cidr4`, 16 for `cidr6`. */
+  readonly address: Uint8Array;
+  /** The prefix length after `/`, already checked against the family's own 0–32/0–128 range. */
+  readonly prefixLength: number;
 }
 
 /**
@@ -258,12 +288,13 @@ export interface MacAddress {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The host value for every binary atom — `!base64`, `!base64url`, `!base32`, `!hex` (§5.3). Each
- * encoding is a distinct type annotation with no generic `!binary` counterpart, but all four decode to
- * the same host shape: the plain decoded byte sequence, since the encoding itself carries no information
- * content beyond the bytes it names (per `CONFORMANCE.md`'s note on `toTson`: a `byte[]` value "always
- * write[s] back as `!base64`, regardless of which of `base64`/`base64url`/`base32`/`hex` [it was]
- * originally decoded from — that information doesn't survive decoding").
+ * The host value for `!bytes` (§5.3), Part 1's one binary annotation and one binary value space:
+ * the plain decoded octet sequence. Base64 (RFC 4648 §4) is the only spelling a schemaless
+ * document can carry — an alphabet is a spelling of an octet sequence, not a kind of value, and
+ * there is no schema in scope to carry a selector — so, unlike the numeric or temporal families,
+ * `!bytes` has no sibling annotations to distinguish. A schema can name another RFC 4648 alphabet
+ * via `bytes_type.encoding`, but that is a schema-layer refinement of the one `bytes` type, not a
+ * different Part 1 tag.
  */
 export type TsonBinary = Uint8Array;
 
@@ -332,8 +363,9 @@ export type UnboundedInteger = bigint;
  * **Declared, not implemented — and feature-detected, not assumed.** Per `PORT-PLAN.md`'s decision ("Own
  * zero-dep immutable value types plus a feature-detected `Temporal` adapter"), `Temporal` is absent on
  * Node 24 as of this writing (and not yet universal across target browsers), so every temporal atom
- * reader must work against {@link PlainDate}/{@link PlainTime}/{@link PlainDateTime}/{@link TsonDuration}
- * on their own; an adapter satisfying this interface is an optional convenience layered on top, built by
+ * reader must work against {@link PlainDate}/{@link PlainTime}/{@link PlainDateTime}/{@link TsonDuration}/
+ * {@link TsonPeriod} on their own; an adapter satisfying this interface is an optional convenience layered
+ * on top, built by
  * a later work package only after checking `typeof Temporal !== 'undefined'` at runtime.
  *
  * The conversion methods are typed `unknown` on the `Temporal`-facing side deliberately: importing an
@@ -359,4 +391,8 @@ export interface TemporalAdapter {
   toDuration(value: TsonDuration): unknown;
   /** A host `Temporal.Duration` back to {@link TsonDuration}. */
   fromDuration(value: unknown): TsonDuration;
+  /** `TsonPeriod` to a host `Temporal.Duration` carrying only calendar fields, when available. */
+  toPeriod(value: TsonPeriod): unknown;
+  /** A host `Temporal.Duration`'s calendar fields back to {@link TsonPeriod}. */
+  fromPeriod(value: unknown): TsonPeriod;
 }

@@ -109,8 +109,9 @@ export interface EmptyBrace {
 }
 
 /**
- * `absent = "_"` (§2.9): the explicitly-absent sentinel, distinct from any typed value including
- * base-type null.
+ * `absent = "_"` (§2.9): the explicitly-absent sentinel, the format's one spelling of absence and
+ * distinct from every typed value -- including the unquoted token `null`, which is an ordinary
+ * string under base type resolution (§4.4) and carries no special status of its own.
  *
  * The spec forbids `_` in map-key position, but as a *resolver-layer* rule, not a grammar one
  * ("the map-entry production accepts any value in key position, and the resolver rejects absent

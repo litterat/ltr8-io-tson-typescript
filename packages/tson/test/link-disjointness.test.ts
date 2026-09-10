@@ -9,6 +9,7 @@ import {
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { Top, TypeDefinition } from '../src/schema/meta/typedef.js';
+import { choiceDisjoint } from '../src/schema/meta/typedef.js';
 
 function def(
   body: Top,
@@ -17,15 +18,17 @@ function def(
     readonly disjoint?: boolean;
   } = {},
 ): TypeDefinition {
+  // `disjoint` now lives on the `ChoiceBody` it is a fact about (§8.1), not on the entry --
+  // every caller here that passes it is building a `choice` body.
+  const withDisjoint: Top =
+    options.disjoint === undefined || !('variants' in body)
+      ? body
+      : { ...body, disjoint: options.disjoint };
   return {
-    kind: 'PRODUCT',
-    parameters: [],
-    constructor: false,
     supertypes: [],
     subtypes: [],
-    body,
+    body: withDisjoint,
     annotations: options.annotations ?? [],
-    ...(options.disjoint === undefined ? {} : { disjoint: options.disjoint }),
   };
 }
 
@@ -135,7 +138,8 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
       ['choice', choice],
     ]);
     const result = computeDisjointness(entries);
-    expect(result.get('choice')?.disjoint).toBe(true);
+    const choiceResult = result.get('choice');
+    expect(choiceResult === undefined ? undefined : choiceDisjoint(choiceResult)).toBe(true);
     expect(result.get('text')).toBe(text); // untouched, same reference
   });
 });
@@ -214,7 +218,9 @@ describe('checkDisjointAssertions (§5.4)', () => {
           { name: 'other', arguments: [], annotations: [] },
         ],
       });
-      const merged = new Map([['shapes', { ...choice, disjoint: false }]]);
+      const merged = new Map([
+        ['shapes', { ...choice, body: { ...choice.body, disjoint: false } }],
+      ]);
       expect(() => {
         checkDisjointAssertions(merged, new Set(['shapes']), {
           schemaId: 'https://x/s.tn',

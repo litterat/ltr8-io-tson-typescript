@@ -2,17 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { resolveBaseType, type BaseToken } from '../src/base/baseTypeResolver.js';
 import type { BasedIntegerForm, IntegerForm } from '../src/base/numberGrammar.js';
 
-// Base type resolution (§4): the fixed order of §4.5 -- null, boolean, number, string.
+// Base type resolution (§4): the fixed order of §4.5 -- boolean, number, string.
 
 function unquoted(text: string): BaseToken {
   return { text, form: 'unquoted' };
 }
 
-describe('null and boolean (§4.1, §4.2)', () => {
-  it('resolves the unquoted keyword "null" to the null value', () => {
-    expect(resolveBaseType(unquoted('null'))).toEqual({ kind: 'null' });
-  });
-
+describe('boolean (§4.2)', () => {
   it('resolves "true" and "false" to boolean values', () => {
     expect(resolveBaseType(unquoted('true'))).toEqual({ kind: 'boolean', value: true });
     expect(resolveBaseType(unquoted('false'))).toEqual({ kind: 'boolean', value: false });
@@ -40,6 +36,10 @@ describe('number delegation (§4.3)', () => {
 });
 
 describe('string fallback (§4.4)', () => {
+  it('the unquoted token "null" is an ordinary string -- it matches neither boolean nor number, and has no keyword status of its own', () => {
+    expect(resolveBaseType(unquoted('null'))).toEqual({ kind: 'string', text: 'null' });
+  });
+
   it('near-miss numeric forms fall through to string -- leading zeros and a second dot fail the grammar', () => {
     expect(resolveBaseType(unquoted('007'))).toEqual({ kind: 'string', text: '007' });
     expect(resolveBaseType(unquoted('1.2.3'))).toEqual({ kind: 'string', text: '1.2.3' });

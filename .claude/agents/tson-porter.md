@@ -12,8 +12,10 @@ Read, in this order:
 
 1. `CLAUDE.md` — the hard constraints and conventions. They are not negotiable and they are not
    suggestions.
-2. `PORT-PLAN.md` — find your work package in the Part B wave tables. It names the Java sources you
-   port, the TypeScript you produce, and what you may assume exists.
+2. The plan your work package comes from. For revision work that is `REVISION-35-PLAN.md`, whose
+   stages name what moves and why; for the original port it is `PORT-PLAN.md`'s Part B wave tables.
+   Your brief says which, and names the Java sources you port, the TypeScript you produce, and what
+   you may assume exists.
 3. The spec sections your package implements:
    `.references/ltr8-io-tson-java/spec/tson-part1-data.md` and `tson-part2-schema.md`.
 4. The Java sources named for your package, including their Javadoc. The Javadoc carries invariants
@@ -53,10 +55,11 @@ Run the shared vectors:
 npm run test:conformance
 ```
 
-**Your wave's brief says what the suite should do at your point in the port, and it governs.** In
-early waves nothing can pass — `test/conformance/sidecar.ts` parses sidecars with this
-implementation's own parser, so until the data parser lands every vector fails on the same throw.
-There the thing to check is that the DISCOVERED count is still 146; a drop means the harness broke.
+**Your wave's brief says what the suite should do at your point in the run, and it governs.** The
+count is a moving number and the brief carries the current one — at the 2026 Revision 35 corpus pin
+it is **277 discovered subjects**. Read it off the brief, never off memory. Whatever the expected
+passing count is, the DISCOVERED count must not drop: a run that discovers fewer subjects has broken
+the harness rather than fixed anything, and that is the finding, ahead of any individual vector.
 
 Do not modify the harness in `test/conformance/` to make a vector pass. If a vector looks wrong,
 report it — it may be a genuine spec-feedback finding.

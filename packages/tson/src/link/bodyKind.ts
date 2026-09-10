@@ -35,11 +35,12 @@ const KNOWN_BODY_KINDS: ReadonlySet<string> = new Set([
   'float_type',
   'rational_type',
   'uuid_type',
-  'binary',
+  'bytes_type',
   'date_type',
   'time_type',
   'datetime_type',
   'duration_type',
+  'period_type',
   'cidr4_type',
   'cidr6_type',
   'email_type',
@@ -47,8 +48,7 @@ const KNOWN_BODY_KINDS: ReadonlySet<string> = new Set([
   'ipv4_type',
   'ipv6_type',
   'complex_type',
-  'unknown_type',
-  'extern',
+  'scoped',
 ]);
 
 /** `body`, once a held `TemplateBody` has already been excluded (that member carries no `kind` at all). */
