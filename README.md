@@ -26,7 +26,7 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.34.x` implements the **2026 Revision 34** series. A new spec revision moves the
+built against, so `0.35.x` implements the **2026 Revision 35** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
@@ -42,9 +42,11 @@ centre is a type system of immutable, hash-pinned schemas whose definitions are 
 resolving down a verified chain — document → schema → meta-schema → kernel — so that one hash
 authenticates a document together with its entire contract.
 
-The text format is a Unicode-first superset of JSON. Commas and quotes are optional where
-unambiguous, identifiers may be in any script, and there are three structural forms distinguished by
-their contents rather than their brackets:
+The text format is Unicode-first and JSON-_like_, and deliberately not a JSON superset ([TSON-DATA]
+§4.1, §6): the notation carries no `null` keyword, treats field names as identifiers, and has no
+surrogate-pair escapes, so a JSON document is read through a JSON reader rather than as TSON.
+Commas and quotes are optional where unambiguous, identifiers may be in any script, and there are
+three structural forms distinguished by their contents rather than their brackets:
 
 ```tson
 !!id:"https://example.com/orders/1042.tn"
@@ -75,7 +77,12 @@ their contents rather than their brackets:
 - **`!name`** — type annotations
 - **`!!name:"…"`** — directives: `id`, `schema`, `meta`, `import`, and only those
 
-Valid JSON is valid TSON apart from two character-level exceptions in string content.
+A JSON document is **not** a TSON document ([TSON-DATA] §6). What the two share — `"`-delimited
+strings, `[ ]` arrays, `{ name: value }` records, the `\n \r \t \\ \"` escapes — is shared because
+each was a good idea on its own. What differs is load-bearing: TSON has no `null` keyword (§4.4),
+field names are identifiers (§2.5), and there are no surrogate-pair escapes (§7.2.2). JSON is read
+through a JSON reader — a second encoding of the same model, mapping `null` to absence and a
+non-identifier-keyed object to a map — which this port does not yet implement.
 
 Two conformance classes: **Class 1** implements the data format alone and needs nothing from Part 2;
 **Class 2** implements the schema layer too. This port targets both, and both are implemented.

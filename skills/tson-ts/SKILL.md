@@ -116,7 +116,8 @@ a plain headerless document.
 A failed step yields `missingNode`: `{ kind: 'missing', path: '/customer/email' }`. The path is the
 pointer _up to and including the step that failed_, and every further `get`/`at` returns that same
 node — the first failure is the informative one. `'missing'` (nothing there) is not `'absent'`
-(the document wrote `_` or `null` there).
+(the document wrote `_` there -- the format's one spelling of absence, §4.4: `null` is an
+ordinary word that resolves to the string `"null"`).
 
 Casting and converting differ: an `int32` atom holds a `number` and does not satisfy a `bigint`
 guard, while `asInt` on a `234.56E2` decimal succeeds because its value is integral.
@@ -471,7 +472,7 @@ writeBinding(personBinding, person); // '{ name: "Ada" age: 36 }'
 | `createTson()` then a schema-governed read                                                  | a fresh instance's registry is **empty**                                                          | `standardLibrary()`, or register the kernel yourself               |
 | `httpSchemaSource({})`                                                                      | no `allowHosts` means nothing is permitted                                                        | name the hosts explicitly                                          |
 | Trusting a data file's own `!!schema` to pick a schema                                      | that reference is attacker-controlled                                                             | name the schema at the call site                                   |
-| Treating `'missing'` and `'absent'` as the same                                             | `absent` was written (`_`/`null`); `missing` is a failed lookup                                   | discriminate on `kind`                                             |
+| Treating `'missing'` and `'absent'` as the same                                             | `absent` was written (`_`, the only spelling); `missing` is a failed lookup                       | discriminate on `kind`                                             |
 | `as`/`asString` where a conversion was meant                                                | casts do not convert                                                                              | `asInt`/`asLong`/`asDouble`                                        |
 | `CONFUSABLE_NAMES`/`RESTRICTED_CHARACTER`/`RESTRICTED_SCRIPT` treated as "invalid document" | each is policy, a fifth outcome (`isVerdict` is still `true` for it, just not a validity verdict) | report it separately; relax `identifierPolicy` in code if intended |
 | Relaxing name policy from an env var                                                        | ambient authority, invisible at the call site                                                     | pass `identifierPolicy`/`tokenPolicy` explicitly                   |

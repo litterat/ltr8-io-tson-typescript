@@ -3,14 +3,14 @@
 ← back to the [README](README.md)
 
 Built against TSON Part 1 (lexer + data format), a working draft:
-https://tson.io/raw/2026/34/tson-part1-data.md, and Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/34/tson-part2-schema.md
+https://tson.io/raw/2026/35/tson-part1-data.md, and Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/35/tson-part2-schema.md
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 233 subjects
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 277 subjects
 over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: 233 / 233 subjects passing at the pinned suite commit, Class 1 and Class 2.**
+**Conformance: 277 / 277 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
 Class 1: 31 lexer, 39 parser, 26 reader, 14 resolver, 89 vocabulary. Class 2: 17 schema, 10 link,
 7 validate.
@@ -158,6 +158,12 @@ day it does not match is the day it matters.
       real browser bundler uses, and unbundlable even with the source condition forced on
 
 ## Known gaps
+
+- **No JSON reader (§6).** Revision 35 deletes the JSON-superset claim, states that a JSON document
+  is not a TSON document, and replaces the claim with a distinct JSON reader: a second encoding of
+  the same model, mapping JSON `null` to absence and a non-identifier-keyed object to a map rather
+  than a record. Neither this port nor the reference has one. `README.md` and `skills/tson-ts/` no
+  longer assert the superset; the reader itself is unbuilt.
 
 - **`type_argument` is bound as a variant where the kernel declares a field group.** The kernel has
   `type_argument => { ( name: type_ref | value: value ) }` — one record whose two members form a

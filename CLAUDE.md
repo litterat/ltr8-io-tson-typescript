@@ -10,9 +10,9 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/34/tson-part1-data.md
+  https://tson.io/raw/2026/35/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/34/tson-part2-schema.md
+  https://tson.io/raw/2026/35/tson-part2-schema.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than
@@ -25,7 +25,7 @@ port is written against:
   port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the three
   live bundled schemas `spec/m/{meta-kernel,meta,core}.tn` plus their `*-resolved.tn` resolver-output
   fixtures.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 233
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 277
   subjects over `tests/<class>/<layer>/<bucket>/`. **Pinned**, like the Java: a corpus that tracked
   `main` turned this repo's CI red on an upstream commit with no change here.
 
@@ -125,10 +125,10 @@ This port is the spec's second implementation, and the first in a language witho
 types. Where the prose resolves ambiguously, or where TypeScript forces a different reading, say so
 in conversation rather than silently picking.
 
-- Identifier characters use real `XID_Start`/`XID_Continue` tables. The reference now does too, so
-  the two agree; before Revision 34 it approximated them with `Character.isUnicodeIdentifier*`,
-  which admits every _identifier-ignorable_ character and so accepted U+00AD, U+2060, U+FEFF and
-  the non-whitespace ISO controls inside an unquoted token. Note that ZWNJ and ZWJ are _not_ in
+- Identifier characters use real `XID_Start`/`XID_Continue` tables, and the reference agrees.
+  Approximating them with a host predicate like `Character.isUnicodeIdentifier*` is the trap: it
+  admits every _identifier-ignorable_ character, so U+00AD, U+2060, U+FEFF and the non-whitespace
+  ISO controls all reach an unquoted token. Note that ZWNJ and ZWJ are _not_ in
   that list any more: §7.1 admits both into the token profile, because they are `XID_Continue`, and
   what makes that safe is the identifier grammar's contextual rule at naming positions (§7.7 rule
   2), not a subtraction from the profile.
@@ -158,9 +158,9 @@ in conversation rather than silently picking.
 
 - Resolved-output writing cannot name the applied constructor. §8.1 says a closed definition's
   body is "a binding record headed by the applied constructor", and `spec/m/*-resolved.tn` writes
-  `enum_set`'s body as `!set { element_type: identifier  min_items: 1 }`. Both this port and the reference write
-  `!array { … unordered: true unique_items: true }`: `set` is a refinement of `array` sharing its
-  shape, so the applied name is not recoverable from the value being written, though it is recorded
+  `enum_set`'s body as `!set_type { element_type: identifier }`. Both this port and the reference write
+  `!array { … unordered: true unique_items: true }`: `set_type` is a refinement of `array` sharing
+  its shape, so the applied name is not recoverable from the value being written, though it is recorded
   one level up in the same entry's `source`. The reference's own fixture test cannot see this — it
   binds the fixture into the value model and compares `TypeDefinition` objects, where both forms
   arrive as one `ArrayBody`. This port compares written form and does see it. Worth reporting
