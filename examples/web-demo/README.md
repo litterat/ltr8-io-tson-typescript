@@ -39,6 +39,16 @@ npx serve examples/web-demo/dist      # or python3 -m http.server, or your own
 - **A library gap is not a verdict.** `NOT_IMPLEMENTED` is styled differently and worded
   differently, because it says nothing was checked rather than that the document is wrong.
 
+The schema and the scenarios are written against the **2026 Revision 35** spec series, which the
+`!!meta`/`!!import` identities in the schema name. Moving to a new revision means moving those two
+lines with the bundled schemas they name, or every schema-layer scenario stops resolving.
+
+The build alone does not catch that -- it never runs a scenario -- so
+`packages/tson/test/web-demo.test.ts` does: it reads `src/scenarios.js` as the page ships it,
+compiles the schema against the bundled library, and pins the diagnostic count each scenario chip
+promises. A revision move that leaves these two lines behind is a red test rather than a blank
+page.
+
 ## Also a test
 
 The build targets `platform: 'browser'`, which makes it a check as much as a demo: under the browser

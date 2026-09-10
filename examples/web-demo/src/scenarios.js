@@ -4,8 +4,8 @@
  * all, rather than stopping at the first.
  */
 export const SCHEMA = `!!id:"https://example.com/people.tn"
-!!meta:"https://tson.io/2026/34/m/meta.tn"
-!!import:"https://tson.io/2026/34/m/core.tn"
+!!meta:"https://tson.io/2026/35/m/meta.tn"
+!!import:"https://tson.io/2026/35/m/core.tn"
 @doc:"The demo schema: an employee record."
 {
   @doc:"A person on the payroll."
@@ -81,10 +81,13 @@ export const SCENARIOS = [
     root: '',
     data: `{
   reading:  42
-  when:     2026-08-28T05:14:00Z
+  on:       2026-08-28
+  when:     !datetime "2026-08-28T05:14:00Z"
   where:    !ipv4 "10.0.0.1"
   who:      !nonesuch "unknown to the built-in vocabulary"
-  nested:   { a: [1 2 3]  b: { c: _ } }
+  absent:   _
+  null:     null
+  nested:   { a: [1 2 3,]  b: { c: _ } }
 }
 `,
   },
