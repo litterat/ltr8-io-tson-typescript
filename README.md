@@ -118,9 +118,10 @@ const tree = readTree(bytes);
 asString(at(tree, '/customer/name')); // 'Ada Lovelace'
 asString(get(get(tree, 'customer'), 'name')); // 'Ada Lovelace'
 
-// validate: like readTree, but collects into a ValidationResult { value, diagnostics } instead
-// of throwing. An empty `diagnostics` is the only "valid": a document that will not lex or
-// parse at all is reported there too, as a VALIDATION_ERROR over a `missing` root value.
+// validate: like readTree, but collects into a ValidationResult { value?, diagnostics } instead
+// of throwing. An empty `diagnostics` is the only "valid", and the only case `value` is present
+// at all: a read is all-or-nothing, so a document that will not lex or parse (reported as a
+// VALIDATION_ERROR) leaves `value` omitted, same as any other reported problem does.
 const result = validate(bytes);
 result.diagnostics; // []
 

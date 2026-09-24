@@ -5,10 +5,12 @@
  * base, one subclass per output shape" need here -- tree mode is the only output shape this package
  * builds (bind mode is a separate work package, over the same {@link RecordBody}).
  *
- * **A field a read doesn't produce is simply omitted** (never a placeholder value) -- matching
- * `RecordNode`'s own frozen TSDoc ("a subsequent `get` of it yields `MissingNode`"): a missing REQUIRED
- * field is reported and then left out of the map exactly like a silently-omitted OPTIONAL one, the
- * diagnostic carrying what went wrong rather than the tree.
+ * **The read is all-or-nothing.** A missing REQUIRED field, a stray or repeated name, or a group
+ * violation is reported same as ever, but reporting anything abandons the whole record rather than
+ * building a partial one around the gap -- `support.ts`'s own `abandonedValue`, the tree-mode
+ * reading of the reference implementation's `ConstructionGuard`. A field this reader *does*
+ * produce is never a placeholder either way, matching `RecordNode`'s own frozen TSDoc ("a
+ * subsequent `get` of it yields `MissingNode`").
  *
  * **`typeRef` is this reader's own compiled `name`, not the wire token the document wrote** -- a
  * schema-driven record position always resolves to the schema's own name for the type in scope, mirroring
@@ -36,7 +38,7 @@ import {
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
-import { readSchemaLiteral, renderValue } from './support.js';
+import { abandonedValue, readSchemaLiteral, renderValue } from './support.js';
 
 interface CompiledField {
   readonly schema: RecordField;
@@ -368,9 +370,13 @@ export function recordTreeReader(
     *read(ctx: ReadContext): Task<Value> {
       const recordCtx = ctx.inRecord(schemaLocation);
       const annotations = yield* captureAnnotations(recordCtx);
+      // The construction-guard checkpoint (`ConstructionGuard.mark`): after the framing (this
+      // value's own annotations/type-ref, consumed by `captureAnnotations`/`expectRecordShape`)
+      // and before the fields -- see `reader/tree/support.ts`'s own `abandonedValue` note.
+      const mark = recordCtx.reported();
       const shapeResult = yield* expectRecordShape(recordCtx);
       if (shapeResult.shape === 'mismatch') {
-        return absentNode(undefined, annotations);
+        return abandonedValue();
       }
       const result = new Map<string, Value>();
       const sink = (schemaIndex: number, decoded: Value | undefined): void => {
@@ -397,6 +403,12 @@ export function recordTreeReader(
         }
       }
       validateGroups(anchoredCtx, seen);
+      if (recordCtx.reported() > mark) {
+        // Tree mode is all-or-nothing: a field left unbuilt, a stray or repeated name, a group
+        // violation -- everything above already reported -- means no partial record to mistake
+        // for a valid one.
+        return abandonedValue();
+      }
       return recordNode(result, name, annotations);
     },
   };

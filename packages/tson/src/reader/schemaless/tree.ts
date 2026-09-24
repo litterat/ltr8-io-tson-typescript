@@ -34,10 +34,15 @@
  *
  * **Every problem goes through `ctx.report`**, so the read's own `DiagnosticsReceiver` decides
  * its fate exactly as it does for the schema-driven readers: fail-fast throws at the first
- * problem, a collecting one gathers them all and still hands back a tree. Reporting never
- * abandons the value -- the node is still built and its children are still read, so one pass
- * finds everything; a leaf whose atom rejected the token becomes an {@link AbsentNode}, the same
- * placeholder `reader/tree/atom.ts`'s `atomTreeReader` uses for the same situation.
+ * problem, a collecting one gathers them all. **Reporting never abandons the value here** --
+ * unlike a schema-governed tree/bind read (`reader/tree/support.ts`'s own `abandonedValue`), this
+ * reader keeps building: the node is still constructed and its children are still read, so one
+ * pass finds everything, and a leaf whose atom rejected the token stands as an {@link AbsentNode}
+ * rather than aborting the container around it. It is the facade above this reader that decides
+ * whether that tree ever reaches a caller: `facade/tree.ts`'s own `validate` withholds `value`
+ * for the whole document whenever anything was reported, whatever layer raised it -- so this
+ * placeholder reaches a caller only through a lower-level entry point that manages its own
+ * `ReadContext` directly, never through `validate`/`readTree`.
  *
  * **Wire annotations are captured** onto each node's own `annotations`, at every position §3.1
  * permits one: the root value, a record field's value, an array element, either side of a map
@@ -88,7 +93,15 @@ import {
 } from '../../unicode/policy.js';
 import { firstConfusableCollision } from '../../unicode/skeleton.js';
 import { UTS39_VERSION } from '../../unicode/uts39.js';
-import { deepEqual } from '../tree/equality.js';
+import {
+  dateTimeInstantSeconds,
+  decimalIdentityKey,
+  deepEqual,
+  isPlainDateTime,
+  isPlainTime,
+  isTsonDecimal,
+  timeOfDayWrapped,
+} from '../tree/equality.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import { lookupBuiltinAtom } from './vocabulary.js';
 import { reportAtomViolation, reportNotScalar, reportUnknownTypeRef } from './typeRefCheck.js';
@@ -875,6 +888,13 @@ const ABSENT_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-absent-key');
  *
  * Type-tagged throughout, so `1` and `"1"` do not share a bucket needlessly, and record fields
  * are sorted so two records differing only in field order still meet for comparison.
+ *
+ * **A decimal, a `!time` or a `!datetime` is digested by its normalised identity, not its raw
+ * fields** (`reader/tree/equality.ts`'s own note on why: scale is a spelling, and a time/datetime
+ * compares as an instant, §2.6, §5.4). Bucketing these by raw field shape would let two keys
+ * `deepEqual` already treats as equal (`1.5` / `1.50`, or two offsets naming one instant) land in
+ * different buckets and never reach the `deepEqual` compare below at all -- the one place this
+ * module's own "equal identities must produce equal digests" invariant would otherwise be false.
  */
 function identityDigest(value: unknown): string {
   if (value === null) return 'z';
@@ -889,6 +909,10 @@ function identityDigest(value: unknown): string {
       return `b${String(value)}`;
     case 'undefined':
       return 'u';
+    case 'symbol':
+      // `ABSENT_KEY_IDENTITY` is the one symbol `keyIdentity` ever produces -- a fixed tag is
+      // enough, and the `'unscaled' in value` shape checks below cannot even run on a symbol.
+      return 'y';
     default:
       break;
   }
@@ -901,9 +925,20 @@ function identityDigest(value: unknown): string {
       .sort()
       .join(',')}}`;
   }
-  // A host atom value (a decimal, a UUID, an address). Own enumerable properties only, sorted,
-  // which is the same surface a structural comparison walks.
-  return `o{${Object.entries(value as Record<string, unknown>)
+  const record = value as Record<string, unknown>;
+  if (isTsonDecimal(record)) {
+    return `x${decimalIdentityKey(record)}`;
+  }
+  if (isPlainDateTime(record)) {
+    return `dt${String(dateTimeInstantSeconds(record))}.${String(record.time.nanosecond)}`;
+  }
+  if (isPlainTime(record)) {
+    return `tm${String(timeOfDayWrapped(record))}.${String(record.nanosecond)}`;
+  }
+  // A host atom value (a UUID, an address, and every other structured atom with no separate
+  // identity rule). Own enumerable properties only, sorted, which is the same surface a
+  // structural comparison walks.
+  return `o{${Object.entries(record)
     .map(([k, v]) => `${k}=${identityDigest(v)}`)
     .sort()
     .join(',')}}`;

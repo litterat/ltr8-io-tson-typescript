@@ -148,12 +148,11 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     expect(omitted.fields.has('age')).toBe(false);
   });
 
-  it('a non-voidable optional field written `_` is refused (§5.2: "a written `_` at a field that is not voidable is a validation error")', () => {
+  it('a non-voidable optional field written `_` is refused (§5.2: "a written `_` at a field that is not voidable is a validation error"), and abandons the record (WP3B)', () => {
     const r = reader([field('name', 'text'), field('nickname', 'text', { optional: true })]);
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" nickname: _ }');
     const value = runSync(r.read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.has('nickname')).toBe(false);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });
 
@@ -164,40 +163,37 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });
 
-  it('reports TYPE_MISMATCH and yields an AbsentNode when no shape matches', () => {
+  it('reports TYPE_MISMATCH and yields no node at all when no shape matches (WP3B)', () => {
     const r = reader([field('name', 'text'), field('age', 'int32')]);
     const { ctx, diagnostics } = collectingContextOver('"not a record"');
     const value = runSync(r.read(ctx));
-    expect(value.kind).toBe('absent');
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 });
 
 describe('recordTreeReader -- closure and duplicates (§2.5, §7.2)', () => {
-  it('a missing unmarked-name field reports FIELD_REQUIRED and is left out of the tree', () => {
+  it('a missing unmarked-name field reports FIELD_REQUIRED and abandons the record (WP3B)', () => {
     const r = reader([field('name', 'text')]);
     const { ctx, diagnostics } = collectingContextOver('{}');
     const value = runSync(r.read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.has('name')).toBe(false);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
-  it('a name the type does not declare reports UNRECOGNIZED_FIELD and is discarded, not held against the rest', () => {
+  it('a name the type does not declare reports UNRECOGNIZED_FIELD and abandons the record, however the declared fields read (WP3B)', () => {
     const r = reader([field('name', 'text')]);
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" nickname: "A" }');
     const value = runSync(r.read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.get('name')).toMatchObject({ value: 'Ada' });
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['UNRECOGNIZED_FIELD']);
   });
 
-  it('a repeated field name reports DUPLICATE_FIELD; the last occurrence wins', () => {
+  it('a repeated field name reports DUPLICATE_FIELD and abandons the record (WP3B)', () => {
     const r = reader([field('name', 'text')]);
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" name: "Grace" }');
     const value = runSync(r.read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.get('name')).toMatchObject({ value: 'Grace' });
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_FIELD']);
   });
 });
@@ -212,21 +208,19 @@ describe('recordTreeReader -- FIXED fields (§5.2)', () => {
     expect(diagnostics.diagnostics).toEqual([]);
   });
 
-  it('a contradicting value at a FIXED field reports FIELD_FIXED, and the field is left out entirely', () => {
+  it('a contradicting value at a FIXED field reports FIELD_FIXED, and abandons the record (WP3B)', () => {
     const r = reader([field('tag', 'text', { role: 'FIXED' }, 'x')]);
     const { ctx, diagnostics } = collectingContextOver('{ tag: "y" }');
     const value = runSync(r.read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.has('tag')).toBe(false);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_FIXED']);
   });
 
-  it('an omitted FIXED field on an UNMARKED name is FIELD_REQUIRED -- a marker the document must state itself (§5.2)', () => {
+  it('an omitted FIXED field on an UNMARKED name is FIELD_REQUIRED -- a marker the document must state itself (§5.2) -- and abandons the record (WP3B)', () => {
     const r = reader([field('tag', 'text', { role: 'FIXED' }, 'x')]);
     const { ctx, diagnostics } = collectingContextOver('{}');
     const value = runSync(r.read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.has('tag')).toBe(false);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
@@ -293,11 +287,10 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
     );
   }
 
-  it('a pinned member is never injected on omission -- omitting it entirely leaves the group unsatisfied, not silently filled with the pin', () => {
+  it('a pinned member is never injected on omission -- omitting it entirely leaves the group unsatisfied, not silently filled with the pin, and abandons the record (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('{}');
     const value = runSync(pinnedMemberReader().read(ctx));
-    if (value.kind !== 'record') throw new Error('unreachable');
-    expect(value.fields.has('a')).toBe(false);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 

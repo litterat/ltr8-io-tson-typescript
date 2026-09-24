@@ -3,6 +3,7 @@ import { compile, validate } from '../src/compiler/compile.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { TypeDefinition } from '../src/schema/meta/typedef.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
+import { requireValue } from './reader-tree-helpers.js';
 
 /**
  * `compiler/compile.ts`'s `scoped` reader ([TSON-SCHEMA] §7.8) -- the open sum a value's own
@@ -67,7 +68,8 @@ describe('scoped reader -- the data rule (§7.8)', () => {
     );
     const result = validate(compiled, 'envelope', bytes);
     expect(result.diagnostics).toEqual([]);
-    const local = result.value.kind === 'record' ? result.value.fields.get('local') : undefined;
+    const value = requireValue(result);
+    const local = value.kind === 'record' ? value.fields.get('local') : undefined;
     expect(local).toMatchObject({ kind: 'record', typeRef: 'note' });
   });
 
@@ -82,7 +84,7 @@ describe('scoped reader -- the data rule (§7.8)', () => {
     );
     const result = validate(compiled, 'envelope', bytes);
     expect(result.diagnostics).toEqual([]);
-    const value = result.value;
+    const value = requireValue(result);
     const foreignField = value.kind === 'record' ? value.fields.get('foreign') : undefined;
     expect(foreignField).toMatchObject({
       kind: 'record',
@@ -155,7 +157,7 @@ describe('scoped reader -- scope membership (§7.8)', () => {
 });
 
 describe('scoped reader -- typed-position restriction, derived structurally (§7.8)', () => {
-  it('a nested !!schema at a non-scoped position is refused, and the value still reads on', () => {
+  it('a nested !!schema at a non-scoped position is refused, and the whole read is abandoned (WP3B)', () => {
     const compiled = compileHost(true);
     const bytes = new TextEncoder().encode(
       '{ local: !note { body: "x" } foreign: !!schema:"' +
@@ -167,8 +169,9 @@ describe('scoped reader -- typed-position restriction, derived structurally (§7
     const result = validate(compiled, 'envelope', bytes);
     const problem = result.diagnostics.find((d) => d.path === '/closed');
     expect(problem?.code).toBe('VALIDATION_ERROR');
-    const closed = result.value.kind === 'record' ? result.value.fields.get('closed') : undefined;
-    expect(closed).toMatchObject({ kind: 'atom', value: 1 });
+    // A read is all-or-nothing (WP3B): the refusal at '/closed' means no partial 'envelope' to
+    // mistake for a valid one, not a record with every other field intact.
+    expect(result.value).toBeUndefined();
   });
 });
 

@@ -90,7 +90,11 @@ day it does not match is the day it matters.
 - [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
       reverse-index population, choice disjointness and `@disjoint` assertion checking
 - [x] Identity and hashing — canonical `!!id` (`link/identity.ts`), `?sha256=` pinning and content
-      hashing via `crypto.subtle` (`link/contentHash.ts`, async — the one async surface in `link/`)
+      hashing via a hand-written, zero-dependency SHA-256 (`link/contentHash.ts`'s own
+      `sha256HexSync`; `sha256Hex` is the same computation wrapped `async` for existing callers).
+      Registering a schema (`config.ts`'s `resolveSchema`/`preload`) pin-checks it like a fetched
+      one either way — its own `!!id` pin against its own content, and a later pinned reference to
+      its identity against the recorded hash
 - [x] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end
 - [x] Compilation — a compiled, schema-validating reader
 - [x] Diagnostics — the data- and schema-side problem model
@@ -119,9 +123,10 @@ day it does not match is the day it matters.
       assumed. No I/O on any platform: nothing is read from disk and no `SchemaSource` is
       consulted, so registering the standard library never reaches the network even when one is
       configured. The CLI now consumes this instead of embedding its own copy
-- [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`,
-      `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin` (pinning, the
-      inverse of `declaredSha256`) beside `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
+- [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`/
+      `sha256HexSync`, `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin`
+      (pinning, the inverse of `declaredSha256`) beside
+      `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
       Its own subpath rather than part of the default entry: nothing in it reaches the compiler,
       the lexer or the event stream, so a consumer who wants only a document's content hash takes
       only that. The CLI's `hash` command consumes it rather than reimplementing §2.2.1, which is

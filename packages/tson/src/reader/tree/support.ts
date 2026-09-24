@@ -51,6 +51,34 @@ const TOKEN_FORM: Record<SchemaTokenForm, EventTokenForm> = {
 };
 
 /**
+ * What a constructing tree reader (record/array/map/tuple/atom/scoped/choice/subsumption) hands
+ * back once {@link ReadContext.reported} shows something was reported while it was building this
+ * position's value -- tree mode's own reading of the reference implementation's
+ * `ConstructionGuard` ("a value whose read reported anything is not assembled, and reads to
+ * `null` instead"), and the container-reader counterpart to `reader/bind.ts`'s own
+ * `abandonedValue`.
+ *
+ * **Why this, and not {@link absentNode}.** `AbsentNode` is a real tree node: it is what a
+ * document's own written `_` reads to, and every container above this position may legitimately
+ * hold one as a genuine child value. Handing the same node back for "this position's own read
+ * failed" would make the two indistinguishable from the tree alone -- a caller holding a partial
+ * tree would have to consult the diagnostics before trusting any of it, exactly the confusion
+ * `ConstructionGuard`'s own doc calls out. This sentinel is therefore never a member of the
+ * {@link Value} union at all: `undefined` cast through `unknown`, the same dishonesty
+ * `reader/bind.ts`'s own `abandonedValue` already commits to for the same reason, and safe on the
+ * same terms -- a fail-fast receiver throws before any caller ever sees this value returned, and a
+ * collecting caller must check {@link ReadContext.reported} around a child read (or, at the
+ * document boundary, `diagnostics.length`) rather than trust a value that might be this
+ * placeholder. Every constructing reader in this stack follows that discipline already: a
+ * checkpoint taken once the framing is consumed and the shape confirmed, and the guard applied
+ * only once, at that reader's own single return -- never re-checked by a parent that already
+ * trusts its own checkpoint to have caught the same growth.
+ */
+export function abandonedValue(): Value {
+  return undefined as unknown as Value;
+}
+
+/**
  * Reads a field/element's schema-composed literal ({@link Token}) through `parser`, the same field's
  * own type reader -- run eagerly and synchronously at construction, exactly as
  * `RecordAbstractReader.readSchemaDefault` does. Safe to drive with {@link runSync} rather than

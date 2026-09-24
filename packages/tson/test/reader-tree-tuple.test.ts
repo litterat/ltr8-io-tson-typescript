@@ -52,18 +52,17 @@ describe('tupleTreeReader -- positions (§5.3 [TSON-SCHEMA])', () => {
     ]);
   });
 
-  it('reports TYPE_MISMATCH for a non-array value', () => {
+  it('reports TYPE_MISMATCH for a non-array value, and abandons the read (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('"nope"');
     const value = runSync(reader([slot('text')]).read(ctx));
-    expect(value.kind).toBe('absent');
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('a REQUIRED position written `_` reports FIELD_REQUIRED and is kept as AbsentNode', () => {
+  it('a REQUIRED position written `_` reports FIELD_REQUIRED, and abandons the whole tuple (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('[_ 1]');
     const value = runSync(reader([slot('text'), slot('int32')]).read(ctx));
-    if (value.kind !== 'tuple') throw new Error('unreachable');
-    expect(value.elements[0]?.kind).toBe('absent');
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
@@ -77,20 +76,17 @@ describe('tupleTreeReader -- positions (§5.3 [TSON-SCHEMA])', () => {
 });
 
 describe('tupleTreeReader -- arity (§5.3)', () => {
-  it('too few elements reports WRONG_ARITY once; the missing position is AbsentNode', () => {
+  it('too few elements reports WRONG_ARITY once, and abandons the tuple (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('["a"]');
     const value = runSync(reader([slot('text'), slot('int32')]).read(ctx));
-    if (value.kind !== 'tuple') throw new Error('unreachable');
-    expect(value.elements).toHaveLength(2);
-    expect(value.elements[1]?.kind).toBe('absent');
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['WRONG_ARITY']);
   });
 
-  it('too many elements reports WRONG_ARITY once; the extras are decoded-and-discarded, not appended', () => {
+  it('too many elements reports WRONG_ARITY once, and abandons the tuple even though every position read cleanly (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('["a" 1 2 3]');
     const value = runSync(reader([slot('text'), slot('int32')]).read(ctx));
-    if (value.kind !== 'tuple') throw new Error('unreachable');
-    expect(value.elements).toHaveLength(2);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['WRONG_ARITY']);
   });
 });

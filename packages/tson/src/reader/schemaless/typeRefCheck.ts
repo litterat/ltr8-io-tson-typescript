@@ -11,7 +11,7 @@
  *
  * 1. `X` **is** a built-in (`vocabulary.ts`, [TSON-DATA] §5) -- the core-value must be a token
  *    ({@link reportNotScalar}), and the token must satisfy the atom (a caller-side
- *    `ATOM_CONSTRAINT_VIOLATION`, since only the caller holds the thrown
+ *    `ATOM_FORM_INVALID`/`ATOM_CONSTRAINT_VIOLATION`, since only the caller holds the thrown
  *    {@link TsonAtomTypeError} -- see `tree.ts`'s own `leaf`).
  * 2. Otherwise the name links to nothing and is {@link reportUnknownTypeRef}.
  *
@@ -26,6 +26,7 @@
  * this sits above.
  */
 import type { TsonAtomTypeError } from '../../core/errors.js';
+import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import type { TsonEvent } from '../../stream/event.js';
 import type { ReadContext } from '../contracts.js';
 
@@ -71,8 +72,10 @@ export function reportNotScalar(ctx: ReadContext, name: string, core: TsonEvent)
 
 /**
  * A token the built-in atom named `name` rejected -- both {@link TsonAtomTypeError} subtypes land
- * here. `error.expected` is the atom's own account of the violated constraint, never the atom's
- * name (`core/errors.ts`'s own six-shape vocabulary).
+ * here and are told apart by {@link diagnosticCodeForAtomError} (`ATOM_FORM_INVALID` for a shape
+ * the atom's grammar never accepts at all, `ATOM_CONSTRAINT_VIOLATION` for a correctly-shaped
+ * value outside its constraints, §5.2). `error.expected` is the atom's own account of the violated
+ * constraint, never the atom's name (`core/errors.ts`'s own six-shape vocabulary).
  */
 export function reportAtomViolation(
   ctx: ReadContext,
@@ -80,5 +83,10 @@ export function reportAtomViolation(
   error: TsonAtomTypeError,
   text: string,
 ): void {
-  ctx.report('ATOM_CONSTRAINT_VIOLATION', `'${name}': ${error.message}`, error.expected, text);
+  ctx.report(
+    diagnosticCodeForAtomError(error),
+    `'${name}': ${error.message}`,
+    error.expected,
+    text,
+  );
 }

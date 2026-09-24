@@ -78,9 +78,8 @@ import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
 import type { Token, Top, TypeDefinition } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
-import { absentNode } from '../tree/nodes.js';
 import { valuesEqual } from '../reader/tree/equality.js';
-import { readSchemaLiteral } from '../reader/tree/support.js';
+import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
 import { isAtom } from './atomChecks.js';
 import { directMembers, type Member } from '../link/recordExtension.js';
 import { terminal } from './referenceChain.js';
@@ -130,9 +129,19 @@ function selfNames(
  * A value with no leading `!type-ref`, or one naming a member of `selfNames`, reads straight
  * through `reader` -- the position's own type is always admitted (§7.2's "S is T"). A value naming
  * one of `definition.subtypes` dispatches to that subtype's own compiled reader via `resolve`,
- * read against the same, still-unconsumed value. Anything else is `UNKNOWN_TYPE_REF`, with a
- * message distinguishing a position whose type has no subtypes at all from one whose subtypes just
- * don't include what was named -- and the whole value is discarded, since nothing consumed it.
+ * read against the same, still-unconsumed value. Anything else is a refusal, split on whether the
+ * written name denotes anything in `entries` at all: one `entries` has no entry for is
+ * `UNKNOWN_TYPE_REF` (§7.2's own opening paragraph -- "a built-in annotation name not defined by
+ * the active schema is an unresolved-type error" -- generalised past built-ins to any name this
+ * schema's namespace does not contain, and `typeRefCheck.ts`'s own top note on the same code for
+ * the schemaless path); one that resolves to a real entry this position simply does not admit is
+ * `TYPE_MISMATCH`, with a message distinguishing a position whose type has no subtypes at all from
+ * one whose subtypes just don't include what was named. Either way the whole value is discarded,
+ * since nothing consumed it. **This reads §7.2 rather than the reference's own
+ * `SubsumptionDiagnostics`/`VariantSchemaReader`, which report `TYPE_MISMATCH` unconditionally and
+ * never consult whether the name resolves elsewhere** -- a divergence this port takes deliberately
+ * (worth raising upstream) rather than silently, since §7.2's two-step reading ("resolve, then
+ * admit") is what the spec text actually states.
  *
  * **An ABSTRACT position takes this module's other branch** (see this file's own top note): with
  * `discriminators`, every read goes through {@link buildMemberDispatchReader} instead of the tag
@@ -203,7 +212,7 @@ export function guardSubsumption(
             '(no type annotation)',
           );
           yield* skipDataValue(ctx);
-          return absentNode();
+          return abandonedValue();
         }
         return yield* reader.read(ctx);
       }
@@ -224,22 +233,35 @@ export function guardSubsumption(
       if (subtype !== undefined) {
         return yield* resolve(subtype).read(ctx);
       }
-      // §7.2 flattens the annotated name through its own chain (`annotated`, above) before asking
-      // whether it is admitted -- once flattened, a name this schema does not declare at all is
-      // `UNKNOWN_TYPE_REF` (it denotes nothing), while a name that resolves to a real, declared
-      // entry which simply is not `name` or one of its subtypes is `TYPE_MISMATCH` -- the value's
-      // own type is known and wrong, not missing.
+      // §7.2's own opening paragraph resolves a type annotation in two steps, and this is the
+      // second: "all type annotations MUST resolve through the schema's type-name namespace; a
+      // built-in annotation name not defined by the active schema is an unresolved-type error" is
+      // the first (the name must denote *something* the schema declares), and subsumption -- is
+      // the denoted type admitted here -- is the second, asked only once the first holds. A name
+      // `entries` has no entry for at all fails the first step and is `UNKNOWN_TYPE_REF`
+      // ("the name denotes nothing", `typeRefCheck.ts`'s own top note, restated for the
+      // schema-directed path this comment is on); a name that resolves to a real entry the
+      // position simply does not admit fails only the second and is `TYPE_MISMATCH`. The
+      // reference's own `SubsumptionDiagnostics`/`VariantSchemaReader` report `TYPE_MISMATCH`
+      // unconditionally here and never make this split -- see this port's own spec-feedback note
+      // on the divergence -- but §7.2's text states the two-step rule plainly, and doing otherwise
+      // would mean a name that resolves nowhere in this schema at all is validated as though the
+      // schema had a considered opinion about it, which it never formed.
+      const resolves = entries.has(annotated);
       ctx.report(
-        entries.has(annotated) ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
-        subtypeNames.length === 0
-          ? `'!${ref}' is not valid at a '${name}' position -- a type annotation must name the ` +
+        resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+        resolves
+          ? subtypeNames.length === 0
+            ? `'!${ref}' is not valid at a '${name}' position -- a type annotation must name the ` +
               `position's own type, which has no subtypes (§7.2)`
-          : `'!${ref}' is not a known subtype of '${name}' (§7.2) -- expected one of (${subtypeList})`,
+            : `'!${ref}' is not a known subtype of '${name}' (§7.2) -- expected one of (${subtypeList})`
+          : `'!${ref}' does not resolve in the governing schema's namespace (§7.2) -- expected ` +
+              (subtypeNames.length === 0 ? `'${name}'` : `one of (${subtypeList})`),
         subtypeNames.length === 0 ? `'${name}'` : `one of (${subtypeList})`,
         `!${ref}`,
       );
       yield* skipDataValue(ctx); // framing included: nothing consumed it, this value being unreadable
-      return absentNode();
+      return abandonedValue();
     },
   };
 }
@@ -260,7 +282,7 @@ function* refuseTaggedBase(
     `!${ref}`,
   );
   yield* skipDataValue(ctx);
-  return absentNode();
+  return abandonedValue();
 }
 
 // ── Member dispatch (§5.2's discriminated family, non-empty `discriminators`) ──────────────────
@@ -515,7 +537,7 @@ function buildMemberDispatchReader(
           candidates.length === 0 ? `a member of '${name}'` : `one of (${memberList})`,
           '(unreadable)',
         );
-        return absentNode();
+        return abandonedValue();
       }
       const matched = candidates.find((candidate) => tuplesEqual(documentPins, candidate.pins));
       if (matched === undefined) {
@@ -531,7 +553,7 @@ function buildMemberDispatchReader(
           `${tuple} as stated`,
         );
         yield* skipDataValue(ctx);
-        return absentNode();
+        return abandonedValue();
       }
 
       if (lookahead.tag !== undefined) {
@@ -549,7 +571,7 @@ function buildMemberDispatchReader(
             `!${lookahead.tag}`,
           );
           yield* skipDataValue(ctx);
-          return absentNode();
+          return abandonedValue();
         }
       }
 

@@ -264,15 +264,15 @@ The one exception is **name hygiene**, which throws `TsonNameHygieneRefusedError
 a `TsonReadError`, because §8.2's refusal is a _fifth outcome_ apart from §8.1's four error
 categories and must be unmistakable for one of them.
 
-**Collecting (`validate`).** `{ value, diagnostics }`, and an empty `diagnostics` means the document
-conforms — including for a document that will not lex, which arrives as a `VALIDATION_ERROR` with
-the root value as a `missingNode` rather than as a throw. A `Diagnostic` carries `code`, `message`,
-`path` (RFC 6901 into the data), `schemaId`/`schemaPointer`, `expected`/`actual`, and
-`dataPosition`/`schemaPosition`:
+**Collecting (`validate`).** `{ value?, diagnostics }`, and an empty `diagnostics` means the document
+conforms and `value` is present — a read is all-or-nothing, so any diagnostic at all, including for
+a document that will not lex (a `VALIDATION_ERROR`), leaves `value` omitted rather than filled with
+a placeholder. A `Diagnostic` carries `code`, `message`, `path` (RFC 6901 into the data),
+`schemaId`/`schemaPointer`, `expected`/`actual`, and `dataPosition`/`schemaPosition`:
 
 ```json
 {
-  "code": "ATOM_CONSTRAINT_VIOLATION",
+  "code": "ATOM_FORM_INVALID",
   "message": "'x' is not a valid integer -- only integer and based-integer forms are accepted (§5.6)",
   "path": "/order_id",
   "schemaId": "example.com/order.tn",
@@ -405,7 +405,7 @@ boolean, so a file whose schema could not be obtained is distinguishable from on
       "outcome": "INVALID",
       "diagnostics": [
         {
-          "code": "ATOM_CONSTRAINT_VIOLATION",
+          "code": "ATOM_FORM_INVALID",
           "message": "'x' is not a valid integer …",
           "path": "/order_id",
           "schema_id": "example.com/order.tn",

@@ -197,6 +197,30 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
     }).toThrow(/'sealed_off' can never be satisfied/u);
   });
 
+  it('rejects a required, non-voidable field typed by an ALIAS of void, followed through the reference chain (§5.10.1, §5.2, §8.3)', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['nothing', def({ kind: 'reference', target: ref('void') })],
+      [
+        'sealed_off',
+        def({
+          kind: 'record',
+          supertypes: [],
+          fields: [field('name', ref('text')), field('never', ref('nothing'))],
+          groups: [],
+          extension: 'OPEN',
+          discriminators: [],
+        }),
+      ],
+      ['text', text],
+    ]);
+    expect(() => {
+      check(merged);
+    }).toThrow(TsonSchemaValidationError);
+    expect(() => {
+      check(merged);
+    }).toThrow(/'sealed_off' can never be satisfied/u);
+  });
+
   it('rejects a record field group that is REQUIRED with no satisfiable member', () => {
     const merged = new Map<string, TypeDefinition>([
       [

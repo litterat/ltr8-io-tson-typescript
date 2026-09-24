@@ -15,8 +15,7 @@ describe('lookupBuiltinAtom -- coverage matching BuiltinTypeVocabulary.java exac
     expect(lookupBuiltinAtom('not_a_real_type')).toBeUndefined();
   });
 
-  it('has no entry for boolean/regex/unknown -- the same gaps BuiltinTypeVocabulary.java has', () => {
-    expect(lookupBuiltinAtom('boolean')).toBeUndefined();
+  it('has no entry for regex/unknown -- the same gaps BuiltinTypeVocabulary.java has', () => {
     expect(lookupBuiltinAtom('regex')).toBeUndefined();
     expect(lookupBuiltinAtom('unknown')).toBeUndefined();
   });
@@ -38,6 +37,23 @@ describe('lookupBuiltinAtom -- coverage matching BuiltinTypeVocabulary.java exac
 });
 
 describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
+  it('boolean (§5.5) reads exactly true/false, case-sensitive, to a host boolean', () => {
+    const boolean_ = lookupBuiltinAtom('boolean');
+    expect(boolean_?.read({ text: 'true', form: 'unquoted' })).toBe(true);
+    expect(boolean_?.read({ text: 'false', form: 'unquoted' })).toBe(false);
+    expect(() => boolean_?.read({ text: 'True', form: 'unquoted' })).toThrow(
+      TsonAtomValidationError,
+    );
+    expect(() => boolean_?.read({ text: 'yes', form: 'unquoted' })).toThrow(
+      TsonAtomValidationError,
+    );
+  });
+
+  it('boolean (§5.5) does not consult the form -- a quoted "true" is the same value', () => {
+    const boolean_ = lookupBuiltinAtom('boolean');
+    expect(boolean_?.read({ text: 'true', form: 'single-line' })).toBe(true);
+  });
+
   it('int8 is width-8 signed, matching `int8 => !integer ^ { size: { bits: 8 signed: true } }`', () => {
     const int8 = lookupBuiltinAtom('int8');
     expect(int8?.read({ text: '127', form: 'unquoted' })).toBe(127);

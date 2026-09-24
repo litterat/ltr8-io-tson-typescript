@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 import {
   contentStart,
   declaredSha256,
+  isAddressable,
   sha256Hex,
+  sha256HexSync,
+  UNADDRESSABLE,
   verifyContentHash,
   withSha256Pin,
 } from '../src/link/contentHash.js';
@@ -54,6 +57,20 @@ describe('contentStart (§2.2.1)', () => {
   });
 });
 
+describe('isAddressable / UNADDRESSABLE (§2.2.1, [TSON-SCHEMA] §10.2 -- WP3B)', () => {
+  it('is true for anything contentStart would not throw on', () => {
+    expect(isAddressable(bytes('!!id:"x"\nbody'))).toBe(true);
+  });
+
+  it('is false for a single-line document with no line terminator at all -- the one case a pinned reference must be refused for', () => {
+    expect(isAddressable(bytes('!!id:"x" with no newline'))).toBe(false);
+  });
+
+  it('UNADDRESSABLE is the empty string -- never a value a real 64-hex-digit hash could collide with', () => {
+    expect(UNADDRESSABLE).toBe('');
+  });
+});
+
 describe('sha256Hex', () => {
   it('hashes only the bytes past the first line, matching a cross-check via node:crypto', async () => {
     const doc = bytes('!!id:"https://example.com/s.tn"\n{ a: 1 }');
@@ -65,6 +82,31 @@ describe('sha256Hex', () => {
   it('produces 64 lowercase hex characters', async () => {
     const hash = await sha256Hex(bytes('!!id:"x"\nbody'));
     expect(hash).toMatch(/^[0-9a-f]{64}$/u);
+  });
+});
+
+describe('sha256HexSync (WP3B: the digest a synchronous registration path can compute)', () => {
+  it('agrees with sha256Hex/node:crypto for the same document', async () => {
+    const doc = bytes('!!id:"https://example.com/s.tn"\n{ a: 1 }');
+    const contentOnly = doc.subarray(contentStart(doc));
+    const expected = createHash('sha256').update(contentOnly).digest('hex');
+    expect(sha256HexSync(doc)).toBe(expected);
+    expect(sha256HexSync(doc)).toBe(await sha256Hex(doc));
+  });
+
+  it('agrees with node:crypto across the SHA-256 padding boundary (55/56/63/64/65-byte content)', () => {
+    for (const len of [0, 1, 55, 56, 63, 64, 65, 1000]) {
+      const content = 'a'.repeat(len);
+      const doc = bytes(`!!id:"x"\n${content}`);
+      const expected = createHash('sha256').update(bytes(content)).digest('hex');
+      expect(sha256HexSync(doc)).toBe(expected);
+    }
+  });
+
+  it('throws the same TsonSchemaValidationError as sha256Hex for a document with no line terminator', () => {
+    expect(() => sha256HexSync(bytes('!!id:"x" with no newline'))).toThrow(
+      TsonSchemaValidationError,
+    );
   });
 });
 

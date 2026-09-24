@@ -31,7 +31,7 @@ const VALIDATION_CODES: ReadonlySet<DiagnosticCode> = new Set([
   'VALIDATION_ERROR',
 ] satisfies DiagnosticCode[]);
 
-/** §8.1's `resolver` category, as it can appear at this layer (a reference the governing schema does not declare, a structural document-level rule). */
+/** §8.1's `resolver` category, as it can appear at this layer (a reference the governing schema does not declare, a structural document-level rule, or a token a built-in atom's grammar rejects outright, §5.2). */
 const RESOLVER_CODES: ReadonlySet<DiagnosticCode> = new Set([
   'UNKNOWN_TYPE_REF',
   'UNKNOWN_TYPE',
@@ -39,6 +39,7 @@ const RESOLVER_CODES: ReadonlySet<DiagnosticCode> = new Set([
   'ABSENT_MAP_KEY',
   'DUPLICATE_FIELD',
   'SCHEMA_ERROR',
+  'ATOM_FORM_INVALID',
 ] satisfies DiagnosticCode[]);
 
 /** §8.2's three name-hygiene codes -- never one of §8.1's four categories (RUNNER.md rule 3d). */

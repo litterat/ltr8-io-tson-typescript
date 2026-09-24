@@ -24,16 +24,19 @@
  *
  * **`members` (§7.4, §5.7, #22) is enforced here**, via {@link createMembershipCheck}: a value
  * outside a declared member set is `ATOM_CONSTRAINT_VIOLATION`. **`pattern` (I-Regexp, RFC 9485)
- * is validated for syntax and matched against `members` at schema load** (`compiler/atomChecks.ts`),
- * but is not matched against an arbitrary read value here -- an unconstrained-by-`members` `!text
- * ^ { pattern: "[A-Z]{2}" }` accepts any text at read time, `pattern` narrowing only what
- * `members` may declare.
+ * is enforced here too**, via {@link createPatternCheck}: a read value the pattern does not
+ * match is `ATOM_CONSTRAINT_VIOLATION` (§7.4, §5.5). `pattern` is parsed once, at reader-build
+ * time -- schema load has already validated its syntax (`compiler/atomChecks.ts`'s own
+ * `textCoherence`), so a pattern reaching this module is always well-formed, and re-parsing it
+ * per read would repeat work every value pays for. `regex/`'s own `matches` runs a Thompson-NFA
+ * (`pike.ts`), never a host `RegExp`, matching every other read path's own I-Regexp use.
  */
 
 import { TsonAtomValidationError } from '../../core/errors.js';
 import type { TextType } from '../../schema/meta/atoms-text.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { toNfc } from '../../unicode/nfc.js';
+import { parseRegex } from '../../regex/index.js';
 
 /**
  * Builds the `AtomType` for one fully-parameterised `text_type` instance -- `text =>
@@ -42,6 +45,7 @@ import { toNfc } from '../../unicode/nfc.js';
  */
 export function createTextParser(typeRef: string, constraints: TextType): AtomType<string> {
   const checkMembership = createMembershipCheck(typeRef, constraints.members);
+  const checkPattern = createPatternCheck(typeRef, constraints.pattern);
 
   function read(token: AtomToken): string {
     const text = token.text;
@@ -67,8 +71,7 @@ export function createTextParser(typeRef: string, constraints: TextType): AtomTy
         `at most ${constraints.maxLength.toString()} characters`,
       );
     }
-    // `pattern` is checked against `members` at schema load (`compiler/atomChecks.ts`), not
-    // matched against an arbitrary read value here -- see this module's TSDoc.
+    checkPattern?.(text);
     checkMembership?.(text);
     return text;
   }
@@ -105,6 +108,37 @@ export function createMembershipCheck(
         typeRef,
         `'${text}' is not a member of '${typeRef}' -- expected ${membership}`,
         membership,
+      );
+    }
+  };
+}
+
+/**
+ * Builds the read-time enforcement for `text_type.pattern` (I-Regexp, RFC 9485; §7.4, §5.5) —
+ * the sibling of {@link createMembershipCheck}, and reached the same way by
+ * `compiler/atomBuilder.ts`'s own dispatch: `text_type` and `regex_type` through this module's
+ * own {@link createTextParser}, `uri_type` and `email_type` through `atomBuilder.ts`'s own
+ * wrapper, since all four compose `text_type`'s `pattern` facet (§9). `undefined` when `pattern`
+ * is absent, so a caller may compose it unconditionally.
+ *
+ * **Parses once, at reader-build time.** `pattern`'s syntax is already checked at schema load
+ * (`compiler/atomChecks.ts`'s own `textCoherence`), so a pattern reaching this function always
+ * parses; re-parsing here — rather than per read, or trusting an unparsed string past load —
+ * builds the {@link Regex} once and reuses it for every value the position ever reads, the same
+ * shape {@link createMembershipCheck}'s own `Set` construction already takes for `members`.
+ */
+export function createPatternCheck(
+  typeRef: string,
+  pattern: string | undefined,
+): ((text: string) => void) | undefined {
+  if (pattern === undefined) return undefined;
+  const regex = parseRegex(pattern);
+  return (text: string): void => {
+    if (!regex.matches(text)) {
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' does not match '${typeRef}'’s pattern '${pattern}' (RFC 9485)`,
+        `text matching '${pattern}'`,
       );
     }
   };

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { compile, validate, type CompiledSchema } from '../src/compiler/compile.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
+import { requireValue } from './reader-tree-helpers.js';
 
 /**
  * `compiler/subsumption.ts` -- §7.2's rule that a value's own `!type-ref` must be admitted by the
@@ -46,11 +47,11 @@ function readHolder(document: string) {
 
 describe('subsumption -- §7.2 at every position it governs', () => {
   it('refuses an unrelated type at an atom position', () => {
-    // `text` does carry a subtype here (core's own `non_empty_text`), so this takes the "not a
-    // known subtype" wording -- the point is that an atom position now refuses at all. `uuid` is a
-    // real, declared type that just is not admissible here, so this is `TYPE_MISMATCH` (the
-    // value's own type is known and wrong) rather than `UNKNOWN_TYPE_REF` (a name denoting
-    // nothing at all), §7.2.
+    // §7.2's own two-step rule (this port's `compiler/subsumption.ts` reads it that way; see its
+    // top note on the deliberate divergence from the reference's unconditional `TYPE_MISMATCH`):
+    // `!uuid` resolves (core's own declared type, imported) but is not admitted at a `text`
+    // position, so it is `TYPE_MISMATCH`; `!nosuch` names nothing this schema's namespace
+    // declares at all, so it is `UNKNOWN_TYPE_REF`.
     const uuidResult = readHolder(`{ t: !uuid "x" ${REST} }`);
     expect(uuidResult.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
     expect(uuidResult.diagnostics[0]?.message).toContain(
@@ -74,6 +75,14 @@ describe('subsumption -- §7.2 at every position it governs', () => {
     );
     expect(mapResult.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
     expect(mapResult.diagnostics[0]?.message).toContain("'!nosuch'");
+
+    // A name that *does* resolve (`person`, declared elsewhere in this schema) but is not
+    // admitted at an array/map position is `TYPE_MISMATCH` instead.
+    const resolvedResult = readHolder(
+      `{ t: "x"  r: { name: "n" }  a: !person [ "x" ]  m: { "k" => "v" } }`,
+    );
+    expect(resolvedResult.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    expect(resolvedResult.diagnostics[0]?.message).toContain("'!person'");
   });
 
   it('refuses an unrelated type at a tuple position', () => {
@@ -83,6 +92,7 @@ describe('subsumption -- §7.2 at every position it governs', () => {
 !!import:"https://tson.io/2026/36/m/core.tn"
 {
   pair => [text, text]
+  unrelated => [integer, integer]
   holder => { p: pair }
 }
 `;
@@ -90,6 +100,14 @@ describe('subsumption -- §7.2 at every position it governs', () => {
     const result = validate(tupleCompiled, 'holder', bytes(`{ p: !nosuch [ "a" "b" ] }`));
     expect(result.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
     expect(result.diagnostics[0]?.message).toContain("'!nosuch'");
+
+    const resolvedResult = validate(
+      tupleCompiled,
+      'holder',
+      bytes(`{ p: !unrelated [ "a" "b" ] }`),
+    );
+    expect(resolvedResult.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    expect(resolvedResult.diagnostics[0]?.message).toContain("'!unrelated'");
   });
 
   it('refuses an unrelated type at a record position with no subtypes, naming the position itself', () => {
@@ -97,8 +115,19 @@ describe('subsumption -- §7.2 at every position it governs', () => {
     const hCompiled = compile(hSchema);
     const result = validate(hCompiled, 'h', bytes(`{ f: !nosuch { name: "x" } }`));
     expect(result.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
-    expect(result.diagnostics[0]?.message).toContain("'!nosuch' is not valid at a 'base' position");
-    expect(result.diagnostics[0]?.message).toContain('no subtypes');
+    expect(result.diagnostics[0]?.message).toContain(
+      "'!nosuch' does not resolve in the governing schema's namespace",
+    );
+    expect(result.diagnostics[0]?.message).toContain("expected 'base'");
+
+    // `person` resolves (declared elsewhere in this schema) but is not admitted at `base`, which
+    // has no subtypes -- `TYPE_MISMATCH`, naming the position itself.
+    const resolvedResult = validate(hCompiled, 'h', bytes(`{ f: !person { name: "x" } }`));
+    expect(resolvedResult.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    expect(resolvedResult.diagnostics[0]?.message).toContain(
+      "'!person' is not valid at a 'base' position",
+    );
+    expect(resolvedResult.diagnostics[0]?.message).toContain('no subtypes');
   });
 
   it('admits and validates a declared subtype as itself', () => {
@@ -163,7 +192,7 @@ const FAMILY_SCHEMA = `
 
   orphan => abstract { sel: text =? }
 
-  holder => { p: pet  s?: shape?  f?: frame?  o?: orphan? }
+  holder => { p: pet  s?: shape?  f?: frame?  o?: orphan?  d?: dog? }
 }
 `;
 
@@ -233,6 +262,18 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
     expect(result.diagnostics[0]?.message).toContain('contradicts');
   });
 
+  it(
+    '§5.2/§5.5 the FIXED check compares VALUES, never annotations -- an annotated pin ' +
+      "('pet_type: @doc:\"x\" dog') still equals the schema's unannotated one ('= \"dog\"')",
+    () => {
+      const result = readFamilyHolder(
+        `{ p: { pet_type: dog  name: "Rex"  breed: "corgi" }  ` +
+          `d: { pet_type: @doc:"x" dog  name: "Fido"  breed: "lab" } }`,
+      );
+      expect(result.diagnostics).toEqual([]);
+    },
+  );
+
   it('a discriminator value no member pins is a validation error naming the alternatives', () => {
     const result = readFamilyHolder(`{ p: { pet_type: dgo  name: "Rex" } }`);
     expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
@@ -249,7 +290,8 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
   function petTypeRef(document: string): string | undefined {
     const result = readFamilyHolder(document);
     expect(result.diagnostics).toEqual([]);
-    const p = result.value.kind === 'record' ? result.value.fields.get('p') : undefined;
+    const value = requireValue(result);
+    const p = value.kind === 'record' ? value.fields.get('p') : undefined;
     return p?.kind === 'record' ? p.typeRef : undefined;
   }
 
@@ -283,3 +325,85 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
     expect(message).toMatch(/no schema in this closure declares a member of 'orphan'/u);
   });
 });
+
+// ── §5.10 "A record-bodied template is a family base": member dispatch reuses the record ────
+// family's own reader (§5.2), over a template's *instantiations* rather than over a record's
+// composers/refiners, matching the Java reference's `AbstractTemplateReader`'s own member
+// -dispatch path.
+
+const TEMPLATE_FAMILY_SCHEMA = `
+!!id:"test://subsumption-template-family.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
+{
+  pet    => <N, T> { type: text = N  pet: T }
+  dog    => pet<"dog", text> & { note: text }
+  cat    => pet<"cat", text> & { note: text }
+
+  holder => { p: pet }
+}
+`;
+
+const templateFamilyCompiled = compile(resolveUserSchema(TEMPLATE_FAMILY_SCHEMA));
+
+function readTemplateFamilyHolder(document: string) {
+  return validate(templateFamilyCompiled, 'holder', bytes(document));
+}
+
+describe(
+  '§5.10 a record-bodied template family base dispatches over its instantiations, never ' +
+    'reading a held body of its own',
+  () => {
+    it('places a member with no tag at all, reading the selector the closing fixed on it (§5.7)', () => {
+      const result = readTemplateFamilyHolder(`{ p: { type: dog  pet: "x"  note: "n" } }`);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it('a selector may arrive after the fields it selects ([TSON-DATA] §2.5)', () => {
+      const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n"  type: dog } }`);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it('an agreeing tag is admitted and changes nothing', () => {
+      const result = readTemplateFamilyHolder(`{ p: !dog { type: dog  pet: "x"  note: "n" } }`);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it('refuses a tag naming the template base itself, regardless of what the fields say', () => {
+      const result = readTemplateFamilyHolder(`{ p: !pet { type: dog  pet: "x"  note: "n" } }`);
+      expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+      expect(result.diagnostics[0]?.message).toContain("'!pet'");
+    });
+
+    it('refuses a tag contradicting the discriminator -- a tag may agree, never overrule', () => {
+      const result = readTemplateFamilyHolder(`{ p: !cat { type: dog  pet: "x"  note: "n" } }`);
+      expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+      expect(result.diagnostics[0]?.message).toContain('contradicts');
+    });
+
+    it('a discriminator value no instantiation pins is a validation error naming the alternatives', () => {
+      const result = readTemplateFamilyHolder(`{ p: { type: bird  pet: "x" } }`);
+      expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+      expect(result.diagnostics[0]?.message).toContain('dog');
+      expect(result.diagnostics[0]?.message).toContain('cat');
+    });
+
+    it(
+      'a missing selector is a validation error even though the closed member’s own copy of ' +
+        'the field is optional (§5.7’s fixation) -- a template base has no reader of its own ' +
+        'to fall back to, and dispatch is decided by what is written, never by what a member ' +
+        'would inject (§7.2)',
+      () => {
+        const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n" } }`);
+        expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+        expect(result.diagnostics[0]?.message).toContain('dog');
+        expect(result.diagnostics[0]?.message).toContain('cat');
+      },
+    );
+
+    it('no instantiation entry is minted for a bare member reference -- dog and cat are named applications, in place (§8.2)', () => {
+      const linked = resolveUserSchema(TEMPLATE_FAMILY_SCHEMA);
+      expect([...linked.entries.keys()].some((k) => k.startsWith('pet_'))).toBe(false);
+    });
+  },
+);

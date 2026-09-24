@@ -94,6 +94,70 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
   });
 });
 
+describe('buildAtomReader -- text_type/regex_type/uri_type/email_type pattern (§7.4, §5.5)', () => {
+  it('enforces text_type.pattern at read: a value the I-Regexp pattern does not match is ATOM_CONSTRAINT_VIOLATION', () => {
+    const atom: Atom = { kind: 'text_type', pattern: '[a-z]+' };
+    const reader = buildAtomReader('lower', atom);
+    expect(runSync(reader.read(bodyContextOver('"abc"')))).toEqual({
+      kind: 'atom',
+      value: 'abc',
+      typeRef: 'lower',
+      annotations: { values: [] },
+    });
+    const { ctx, diagnostics } = collectingContextOver('"ABC"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+
+  it("reuses text_type's own pattern enforcement for regex_type, through the same asTextConstraints composition as its length/members facets", () => {
+    const atom: Atom = {
+      kind: 'regex_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc9485',
+      pattern: '[0-9]+',
+    };
+    const reader = buildAtomReader('digits', atom);
+    const { ctx, diagnostics } = collectingContextOver('"abc"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+
+  it('enforces uri_type.pattern at read, on top of its own URI grammar', () => {
+    const atom: Atom = {
+      kind: 'uri_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc3986',
+      pattern: 'https://.*',
+    };
+    const reader = buildAtomReader('https_only', atom);
+    expect(runSync(reader.read(bodyContextOver('"https://example.com/"')))).toEqual({
+      kind: 'atom',
+      value: 'https://example.com/',
+      typeRef: 'https_only',
+      annotations: { values: [] },
+    });
+    const { ctx, diagnostics } = collectingContextOver('"http://example.com/"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+
+  it('enforces email_type.pattern at read, on top of its own address grammar', () => {
+    const atom: Atom = {
+      kind: 'email_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc5322',
+      pattern: '.*@example\\.com',
+    };
+    const reader = buildAtomReader('example_only', atom);
+    expect(runSync(reader.read(bodyContextOver('"a@example.com"')))).toEqual({
+      kind: 'atom',
+      value: 'a@example.com',
+      typeRef: 'example_only',
+      annotations: { values: [] },
+    });
+    const { ctx, diagnostics } = collectingContextOver('"a@other.example"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+});
+
 describe('buildAtomReader -- uri_type / email_type members (§7.4, §5.7, #22)', () => {
   it('enforces uri_type.members even though it has no createTextParser-backed reader of its own', () => {
     const atom: Atom = {

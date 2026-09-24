@@ -45,9 +45,12 @@ import type {
 import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type } from '../schema/meta/atoms-network.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
+import type { EmailType, UriType } from '../schema/meta/atoms-text.js';
 import { parseNetworkBlock, whyNoValue } from '../atom/network/cidrParsing.js';
 import { parseIpv4Octets } from '../atom/network/ipv4.js';
 import { parseIpv6Bytes } from '../atom/network/ipv6.js';
+import { createUriParser } from '../atom/network/uri.js';
+import { createEmailParser } from '../atom/network/email.js';
 import {
   admitsLower,
   admitsUpper,
@@ -585,14 +588,12 @@ function textUniqueMembers(members: readonly string[]): string[] {
  * this function never re-parses it and never reports a pattern-syntax problem twice.
  *
  * **`uri_type`/`email_type`'s own family-specific facets (`scheme`, and email's own address
- * grammar) are not asked of a member here, nor is a member parsed as a URI or an email address**
- * — unlike `regex_type`, whose own member obligation ({@link regexMemberSyntaxCoherence}) this
- * function's shared caller applies alongside it. `text_type`'s length/pattern facets are the only
- * ones this shared function owns; a `uri_type` member satisfying `scheme` or actually being a
- * well-formed URI is a fact `uri_type`'s own facets state and this function does not read. The
- * reference implementation's `UriType` carries the identical gap (its `coherenceCheck` delegates
- * here in exactly the same way) — worth reporting upstream as a §7.4 conformance gap rather than
- * left silent, not something this port closes alone against its own reference.
+ * grammar) are not asked of a member here** — `text_type`'s length/pattern facets are the only
+ * ones this shared function owns. Each family's own obligation runs alongside this one instead
+ * ({@link regexMemberSyntaxCoherence} for `regex_type`, {@link uriMemberCoherence}/
+ * {@link emailMemberCoherence} for `uri_type`/`email_type`), every one of them a member of
+ * `checkAtomCoherence`'s own per-family list rather than folded into this shared function, since
+ * this one function's whole point is to be the part every text-shaped family owns identically.
  */
 function textMemberCoherence(
   t: TextConstraints,
@@ -681,6 +682,58 @@ function regexMemberSyntaxCoherence(members: readonly string[] | undefined): str
     }
   }
   return out;
+}
+
+/**
+ * §7.4's "every member satisfies the body's other facets", for the two families
+ * {@link textMemberCoherence} deliberately leaves alone: a `uri_type`/`email_type` member is
+ * checked against the family's OWN obligation -- `scheme` and RFC 3986's grammar for a URI,
+ * RFC 5322's dot-atom grammar for an email address -- by running it through the family's own
+ * compiled parser ({@link createUriParser}/{@link createEmailParser}), the single source of
+ * truth `compiler/atomBuilder.ts` reads at data-read time too, rather than a second, drifting
+ * copy of either grammar here. The parser's own length/pattern checks fire identically for a
+ * member that also violates one of those (already reported by {@link textMemberCoherence}) --
+ * accepted as one violation surfacing under two messages, rather than teaching this function to
+ * suppress a family check because a shared one already ran.
+ */
+function uriMemberCoherence(atom: UriType): string[] {
+  if (atom.members === undefined) return [];
+  const parser = createUriParser('uri', atom);
+  const out: string[] = [];
+  for (const member of atom.members) {
+    try {
+      parser.read(memberToken(member));
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      out.push(
+        `members includes '${member}', which does not satisfy uri_type's own facets: ${why}`,
+      );
+    }
+  }
+  return out;
+}
+
+/** {@link uriMemberCoherence}'s own twin for `email_type`. */
+function emailMemberCoherence(atom: EmailType): string[] {
+  if (atom.members === undefined) return [];
+  const parser = createEmailParser('email', atom);
+  const out: string[] = [];
+  for (const member of atom.members) {
+    try {
+      parser.read(memberToken(member));
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      out.push(
+        `members includes '${member}', which does not satisfy email_type's own facets: ${why}`,
+      );
+    }
+  }
+  return out;
+}
+
+/** A member string as the `AtomToken` a family's own parser reads -- `form` is never consulted by `createUriParser`/`createEmailParser`, so any well-formed choice is exact. */
+function memberToken(text: string): { readonly text: string; readonly form: 'single-line' } {
+  return { text, form: 'single-line' };
 }
 
 /** `bytes_type.encoding` carries no narrowing relation at all (§5.5, §5.7): a refinement may neither set nor change it, so the only legal comparison is equality -- an alphabet is a spelling, and another one is a fresh instance, never a tightening of this one. */
@@ -1232,9 +1285,9 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'regex_type':
       return [...textCoherence(atom), ...regexMemberSyntaxCoherence(atom.members)];
     case 'uri_type':
-      return textCoherence(atom);
+      return [...textCoherence(atom), ...uriMemberCoherence(atom)];
     case 'email_type':
-      return textCoherence(atom);
+      return [...textCoherence(atom), ...emailMemberCoherence(atom)];
     case 'date_type':
       return dateCoherence(atom);
     case 'time_type':

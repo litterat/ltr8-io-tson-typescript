@@ -10,12 +10,14 @@ import type { Value } from '../../tree/nodes.js';
 import { absentNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from './grammar.js';
+import { abandonedValue } from './support.js';
 
 /** Builds the `void` tree reader -- `displayName` names this position in a shape-mismatch diagnostic. */
 export function absentTreeReader(displayName: string): TypeReader<Value> {
   return {
     *read(ctx: ReadContext): Task<Value> {
       const annotations = yield* captureAnnotations(ctx);
+      const mark = ctx.reported();
       yield* skipAnnotationsAndTypeRef(ctx); // no-op past the annotations already captured above; consumes an optional type-ref
       const e = yield* ctx.peek();
       if (e.kind === 'absent') {
@@ -29,7 +31,9 @@ export function absentTreeReader(displayName: string): TypeReader<Value> {
         );
         yield* skipCoreValue(ctx);
       }
-      return absentNode(undefined, annotations);
+      // Tree mode's construction guard: a shape mismatch reported above means no node, not the
+      // absent one a genuinely-written `_` reads to.
+      return ctx.reported() > mark ? abandonedValue() : absentNode(undefined, annotations);
     },
   };
 }

@@ -17,6 +17,8 @@ import {
   type SchemaResolverDeps,
 } from '../src/compiler/schemaResolver.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
+import { FIELDS, NAME, OPTIONAL, field } from '../src/compiler/wireForm.js';
+import type { HeldBody } from '../src/compiler/heldBody.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
 import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
@@ -209,6 +211,30 @@ function fieldTypeOf(schema: Schema, name: string, field: string): TypeRef {
   const found = recordBodyOf(schema, name).fields.find((f) => f.name === field);
   if (found === undefined) throw new Error(`'${name}' has no field '${field}'`);
   return found.type;
+}
+
+/**
+ * Whether a *still-open* entry's held wire (`wireForm.ts`'s own `heldRecord` spelling, §5.10)
+ * marks one field `optional` -- `heldRecord` writes the `optional` member only when the fact is
+ * `true`, so this reads the held text directly rather than through a `RecordBody`, which a held
+ * entry's `TypeDefinition.body` is not (it is a `HeldBody`, unread until its parameters close).
+ */
+function heldFieldOptional(schema: Schema, name: string, fieldName: string): boolean {
+  const body = entryOf(schema, name).body;
+  if (!('application' in body)) throw new Error(`'${name}' is not a held (open) entry`);
+  const coreValue = (body as HeldBody).application.coreValue;
+  if (coreValue.kind !== 'record') throw new Error(`'${name}' holds no record wire`);
+  const fieldsValue = field(coreValue, FIELDS);
+  if (fieldsValue?.kind !== 'array') throw new Error(`'${name}' holds no 'fields' array`);
+  for (const element of fieldsValue.elements) {
+    const fieldRecord = element.value.coreValue;
+    if (fieldRecord.kind !== 'record') continue;
+    const nameToken = field(fieldRecord, NAME);
+    if (nameToken?.kind === 'token' && nameToken.text === fieldName) {
+      return field(fieldRecord, OPTIONAL) !== undefined;
+    }
+  }
+  throw new Error(`'${name}' has no held field '${fieldName}'`);
 }
 
 // ── !!id / header handling ───────────────────────────────────────────────────────────────────
@@ -621,6 +647,12 @@ function richTypeRefField(record: RecordValue, name: string): TypeRef {
   return { name: head, arguments: args, annotations: [] };
 }
 
+/** `true` when `record`'s `name` field is a `token` holding the literal `"true"` -- §5.2's `optional`/`voidable` wire fields, written only when `true` (`desugar.ts`'s own `recordFieldValue`). */
+function richBooleanField(record: RecordValue, name: string): boolean {
+  const value = fieldOf(record, name)?.coreValue;
+  return value?.kind === 'token' && value.text === 'true';
+}
+
 function richMetaReader(type: string, value: DataValue): Top {
   const record = value.coreValue as RecordValue;
   if (type === 'record') {
@@ -630,12 +662,23 @@ function richMetaReader(type: string, value: DataValue): Top {
       for (const element of fieldsField.elements) {
         const fieldRecord = element.value.coreValue as RecordValue;
         const fname = (fieldOf(fieldRecord, 'name')?.coreValue as TokenValue).text;
+        const roleWire = fieldOf(fieldRecord, 'role')?.coreValue;
+        const role: RecordField['role'] =
+          roleWire?.kind === 'token' && (roleWire.text === 'DEFAULT' || roleWire.text === 'FIXED')
+            ? roleWire.text
+            : 'FREE';
+        const valueWire = fieldOf(fieldRecord, 'value')?.coreValue;
+        const fieldValue =
+          valueWire?.kind === 'token'
+            ? { text: valueWire.text, form: metaFormOfLexer(valueWire.form) }
+            : undefined;
         fields.push({
           name: fname,
           type: richTypeRefField(fieldRecord, 'type'),
-          optional: false,
-          voidable: false,
-          role: 'FREE',
+          optional: richBooleanField(fieldRecord, 'optional'),
+          voidable: richBooleanField(fieldRecord, 'voidable'),
+          role,
+          ...(fieldValue === undefined ? {} : { value: fieldValue }),
           annotations: [],
         });
       }
@@ -814,9 +857,43 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       expect(dogBody.fields.map((f) => f.name)).toEqual(['type', 'pet', 'breed']);
       expect(fieldTypeOf(schema, 'dog', 'type').name).toBe('text');
       expect(fieldTypeOf(schema, 'dog', 'pet').name).toBe('text');
+      // §5.7 "Open modifiers": `type: text = N` in `pet`'s held body is bound to the literal
+      // "dog" the moment this operand's own parameters close, exactly as it would were `pet<N,
+      // T>` named whole at a type position -- "the name mark supplied by the closing" is owed
+      // here too, one fixation shared by both paths (`templates.ts`'s `fixRoutedValues`).
+      const typeField = dogBody.fields.find((f) => f.name === 'type');
+      expect(typeField?.optional).toBe(true);
+      expect(typeField?.role).toBe('FIXED');
+      expect(typeField?.value).toEqual({ text: 'dog', form: 'SINGLE_LINE_QUOTED' });
       // No instantiation entry was minted for `pet<"dog", text>` -- `pet` and `dog` are the whole
       // namespace this schema produces.
       expect([...schema.entries.keys()]).toEqual(['pet', 'dog']);
+    },
+  );
+
+  it(
+    'an outer parameter riding through the operand ("<S> pet<S, text> & { extra: text }") ' +
+      "defers fixation to the enclosing template's own closing, rather than firing the moment " +
+      'the named template\'s own parameters bind (§5.7 "Open modifiers", §5.8)',
+    () => {
+      const doc = document(
+        'pet => <N, T> { type: text = N  pet: T } ' +
+          'w => <S> pet<S, text> & { extra: text } ' +
+          'used => w<"dog">',
+      );
+      const schema = resolveSchema(doc, richDeps());
+      // `w` stays open while resolving the composition operand (its own `S` is unbound): the
+      // routed field's substituted value is `S` itself, not a concrete argument, so §5.7's
+      // fixation has nothing to fire on yet -- `w`'s own held wire must not mark `type`
+      // `optional` ahead of time (a held body has exactly one spelling, §5.10, and this would
+      // change it).
+      expect(heldFieldOptional(schema, 'w', 'type')).toBe(false);
+      // Once `w<"dog">` itself closes, `S` becomes concrete and the deferred fixation applies
+      // then, exactly the outcome a fully-bound operand reaches directly (the test above).
+      const usedType = recordBodyOf(schema, 'used').fields.find((f) => f.name === 'type');
+      expect(usedType?.optional).toBe(true);
+      expect(usedType?.role).toBe('FIXED');
+      expect(usedType?.value).toEqual({ text: 'dog', form: 'SINGLE_LINE_QUOTED' });
     },
   );
 

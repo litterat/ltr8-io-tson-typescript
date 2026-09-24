@@ -9,33 +9,49 @@
  * Ported from the reference implementation's `TsonContentHash`
  * (`tson-compiler/.../TsonContentHash.java`). This module states only what differs in the port.
  *
- * **Why this is the one async surface in `link/`.** SHA-256 has no synchronous host API in either
- * Node or a browser — `crypto.subtle.digest` is Promise-returning by design, and neither runtime
- * offers a synchronous alternative worth depending on. `sha256Hex`/`verifyContentHash` are
- * therefore the only two `async` exports anywhere in this directory; every other `link/` module
- * (`identity.ts`, `subtypes.ts`, `disjointness.ts`, `referenceValidation.ts`, `link.ts`) stays
- * ordinary synchronous code, and `link.ts` never awaits a hash mid-link — hashing is a fetch-time
- * concern (verify what a loader retrieved before handing it to `link()`), not a linking one. This
- * is deliberately *not* `Task<T>`: `Task` exists for a suspension the caller's own input supply
- * resumes (`yield*` through a byte source that may starve), which content hashing never does —
- * `crypto.subtle` is the platform's own async primitive and composes with `await` directly.
+ * **The digest is a hand-written, pure-JS SHA-256 ({@link sha256Digest}), not `crypto.subtle`.**
+ * `crypto.subtle.digest` is Promise-returning in both Node and every browser, with no synchronous
+ * form either offers — but registering a schema from source text (`config.ts`'s own
+ * `resolveSchema`) is synchronous by deliberate, documented architecture, and needs a real digest
+ * to pin-check that registration the same way a fetch is ([TSON-SCHEMA] §10.2). A package
+ * dependency is not an option (`CLAUDE.md`'s zero-runtime-dependencies constraint), so this module
+ * carries its own FIPS 180-4 implementation instead. {@link sha256HexSync} is the synchronous
+ * entry every registration path in this library now uses; {@link sha256Hex} is the same
+ * computation wrapped in an already-resolved `Promise`, kept `async`-shaped only so the callers
+ * this module already had (`verifyContentHash`, `identity/index.ts`'s public re-export) do not
+ * have to change their own signatures. Content hashing is not suspendable input consumption
+ * either way, so neither is `Task<T>`-returning: `Task` exists for a suspension the caller's own
+ * byte source resumes, which hashing bytes already fully in hand never needs.
  */
 import { TsonContentHashMismatchError, TsonSchemaValidationError } from '../core/errors.js';
 
-/**
- * The one sliver of the Web Crypto API this module needs. Declared locally rather than pulled in
- * via the `dom`/`webworker` lib (`CLAUDE.md`'s hard constraint: no `DOM` lib in this project's
- * type configuration) — `crypto.subtle` is a real global in Node 24 and in every browser, `tsc`
- * simply has no ambient type for it without one of those libs, and a scoped `declare const` here
- * costs nothing outside this file.
- */
-declare const crypto: {
-  readonly subtle: {
-    digest(algorithm: 'SHA-256', data: Uint8Array): Promise<ArrayBuffer>;
-  };
-};
-
 const BOM = [0xef, 0xbb, 0xbf];
+
+/**
+ * The content-hash sentinel recorded for a document with no well-defined hash-input boundary --
+ * {@link contentStart} itself throws for this case (a single-line document, no terminator after
+ * its `!!id` line). §2.2.1 requires that terminator of a content-addressed document only, so its
+ * absence is not a document error: the document still loads, and this sentinel is what makes a
+ * *pinned reference* to it fail instead of silently going unverified (§10.2), the same distinction
+ * the reference implementation's own `TsonCompiledMetaRegistry.UNADDRESSABLE` draws.
+ */
+export const UNADDRESSABLE = '';
+
+/**
+ * Whether `document` has a well-defined content-hash input boundary at all -- `false` exactly
+ * when {@link contentStart} would throw. Synchronous and cheap, unlike {@link sha256Hex}: this
+ * walks the bytes once for a line terminator and computes no digest, so a caller that cannot
+ * await a hash (a synchronous registration path) can still record {@link UNADDRESSABLE} for an
+ * identity it cannot otherwise verify.
+ */
+export function isAddressable(document: Uint8Array): boolean {
+  try {
+    contentStart(document);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The index where the hash input begins — past a leading BOM and past the first line's
@@ -86,17 +102,142 @@ function toHex(bytes: Uint8Array): string {
   return hex;
 }
 
+/** SHA-256's eight initial hash values, FIPS 180-4 §5.3.3 — the first 32 bits of the fractional parts of the square roots of the first eight primes. */
+const SHA256_H0 = new Uint32Array([
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]);
+
+/** SHA-256's 64 round constants, FIPS 180-4 §4.2.2 — the first 32 bits of the fractional parts of the cube roots of the first sixty-four primes. */
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function rotr(x: number, n: number): number {
+  return (x >>> n) | (x << (32 - n));
+}
+
 /**
- * The lowercase-hex SHA-256 over every byte from {@link contentStart} to the end, via
- * `crypto.subtle` — present as a global in Node 24 and in every browser, so this needs no
- * runtime dependency and no platform-conditional export.
+ * Element `i` of `array`, asserted present -- every call site below reads at an index its own
+ * loop bound already guarantees is in range (a fixed 8/16/64-element pass, or a byte offset
+ * computed from `totalLength`), a guarantee `noUncheckedIndexedAccess` cannot see from the type
+ * alone. One assertion here rather than one at every read.
  */
-export async function sha256Hex(document: Uint8Array): Promise<string> {
+// eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- see this function's own doc.
+const at = (array: Uint8Array | Uint32Array, i: number): number => array[i]!;
+
+/**
+ * `data`'s 32-byte SHA-256 digest (FIPS 180-4), computed from scratch: this project ships zero
+ * runtime dependencies, and neither Node nor a browser offers a synchronous digest primitive
+ * this module could delegate to instead (`sha256Hex`'s own top note). Message schedule and
+ * compression run per FIPS 180-4 §6.2 exactly, over one or more 64-byte blocks built by padding
+ * `data` per §5.1.1 (a `1` bit, `0` bits, then the 64-bit big-endian bit length).
+ */
+function sha256Digest(data: Uint8Array): Uint8Array {
+  const h = SHA256_H0.slice();
+
+  const bitLength = BigInt(data.length) * 8n;
+  const withOneBit = data.length + 1;
+  const mod = withOneBit % 64;
+  const zeroPadding = mod <= 56 ? 56 - mod : 120 - mod;
+  const totalLength = withOneBit + zeroPadding + 8;
+  const padded = new Uint8Array(totalLength);
+  padded.set(data);
+  padded[data.length] = 0x80;
+  for (let i = 0; i < 8; i += 1) {
+    padded[totalLength - 1 - i] = Number((bitLength >> BigInt(8 * i)) & 0xffn);
+  }
+
+  const w = new Uint32Array(64);
+  for (let block = 0; block < totalLength; block += 64) {
+    for (let i = 0; i < 16; i += 1) {
+      const o = block + i * 4;
+      w[i] =
+        (at(padded, o) << 24) |
+        (at(padded, o + 1) << 16) |
+        (at(padded, o + 2) << 8) |
+        at(padded, o + 3);
+    }
+    for (let i = 16; i < 64; i += 1) {
+      const w15 = at(w, i - 15);
+      const w2 = at(w, i - 2);
+      const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ (w15 >>> 3);
+      const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ (w2 >>> 10);
+      w[i] = (at(w, i - 16) + s0 + at(w, i - 7) + s1) | 0;
+    }
+
+    let a = at(h, 0);
+    let b = at(h, 1);
+    let c = at(h, 2);
+    let d = at(h, 3);
+    let e = at(h, 4);
+    let f = at(h, 5);
+    let g = at(h, 6);
+    let hh = at(h, 7);
+    for (let i = 0; i < 64; i += 1) {
+      const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (hh + s1 + ch + at(SHA256_K, i) + at(w, i)) | 0;
+      const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (s0 + maj) | 0;
+      hh = g;
+      g = f;
+      f = e;
+      e = (d + temp1) | 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) | 0;
+    }
+
+    h[0] = (at(h, 0) + a) | 0;
+    h[1] = (at(h, 1) + b) | 0;
+    h[2] = (at(h, 2) + c) | 0;
+    h[3] = (at(h, 3) + d) | 0;
+    h[4] = (at(h, 4) + e) | 0;
+    h[5] = (at(h, 5) + f) | 0;
+    h[6] = (at(h, 6) + g) | 0;
+    h[7] = (at(h, 7) + hh) | 0;
+  }
+
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 8; i += 1) {
+    const word = at(h, i);
+    out[i * 4] = (word >>> 24) & 0xff;
+    out[i * 4 + 1] = (word >>> 16) & 0xff;
+    out[i * 4 + 2] = (word >>> 8) & 0xff;
+    out[i * 4 + 3] = word & 0xff;
+  }
+  return out;
+}
+
+/**
+ * The lowercase-hex SHA-256 over every byte from {@link contentStart} to the end -- the
+ * synchronous entry point every registration path in this library uses (`config.ts`'s own
+ * `resolveSchema`/`preload`), since neither can await a digest and this module's own
+ * {@link sha256Digest} does not need to.
+ */
+export function sha256HexSync(document: Uint8Array): string {
   const start = contentStart(document);
-  // `crypto.subtle.digest` requires an ArrayBuffer-backed view; `subarray` shares the same
-  // underlying buffer rather than copying, so this stays a view, not an allocation.
-  const digest = await crypto.subtle.digest('SHA-256', document.subarray(start));
-  return toHex(new Uint8Array(digest));
+  return toHex(sha256Digest(document.subarray(start)));
+}
+
+/**
+ * {@link sha256HexSync}, wrapped in an already-resolved `Promise` -- kept `async`-shaped only
+ * for the callers this module already had before a synchronous digest existed
+ * ({@link verifyContentHash}, and the public re-export `identity/index.ts` makes of this
+ * function). Prefer {@link sha256HexSync} in new code; there is no `crypto.subtle` I/O left
+ * here to actually await.
+ */
+export function sha256Hex(document: Uint8Array): Promise<string> {
+  return Promise.resolve(sha256HexSync(document));
 }
 
 const FULL_LOWERCASE_HEX = /^[0-9a-f]{64}$/u;

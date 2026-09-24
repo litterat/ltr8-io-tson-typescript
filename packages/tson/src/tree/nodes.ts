@@ -155,8 +155,14 @@ export interface AtomNode {
  * the format's one spelling of absence. Distinct from {@link MissingNode} (no such node at all): this
  * one was written. Mirrors `TsonAbsent`.
  *
- * Also the placeholder a tree-mode reader leaves where a value failed to read in collecting mode — what
- * went wrong is carried by the diagnostic (`core/diagnostic.ts`), not by the node standing in for it.
+ * **A written `_` on every schema-governed read, never a stand-in for a value that failed to
+ * read.** A schema-governed tree/bind read is all-or-nothing (`reader/tree/support.ts`'s own
+ * `abandonedValue`, `compiler/compile.ts`'s own `ValidationResult`): a position whose read
+ * reported anything withholds the whole document's value rather than filling that position with
+ * this node. **The schemaless (Class 1) tree reader is the one exception**:
+ * `reader/schemaless/tree.ts` never abandons at all (its own top note), so its leaf reader still
+ * stands this node in for a token an atom rejected, the diagnostic (`core/diagnostic.ts`)
+ * carrying what went wrong rather than the node.
  */
 export interface AbsentNode {
   readonly kind: 'absent';

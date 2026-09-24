@@ -10,6 +10,7 @@ import type { Value } from '../src/tree/nodes.js';
 import {
   bodyContextOver,
   collectingContextOver,
+  requireValue,
   stubIntType,
   stubTextType,
 } from './reader-tree-helpers.js';
@@ -94,7 +95,7 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
     });
   });
 
-  it('reports UNKNOWN_TYPE_REF when the value carries no !type-ref at all', () => {
+  it('reports TYPE_MISMATCH when the value carries no !type-ref at all -- a required tag absent establishes no type (§7.2)', () => {
     const reader = choiceTreeReader(
       'contact_method',
       'contact_method',
@@ -106,10 +107,30 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
     );
     const { ctx, diagnostics } = collectingContextOver('5551234');
     runSync(reader.read(ctx));
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('reports UNKNOWN_TYPE_REF when the !type-ref names no member of this choice', () => {
+  it("reports TYPE_MISMATCH when the !type-ref names a real schema entry that just isn't a member of this choice (§7.2's two-step rule: resolves, but not admitted here)", () => {
+    // `fax` resolves in the schema (declared alongside the choice, an unrelated entry) but is not
+    // one of `phone`/`email` -- admissibility fails, not resolution.
+    const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
+      ['fax', { supertypes: [], subtypes: [], annotations: [], body: { kind: 'text_type' } }],
+    ]);
+    const reader = choiceTreeReader(
+      'contact_method',
+      'contact_method',
+      BODY,
+      resolveType,
+      LOCATION,
+      false,
+      namespace,
+    );
+    const { ctx, diagnostics } = collectingContextOver('!fax 5551234');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+  });
+
+  it("reports UNKNOWN_TYPE_REF when the !type-ref names nothing the governing schema declares at all (§7.2's two-step rule: does not resolve)", () => {
     const reader = choiceTreeReader(
       'contact_method',
       'contact_method',
@@ -138,7 +159,7 @@ const DISJOINT_SCHEMA = `
 !!meta:"https://tson.io/2026/35/m/meta.tn"
 !!import:"https://tson.io/2026/35/m/core.tn"
 {
-  designator => !text ^ { pattern: "^[A-Z]{3}-[0-9]{3}$" }
+  designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }
   @disjoint
   target_ref => (designator | channel)
@@ -175,7 +196,7 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
       disjointBytes('{ targets: ["MKA-777" 42] }'),
     );
     expect(result.diagnostics).toEqual([]);
-    const targets = fieldOf(result.value, 'targets');
+    const targets = fieldOf(requireValue(result), 'targets');
     if (targets.kind !== 'array') throw new Error(`expected an array, got '${targets.kind}'`);
     expect(targets.elements).toEqual([
       { kind: 'atom', value: 'MKA-777', typeRef: 'designator', annotations: { values: [] } },
@@ -198,13 +219,13 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
       'ambiguous_holder',
       disjointBytes('{ code: "hello" }'),
     );
-    expect(result.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
     expect(result.diagnostics[0]?.message).toContain(
       "a 'ambiguous_code' value needs its own !type-ref",
     );
   });
 
-  it('reports a validation error, not UNKNOWN_TYPE_REF, when an untagged value at a disjoint choice matches no variant’s class', () => {
+  it('reports TYPE_MISMATCH when an untagged value at a disjoint choice matches no variant’s class', () => {
     // `target_ref` admits `number`/`string`; an untagged boolean matches neither.
     const result = validate(disjointCompiled, 'holder', disjointBytes('{ targets: [true] }'));
     expect(result.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
@@ -218,7 +239,7 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
       disjointBytes('{ shape: { x: 1  y: 2 } }'),
     );
     expect(result.diagnostics).toEqual([]);
-    expect(fieldOf(result.value, 'shape')).toEqual({
+    expect(fieldOf(requireValue(result), 'shape')).toEqual({
       kind: 'record',
       typeRef: 'point',
       fields: new Map([
@@ -232,7 +253,7 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
   it('dispatches an untagged bracket value to an array variant', () => {
     const result = validate(disjointCompiled, 'shape_holder', disjointBytes('{ shape: [1 2 3] }'));
     expect(result.diagnostics).toEqual([]);
-    const shape = fieldOf(result.value, 'shape');
+    const shape = fieldOf(requireValue(result), 'shape');
     if (shape.kind !== 'array') throw new Error(`expected an array, got '${shape.kind}'`);
     expect(shape.elements).toEqual([
       { kind: 'atom', value: 1, typeRef: 'int32', annotations: { values: [] } },
@@ -244,7 +265,7 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
   it('dispatches an untagged boolean value to a boolean-class variant', () => {
     const result = validate(disjointCompiled, 'shape_holder', disjointBytes('{ shape: true }'));
     expect(result.diagnostics).toEqual([]);
-    expect(fieldOf(result.value, 'shape')).toEqual({
+    expect(fieldOf(requireValue(result), 'shape')).toEqual({
       kind: 'atom',
       value: true,
       typeRef: 'boolean',

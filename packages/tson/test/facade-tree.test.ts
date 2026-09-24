@@ -19,6 +19,7 @@ import {
 } from '../src/core/errors.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
+import { requireValue } from './reader-tree-helpers.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
@@ -52,7 +53,7 @@ describe('readTree/validate: schemaless (Class 1)', () => {
   it('validate collects rather than throwing, an empty document being no problem at all', () => {
     const result = validate(bytesOf('{}'));
     expect(result.diagnostics).toEqual([]);
-    expect(result.value.kind).toBe('record');
+    expect(requireValue(result).kind).toBe('record');
   });
 
   it('reads identically over a chunked async source', async () => {
@@ -129,22 +130,21 @@ describe('a collecting read never throws for a bad document', () => {
     ['a lone continuation byte', new Uint8Array([0x80])],
   ];
 
-  it.each(MALFORMED)('validate collects %s as a diagnostic', (_name, bytes) => {
-    const result = validate(bytes);
-    expect(result.diagnostics).not.toHaveLength(0);
-    expect(result.diagnostics[0]?.code).toBe('VALIDATION_ERROR');
-    expect(result.value.kind).toBe('missing');
-  });
+  it.each(MALFORMED)(
+    'validate collects %s as a diagnostic, and withholds the value (WP3B)',
+    (_name, bytes) => {
+      const result = validate(bytes);
+      expect(result.diagnostics).not.toHaveLength(0);
+      expect(result.diagnostics[0]?.code).toBe('VALIDATION_ERROR');
+      // A read is all-or-nothing: a document that will not lex or parse yields no value, never a
+      // placeholder tree standing in for the failure.
+      expect(result.value).toBeUndefined();
+    },
+  );
 
   it('reports the position the underlying error already knew, rather than dropping it', () => {
     const result = validate(bytesOf('{ x: 1\n  y: }\n'));
     expect(result.diagnostics[0]?.dataPosition?.line).toBe(2);
-  });
-
-  it("gives the root value RFC 6901's own root pointer, not undefined", () => {
-    // '' is a valid pointer meaning exactly "the document root"; undefined would mean "nowhere".
-    const value = validate(bytesOf('{ x: 1')).value;
-    expect(value).toMatchObject({ kind: 'missing', path: '' });
   });
 
   it('still refuses a declared encoding it will not read, as a diagnostic', () => {
@@ -215,7 +215,9 @@ describe('a library gap reaches the collector as NOT_IMPLEMENTED, not as a verdi
       code: 'NOT_IMPLEMENTED',
       message: 'no reader for `!tuple` yet',
     });
-    expect(result.value.kind).toBe('missing');
+    // A read is all-or-nothing (WP3B): a library gap withholds the value exactly as a genuine
+    // document fault does, never a placeholder tree standing in for it.
+    expect(result.value).toBeUndefined();
   });
 
   it('readTree still throws, with the original reachable as the cause', () => {

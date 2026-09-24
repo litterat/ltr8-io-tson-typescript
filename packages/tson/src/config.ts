@@ -52,6 +52,7 @@
  * `resolveImport` finds each one already registered and never needs to suspend.
  */
 import {
+  TsonContentHashMismatchError,
   TsonInternalError,
   TsonSchemaFetchError,
   TsonSchemaValidationError,
@@ -67,7 +68,7 @@ import type { LimitsPolicy, NestingLimitOptions } from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
 import type { NamePolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
-import { verifyContentHash } from './link/contentHash.js';
+import { declaredSha256, isAddressable, sha256HexSync, UNADDRESSABLE } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
 import {
   resolveSchema as resolveSchemaCore,
@@ -270,8 +271,88 @@ function policyOptionsOf(config: Config): {
   };
 }
 
+/**
+ * `reference`'s own declared `?sha256=` pin, if any, MUST equal `contentHash` -- [TSON-DATA]
+ * §2.2.1, [TSON-SCHEMA] §10.2's core verification rule, shared by every place a pin is checked
+ * against an already-known hash: a later reference to an identity this instance has already
+ * recorded ({@link verifyPin}), and a document's own self-declared `!!id` pin checked against the
+ * hash just computed for its own bytes ({@link recordContentHash}). `identity` names the schema
+ * in the thrown error only -- it plays no part in the comparison.
+ *
+ * `contentHash` being {@link UNADDRESSABLE} (a single-line document, no `!!id`-line terminator)
+ * refuses the pin unconditionally: §2.2.1 requires the terminator of a content-addressed document
+ * only, so the document itself still loads, but nothing may pin it.
+ */
+function checkPin(reference: string, contentHash: string, identity: string): void {
+  const declared = declaredSha256(reference);
+  if (declared === undefined) {
+    return;
+  }
+  if (contentHash === UNADDRESSABLE) {
+    throw new TsonContentHashMismatchError(
+      identity,
+      declared,
+      '(no line terminator after its !!id line, so it has no content hash to verify against)',
+    );
+  }
+  if (contentHash !== declared) {
+    throw new TsonContentHashMismatchError(identity, declared, contentHash);
+  }
+}
+
+/**
+ * `reference`'s own declared `?sha256=` pin, if any, MUST equal `identity`'s recorded content
+ * hash -- [TSON-SCHEMA] §10.2's "a later pinned reference is verified against the identity's own
+ * recorded hash". Silent only when nothing is recorded for `identity` at all, which no longer
+ * happens for any schema this instance itself resolved or fetched ({@link recordContentHash} runs
+ * for every one, via `resolveSchemaMethod`/`preload` below) -- the remaining case is an identity
+ * registered directly as an already-linked {@link LinkedSchema} (`register`, e.g. the meta-kernel
+ * bootstrap), which carries no source bytes to hash at all.
+ */
+function verifyPin(
+  contentHashes: ReadonlyMap<string, string>,
+  reference: string,
+  identity: string,
+): void {
+  const recorded = contentHashes.get(identity);
+  if (recorded === undefined) {
+    return; // nothing recorded to verify against -- see this function's own doc
+  }
+  checkPin(reference, recorded, identity);
+}
+
+/**
+ * Computes `bytes`' own content hash and records it for `identity` (once; a second call for the
+ * same identity is a no-op, matching the reference implementation's own `putIfAbsent` semantics),
+ * verifying `reference`'s own declared `?sha256=` pin against that hash first -- [TSON-SCHEMA]
+ * §10.2's MUST, applied uniformly to every schema this instance loads regardless of route:
+ * `resolveSchemaMethod` passes the document's own `!!id` as `reference` (nothing else names it, so
+ * this is a self-consistency check: a document declaring a wrong hash for itself is refused before
+ * it is even registered), and `preload` passes the reference it was asked to fetch, which is
+ * checked before the fetched bytes are trusted at all.
+ *
+ * Computing the digest is synchronous (`sha256HexSync` -- this module's own top note explains why
+ * a hand-written SHA-256 exists rather than the async `crypto.subtle`), so unlike an earlier
+ * version of this instance, *every* addressable schema resolved or fetched here gets a recorded
+ * hash, not only an unaddressable one -- {@link verifyPin}'s own "nothing recorded" case no longer
+ * applies to it.
+ */
+function recordContentHash(
+  contentHashes: Map<string, string>,
+  bytes: Uint8Array,
+  reference: string,
+  identity: string,
+): void {
+  const contentHash = isAddressable(bytes) ? sha256HexSync(bytes) : UNADDRESSABLE;
+  checkPin(reference, contentHash, identity);
+  if (!contentHashes.has(identity)) {
+    contentHashes.set(identity, contentHash);
+  }
+}
+
 function requireRegistered(
   schemas: ReadonlyMap<string, LinkedSchema>,
+  contentHashes: ReadonlyMap<string, string>,
   reference: string,
   resolving: string,
 ): LinkedSchema {
@@ -283,6 +364,7 @@ function requireRegistered(
         'and everything it in turn depends on, before resolving a schema that names it',
     );
   }
+  verifyPin(contentHashes, reference, canonical);
   return found;
 }
 
@@ -340,6 +422,7 @@ function importClosureSize(
 
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
+  contentHashes: ReadonlyMap<string, string>,
   bytes: Uint8Array,
   limit: NestingLimitOptions,
   identifierPolicy: NamePolicy | undefined,
@@ -355,10 +438,10 @@ function resolveAgainstRegistry(
   if (closureSize > DEFAULT_MAX_IMPORT_CLOSURE) {
     throw importClosureLimitRefusal(DEFAULT_MAX_IMPORT_CLOSURE, id);
   }
-  const governingMeta = requireRegistered(schemas, document.meta, id);
+  const governingMeta = requireRegistered(schemas, contentHashes, document.meta, id);
   const metaDefinitions: DefinitionGetter = (name) => governingMeta.entries.get(name);
   const resolveImport: ImportResolver = (importUri) =>
-    importedFrom(requireRegistered(schemas, importUri, id));
+    importedFrom(requireRegistered(schemas, contentHashes, importUri, id));
   const resolved = resolveSchemaCore(document, {
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
     // §6/§3.3.3: a declaration's key annotations (`@doc` and anything else a meta-schema defines)
@@ -447,11 +530,13 @@ export interface Tson {
    * Fetches, resolves, links, and registers each of `references`, **in order** -- so a reference
    * depending on an earlier one in this same call (or on anything already registered) finds it
    * in place by the time its own turn comes. A `?sha256=` pin declared on a reference is verified
-   * against what was fetched (`link/contentHash.ts`'s own `verifyContentHash`, §2.2.1's MUST),
-   * and the fetched document's own `!!id` is cross-checked against the identity that was asked
-   * for -- both regardless of whether {@link HttpSchemaSourceOptions.requireContentHashPin}-style
-   * policy required a pin to be *present*, since verifying one that *is* declared is unconditional.
-   * A reference already registered is left alone (idempotent) and never re-fetched.
+   * against what was fetched, this identity's own content hash is recorded either way so a later
+   * pinned `!!import`/`!!meta` reference to it is verified too (`config.ts`'s own
+   * `recordContentHash`, [TSON-SCHEMA] §10.2's MUST), and the fetched document's own `!!id` is
+   * cross-checked against the identity that was asked for -- all regardless of whether
+   * {@link HttpSchemaSourceOptions.requireContentHashPin}-style policy required a pin to be
+   * *present*, since verifying one that *is* declared is unconditional. A reference already
+   * registered is left alone (idempotent) and never re-fetched.
    *
    * See {@link Tson}'s own top note on this instance's concurrency contract -- in particular the
    * narrow, known race between this method's own has-check and its later write when two calls
@@ -494,6 +579,12 @@ export interface Tson {
 /** Builds a {@link Tson}: an empty schema registry, and the flat front door bound onto one instance. See this module's own top note for the standard-library bootstrap sequence a schema-governed read needs before it. */
 export function createTson(config: Config = {}): Tson {
   const schemas = new Map<string, LinkedSchema>();
+  // Canonical identity -> recorded content hash ([TSON-DATA] §2.2.1, [TSON-SCHEMA] §10.2) --
+  // {@link UNADDRESSABLE} for an identity whose own document has no `!!id`-line terminator, unset
+  // only for an identity registered directly as an already-linked {@link LinkedSchema} (`register`)
+  // rather than resolved or fetched through this instance. `verifyPin` reads it; `resolveSchemaMethod`/
+  // `preload` below are what populate it, both via `recordContentHash`.
+  const contentHashes = new Map<string, string>();
   const limit = limitOf(config);
   const policyOptions = policyOptionsOf(config);
 
@@ -521,7 +612,20 @@ export function createTson(config: Config = {}): Tson {
 
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {
     const bytes = typeof source === 'string' ? encodeUtf8(source) : source;
-    const linked = resolveAgainstRegistry(schemas, bytes, limit, config.identifierPolicy);
+    const linked = resolveAgainstRegistry(
+      schemas,
+      contentHashes,
+      bytes,
+      limit,
+      config.identifierPolicy,
+    );
+    // A schema registered in-process is pin-checked like a fetched one ([TSON-SCHEMA] §10.2):
+    // `recordContentHash` computes this document's own hash, verifies its own `!!id` pin (if it
+    // declares one) against that hash, and records it -- all before this identity is registered,
+    // so a document that misdeclares its own hash is refused rather than let in. A single-line
+    // schema (no `!!id`-line terminator) still loads, recording {@link UNADDRESSABLE}; a later
+    // pinned reference to it is refused by `verifyPin` rather than silently unverified.
+    recordContentHash(contentHashes, bytes, linked.id, canonicalizeIdentity(linked.id));
     register(linked);
     return linked;
   }
@@ -558,8 +662,17 @@ export function createTson(config: Config = {}): Tson {
         continue; // idempotent -- already registered, from an earlier call or an earlier entry
       }
       const bytes = await fetchReference(reference);
-      await verifyContentHash(bytes, reference);
-      const linked = resolveAgainstRegistry(schemas, bytes, limit, config.identifierPolicy);
+      // Verifies `reference`'s own declared pin (if any) against these fetched bytes, and records
+      // this identity's own content hash either way ([TSON-SCHEMA] §10.2) -- before the bytes are
+      // parsed/resolved, so tampered content is refused without spending that work on it.
+      recordContentHash(contentHashes, bytes, reference, canonical);
+      const linked = resolveAgainstRegistry(
+        schemas,
+        contentHashes,
+        bytes,
+        limit,
+        config.identifierPolicy,
+      );
       const declared = canonicalizeIdentity(linked.id);
       if (declared !== canonical) {
         throw new TsonSchemaValidationError(

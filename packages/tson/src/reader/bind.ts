@@ -68,6 +68,7 @@ import type {
   VariantBinding,
 } from '../bind/binding.js';
 import { TsonAtomTypeError, TsonInternalError } from '../core/errors.js';
+import { diagnosticCodeForAtomError } from '../core/diagnostic.js';
 import { nestingLimitRefusal } from '../core/limits.js';
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
@@ -86,8 +87,9 @@ import type { ReadContext, TypeReader } from './contracts.js';
  * must not import either -- a caller that owns them passes a reader that delegates.
  *
  * May throw {@link TsonAtomParseError}/{@link TsonAtomValidationError}; {@link bindReader} catches
- * both (their common base, {@link TsonAtomTypeError}) and reports `ATOM_CONSTRAINT_VIOLATION`
- * rather than letting either escape, exactly as the Java reference's own `AtomTypeReader` does for
+ * both (their common base, {@link TsonAtomTypeError}) and reports `ATOM_FORM_INVALID` or
+ * `ATOM_CONSTRAINT_VIOLATION` (`core/diagnostic.ts`'s own `diagnosticCodeForAtomError`) rather than
+ * letting either escape, exactly as the Java reference's own `AtomTypeReader` does for
  * `AtomTypeException`.
  */
 export type AtomReader = (binding: AtomBinding<unknown>, token: AtomToken) => unknown;
@@ -429,7 +431,7 @@ function* readAtomLeaf<T>(
   } catch (err) {
     if (err instanceof TsonAtomTypeError) {
       ctx.report(
-        'ATOM_CONSTRAINT_VIOLATION',
+        diagnosticCodeForAtomError(err),
         `'${binding.wireType}': ${err.message}`,
         err.expected,
         e.text,
@@ -863,9 +865,17 @@ function* readVariant<T>(
   // were rewound, the core-value alone when they were consumed.
   const skipRest = replay ? skipDataValue : skipRemainingValue;
   const names = binding.members.map((m) => m.wireName).join('/');
+  // Both branches below are `TYPE_MISMATCH`, never `UNKNOWN_TYPE_REF` -- but not for the reason a
+  // schema-directed dispatch with a real namespace in view would give (`compiler/subsumption.ts`'s
+  // own note has that split): this module's own top note is "No schema in view, by design", so
+  // there is no whole-namespace map here to ask whether an unadmitted `typeRefName` resolves to
+  // some other entry, only `binding.members` itself. An absent tag establishes no member either
+  // way, and a tag not among `binding.members` is not admitted here, resolved elsewhere or not --
+  // exactly as the reference's own `NamedDispatchReader`/`VariantBindReader` report both cases
+  // uniformly, which happens to be right here for a different reason than theirs.
   if (typeRefName === undefined) {
     ctx.report(
-      'UNKNOWN_TYPE_REF',
+      'TYPE_MISMATCH',
       `a '${names}' value needs its own !type-ref to say which member it is`,
       `a !type-ref naming one of (${names})`,
       '(none)',
@@ -876,7 +886,7 @@ function* readVariant<T>(
   const member = binding.members.find((m) => m.wireName === typeRefName);
   if (member === undefined) {
     ctx.report(
-      'UNKNOWN_TYPE_REF',
+      'TYPE_MISMATCH',
       `'!${typeRefName}' names no member of this variant (${names})`,
       `one of (${names})`,
       `!${typeRefName}`,

@@ -49,8 +49,8 @@ interface SchemalessReadOptions extends NestingLimitOptions {
 }
 
 interface ValidationResult {
-  readonly value: Value; // missingNode('') when nothing could be read
-  readonly diagnostics: readonly Diagnostic[]; // empty ⟺ the document conforms
+  readonly value?: Value; // omitted -- not a placeholder -- whenever diagnostics is non-empty
+  readonly diagnostics: readonly Diagnostic[]; // empty ⟺ the document conforms and value is present
 }
 
 interface WriteOptions {

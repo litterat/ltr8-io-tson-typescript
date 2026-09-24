@@ -196,15 +196,20 @@ export function fromDataValue<T>(
     return resolved.construct(inner, annotations);
   }
   if (resolved.kind === 'variant') {
+    // `TYPE_MISMATCH` throughout, not `UNKNOWN_TYPE_REF`: `resolved.members` is this decode's
+    // whole view of the world (`reader/bind.ts`'s own `readVariant` has the same dispatch and the
+    // same reasoning -- no schema namespace in view to ask whether an unadmitted `typeRef`
+    // resolves to some other entry), so every unadmitted name is reported the same way regardless
+    // of whether it happens to resolve somewhere this decode cannot see.
     if (value.typeRef === undefined) {
       throw readError(
-        'UNKNOWN_TYPE_REF',
+        'TYPE_MISMATCH',
         `a '${resolved.members.map((m) => m.wireName).join('/')}' value needs its own !type-ref to say which member it is`,
       );
     }
     const member = resolved.members.find((m) => m.wireName === value.typeRef);
     if (member === undefined) {
-      throw readError('UNKNOWN_TYPE_REF', `'!${value.typeRef}' names no member of this variant`);
+      throw readError('TYPE_MISMATCH', `'!${value.typeRef}' names no member of this variant`);
     }
     return fromDataValue(member.binding, value, decodeAtom, fieldsFor) as T;
   }

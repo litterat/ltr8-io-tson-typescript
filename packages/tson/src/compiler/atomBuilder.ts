@@ -35,13 +35,14 @@ import type { Atom } from '../schema/meta/typedef.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { AtomValue, Value } from '../tree/nodes.js';
-import { absentNode, atomNode } from '../tree/nodes.js';
+import { atomNode } from '../tree/nodes.js';
 import type { Task } from '../io/bytes.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import { atomTreeReader, atomTypeReader } from '../reader/tree/atom.js';
 import { absentTreeReader } from '../reader/tree/absent.js';
 import { captureAnnotations } from '../reader/tree/annotations.js';
 import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from '../reader/tree/grammar.js';
+import { abandonedValue } from '../reader/tree/support.js';
 import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
 import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
 import type { NumberForm } from '../base/numberGrammar.js';
@@ -52,7 +53,7 @@ import { createFloatParser } from '../atom/numeric/float.js';
 import { createRationalParser } from '../atom/numeric/rational.js';
 import { createComplexParser } from '../atom/numeric/complex.js';
 import { createBinaryParser } from '../atom/numeric/binary.js';
-import { createMembershipCheck, createTextParser } from '../atom/text/text.js';
+import { createMembershipCheck, createPatternCheck, createTextParser } from '../atom/text/text.js';
 import { createUuidParser } from '../atom/network/uuid.js';
 import { createUriParser } from '../atom/network/uri.js';
 import { createEmailParser } from '../atom/network/email.js';
@@ -159,7 +160,7 @@ function unitValueTreeReader(displayName: string): TypeReader<Value> {
           describeEvent(e),
         );
         yield* skipCoreValue(ctx);
-        return absentNode(undefined, annotations);
+        return abandonedValue();
       }
       yield* ctx.next();
       const narrowed = narrowBaseValue(resolveBaseType({ text: e.text, form: e.form }));
@@ -199,25 +200,30 @@ function asTextConstraints(atom: RegexType): TextType {
 }
 
 /**
- * Wraps `atomType` with `text_type.members`' own read-time enforcement (§7.4, §5.7, #22), for the
- * two text-shaped families with no `createTextParser`-backed reader of their own —
- * `uri_type`/`email_type` each compose `text_type`'s `members` facet (§9) but keep an independent
- * parser (`atom/network/{uri,email}.ts`), whose host value is the token's own text unchanged, so a
- * post-read membership check on the returned string is exactly a pre-read check on the token would
- * have been. `text_type`/`regex_type` need no such wrapping: both dispatch through
- * `createTextParser`, which enforces `members` itself (`atom/text/text.ts`).
+ * Wraps `atomType` with `text_type.members`/`text_type.pattern`'s own read-time enforcement
+ * (§7.4, §5.5, §5.7, #22), for the two text-shaped families with no `createTextParser`-backed
+ * reader of their own — `uri_type`/`email_type` each compose `text_type`'s `members` and
+ * `pattern` facets (§9) but keep an independent parser (`atom/network/{uri,email}.ts`), whose
+ * host value is the token's own text unchanged, so a post-read check on the returned string is
+ * exactly a pre-read check on the token would have been. `text_type`/`regex_type` need no such
+ * wrapping: both dispatch through `createTextParser`, which enforces both facets itself
+ * (`atom/text/text.ts`) — this function reuses that module's own `createMembershipCheck`/
+ * `createPatternCheck` rather than a second copy of either.
  */
-function withMembers(
+function withTextFacets(
   atomType: AtomType<string>,
   typeRef: string,
   members: readonly string[] | undefined,
+  pattern: string | undefined,
 ): AtomType<string> {
+  const checkPattern = createPatternCheck(typeRef, pattern);
   const checkMembership = createMembershipCheck(typeRef, members);
-  if (checkMembership === undefined) return atomType;
+  if (checkPattern === undefined && checkMembership === undefined) return atomType;
   return {
     read(token: AtomToken): string {
       const value = atomType.read(token);
-      checkMembership(value);
+      checkPattern?.(value);
+      checkMembership?.(value);
       return value;
     },
     write: (value: string): string => atomType.write(value),
@@ -243,7 +249,10 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
     case 'text_type':
       return wrap(createTextParser(name, atom), name);
     case 'uri_type':
-      return wrap(withMembers(createUriParser(name, atom), name, atom.members), name);
+      return wrap(
+        withTextFacets(createUriParser(name, atom), name, atom.members, atom.pattern),
+        name,
+      );
     case 'regex_type':
       // `regex_type => ~text_type & atom_specification & { spec: = ... }` (§5.7): every field
       // `createTextParser` reads (`minLength`/`maxLength`/`length`/`pattern`/`members`) is one
@@ -252,7 +261,10 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
       // `atom/text/text.ts`'s own TSDoc states what `createTextParser` enforces at read time.
       return wrap(createTextParser(name, asTextConstraints(atom)), name);
     case 'email_type':
-      return wrap(withMembers(createEmailParser(name, atom), name, atom.members), name);
+      return wrap(
+        withTextFacets(createEmailParser(name, atom), name, atom.members, atom.pattern),
+        name,
+      );
     case 'decimal_type':
       return wrap(createDecimalParser(name, atom), name);
     case 'float_type':

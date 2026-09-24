@@ -12,12 +12,14 @@
  */
 import type { Task } from '../../io/bytes.js';
 import { TsonAtomTypeError } from '../../core/errors.js';
+import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import type { AtomType } from '../../atom/contract.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import type { AtomValue, Value } from '../../tree/nodes.js';
-import { absentNode, atomNode } from '../../tree/nodes.js';
+import { atomNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from './grammar.js';
+import { abandonedValue } from './support.js';
 
 /**
  * Reads one token through `atomType`, consuming this value's own `annotation* type-ref?` framing first
@@ -53,7 +55,7 @@ export function atomTypeReader<T>(
         return atomType.read({ text: e.text, form: e.form });
       } catch (error) {
         if (error instanceof TsonAtomTypeError) {
-          ctx.report('ATOM_CONSTRAINT_VIOLATION', error.message, error.expected, e.text);
+          ctx.report(diagnosticCodeForAtomError(error), error.message, error.expected, e.text);
           return undefined;
         }
         throw error;
@@ -64,11 +66,12 @@ export function atomTypeReader<T>(
 
 /**
  * Wraps `delegate` -- ordinarily {@link atomTypeReader} -- so it yields a {@link Value} instead of a
- * bare host value: an {@link AtomNode} carrying the value and this leaf's declared type-ref, or an
- * {@link AbsentNode} when the delegate produced no value (a soft-failed read, per this module's own
- * top note -- the diagnostic already carries the real problem). This is how every atom position
- * produces a node uniformly, so a container reader's children are always nodes and an atom read at the
- * root is a node too.
+ * bare host value: an {@link AtomNode} carrying the value and this leaf's declared type-ref, or the
+ * construction-guard placeholder ({@link abandonedValue}) when the delegate reported anything (a
+ * soft-failed read, per this module's own top note -- the diagnostic already carries the real
+ * problem, and tree mode is all-or-nothing at every leaf, not only every container). This is
+ * how every atom position produces a node uniformly, so a container reader's children are always
+ * nodes and an atom read at the root is a node too.
  */
 export function atomTreeReader<T extends AtomValue>(
   delegate: TypeReader<T | undefined>,
@@ -77,9 +80,10 @@ export function atomTreeReader<T extends AtomValue>(
   return {
     *read(ctx: ReadContext): Task<Value> {
       const annotations = yield* captureAnnotations(ctx);
+      const mark = ctx.reported();
       const value = yield* delegate.read(ctx);
-      if (value === undefined) {
-        return absentNode(undefined, annotations);
+      if (value === undefined || ctx.reported() > mark) {
+        return abandonedValue();
       }
       return atomNode(value, typeRef, annotations);
     },

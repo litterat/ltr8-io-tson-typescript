@@ -29,6 +29,7 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
+import { terminal } from '../compiler/referenceChain.js';
 import { isDataBody } from './bodyKind.js';
 import type { RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
@@ -202,10 +203,11 @@ function recordInhabited(
     }
     // §5.10.1, §5.2: `a: void` — a field the document MUST write and MUST NOT write `_` at — is
     // the one declaration this rule refuses on its own, the record having no member at all: `_`
-    // is the only value `void` admits, and this field admits neither a value nor `_`. Checked by
-    // bare name against the kernel's own `void`; a field typed by an *alias* of `void` is left to
-    // a later work package's reference-chain walk.
-    if (field.type.name === 'void') {
+    // is the only value `void` admits, and this field admits neither a value nor `_`. Followed
+    // through the reference chain (§8.3) rather than checked by bare name, since a rename
+    // (`nothing => void`) is the same type under another name and `a: nothing` empties the
+    // record exactly as `a: void` would.
+    if (refIsVoid(field.type, namespace)) {
       return false;
     }
     if (!refInhabited(field.type, namespace, inhabited)) {
@@ -270,6 +272,18 @@ function refInhabited(
   return !namespace.has(ref.name) || inhabited.has(ref.name);
 }
 
+/**
+ * Whether `ref`, followed through its reference chain (§8.3), terminates at the kernel's own
+ * `void` -- what a required, non-voidable field's own `a: void` refusal (§5.10.1, §5.2) must ask
+ * rather than comparing `ref.name` by spelling, since a rename (`nothing => void`) is the same
+ * type under another name and `void` itself is otherwise an ordinary, trivially satisfiable
+ * `unit` atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
+ * one position-specific exemption from it, not a fact `void`'s own entry carries.
+ */
+function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, TypeDefinition>): boolean {
+  return terminal(ref.name, (n) => namespace.get(n)) === 'void';
+}
+
 // ── The diagnostic chain ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -321,7 +335,7 @@ function recordDependency(
     if (
       !grouped.has(field.name) &&
       !isOptionalField(field) &&
-      !refInhabited(field.type, namespace, inhabited)
+      (refIsVoid(field.type, namespace) || !refInhabited(field.type, namespace, inhabited))
     ) {
       return field.type.name;
     }

@@ -963,14 +963,15 @@ function isRecordTop(body: Top): body is RecordBody {
 
 /**
  * §5.7's fixation, applied where the section says it happens: "fixation happens at
- * materialisation, where values are concrete". A field routed by `= P` or `~ P` is written on an
- * *unmarked* name (§5.7's "Open modifiers") and held with its role already `FIXED`/`DEFAULT` --
- * the eventual role its own modifier spells, `fieldModifiers.ts`'s `resolveFieldMarks` deciding
- * `= P` from `~ P` by modifier kind the same way it decides between a literal `= v` and `~ v` --
- * and the parameter riding `value`, satisfying §8.1's invariant that `value` is present exactly
- * when `role` is not `FREE` throughout, held phase included. Once substitution has made the value
- * concrete, the one fact closing still owes the field is the mark: `optional` becomes `true`,
- * "the name mark supplied by the closing".
+ * materialisation, where values are concrete". §5.7 describes the field itself as held required
+ * and FREE while its entry stays open, the parameter riding the ordinary `value` slot with no
+ * label distinguishing it from a literal. This port's held wire resolves `role` to
+ * `FIXED`/`DEFAULT` from the modifier's own spelling (`fieldModifiers.ts`'s `resolveFieldMarks`,
+ * the same call a literal `= v`/`~ v` goes through) at the point the body is first read, ahead of
+ * substitution -- `value` already holds the parameter token at that point, so `role` and `value`
+ * agree with each other throughout the held phase, and only `optional` still waits. Once
+ * substitution has made the value concrete, the one fact closing still owes the field is the mark
+ * this function applies: `optional` becomes `true`, "the name mark supplied by the closing".
  *
  * `parametricNames` is exactly the set of field names whose *pre-substitution* value was one of
  * the template's own parameters ({@link parametricFieldNames}) -- computed before substitution
@@ -978,8 +979,20 @@ function isRecordTop(body: Top): body is RecordBody {
  * promoted) are indistinguishable by value alone. It is what tells the promotable fields apart
  * from an ordinary unmarked marker of the template's own -- `role` alone cannot, both already
  * carrying `FIXED`/`DEFAULT` before substitution runs.
+ *
+ * **Exported and shared with `definitionResolver.ts`'s `openOperand`.** §5.7 ties fixation to the
+ * field's *value* becoming concrete, not to which call closes the named template's own
+ * parameters: at a named type position closing an instantiation entry the value is always
+ * concrete by definition, but at a composition or refinement operand "subsumed where it stands"
+ * (§5.8) it need not be -- an outer parameter can ride straight through (`<S> pet<S, text>`),
+ * leaving the routed field's substituted value itself a parameter. `openOperand` applies this
+ * only once its own operand is fully bound (its `namesOwnParameter` false); while the operand
+ * still names the enclosing declaration's own parameter, the field is left alone here and the
+ * later closing of that declaration applies it instead, once the value is actually concrete. One
+ * fixation, called from both places under that one condition, rather than two copies that could
+ * drift or a condition duplicated.
  */
-function fixRoutedValues(body: Top, parametricNames: ReadonlySet<string>): Top {
+export function fixRoutedValues(body: Top, parametricNames: ReadonlySet<string>): Top {
   // `'fields' in body`, not `body.kind === 'record'`: see `mapBodyRefs`'s own note on why a
   // `Data` body's bare-`string` `kind` cannot be excluded by a literal comparison.
   if (!('fields' in body)) {
@@ -997,7 +1010,7 @@ function fixRoutedValues(body: Top, parametricNames: ReadonlySet<string>): Top {
  * The names of every field in the *held* (pre-substitution) wire form whose `value` slot is a
  * bare unquoted token naming one of `parameters` -- see {@link fixRoutedValues}.
  */
-function parametricFieldNames(
+export function parametricFieldNames(
   preSubstitution: CoreValue,
   parameters: readonly string[],
 ): ReadonlySet<string> {

@@ -131,6 +131,7 @@ import {
   typeRefOf,
 } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
+import { fixRoutedValues, parametricFieldNames } from './templates.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
 import { terminal, terminalDefinition } from './referenceChain.js';
@@ -1692,10 +1693,25 @@ interface OpenOperand {
 }
 
 /**
- * What an operand still open (applied to this declaration's own parameter) contributes to the
- * declaration absorbing it: a field set, and the operand's own ancestors. Not the operand
- * itself — a template is no type (§5.10), so nothing can be IS-A one; its ancestors are types,
- * and its fields arrive with them via {@link substitute}.
+ * What an operand — an application at a composition or refinement source, whether it still names
+ * this declaration's own parameter or is fully bound and "subsumed where it stands" (§5.8) —
+ * contributes to the declaration absorbing it: a field set, and the operand's own ancestors. Not
+ * the operand itself — a template is no type (§5.10), so nothing can be IS-A one; its ancestors
+ * are types, and its fields arrive with them via {@link substitute}.
+ *
+ * `held.parameters` (the *named template's own* parameters, `pet`'s `N`/`T`, never `name`'s) are
+ * bound the moment this runs, whether or not `name` itself stays open — but §5.7's "Open
+ * modifiers" ties fixation (the name mark, `optional: true`) to the *value* becoming concrete,
+ * not to this one substitution: with an outer parameter riding through in one of
+ * `application.args` (`<S> pet<S, text>`), the routed field's value substitutes to `S`, still a
+ * parameter, so it stays required and FREE here, exactly as the spec's own held form does, and
+ * {@link fixRoutedValues} is skipped. `namesOwnParameter` is what tells the two cases apart, and
+ * a later closing sees the deferred field for what it is: `parametricFieldNames` reads the still
+ * -unfixed `S` token straight off `name`'s own held wire once `name<...>` itself closes, so the
+ * fixation the open case defers here is the one the outer closing applies, never a lost one. Only
+ * a fully-bound operand fixates here, with the same {@link fixRoutedValues} a named type position
+ * closes an instantiation with (`templates.ts`'s own `closeHeldInstantiation`), never a second
+ * copy.
  */
 function openOperand(
   deps: DefinitionResolverDeps,
@@ -1741,7 +1757,22 @@ function openOperand(
         "vocabulary, so there is nothing to compose with (§5.8, and §5.7's vocabulary-body rule read across)",
     );
   }
-  return { ancestors: template.supertypes, body: absorbed };
+  if (namesOwnParameter(application, typeParams)) {
+    // `name` itself stays open through this operand (an outer parameter rides one of
+    // `application.args`): a routed field's substituted value is still a parameter, not a
+    // concrete one, so §5.7's fixation does not fire yet. Deferred to `name<...>`'s own closing,
+    // which rediscovers it via `parametricFieldNames` over `name`'s own held wire.
+    return { ancestors: template.supertypes, body: absorbed };
+  }
+  const parametricNames = parametricFieldNames(held.application.coreValue, held.parameters);
+  const fixed = fixRoutedValues(absorbed, parametricNames);
+  if (!isRecordBody(fixed)) {
+    throw new TsonInternalError(
+      `'${name}': ${position} '${head}<...>' stopped being a record body after fixation -- ` +
+        'fixRoutedValues only ever maps a record body’s own field list',
+    );
+  }
+  return { ancestors: template.supertypes, body: fixed };
 }
 
 /** A fully-bound application at one of the two field-absorbing positions, closed to the entry it denotes. */

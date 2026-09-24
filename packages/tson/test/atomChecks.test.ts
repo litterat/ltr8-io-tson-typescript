@@ -344,6 +344,69 @@ describe('regex_type', () => {
   });
 });
 
+// ── uri_type/email_type: a member must satisfy the family's OWN facets too (§7.4) ──────────
+//
+// `text_type`'s shared length/pattern member rule is `textMemberCoherence`'s (tested above, and
+// reused here through `textCoherence`); this is the family-specific half that rule deliberately
+// leaves alone -- `scheme` and RFC 3986's grammar for `uri_type`, RFC 5322's dot-atom grammar for
+// `email_type` -- run through each family's own compiled parser, the same one a read uses.
+
+describe('uri_type', () => {
+  const spec = 'https://www.rfc-editor.org/rfc/rfc3986';
+
+  it("coherence: every member must itself parse as a URI -- the family's own parsing contract still applies (§7.4)", () => {
+    const violations = checkAtomCoherence({
+      kind: 'uri_type',
+      spec,
+      members: ['https://example.com', 'not a uri'],
+    });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => v.includes('not a uri'))).toBe(true);
+  });
+
+  it('coherence: every member must satisfy `scheme` too, not merely parse as some URI', () => {
+    const violations = checkAtomCoherence({
+      kind: 'uri_type',
+      spec,
+      scheme: 'https',
+      members: ['https://example.com', 'ftp://example.com'],
+    });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => v.includes('ftp://example.com'))).toBe(true);
+  });
+
+  it('coherence: a member set of well-formed, scheme-conforming URIs is coherent', () => {
+    expect(
+      checkAtomCoherence({
+        kind: 'uri_type',
+        spec,
+        scheme: 'https',
+        members: ['https://a.example', 'https://b.example'],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('email_type', () => {
+  const spec = 'https://www.rfc-editor.org/rfc/rfc5322';
+
+  it("coherence: every member must itself parse as an email address -- the family's own parsing contract still applies (§7.4)", () => {
+    const violations = checkAtomCoherence({
+      kind: 'email_type',
+      spec,
+      members: ['a@example.com', 'not an address'],
+    });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => v.includes('not an address'))).toBe(true);
+  });
+
+  it('coherence: a member set of well-formed addresses is coherent', () => {
+    expect(
+      checkAtomCoherence({ kind: 'email_type', spec, members: ['a@example.com', 'b@example.com'] }),
+    ).toEqual([]);
+  });
+});
+
 // ── cidr4_type ───────────────────────────────────────────────────────────────────────────────
 
 describe('cidr4_type', () => {

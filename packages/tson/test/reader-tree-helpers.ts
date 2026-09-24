@@ -16,6 +16,22 @@ import {
 import type { ReadContext } from '../src/reader/contracts.js';
 import type { AtomType, AtomToken } from '../src/atom/contract.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
+import type { Value } from '../src/tree/nodes.js';
+
+/**
+ * `result.value`, narrowed -- a `validate()`/`ValidationResult.value` is present exactly when
+ * `diagnostics` is empty (a read is all-or-nothing, `compiler/compile.ts`'s own
+ * {@link ValidationResult} doc), so a test that already asserted a clean read may call this
+ * rather than repeat the guard inline. Throws rather than asserting the type away
+ * (`link/identity.ts`'s own "guarded rather than asserted away" convention) -- a call site
+ * reaching the throw means the diagnostics assertion above it was wrong, which should fail loudly.
+ */
+export function requireValue(result: { readonly value?: Value }): Value {
+  if (result.value === undefined) {
+    throw new Error('expected a value, but the read reported something and none was built');
+  }
+  return result.value;
+}
 
 /** A `ReadContext` over `text`'s real event stream, reporting through `receiver` -- fail-fast by default. */
 export function contextOver(text: string, receiver?: DiagnosticsReceiver): ReadContext {

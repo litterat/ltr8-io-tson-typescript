@@ -37,9 +37,8 @@ import { lookingAhead } from '../reader/context.js';
 import type { ChoiceBody } from '../schema/meta/bodies.js';
 import type { TypeDefinition } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
-import { absentNode } from '../tree/nodes.js';
 import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
-import type { TreeTypeResolver } from '../reader/tree/support.js';
+import { abandonedValue, type TreeTypeResolver } from '../reader/tree/support.js';
 import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
 import { discriminationClassOf, type DiscriminationClass } from '../link/disjointness.js';
 import type { TsonEvent } from '../stream/event.js';
@@ -146,14 +145,20 @@ export function choiceTreeReader(
         // second, type-directed inspection that tries each variant's own parser to see which
         // sticks.
         if (recovery === undefined) {
+          // TYPE_MISMATCH, not UNKNOWN_TYPE_REF: `UNKNOWN_TYPE_REF` means a *written* name
+          // resolves nowhere (§7.2's own two-step rule, this function's other branch below); a
+          // required tag that is simply absent never reaches that question -- there is no written
+          // name to resolve -- and establishes no type either way, the same verdict as a written
+          // name the position does not admit. The reference's own `NamedDispatchReader` reports
+          // this same case as `TYPE_MISMATCH` too.
           choiceCtx.report(
-            'UNKNOWN_TYPE_REF',
+            'TYPE_MISMATCH',
             `a '${displayName}' value needs its own !type-ref to say which member it is (${names})`,
             `a !type-ref naming one of (${names})`,
             '(none)',
           );
           yield* skipDataValue(choiceCtx);
-          return absentNode();
+          return abandonedValue();
         }
         const valueClass = classifyEvent(lookahead.firstEvent);
         const variant = valueClass === undefined ? undefined : recovery.get(valueClass);
@@ -165,7 +170,7 @@ export function choiceTreeReader(
             describeEvent(lookahead.firstEvent),
           );
           yield* skipDataValue(choiceCtx);
-          return absentNode();
+          return abandonedValue();
         }
         return yield* variant.parser.read(choiceCtx);
       }
@@ -173,14 +178,24 @@ export function choiceTreeReader(
       const typeRefName = lookahead.typeRefName;
       const variant = variants.find((candidate) => candidate.name === typeRefName);
       if (variant === undefined) {
+        // §7.2's own two-step resolution rule: a name `namespace` declares nothing under is
+        // `UNKNOWN_TYPE_REF` ("a built-in annotation name not defined by the active schema is an
+        // unresolved-type error", generalised past built-ins); a name that resolves to a real
+        // entry that just isn't one of this choice's variants is `TYPE_MISMATCH` -- admitted
+        // somewhere, not admitted here. `compiler/subsumption.ts`'s own top note has the same
+        // split for record subsumption, and the same divergence-from-the-reference note.
+        const resolves = namespace.has(typeRefName);
         choiceCtx.report(
-          'UNKNOWN_TYPE_REF',
-          `'!${typeRefName}' names no member of '${displayName}' (${names})`,
+          resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+          resolves
+            ? `'!${typeRefName}' names no member of '${displayName}' (${names})`
+            : `'!${typeRefName}' does not resolve in the governing schema's namespace (§7.2) -- ` +
+                `expected one of (${names})`,
           `one of (${names})`,
           `!${typeRefName}`,
         );
         yield* skipDataValue(choiceCtx);
-        return absentNode();
+        return abandonedValue();
       }
       return yield* variant.parser.read(choiceCtx);
     },

@@ -36,6 +36,7 @@ import { tsonDocument } from '../src/tree/nodes.js';
 import { writeDocument } from '../src/write/astWriter.js';
 import { writeTree, writeTreeValue } from '../src/write/treeWriter.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
+import { requireValue } from './reader-tree-helpers.js';
 
 // ── The user schema, and the two documents it governs ─────────────────────────────────────────
 
@@ -293,7 +294,7 @@ describe('a conforming document', () => {
     const withoutSite = CONFORMING.replace(/\n {2}site: \{[^}]*\}/u, '');
     const result = validate(compiled, 'reading', bytes(withoutSite));
     expect(result.diagnostics).toEqual([]);
-    const root = result.value;
+    const root = requireValue(result);
     if (root.kind !== 'record') throw new Error(`expected a record, found '${root.kind}'`);
     expect(root.fields.has('site')).toBe(false);
     expect([...root.fields.keys()]).toEqual([
@@ -364,7 +365,9 @@ describe('a non-conforming document is rejected with a located, named diagnostic
     expect(result.diagnostics[0]?.dataPosition).toEqual({ line: 6, column: 9, offset: 155 });
   });
 
-  it('rejects a choice variant the schema does not declare, naming the members it does', () => {
+  it('rejects a choice variant the schema declares nothing by that name at all, naming the members it does', () => {
+    // `humidity` resolves nowhere in this schema's namespace -- §7.2's own two-step rule makes
+    // this `UNKNOWN_TYPE_REF`, not `TYPE_MISMATCH` (`compiler/choiceReader.ts`'s own top note).
     const result = validate(
       compiled,
       'reading',
@@ -373,11 +376,32 @@ describe('a non-conforming document is rejected with a located, named diagnostic
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]).toMatchObject({
       code: 'UNKNOWN_TYPE_REF',
-      message: "'!humidity' names no member of 'sample' (temperature | pressure)",
+      message:
+        "'!humidity' does not resolve in the governing schema's namespace (§7.2) -- expected one of (temperature | pressure)",
       path: '/sample',
       schemaPointer: '/reading/sample',
       expected: 'one of (temperature | pressure)',
       actual: '!humidity',
+    });
+    expect(result.diagnostics[0]?.dataPosition).toBeDefined();
+  });
+
+  it('rejects a choice variant the schema declares as something else entirely, naming the members it does', () => {
+    // `site` resolves (declared elsewhere in this schema) but is not one of `sample`'s own
+    // members -- admissibility fails, not resolution, so this is `TYPE_MISMATCH`.
+    const result = validate(
+      compiled,
+      'reading',
+      bytes(CONFORMING.replace('!temperature', '!site')),
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: 'TYPE_MISMATCH',
+      message: "'!site' names no member of 'sample' (temperature | pressure)",
+      path: '/sample',
+      schemaPointer: '/reading/sample',
+      expected: 'one of (temperature | pressure)',
+      actual: '!site',
     });
     expect(result.diagnostics[0]?.dataPosition).toBeDefined();
   });
@@ -418,32 +442,33 @@ describe('a non-conforming document is rejected with a located, named diagnostic
 
 describe('round trip: parse, write, parse, compare', () => {
   const first = validate(compiled, 'reading', bytes(CONFORMING));
+  const firstValue = requireValue(first);
 
   it('the tree writer round-trips the whole value, schema-validating on the way back in', () => {
-    const written = writeTreeValue(first.value);
+    const written = writeTreeValue(firstValue);
     const second = validate(compiled, 'reading', bytes(written));
     expect(second.diagnostics).toEqual([]);
-    expect(second.value).toEqual(first.value);
+    expect(second.value).toEqual(firstValue);
     expect(second.value).toEqual(EXPECTED_TREE);
   });
 
   it('the tree writer is idempotent: writing the re-read value gives the identical text', () => {
-    const written = writeTreeValue(first.value);
-    const rewritten = writeTreeValue(validate(compiled, 'reading', bytes(written)).value);
+    const written = writeTreeValue(firstValue);
+    const rewritten = writeTreeValue(requireValue(validate(compiled, 'reading', bytes(written))));
     expect(rewritten).toBe(written);
   });
 
   it('has one spelling: the document form is the header plus exactly the value form', () => {
     // `write/index.ts`'s own contract -- canonical and readable are the same call, so there is no
     // second entry point here whose whitespace could differ from this one's.
-    const document = tsonDocument(first.value, 'test://reading-1', 'test://catalog.tn');
+    const document = tsonDocument(firstValue, 'test://reading-1', 'test://catalog.tn');
     expect(writeTree(document)).toBe(
-      `!!id:"test://reading-1"\n!!schema:"test://catalog.tn"\n${writeTreeValue(first.value)}`,
+      `!!id:"test://reading-1"\n!!schema:"test://catalog.tn"\n${writeTreeValue(firstValue)}`,
     );
   });
 
   it('a written document keeps its header readable and its value equal on re-read', () => {
-    const document = tsonDocument(first.value, 'test://reading-1', 'test://catalog.tn');
+    const document = tsonDocument(firstValue, 'test://reading-1', 'test://catalog.tn');
     const text = writeTree(document);
     const reparsed = runSync(parseDocument(fromBytes(bytes(text))));
     expect(reparsed.document.id).toBe('test://reading-1');
@@ -467,7 +492,7 @@ describe('round trip: parse, write, parse, compare', () => {
   it('keeps the two writers distinct: the AST writer preserves the source spelling, the tree writer normalises it', () => {
     const parsed = runSync(parseDocument(fromBytes(bytes(CONFORMING))));
     const astText = writeDocument(parsed.document);
-    const treeText = writeTreeValue(first.value);
+    const treeText = writeTreeValue(firstValue);
     // The parse-preserving writer keeps what the author wrote: no type-refs the source did not
     // spell, and none of the schema's own names.
     expect(astText).not.toContain('!uuid');
@@ -488,14 +513,15 @@ describe('round trip: parse, write, parse, compare', () => {
 // ── §7.2 subsumption: a value's own type-ref must be admitted by the position it stands in ────
 
 describe("§7.2's subsumption rule: a data type-ref at a typed position is verified, not skipped", () => {
-  it('reports TYPE_MISMATCH for a wrong type-ref naming a real entry, and UNKNOWN_TYPE_REF for one naming no type at all', () => {
+  it('reports TYPE_MISMATCH for a wrong type-ref naming a real entry, and UNKNOWN_TYPE_REF for one naming nothing at all', () => {
     // §7.2: "At a position whose declared type is `T`, a value annotated `!S` is valid if and only
     // if [...] `S` is `T` or `T` appears in `S`'s transitive supertypes." `reading` has no
-    // subtypes in this schema, so both `!site` (a real entry, but not one `reading` admits) and
-    // `!nonsense` (naming nothing at all) are refused with the "has no subtypes" wording
-    // (`compiler/subsumption.ts`) -- but `!site` denotes a real, flattened entry, so its own type
-    // is known and simply wrong here (`TYPE_MISMATCH`), while `!nonsense` denotes nothing at all
-    // (`UNKNOWN_TYPE_REF`), §7.2.
+    // subtypes in this schema. §7.2's own opening paragraph resolves this in two steps: `!site` (a
+    // real entry this schema declares, but not one `reading` admits) fails only admissibility and
+    // is `TYPE_MISMATCH`; `!nonsense` (naming nothing this schema's namespace declares at all)
+    // fails resolution itself and is `UNKNOWN_TYPE_REF` (`compiler/subsumption.ts`'s own top note
+    // has the split, and the deliberate divergence from the reference implementation, which
+    // reports `TYPE_MISMATCH` unconditionally for both).
     const wrongType = validate(compiled, 'reading', bytes(CONFORMING.replace('{', '!site {')));
     expect(wrongType.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
     expect(wrongType.diagnostics[0]?.message).toContain(
@@ -505,7 +531,7 @@ describe("§7.2's subsumption rule: a data type-ref at a typed position is verif
     const noSuchType = validate(compiled, 'reading', bytes(CONFORMING.replace('{', '!nonsense {')));
     expect(noSuchType.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
     expect(noSuchType.diagnostics[0]?.message).toContain(
-      "'!nonsense' is not valid at a 'reading' position",
+      "'!nonsense' does not resolve in the governing schema's namespace",
     );
   });
 

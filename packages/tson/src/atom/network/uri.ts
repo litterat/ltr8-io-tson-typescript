@@ -5,10 +5,10 @@
  * accepting `UriParser.java`'s documented different-revision gap (delegating to `java.net.URI`,
  * which implements RFC 2396): this port has no host URI type to delegate to at all.
  *
- * **`pattern` (I-Regexp, RFC 9485) is accepted but not yet enforced** -- the same deferral
- * `email.ts` documents, for the same reason: this package's I-Regexp matcher (`regex/`) has not
- * yet landed as of this module's writing. `minLength`/`maxLength`/`length`/`scheme` are fully
- * enforced.
+ * **`pattern` (I-Regexp, RFC 9485) is enforced, but not by this module** -- see `email.ts`'s own
+ * TSDoc for where and why: `compiler/atomBuilder.ts`'s own `withTextFacets` wraps this parser's
+ * `read` with the same `pattern`/`members` checks `text.ts` runs for `text_type`/`regex_type`
+ * directly. `minLength`/`maxLength`/`length`/`scheme` are enforced directly, below.
  *
  * Host value is `string`, the authored text unchanged: like `cidr4.ts`/`cidr6.ts`, there is no
  * decomposed URI type in this package to build instead (no `DOM` lib, no global `URL` in this
@@ -69,8 +69,8 @@ export function createUriParser(typeRef: string, constraints: UriType): AtomType
         `at most ${constraints.maxLength.toString()} characters`,
       );
     }
-    // `pattern` (I-Regexp) is deferred until `regex/` lands a matcher -- see this module's TSDoc.
-    const { pattern: _pattern } = constraints;
+    // `pattern` (I-Regexp) is enforced by `compiler/atomBuilder.ts`'s own wrapper, not here --
+    // see this module's own TSDoc.
     if (constraints.scheme !== undefined) {
       const actual = parsed.scheme;
       if (actual?.toLowerCase() !== constraints.scheme.toLowerCase()) {

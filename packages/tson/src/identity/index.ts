@@ -12,17 +12,19 @@
  *
  * It is a separate subpath rather than part of the default entry for the reason that entry's own
  * note gives: an import should not drag in more than it needs. Nothing here reaches the schema
- * compiler, the lexer or the event stream — {@link sha256Hex} and {@link contentStart} operate on
- * raw bytes and {@link canonicalizeIdentity} on a URI string — so this is the smallest useful
- * piece of the library that a build can take on its own.
+ * compiler, the lexer or the event stream — {@link sha256HexSync} and {@link contentStart}
+ * operate on raw bytes and {@link canonicalizeIdentity} on a URI string — so this is the smallest
+ * useful piece of the library that a build can take on its own.
  *
- * `crypto.subtle` is the only platform API involved, and it is a global in Node 24 and in every
- * browser, so this subpath is not Node-only the way `@ltr8/tson/source` is.
+ * No platform API is involved at all: `link/contentHash.ts`'s own SHA-256 is a hand-written,
+ * zero-dependency implementation (`CLAUDE.md`'s own constraint), so this subpath is not Node-only
+ * the way `@ltr8/tson/source` is, and {@link sha256HexSync} needs no `await` to use.
  */
 export {
   contentStart,
   declaredSha256,
   sha256Hex,
+  sha256HexSync,
   verifyContentHash,
   withSha256Pin,
 } from '../link/contentHash.js';

@@ -615,9 +615,10 @@ function typeParamsOfDeclaration(declaration: Declaration): readonly string[] {
  * One declaration's failure as a {@link Diagnostic}, classified positively -- `BIND_MISMATCH` for
  * a {@link TsonBindMismatchError} (the reading application's own binding disagrees with the
  * schema, not an author mistake; subsumes {@link TsonMissingBindingError}), `NOT_IMPLEMENTED` for
- * a {@link TsonNotImplementedError} (a library gap), `SCHEMA_UNAVAILABLE` for a
- * {@link TsonSchemaFetchError} (no configured source would supply a schema this declaration's own
- * constructor is bound against -- not obtained, so never judged), and `SCHEMA_ERROR` for a
+ * a {@link TsonNotImplementedError} (a library gap), one of the five `SCHEMA_*` fetch codes (via
+ * {@link diagnosticCodeForFetch}) for a {@link TsonSchemaFetchError} (no configured source would
+ * supply a schema this declaration's own constructor is bound against -- not obtained, so never
+ * judged), and `SCHEMA_ERROR` for a
  * {@link TsonSchemaValidationError} (the author's mistake), matching the classification
  * `definitionResolver.ts`'s own errors already carry. `schemaPointer` names the declaration by an
  * RFC 6901-shaped `/name` rather than embedding it in the message, since the message is already
