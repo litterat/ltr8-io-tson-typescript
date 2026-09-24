@@ -44,6 +44,9 @@ function stubMaterialiser(
     closeApplication(): string {
       throw new Error('not exercised by this test');
     },
+    closeApplicationAs(): TypeDefinition | undefined {
+      throw new Error('not exercised by this test');
+    },
     materialise() {
       throw new Error('not exercised by this test');
     },

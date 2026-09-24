@@ -43,7 +43,7 @@ import type { SchemaRef } from '../stream/event.js';
 import type { LinkedSchema } from '../link/link.js';
 import { canonicalizeIdentity } from '../link/identity.js';
 import type { Reference, Scoped, Top, TypeDefinition } from '../schema/meta/typedef.js';
-import { choiceDisjoint, typeKind } from '../schema/meta/typedef.js';
+import { choiceDisjoint, isTemplateBody, typeKind } from '../schema/meta/typedef.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -183,10 +183,28 @@ function buildReader(
     resolvesToScoped(typeName, (n) => schema.entries.get(n));
 
   if (!('kind' in body)) {
-    // A `TemplateBody` reaching compilation at all means an open (parameterised) entry was named
-    // directly rather than through a closed application -- §5.10's materialisation should have
-    // produced a closed entry for every use site before linking; naming the open declaration
-    // itself has no reader of its own to build.
+    // §5.10: a record-bodied template is a family base and MAY be named bare at a type position --
+    // dispatching exactly as an ABSTRACT record's own position does, over its instantiations, and
+    // never reading the held body (there is nothing of its own to read: a value at such a position
+    // is always a value of some member, never of the template itself). Every other open shape
+    // (reference, container, constructor-application, atom template) is no type at all and has no
+    // reader to build.
+    if (isTemplateBody(body) && body.extension !== undefined) {
+      // `guardSubsumption` never invokes this, zero discriminators or many: it either reports a
+      // validation error, refuses a tag naming the base, or dispatches to a subtype's/member's
+      // own reader -- so there is no "own" record to read and none to build here.
+      const neverRead: TypeReader<Value> = {
+        read(): Task<Value> {
+          throw new TsonInternalError(
+            `'${name}': a template family base has no reader of its own -- this should be unreachable`,
+          );
+        },
+      };
+      return guardSubsumption(name, definition, neverRead, schema.entries, resolve);
+    }
+    // An open (parameterised) entry that is no type at all was named directly rather than through
+    // a closed application -- §5.10's materialisation should have produced a closed entry for
+    // every use site before linking; naming this declaration itself has no reader of its own.
     throw new TsonNotImplementedError(
       `'${name}' declares type parameters and has no reader of its own -- apply it (§5.10) before reading against it`,
     );

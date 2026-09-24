@@ -140,6 +140,18 @@ function isInhabited(
   }
   switch (body.kind) {
     case 'record':
+      // §5.2: "Inhabitance gains no case" -- ABSTRACT is not a productivity question at all, and
+      // gets no branch here. A record's own field set is judged the same way whatever its
+      // `extension`: an ABSTRACT base with no subtype in this schema's own closure is the
+      // ordinary shape of a library schema whose importers supply the members (§3.3.4 makes
+      // `subtypes` open across schemas), and that is *why* refusing it would be wrong -- not
+      // because this function special-cases it, but because an ABSTRACT base's own fields are, in
+      // the ordinary case, satisfiable on their own (a selector field typed by an atom or enum is
+      // always productive) regardless of whether any subtype exists yet. A base whose own fields
+      // genuinely cannot be satisfied -- a required self-reference, an `a: void` -- is uninhabited
+      // exactly as an OPEN record with the same shape would be; no reader ever supplies an
+      // ABSTRACT base's field set directly (§7.2), but that is a *read-time* dispatch rule, not a
+      // productivity exemption.
       return recordInhabited(body, namespace, inhabited);
     case 'array':
       return (
@@ -343,6 +355,8 @@ function firstUnsatisfiedDependency(
   }
   switch (body.kind) {
     case 'record':
+      // Mirrors `isInhabited`'s own reading of "Inhabitance gains no case" -- a record's
+      // dependency chain is its own field set whatever its `extension`.
       return recordDependency(body, namespace, inhabited);
     case 'array':
       return refInhabited(body.elementType, namespace, inhabited)

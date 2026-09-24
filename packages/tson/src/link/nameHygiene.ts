@@ -14,15 +14,23 @@
  * - **The members of one enum** and **the field names of one record** (group labels included —
  *   §5.11's own resolution rule already flattens a group's members into the body's ordinary
  *   `fields` list before this module ever sees it, so no separate handling is needed) are each
- *   entry's own scope, checked once per entry in `merged`.
+ *   entry's own scope, checked once per entry in `merged`. **An enum's own scope is conditional on
+ *   its `profile`** (§7.4, §11.4, #21): under `IDENTIFIER` (the default) every mechanism applies,
+ *   as always; under `TEXT` the members are values, not names, so mechanisms 2
+ *   (`Identifier_Status`) and 3 (restriction level) do not reach them — only mechanism 1
+ *   (skeleton distinctness) still relates two members that read alike, and `textProfileScopePolicy`
+ *   is the one-line policy that drops the other two for exactly that scope's check.
  *
- * **A fifth scope, not in §11.4's text at all: a template's own type parameters**
- * (`typeParameters`, `schema/meta/typedef.ts`), checked over every entry that declares any. This is this
- * implementation's own choice, not the spec's — the reference implementation's
- * `SPEC-FEEDBACK.md` #5 records it as an open proposal, reasoning that a parameter is a name and
- * `<T, Т>` (Latin/Cyrillic) is exactly the substitution hazard §8.2 exists to refuse, whether or
- * not §11.4 happens to enumerate the position. All three mechanisms apply here exactly as they do
- * for the other schema-layer scopes.
+ * **A fifth scope §11.4 declines to make one: a template's own type parameters.** §11.4 says so
+ * outright — "A template's parameter list is not a scope either (§5.10): one author writes it
+ * whole on one line, and the list stays short so that it stays reviewable" — and this module
+ * checks it anyway (`typeParameters`, `schema/meta/typedef.ts`, over every entry that declares
+ * any), against the spec's own text rather than in a gap it leaves. The reference implementation's
+ * `SPEC-FEEDBACK.md` #5 records the same divergence as an open proposal against the same clause,
+ * reasoning that a parameter is a name and `<T, Т>` (Latin/Cyrillic) is exactly the substitution
+ * hazard §8.2 exists to refuse, whatever §5.10 does or does not need from the reviewability a
+ * short parameter list already buys. All three mechanisms apply here exactly as they do for the
+ * other schema-layer scopes.
  *
  * **Choice variants are deliberately not a fourth scope.** A variant is a reference to a
  * declared name (§5.4), so two confusable variants are two confusable entries in the namespace
@@ -107,7 +115,10 @@ export function checkNameHygiene(
   for (const [name, def] of merged) {
     const scope = entryScope(def);
     if (scope !== undefined) {
-      const refusal = nameHygieneRefusal(scope.names, identifierPolicy);
+      const scopePolicy = scope.textProfile
+        ? textProfileScopePolicy(identifierPolicy)
+        : identifierPolicy;
+      const refusal = nameHygieneRefusal(scope.names, scopePolicy);
       if (refusal !== undefined) {
         const message =
           `'${name}' has ${scope.noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
@@ -122,20 +133,33 @@ export function checkNameHygiene(
       if (refusal !== undefined) {
         const message =
           `'${name}' has its own type parameters refused under [TSON-DATA] §8.2's ` +
-          `name-hygiene policy (this implementation's own scope, not in [TSON-SCHEMA] §11.4's ` +
-          `text -- a parameter is a name and the substitution hazard §8.2 exists to refuse ` +
-          `applies to it the same as any other declared name): ${refusal.detail} (computed ` +
-          `against UTS #39 version ${UTS39_VERSION})`;
+          `name-hygiene policy (this implementation's own scope, against [TSON-SCHEMA] §11.4's ` +
+          `own text declining to make one -- a parameter is a name and the substitution hazard ` +
+          `§8.2 exists to refuse applies to it the same as any other declared name): ` +
+          `${refusal.detail} (computed against UTS #39 version ${UTS39_VERSION})`;
         reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
       }
     }
   }
 }
 
+/**
+ * A `TEXT`-profile enum's own scope policy (§7.4, §11.4, #21): mechanism 1 (skeleton
+ * distinctness) still relates two members that read alike, but mechanisms 2 and 3 do not reach
+ * values that are not names -- "a `TEXT` enum's members are values, and mechanisms 2 and 3 do not
+ * reach them". Built from `base`, the caller's own configured policy, so a deployment's mechanism-1
+ * relaxation still applies here too; only mechanisms 2 and 3 are unconditionally dropped.
+ */
+function textProfileScopePolicy(base: NamePolicy): NamePolicy {
+  return { ...base, identifierStatus: false, restrictionLevel: 'UNRESTRICTED' };
+}
+
 /** One entry's own §11.4 scope — its record field names or its enum members — or `undefined` for every other body shape, which declares no scope of its own. */
 function entryScope(
   def: TypeDefinition,
-): { readonly names: readonly string[]; readonly noun: string } | undefined {
+):
+  | { readonly names: readonly string[]; readonly noun: string; readonly textProfile: boolean }
+  | undefined {
   const body = def.body;
   if (!('kind' in body) || isDataBody(body)) {
     // A held TemplateBody is unresolved (no field/member list exists yet to check), and a Data
@@ -146,9 +170,13 @@ function entryScope(
     case 'record':
       // Group labels are already ordinary `record_field`s here (§5.11's own resolution rule:
       // "each member becomes an ordinary record_field"), so no separate group-label pass exists.
-      return { names: body.fields.map((field) => field.name), noun: 'field names' };
+      return {
+        names: body.fields.map((field) => field.name),
+        noun: 'field names',
+        textProfile: false,
+      };
     case 'enum':
-      return { names: body.members, noun: 'enum members' };
+      return { names: body.members, noun: 'enum members', textProfile: body.profile === 'TEXT' };
     default:
       return undefined;
   }

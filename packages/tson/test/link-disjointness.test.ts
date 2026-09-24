@@ -96,6 +96,111 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('rational', ns)).toBeUndefined();
     expect(discriminationClassOf('op', ns)).toBeUndefined();
   });
+
+  it('a TEXT-profile enum is always STRING, whatever its members spell (§7.4, #21)', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['ports', def({ kind: 'enum', members: ['80', '443'], profile: 'TEXT' })],
+      ['bools', def({ kind: 'enum', members: ['true', 'false'], profile: 'TEXT' })],
+    ]);
+    expect(discriminationClassOf('ports', ns)).toBe('STRING');
+    expect(discriminationClassOf('bools', ns)).toBe('STRING');
+  });
+
+  // ── §5.4's no-class list gains two straddling kinds (#17) ───────────────────────────────────
+
+  const approximateFloat = (allowNan: boolean, allowInfinity: boolean): TypeDefinition =>
+    def({
+      kind: 'float_type',
+      format: 'BINARY64',
+      allowNan,
+      allowInfinity,
+      allowSubnormal: false,
+      allowNegativeZero: false,
+    });
+
+  it('an approximate atom (float) still admitting NaN or infinity has no class -- its forms straddle classes like rational/complex', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['nanFloat', approximateFloat(true, false)],
+      ['infFloat', approximateFloat(false, true)],
+      ['bothFloat', approximateFloat(true, true)],
+    ]);
+    expect(discriminationClassOf('nanFloat', ns)).toBeUndefined();
+    expect(discriminationClassOf('infFloat', ns)).toBeUndefined();
+    expect(discriminationClassOf('bothFloat', ns)).toBeUndefined();
+  });
+
+  it('narrowing allow_nan and allow_infinity to false restores the class (NUMBER)', () => {
+    const ns = new Map<string, TypeDefinition>([['stableFloat', approximateFloat(false, false)]]);
+    expect(discriminationClassOf('stableFloat', ns)).toBe('NUMBER');
+  });
+
+  function withKeyType(keyName: string): TypeDefinition {
+    return def({
+      kind: 'map',
+      keyType: { name: keyName, arguments: [], annotations: [] },
+      valueType: { name: 'text', arguments: [], annotations: [] },
+      state: 'REQUIRED',
+    });
+  }
+
+  it('a map keyed by an atom-family instance or an enum is BRACE', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['text', text],
+      ['byText', withKeyType('text')],
+      ['status', def({ kind: 'enum', members: ['UP', 'DOWN'], profile: 'IDENTIFIER' })],
+      ['byEnum', withKeyType('status')],
+    ]);
+    expect(discriminationClassOf('byText', ns)).toBe('BRACE');
+    expect(discriminationClassOf('byEnum', ns)).toBe('BRACE');
+  });
+
+  it('a map keyed by a compound type (no single scalar token denotes it) has no class -- a record, an array, and a nested map alike', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['record', record],
+      ['byRecord', withKeyType('record')],
+      ['text', text],
+      ['inner', withKeyType('text')],
+      ['byMap', withKeyType('inner')],
+    ]);
+    expect(discriminationClassOf('byRecord', ns)).toBeUndefined();
+    expect(discriminationClassOf('byMap', ns)).toBeUndefined();
+  });
+
+  it("a map keyed by the kernel's `value` or `void` has no class -- excepted even though both are structurally `unit` atoms (§5.4)", () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['value', def({ kind: 'unit' })],
+      ['void', def({ kind: 'unit' })],
+      ['byValue', withKeyType('value')],
+      ['byVoid', withKeyType('void')],
+    ]);
+    expect(discriminationClassOf('byValue', ns)).toBeUndefined();
+    expect(discriminationClassOf('byVoid', ns)).toBeUndefined();
+  });
+
+  it('a map keyed by any other `unit`-kind instance is treated as scalar content, like `token` (§5.4 excepts only `value`/`void`)', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['token', def({ kind: 'unit' })],
+      ['byToken', withKeyType('token')],
+    ]);
+    expect(discriminationClassOf('byToken', ns)).toBe('BRACE');
+  });
+
+  it('a choice over an approximate float and text is not disjoint in text either -- the straddling kind needs a tag (§5.4, #17)', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['unstableFloat', approximateFloat(true, true)],
+      ['text', text],
+    ]);
+    expect(isChoiceDisjoint([{ name: 'unstableFloat' }, { name: 'text' }], ns)).toBe(false);
+  });
+
+  it('a choice over a compound-keyed map and text is not disjoint -- the same class-stability rule (#17)', () => {
+    const ns = new Map<string, TypeDefinition>([
+      ['record', record],
+      ['byRecord', withKeyType('record')],
+      ['text', text],
+    ]);
+    expect(isChoiceDisjoint([{ name: 'byRecord' }, { name: 'text' }], ns)).toBe(false);
+  });
 });
 
 describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {

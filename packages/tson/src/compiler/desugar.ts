@@ -87,6 +87,7 @@ import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import {
   ARGUMENTS,
+  DISCRIMINATORS,
   FIELDS,
   GROUPS,
   MEMBERS,
@@ -729,11 +730,14 @@ function choiceBinding(variants: readonly TypeRef[]): Binding {
 function recordBinding(record: RecordDef, parameters: readonly string[]): Binding {
   const fields: ScopedValue[] = [];
   const groups: ScopedValue[] = [];
+  const discriminators: string[] = [];
   const seen = new Set<string>();
   for (const entry of record.entries) {
     if (entry.kind === 'fieldDef') {
       requireFieldNameUnseen(entry.name, seen, 'this body declares it twice');
-      fields.push(recordFieldValue(entry, parameters));
+      const field = recordFieldValue(entry, parameters);
+      fields.push(field.value);
+      if (field.selector) discriminators.push(entry.name);
       continue;
     }
     const members: ScopedValue[] = [];
@@ -767,6 +771,17 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
   if (groups.length > 0) {
     binding.push({ name: GROUPS, value: scoped(arrayValue(groups)) });
   }
+  // §5.2's `=?` selector, lowered the same way `resolveEntry`'s own non-template path lowers it
+  // (`definitionResolver.ts`): the base's own statement of which fields its members pin, in
+  // declaration order -- a fresh record TEMPLATE reaches this constructor via `desugar.ts` rather
+  // than that path (§5.2's canonical-form rewrite, `structuralTypeDefPass`), so it has to be
+  // written here too, or a template's own selectors would never reach the held text at all.
+  if (discriminators.length > 0) {
+    binding.push({
+      name: DISCRIMINATORS,
+      value: scoped(arrayValue(discriminators.map((d) => scoped(tokenValue(d, 'unquoted'))))),
+    });
+  }
   return { head: RECORD, fields: binding, applicationSlots: new Map() };
 }
 
@@ -786,12 +801,18 @@ function requireFieldNameUnseen(name: string, seen: Set<string>, explanation: st
   seen.add(name);
 }
 
+/** {@link recordFieldValue}'s own result: the field's wire value, plus whether §5.2's `=?` marked it a selector (`recordBinding`'s own `discriminators` list, never carried on the field itself -- §8.1's `record_field` has no such member). */
+interface RecordFieldValue {
+  readonly value: ScopedValue;
+  readonly selector: boolean;
+}
+
 /**
- * One `record_field`, with `optional`/`voidable`/`role`/`value` written only where the author's
- * marks say something the constructor's own defaults do not (§5.2's `resolveFieldMarks` table,
- * `fieldModifiers.ts`).
+ * One `record_field`'s wire value, with `optional`/`voidable`/`role`/`value` written only where
+ * the author's marks say something the constructor's own defaults do not (§5.2's
+ * `resolveFieldMarks` table, `fieldModifiers.ts`).
  */
-function recordFieldValue(field: FieldDef, parameters: readonly string[]): ScopedValue {
+function recordFieldValue(field: FieldDef, parameters: readonly string[]): RecordFieldValue {
   if (field.type === undefined) {
     throw new TsonSchemaValidationError(
       `field '${field.name}' states only a modifier and no type-ref, but names no inherited ` +
@@ -823,7 +844,10 @@ function recordFieldValue(field: FieldDef, parameters: readonly string[]): Scope
   if (resolved.value !== undefined) {
     members.push({ name: VALUE, value: scoped(resolved.value) });
   }
-  return scoped(recordValue(members), field.annotations);
+  return {
+    value: scoped(recordValue(members), field.annotations),
+    selector: resolved.selector,
+  };
 }
 
 /**

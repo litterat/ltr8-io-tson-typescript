@@ -21,7 +21,7 @@ import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
 import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type { Top, TypeArgument, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
-import { typeKind, typeParameters } from '../src/schema/meta/typedef.js';
+import { typeParameters } from '../src/schema/meta/typedef.js';
 
 // ── Parsing helper ───────────────────────────────────────────────────────────────────────────
 
@@ -73,13 +73,28 @@ function testMetaReader(type: string, value: DataValue): Top {
         });
       }
     }
+    const extensionField = fieldOf(record, 'extension')?.coreValue;
+    const extension =
+      extensionField?.kind === 'token' && extensionField.text === 'ABSTRACT'
+        ? 'ABSTRACT'
+        : extensionField?.kind === 'token' && extensionField.text === 'FINAL'
+          ? 'FINAL'
+          : 'OPEN';
+    const discriminatorsField = fieldOf(record, 'discriminators')?.coreValue;
+    const discriminators: string[] = [];
+    if (discriminatorsField?.kind === 'array') {
+      for (const element of discriminatorsField.elements) {
+        const token = element.value.coreValue as TokenValue;
+        discriminators.push(token.text);
+      }
+    }
     return {
       kind: 'record',
       supertypes: [],
       fields,
       groups: [],
-      extension: 'OPEN',
-      discriminators: [],
+      extension,
+      discriminators,
     } satisfies RecordBody;
   }
   if (type === 'array') {
@@ -182,11 +197,6 @@ function entryOf(schema: Schema, name: string): TypeDefinition {
   const entry = schema.entries.get(name);
   if (entry === undefined) throw new Error(`resolved schema has no entry '${name}'`);
   return entry;
-}
-
-/** {@link typeKind} over `schema.entries` -- the local-only namespace, sufficient for these fixtures since none reaches the fourth branch's structure-namespace lookup. */
-function kindOf(schema: Schema, name: string) {
-  return typeKind(entryOf(schema, name), (n) => schema.entries.get(n));
 }
 
 function recordBodyOf(schema: Schema, name: string): RecordBody {
@@ -507,22 +517,24 @@ describe('a sugar form lifts to a synthetic entry, marked @synthetic at its key'
 // ── §5.10 template materialisation, wired through the real templates.ts ────────────────────────
 
 describe('template materialisation (§5.10), end to end through the real TemplateMaterialiser', () => {
-  it('closes text_box => box<text> to the instantiation entry a record template denotes', () => {
+  it('closes text_box => box<text> to the instantiation entry a record template denotes (§5.10, §8.2)', () => {
     const doc = document('box => <T> { v: T } text_box => box<text>');
     const schema = resolveSchema(doc, depsWithReader());
     // `box` itself stays a template (it is still open, with a parameter list).
     expect(typeParameters(entryOf(schema, 'box'))).toEqual(['T']);
-    // `text_box` is a REFERENCE onto whatever entry the application closed to.
-    const alias = entryOf(schema, 'text_box');
-    expect(kindOf(schema, 'text_box')).toBe('REFERENCE');
-    const target = (alias.body as { readonly target: TypeRef }).target;
-    const instantiation = entryOf(schema, target.name);
-    expect(instantiation.source).toEqual({
+    // §8.2: a declaration whose body is a fully-bound application IS the instantiation entry --
+    // `text_box` is the closed record itself, carrying the application in its own `source`, with
+    // no minted twin beside it and no `!reference` hop.
+    const text_box = entryOf(schema, 'text_box');
+    // Not `kindOf` (whose own note says it never needs the structure-namespace fourth branch in
+    // this file's fixtures): `text_box` is a genuine, closed `!record` body, not a `!reference`.
+    expect(isRecordBody(text_box.body)).toBe(true);
+    expect(text_box.source).toEqual({
       name: 'box',
       arguments: [{ kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } }],
       annotations: [],
     });
-    expect(fieldTypeOf(schema, target.name, 'v').name).toBe('text');
+    expect(fieldTypeOf(schema, 'text_box', 'v').name).toBe('text');
   });
 
   it('closes a composition supertype that is a closed generic application on demand, during resolution', () => {
@@ -535,6 +547,43 @@ describe('template materialisation (§5.10), end to end through the real Templat
 
   it('rejects head abstraction -- a type parameter applied to arguments (§5.10)', () => {
     const doc = document('bad => <T> { v: T<text> }');
+    expect(() => resolveSchema(doc, depsWithReader())).toThrow(TsonSchemaValidationError);
+  });
+
+  it('a record-bodied template is a family base, ABSTRACT and derived, with no discriminators of its own to erase (§5.10, §8.1)', () => {
+    const doc = document('box => <T> { v: T }');
+    const schema = resolveSchema(doc, depsWithReader());
+    const box = entryOf(schema, 'box');
+    expect(typeParameters(box)).toEqual(['T']);
+    // Never OPEN and never FINAL: nothing is ever read against the template itself (§5.10).
+    expect((box.body as { readonly extension?: string }).extension).toBe('ABSTRACT');
+    expect((box.body as { readonly discriminators?: readonly string[] }).discriminators).toEqual(
+      [],
+    );
+  });
+
+  it("an author-written 'abstract' on a record template travels inside the held text to every instantiation (§5.10)", () => {
+    const doc = document('outcome => abstract <T> { code: T } outcome_of => outcome<text>');
+    const schema = resolveSchema(doc, depsWithReader());
+    // The template's own entry states the derived fact regardless of the author's own word.
+    expect((entryOf(schema, 'outcome').body as { readonly extension?: string }).extension).toBe(
+      'ABSTRACT',
+    );
+    // §8.2: `outcome_of` is the instantiation entry itself (no minted twin) -- and the `abstract`
+    // the author wrote on `outcome` is baked into the held text, so this *closed* record's own
+    // `extension` states it too (the "instantiation's own... stated, by `abstract` inside the held
+    // text" level, distinct from the template's own derived fact just above).
+    const outcomeOf = entryOf(schema, 'outcome_of');
+    expect(isRecordBody(outcomeOf.body) && outcomeOf.body.extension).toBe('ABSTRACT');
+  });
+
+  it("'final' on a template is refused -- a template's applications are subtypes by construction (§5.10)", () => {
+    const doc = document('sneaky => final <T> { v: T }');
+    expect(() => resolveSchema(doc, depsWithReader())).toThrow(TsonSchemaValidationError);
+  });
+
+  it('a selector whose declared type mentions a type parameter is refused (§5.10)', () => {
+    const doc = document('bad => <T> { sel: T =? }');
     expect(() => resolveSchema(doc, depsWithReader())).toThrow(TsonSchemaValidationError);
   });
 });
@@ -728,18 +777,70 @@ describe('§5.10 parameter kinds, end to end through the real schemaResolver', (
       const doc = document('e => <M> !enum { members: [a b M] } used => e<c>');
       const schema = resolveSchema(doc, richDeps());
       expect(typeParameters(entryOf(schema, 'e'))).toEqual(['M']);
+      // §8.2, §8.3: `used => e<c>` names a fully-bound application, so `used` IS the instantiation
+      // entry itself -- `source` the canonical application, the substituted binding record its own
+      // body, with nothing minted beside it and no `!reference` hop.
       const used = entryOf(schema, 'used');
-      expect(kindOf(schema, 'used')).toBe('REFERENCE');
-      const target = (used.body as { readonly target: TypeRef }).target;
-      const instantiation = entryOf(schema, target.name);
-      expect(instantiation.source).toEqual({
+      expect(used.source).toEqual({
         name: 'e',
         arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
         annotations: [],
       });
-      const formName = (instantiation.body as { readonly target: TypeRef }).target.name;
-      const form = entryOf(schema, formName);
-      expect((form.body as EnumBody).members).toEqual(['a', 'b', 'c']);
+      expect((used.body as EnumBody).members).toEqual(['a', 'b', 'c']);
+    },
+  );
+});
+
+// ── §5.8's last sentence: a fully-bound application at a composition operand ────────────────
+
+describe('§5.8 composition operand that is a fully-bound application, end to end', () => {
+  it(
+    '\'dog => pet<"dog", text> & { breed: text }\' subsumes the application where it stands -- ' +
+      'one IS-A edge to the template itself, and no instantiation entry is minted for it',
+    () => {
+      const doc = document(
+        'pet => <N, T> { type: text = N  pet: T } dog => pet<"dog", text> & { breed: text }',
+      );
+      const schema = resolveSchema(doc, richDeps());
+      const dog = entryOf(schema, 'dog');
+      // One IS-A edge, to the template `pet` itself -- never to a minted `pet_dog_text_...`.
+      expect(dog.supertypes).toEqual(['pet']);
+      const dogBody = recordBodyOf(schema, 'dog');
+      // `record.supertypes` names `pet` bare too: the hand-written equivalent this sentence
+      // states (`dog => pet & { type?: = "dog"  pet: text  breed: text }`) never carries the
+      // application's own arguments forward, because there is no entry for them to belong to.
+      expect(dogBody.supertypes).toEqual([{ name: 'pet', arguments: [], annotations: [] }]);
+      // The application's own arguments are absorbed as the member's own contribution.
+      expect(dogBody.fields.map((f) => f.name)).toEqual(['type', 'pet', 'breed']);
+      expect(fieldTypeOf(schema, 'dog', 'type').name).toBe('text');
+      expect(fieldTypeOf(schema, 'dog', 'pet').name).toBe('text');
+      // No instantiation entry was minted for `pet<"dog", text>` -- `pet` and `dog` are the whole
+      // namespace this schema produces.
+      expect([...schema.entries.keys()]).toEqual(['pet', 'dog']);
+    },
+  );
+
+  it(
+    'a removal drops an open application from the lineage a template keeps for names ' +
+      '(§5.9 rule 10): `ok => <T> result<T> - { extra }` composes no IS-A edge to `result`',
+    () => {
+      const doc = document(
+        'result => <T> { payload: T  extra: text } ok => <T> result<T> - { extra } ' +
+          'used => ok<text>',
+      );
+      const schema = resolveSchema(doc, richDeps());
+      // §5.9: subtraction breaks IS-A -- `ok` itself (still open) carries no edge to `result`.
+      expect(entryOf(schema, 'ok').supertypes).toEqual([]);
+      // `ok<text>`'s own instantiation carries no edge to `result` or to any instantiation of it
+      // -- only #13's own self-edge to its family base, `ok` -- and its own closed
+      // `record.supertypes` is empty too: rule 10's dropped open application never survived
+      // substitution to close into a live edge one pass later.
+      const used = entryOf(schema, 'used');
+      expect(used.supertypes).toEqual(['ok']);
+      const usedBody = recordBodyOf(schema, 'used');
+      expect(usedBody.supertypes).toEqual([]);
+      expect(usedBody.fields.map((f) => f.name)).toEqual(['payload']);
+      expect([...schema.entries.keys()].some((k) => k.startsWith('result_'))).toBe(false);
     },
   );
 });
@@ -748,21 +849,26 @@ describe('§5.10 parameter kinds, end to end through the real schemaResolver', (
 
 describe('§8.2 synthetic merge (SyntheticMerge), end to end through the real schemaResolver', () => {
   it(
-    "'[box<text>]' written directly and 'wrap<box<text>>' closed through a template merge onto " +
-      'one array entry, not two',
+    "'[box<text>]' written directly and the same sugar form closing inside a materialised " +
+      'template merge onto one array entry, not two',
     () => {
+      // §8.2's own two channels: `holder.items` lifts `[box<text>]` eagerly, at desugar time;
+      // `carrier`'s own field `boxed: [T]` lifts the same bracket sugar to an *open* synthetic
+      // while `carrier` is still a template, which closes only once `carrier<box<text>>` applies,
+      // at materialisation. (This is distinct from a template *application* itself, which is
+      // always its own instantiation entry, declared or not -- covered by the '§5.10 parameter
+      // kinds' describe block above; the merge here is between two SUGAR lifts of `[box<text>]`,
+      // one direct and one arising from substitution, not between an application and a sugar
+      // form.) Both resolve to the identical array form and MUST dedupe onto one entry.
       const doc = document(
-        'box => <T> { v: T } holder => { items: [box<text>] } wrap => <T> [T] used => wrap<box<text>>',
+        'box => <T> { v: T } holder => { items: [box<text>] } ' +
+          'carrier => <T> { boxed: [T] } used => carrier<box<text>>',
       );
       const schema = resolveSchema(doc, richDeps());
-      // The eagerly-lifted synthetic `[box<text>]` was named from the desugarer.
       const eagerName = fieldTypeOf(schema, 'holder', 'items').name;
-      // `used => wrap<box<text>>` closes to a REFERENCE instantiation naming the same array form.
-      const usedTarget = (entryOf(schema, 'used').body as { readonly target: TypeRef }).target;
-      const instantiation = entryOf(schema, usedTarget.name);
-      const closedFormRef = (instantiation.body as { readonly target: TypeRef }).target;
+      const materialisedName = fieldTypeOf(schema, 'used', 'boxed').name;
       // One array entry survives the merge, referenced from both places -- not two.
-      expect(closedFormRef.name).toBe(eagerName);
+      expect(materialisedName).toBe(eagerName);
       expect(schema.entries.has(eagerName)).toBe(true);
       const form = entryOf(schema, eagerName);
       if (!isArrayBody(form.body)) throw new Error('unreachable');

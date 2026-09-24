@@ -1101,13 +1101,17 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
     optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', bigintBinding),
     optional<TextType, 'length'>(2, 'length', 'length', bigintBinding),
     optional<TextType, 'pattern'>(3, 'pattern', 'pattern', textBinding),
+    // `text_member_set => !set_type { element_type: text }` (§7.4, #22): a value set on the text
+    // tier itself, reached the same way `integer_type.members`/`decimal_type.members` are.
+    optional<TextType, 'members'>(4, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [minLength, maxLength, length, pattern] = slots as [
+    const [minLength, maxLength, length, pattern, members] = slots as [
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'text_type',
@@ -1115,6 +1119,7 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
       ...opt('maxLength', maxLength),
       ...opt('length', length),
       ...opt('pattern', pattern),
+      ...opt('members', members),
     };
   },
 });
@@ -1147,14 +1152,16 @@ const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
     optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
     optional<RegexType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<RegexType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
+    optional<RegexType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern] = slots as [
+    const [spec, minLength, maxLength, length, pattern, members] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'regex_type',
@@ -1163,6 +1170,7 @@ const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
       ...opt('maxLength', maxLength),
       ...opt('length', length),
       ...opt('pattern', pattern),
+      ...opt('members', members),
     };
   },
 });
@@ -1175,15 +1183,17 @@ const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
     optional<UriType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<UriType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
     optional<UriType, 'scheme'>(5, 'scheme', 'scheme', textBinding),
+    optional<UriType, 'members'>(6, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern, scheme] = slots as [
+    const [spec, minLength, maxLength, length, pattern, scheme, members] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'uri_type',
@@ -1193,6 +1203,7 @@ const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
       ...opt('length', length),
       ...opt('pattern', pattern),
       ...opt('scheme', scheme),
+      ...opt('members', members),
     };
   },
 });
@@ -1204,14 +1215,16 @@ const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
     optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
     optional<EmailType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<EmailType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
+    optional<EmailType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern] = slots as [
+    const [spec, minLength, maxLength, length, pattern, members] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'email_type',
@@ -1220,6 +1233,7 @@ const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
       ...opt('maxLength', maxLength),
       ...opt('length', length),
       ...opt('pattern', pattern),
+      ...opt('members', members),
     };
   },
 });

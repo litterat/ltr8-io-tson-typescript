@@ -58,6 +58,7 @@ import {
   checkLower,
   checkMemberSubset,
   checkOnlyWithdraws,
+  checkSettableOnce,
   checkSubset,
   checkSuperset,
   checkUpper,
@@ -65,6 +66,9 @@ import {
   tighterLower,
   tighterUpper,
 } from './atomNarrowing.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
+import { toNfc } from '../unicode/nfc.js';
+import { parseRegex } from '../regex/index.js';
 import {
   checkNonNegative,
   checkOrdered,
@@ -487,6 +491,8 @@ interface TextConstraints {
   readonly minLength?: bigint;
   readonly maxLength?: bigint;
   readonly length?: bigint;
+  readonly pattern?: string;
+  readonly members?: readonly string[];
 }
 
 function effectiveMinLength(t: TextConstraints): bigint | undefined {
@@ -497,17 +503,142 @@ function effectiveMaxLength(t: TextConstraints): bigint | undefined {
   return t.maxLength ?? t.length;
 }
 
-/** `text_type`'s own narrowing rule — reused verbatim by `regex_type`/`uri_type`/`email_type`, which compose `text_type`'s length facets flat (§5.7). */
+/**
+ * Set equality by NFC-compared value, for {@link checkSettableOnce}'s own `members` call — a
+ * settable-once facet compares what the list admits, not its written order: §7.5 gives set
+ * element order no meaning, `text_member_set` (§7.4) is `set_type`'s unordered, unique refinement
+ * of `array`, and members compare as text, NFC (§7.4), matching identifier equality's own rule
+ * (§7.7) and {@link textUniqueMembers}'s own comparison.
+ */
+function sameMembers(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const normalized = new Set(a.map(toNfc));
+  return b.every((value) => normalized.has(toNfc(value)));
+}
+
+/**
+ * `text_type`'s own narrowing rule — reused verbatim by `regex_type`/`uri_type`/`email_type`,
+ * which compose `text_type`'s length facets flat (§5.7).
+ *
+ * `pattern` and `members` are each **settable once** (§5.7's facet-kind table, #22): a
+ * refinement may set either where the source left it unset, restate the source's own verbatim, or
+ * leave it alone, but never change it. `pattern`'s reason is that the narrowing question is
+ * undecided in general (regular-language containment); `members`' reason is that the pair shares
+ * one logical position — "what does this text admit" — and giving them two rules would make the
+ * relation an artifact of which spelling an author reached for, even though `members` alone is
+ * decidably narrowable (a member set could otherwise shrink like the numeric tiers' own).
+ */
 function textNarrows(source: TextConstraints, refined: TextConstraints): string[] {
   const out: string[] = [];
   checkAtLeast(out, 'min_length', effectiveMinLength(source), refined.minLength, compareBigint);
   checkAtLeast(out, 'length', effectiveMinLength(source), refined.length, compareBigint);
   checkAtMost(out, 'max_length', effectiveMaxLength(source), refined.maxLength, compareBigint);
   checkAtMost(out, 'length', effectiveMaxLength(source), refined.length, compareBigint);
+  checkSettableOnce(out, 'pattern', source.pattern, refined.pattern);
+  checkSettableOnce(
+    out,
+    'members',
+    source.members,
+    refined.members,
+    sameMembers,
+    'members and pattern share one position and pattern cannot be narrowed',
+  );
   return out;
 }
 
-/** `pattern` is left unchecked here, the same undecidable-facet gap the Java original states: deciding a pattern narrows another needs regular-language containment, which this module has no dependency (`tson-regex`) to reach for. */
+/**
+ * `text_member_set`'s own non-emptiness and uniqueness, folded in here the same way
+ * {@link integerMemberCoherence} folds `integer_member_set`'s: `text_member_set => !set_type {
+ * element_type: text }` (§7.4) carries `min_items ~ 1` and a pinned `unique_items: true`, and
+ * nothing below the schema's own field-vocabulary binding re-checks a `set_type` instance's shape
+ * against its own facets, so this atom family states the obligation for itself, as every member
+ * set family in this module does. **Members compare as text, NFC** (§7.4, matching identifier
+ * equality's own rule, §7.7), so two members that are one NFC-normalised string are one member
+ * stated twice, not two.
+ */
+function textUniqueMembers(members: readonly string[]): string[] {
+  const out: string[] = [];
+  if (members.length === 0) {
+    return ["'members' is empty, so the body admits no value -- a member set states at least one"];
+  }
+  const seen = new Set<string>();
+  for (const member of members) {
+    const normalized = toNfc(member);
+    if (seen.has(normalized)) {
+      out.push(
+        `members states '${member}' more than once -- members are compared as text, NFC, so two ` +
+          'spellings of one string are one member',
+      );
+    }
+    seen.add(normalized);
+  }
+  return out;
+}
+
+/**
+ * §7.4's uniform members rule, over the text tier: every member of `members` MUST satisfy the
+ * body's other facets, `pattern` included — one rule, checked once here and reused by
+ * `regex_type`/`uri_type`/`email_type` alike. Lengths are counted in Unicode code points, matching
+ * the kernel's own `text_type.members` doc ("Lengths count code points") — `Array.from` iterates a
+ * string by code point, not by UTF-16 code unit. `pattern` arrives already parsed (`undefined`
+ * when unset, or when it failed to parse and {@link textCoherence} has already reported that) so
+ * this function never re-parses it and never reports a pattern-syntax problem twice.
+ *
+ * **`uri_type`/`email_type`'s own family-specific facets (`scheme`, and email's own address
+ * grammar) are not asked of a member here, nor is a member parsed as a URI or an email address**
+ * — unlike `regex_type`, whose own member obligation ({@link regexMemberSyntaxCoherence}) this
+ * function's shared caller applies alongside it. `text_type`'s length/pattern facets are the only
+ * ones this shared function owns; a `uri_type` member satisfying `scheme` or actually being a
+ * well-formed URI is a fact `uri_type`'s own facets state and this function does not read. The
+ * reference implementation's `UriType` carries the identical gap (its `coherenceCheck` delegates
+ * here in exactly the same way) — worth reporting upstream as a §7.4 conformance gap rather than
+ * left silent, not something this port closes alone against its own reference.
+ */
+function textMemberCoherence(
+  t: TextConstraints,
+  pattern: ReturnType<typeof parseRegex> | undefined,
+): string[] {
+  const out: string[] = [];
+  if (t.members === undefined) return out;
+  out.push(...textUniqueMembers(t.members));
+  const fixedLength = t.length;
+  const minLength = effectiveMinLength(t);
+  const maxLength = effectiveMaxLength(t);
+  for (const member of t.members) {
+    const codePoints = BigInt(Array.from(member).length);
+    if (fixedLength !== undefined && codePoints !== fixedLength) {
+      out.push(
+        `members includes '${member}', ${codePoints.toString()} characters, and length is ${fixedLength.toString()}`,
+      );
+      continue;
+    }
+    if (minLength !== undefined && codePoints < minLength) {
+      out.push(
+        `members includes '${member}', ${codePoints.toString()} characters, under min_length ${minLength.toString()}`,
+      );
+      continue;
+    }
+    if (maxLength !== undefined && codePoints > maxLength) {
+      out.push(
+        `members includes '${member}', ${codePoints.toString()} characters, over max_length ${maxLength.toString()}`,
+      );
+      continue;
+    }
+    if (pattern !== undefined && !pattern.matches(member)) {
+      out.push(`members includes '${member}', which does not match pattern ${t.pattern ?? ''}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * §5.7's length-family coherence, shared by `text_type`, `regex_type`, `uri_type` and
+ * `email_type` alike (§9): the floor may not exceed the ceiling, no count may be negative, and
+ * `length` — pinning both ends at once — must itself fall inside whatever range the other two
+ * leave. `pattern` is parsed here, once, against RFC 9485's I-Regexp grammar (`regex/`): a
+ * pattern that fails to parse is itself a coherence violation, naming why, rather than a silent
+ * pass that leaves {@link textMemberCoherence}'s own member-vs-pattern rule unable to run.
+ */
 function textCoherence(t: TextConstraints): string[] {
   const out: string[] = [];
   checkNonNegative(out, 'min_length', t.minLength);
@@ -516,6 +647,39 @@ function textCoherence(t: TextConstraints): string[] {
   checkOrdered(out, 'min_length', t.minLength, 'max_length', t.maxLength, compareBigint);
   checkOrdered(out, 'min_length', t.minLength, 'length', t.length, compareBigint);
   checkOrdered(out, 'length', t.length, 'max_length', t.maxLength, compareBigint);
+  let pattern: ReturnType<typeof parseRegex> | undefined;
+  if (t.pattern !== undefined) {
+    try {
+      pattern = parseRegex(t.pattern);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      out.push(`pattern '${t.pattern}' is not a valid I-Regexp pattern (RFC 9485): ${why}`);
+    }
+  }
+  out.push(...textMemberCoherence(t, pattern));
+  return out;
+}
+
+/**
+ * `regex_type`'s own family-specific member obligation, beyond {@link textCoherence}'s shared
+ * length/pattern rule: a `regex_type` value's own parsing contract is "a valid I-Regexp pattern"
+ * (§5.7, RFC 9485), and §7.4's "the family's own parsing contract still applies" to a member set
+ * reaches that too — a member that does not itself parse as I-Regexp is not a value `regex_type`
+ * could ever read, member set or not.
+ */
+function regexMemberSyntaxCoherence(members: readonly string[] | undefined): string[] {
+  if (members === undefined) return [];
+  const out: string[] = [];
+  for (const member of members) {
+    try {
+      parseRegex(member);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      out.push(
+        `members includes '${member}', which is not a valid I-Regexp pattern (RFC 9485): ${why}`,
+      );
+    }
+  }
   return out;
 }
 
@@ -848,19 +1012,53 @@ function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: bigint): string[] {
 // ── enum ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * An enum states at least one member (§9). `enum.members` is typed `enum_set`, whose `min_items`
- * is `1`, so `!enum []` describes no value at all and is refused at schema load rather than
- * left to fail against every document.
+ * An enum states at least one member, each stated once (§9). `enum.members` is typed `enum_set`
+ * (`!set_type { element_type: text }`), whose `min_items` is `1` and whose `unique_items` is
+ * pinned `true`, so `!enum []` and `!enum [OPEN OPEN]` both describe a body contradicting its own
+ * declared shape and are refused at schema load rather than left to fail against every document —
+ * {@link textUniqueMembers} states the same obligation for `text_member_set` and is reused here
+ * rather than restated, since the two sets share one contract.
+ *
+ * **Under `IDENTIFIER` (the default), every member MUST match [TSON-DATA] §7.7's identifier
+ * grammar** (§7.4, #21) — `enum_set`'s element type is `text`, not `identifier`, so nothing below
+ * this check makes a member a name; a member that is not one is the body contradicting its own
+ * declaration, in the family of coherence errors §7.2 makes a schema-load concern rather than data
+ * validation. Under `TEXT` a member is any text and this rule does not apply.
  */
 function enumCoherence(t: EnumBody): string[] {
-  return t.members.length === 0
-    ? ["'members' is empty, so the enum admits no value -- an enum states at least one member"]
-    : [];
+  const out = [...textUniqueMembers(t.members)];
+  if (t.profile !== 'IDENTIFIER') return out;
+  for (const member of t.members) {
+    if (!isIdentifierText(member)) {
+      out.push(
+        `member '${member}' is not a well-formed identifier ([TSON-DATA] §7.7) -- an enum whose ` +
+          "members are not names declares 'profile: TEXT'",
+      );
+    }
+  }
+  return out;
 }
 
+/**
+ * An enum's value set is written out in full, so narrowing is plain subset containment (`members`
+ * may drop members but never introduce one the source does not admit). `profile` is §5.7's
+ * settable-once facet-kind table's own third example, over its one-step chain `IDENTIFIER` inside
+ * `TEXT`: `IDENTIFIER` is the narrower position, so restating either profile verbatim tightens
+ * vacuously and narrowing from `TEXT` to `IDENTIFIER` sets what the source left at its wider
+ * default, while the reverse would grant back latitude a refinement may only withdraw -- the same
+ * pair of outcomes {@link checkSettableOnce}'s generic equality check gives a facet with a true
+ * "unset" state, reached here by comparing along the chain's one order instead, since `profile`
+ * always carries a value and has no unset state of its own to leave.
+ */
 function enumNarrows(source: EnumBody, refined: EnumBody): string[] {
   const out: string[] = [];
   checkSubset(out, 'members', source.members, refined.members);
+  if (source.profile === 'IDENTIFIER' && refined.profile === 'TEXT') {
+    out.push(
+      "profile TEXT widens the source's own IDENTIFIER -- a refinement may withdraw the latitude " +
+        'of TEXT but never grant it',
+    );
+  }
   return out;
 }
 
@@ -1032,7 +1230,7 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'bytes_type':
       return bytesCoherence(atom);
     case 'regex_type':
-      return textCoherence(atom);
+      return [...textCoherence(atom), ...regexMemberSyntaxCoherence(atom.members)];
     case 'uri_type':
       return textCoherence(atom);
     case 'email_type':

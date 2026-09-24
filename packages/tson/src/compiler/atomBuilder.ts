@@ -52,7 +52,7 @@ import { createFloatParser } from '../atom/numeric/float.js';
 import { createRationalParser } from '../atom/numeric/rational.js';
 import { createComplexParser } from '../atom/numeric/complex.js';
 import { createBinaryParser } from '../atom/numeric/binary.js';
-import { createTextParser } from '../atom/text/text.js';
+import { createMembershipCheck, createTextParser } from '../atom/text/text.js';
 import { createUuidParser } from '../atom/network/uuid.js';
 import { createUriParser } from '../atom/network/uri.js';
 import { createEmailParser } from '../atom/network/email.js';
@@ -187,13 +187,40 @@ function buildUnitReader(name: string): TypeReader<Value> {
  * `createTextParser`'s own signature to accept either discriminant.
  */
 function asTextConstraints(atom: RegexType): TextType {
-  const { minLength, maxLength, length, pattern } = atom;
+  const { minLength, maxLength, length, pattern, members } = atom;
   return {
     kind: 'text_type',
     ...(minLength === undefined ? {} : { minLength }),
     ...(maxLength === undefined ? {} : { maxLength }),
     ...(length === undefined ? {} : { length }),
     ...(pattern === undefined ? {} : { pattern }),
+    ...(members === undefined ? {} : { members }),
+  };
+}
+
+/**
+ * Wraps `atomType` with `text_type.members`' own read-time enforcement (§7.4, §5.7, #22), for the
+ * two text-shaped families with no `createTextParser`-backed reader of their own —
+ * `uri_type`/`email_type` each compose `text_type`'s `members` facet (§9) but keep an independent
+ * parser (`atom/network/{uri,email}.ts`), whose host value is the token's own text unchanged, so a
+ * post-read membership check on the returned string is exactly a pre-read check on the token would
+ * have been. `text_type`/`regex_type` need no such wrapping: both dispatch through
+ * `createTextParser`, which enforces `members` itself (`atom/text/text.ts`).
+ */
+function withMembers(
+  atomType: AtomType<string>,
+  typeRef: string,
+  members: readonly string[] | undefined,
+): AtomType<string> {
+  const checkMembership = createMembershipCheck(typeRef, members);
+  if (checkMembership === undefined) return atomType;
+  return {
+    read(token: AtomToken): string {
+      const value = atomType.read(token);
+      checkMembership(value);
+      return value;
+    },
+    write: (value: string): string => atomType.write(value),
   };
 }
 
@@ -216,17 +243,16 @@ export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
     case 'text_type':
       return wrap(createTextParser(name, atom), name);
     case 'uri_type':
-      return wrap(createUriParser(name, atom), name);
+      return wrap(withMembers(createUriParser(name, atom), name, atom.members), name);
     case 'regex_type':
       // `regex_type => ~text_type & atom_specification & { spec: = ... }` (§5.7): every field
-      // `createTextParser` reads (`minLength`/`maxLength`/`length`/`pattern`) is one `regex_type`
-      // carries too, so its own length/pattern contract is `text_type`'s, unmodified -- reusing
-      // it here rather than authoring a second copy of the same four checks. `pattern`
-      // enforcement is deferred exactly as `text_type`'s own instance already defers it (that
-      // module's own documented gap, not a new one).
+      // `createTextParser` reads (`minLength`/`maxLength`/`length`/`pattern`/`members`) is one
+      // `regex_type` carries too, so its own length/pattern/members contract is `text_type`'s,
+      // unmodified -- reusing it here rather than authoring a second copy of the same checks.
+      // `atom/text/text.ts`'s own TSDoc states what `createTextParser` enforces at read time.
       return wrap(createTextParser(name, asTextConstraints(atom)), name);
     case 'email_type':
-      return wrap(createEmailParser(name, atom), name);
+      return wrap(withMembers(createEmailParser(name, atom), name, atom.members), name);
     case 'decimal_type':
       return wrap(createDecimalParser(name, atom), name);
     case 'float_type':

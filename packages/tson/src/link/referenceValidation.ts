@@ -53,7 +53,7 @@ import type {
   TypeKind,
   TypeRef,
 } from '../schema/meta/typedef.js';
-import { typeKind, typeParameters } from '../schema/meta/typedef.js';
+import { isTemplateBody, typeKind, typeParameters } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -567,6 +567,13 @@ function checkArity(
     );
   }
   if (supplied === 0) {
+    // §5.10: a record-bodied template that is a family base is the one template shape that IS a
+    // type without being applied -- its own `TemplateBody.extension` is stamped 'ABSTRACT' by
+    // `deriveTemplateFamilyFacts` exactly then, never for a reference, container,
+    // constructor-application or atom template, which stay refused below.
+    if (isTemplateBody(referenced.body) && referenced.body.extension !== undefined) {
+      return;
+    }
     throw new TsonSchemaValidationError(
       `${context}: '${ref.name}' is a template taking ${String(declared)} type argument` +
         `${declared === 1 ? '' : 's'} [${referencedParameters.join(', ')}], and a template is ` +

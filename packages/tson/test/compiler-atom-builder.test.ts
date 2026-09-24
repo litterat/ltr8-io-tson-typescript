@@ -53,6 +53,83 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
     runSync(reader.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });
+
+  it('enforces text_type.members at read: a value outside the set is ATOM_CONSTRAINT_VIOLATION (§7.4, §5.7, #22)', () => {
+    const atom: Atom = { kind: 'text_type', members: ['SE', 'NO', 'DK'] };
+    const reader = buildAtomReader('nordic', atom);
+    expect(runSync(reader.read(bodyContextOver('SE')))).toEqual({
+      kind: 'atom',
+      value: 'SE',
+      typeRef: 'nordic',
+      annotations: { values: [] },
+    });
+    const { ctx, diagnostics } = collectingContextOver('FI');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+
+  it("counts length in Unicode code points, not UTF-16 code units, matching the kernel's own text_type doc (§5.7, §7.4)", () => {
+    const atom: Atom = { kind: 'text_type', length: 1n, members: ['😀'] };
+    const reader = buildAtomReader('emoji', atom);
+    // U+1F600 is one code point and a UTF-16 surrogate pair (`.length` is 2); a reader that
+    // counted UTF-16 units would refuse the type's own only declared member.
+    expect(runSync(reader.read(bodyContextOver('"😀"')))).toEqual({
+      kind: 'atom',
+      value: '😀',
+      typeRef: 'emoji',
+      annotations: { values: [] },
+    });
+  });
+
+  it("reuses text_type's own members enforcement for regex_type, through the same asTextConstraints composition as its length facets", () => {
+    const atom: Atom = {
+      kind: 'regex_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc9485',
+      members: ['[a-z]+', '[0-9]+'],
+    };
+    const reader = buildAtomReader('pattern_member', atom);
+    const { ctx, diagnostics } = collectingContextOver('"[A-Z]+"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+});
+
+describe('buildAtomReader -- uri_type / email_type members (§7.4, §5.7, #22)', () => {
+  it('enforces uri_type.members even though it has no createTextParser-backed reader of its own', () => {
+    const atom: Atom = {
+      kind: 'uri_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc3986',
+      members: ['https://a.example/', 'https://b.example/'],
+    };
+    const reader = buildAtomReader('allowed_uri', atom);
+    expect(runSync(reader.read(bodyContextOver('"https://a.example/"')))).toEqual({
+      kind: 'atom',
+      value: 'https://a.example/',
+      typeRef: 'allowed_uri',
+      annotations: { values: [] },
+    });
+    const { ctx, diagnostics } = collectingContextOver('"https://c.example/"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+
+  it('enforces email_type.members the same way', () => {
+    const atom: Atom = {
+      kind: 'email_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc5322',
+      members: ['a@example.com'],
+    };
+    const reader = buildAtomReader('allowed_email', atom);
+    expect(runSync(reader.read(bodyContextOver('"a@example.com"')))).toEqual({
+      kind: 'atom',
+      value: 'a@example.com',
+      typeRef: 'allowed_email',
+      annotations: { values: [] },
+    });
+    const { ctx, diagnostics } = collectingContextOver('"b@example.com"');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
 });
 
 describe('buildAtomReader -- enum (§5.4, §9)', () => {

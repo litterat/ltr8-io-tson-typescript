@@ -488,14 +488,16 @@ describe('round trip: parse, write, parse, compare', () => {
 // ── §7.2 subsumption: a value's own type-ref must be admitted by the position it stands in ────
 
 describe("§7.2's subsumption rule: a data type-ref at a typed position is verified, not skipped", () => {
-  it('reports UNKNOWN_TYPE_REF for a wrong type-ref, and for one naming no type at all', () => {
+  it('reports TYPE_MISMATCH for a wrong type-ref naming a real entry, and UNKNOWN_TYPE_REF for one naming no type at all', () => {
     // §7.2: "At a position whose declared type is `T`, a value annotated `!S` is valid if and only
     // if [...] `S` is `T` or `T` appears in `S`'s transitive supertypes." `reading` has no
     // subtypes in this schema, so both `!site` (a real entry, but not one `reading` admits) and
     // `!nonsense` (naming nothing at all) are refused with the "has no subtypes" wording
-    // (`compiler/subsumption.ts`).
+    // (`compiler/subsumption.ts`) -- but `!site` denotes a real, flattened entry, so its own type
+    // is known and simply wrong here (`TYPE_MISMATCH`), while `!nonsense` denotes nothing at all
+    // (`UNKNOWN_TYPE_REF`), §7.2.
     const wrongType = validate(compiled, 'reading', bytes(CONFORMING.replace('{', '!site {')));
-    expect(wrongType.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(wrongType.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
     expect(wrongType.diagnostics[0]?.message).toContain(
       "'!site' is not valid at a 'reading' position",
     );

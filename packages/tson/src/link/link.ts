@@ -29,6 +29,12 @@
  * satisfy) lives in {@link checkEveryEntryIsInhabited} (`typeInhabitance.ts`), run here over
  * every local entry after reference validation and before `@disjoint` checking, matching the
  * reference implementation's own placement in `TsonSchemaLinker`.
+ *
+ * **§5.2's discriminated-family coherence** (a selector's declared type, and the family's pin
+ * distinctness) lives in {@link checkRecordExtension} (`recordExtension.ts`), run here right
+ * after inhabitance for the same reason: it needs `subtypes` populated and every reference
+ * already validated, and — unlike inhabitance — it is re-judged whenever any part of a family is
+ * local, which is why it takes `localNames` too.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
@@ -41,6 +47,7 @@ import { checkDisjointAssertions, computeDisjointness } from './disjointness.js'
 import { checkNameHygiene } from './nameHygiene.js';
 import { validateReferences } from './referenceValidation.js';
 import { checkEveryEntryIsInhabited } from './typeInhabitance.js';
+import { checkRecordExtension } from './recordExtension.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -178,6 +185,10 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkEveryEntryIsInhabited(merged, localNames, {
+    schemaId: schema.id,
+    ...(receiver === undefined ? {} : { receiver }),
+  });
+  checkRecordExtension(merged, localNames, {
     schemaId: schema.id,
     ...(receiver === undefined ? {} : { receiver }),
   });

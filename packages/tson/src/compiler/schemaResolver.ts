@@ -308,6 +308,8 @@ export function resolveSchema(
     metaDefinitions: deps.metaDefinitions,
     namespaceDefinitions: namespaceGetter,
     applicationCloser: (application) => materialiser.closeApplication(application),
+    declaredApplicationCloser: (declaredName, application) =>
+      materialiser.closeApplicationAs(declaredName, application),
     ...(deps.annotationValueReader === undefined
       ? {}
       : { annotationValueReader: deps.annotationValueReader }),

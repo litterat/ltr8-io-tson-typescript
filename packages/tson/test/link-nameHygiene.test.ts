@@ -125,6 +125,10 @@ function enumOf(members: readonly string[]): Top {
   return { kind: 'enum', members, profile: 'IDENTIFIER' };
 }
 
+function textEnumOf(members: readonly string[]): Top {
+  return { kind: 'enum', members, profile: 'TEXT' };
+}
+
 function choiceOf(variants: readonly TypeRef[]): Top {
   return { kind: 'choice', variants };
 }
@@ -221,6 +225,31 @@ describe('checkNameHygiene: the members of one enum', () => {
     const refused = refusalOf(() => linkSchema(s));
     expect(refused.message).toContain('enum members');
   });
+
+  // ── §7.4, §11.4, #21: the scope is conditional on `profile` ─────────────────────────────────
+
+  it('a TEXT-profile enum member with a restricted-status character is not refused -- mechanism 2 does not reach values', () => {
+    // U+0132 LATIN CAPITAL LIGATURE IJ: `Identifier_Status != Allowed`, the same character the
+    // shared conformance corpus's `class2/schema/refused/a-restricted-character-in-an-enum-member`
+    // vector refuses under the default IDENTIFIER profile.
+    const s = schema('https://x/s.tn', [['activity', def(textEnumOf(['sedentary', 'aĲb']))]]);
+    expect(() => linkSchema(s)).not.toThrow();
+  });
+
+  it('the same restricted-status character IS refused under the default IDENTIFIER profile', () => {
+    const s = schema('https://x/s.tn', [['activity', def(enumOf(['ACTIVE', 'aĲb']))]]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(refused.mechanism).toBe('identifier-status');
+  });
+
+  it('a TEXT-profile enum still refuses two members that read alike -- mechanism 1 relates values, not just names', () => {
+    const s = schema('https://x/s.tn', [
+      ['activity', def(textEnumOf(['active', CYR_A + 'ctive']))],
+    ]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(refused.mechanism).toBe('skeleton-distinctness');
+    expect(refused.message).toContain('enum members');
+  });
 });
 
 describe('checkNameHygiene: a whole-script pair isolates mechanism 1', () => {
@@ -258,7 +287,7 @@ describe('checkNameHygiene: choice variants are not a scope of their own', () =>
   });
 });
 
-describe("checkNameHygiene: a template's own type parameters (this implementation's own scope, not in §11.4's text)", () => {
+describe("checkNameHygiene: a template's own type parameters (this implementation's own scope, against §11.4's own text declining to make one)", () => {
   // Both parameters referenced by the body's own fields, so a policy relaxation is what admits
   // the schema and not the unrelated `TsonSchemaValidationError` `validateReferences` (run after
   // this check) would otherwise raise over a declared-but-unused parameter (§5.10).

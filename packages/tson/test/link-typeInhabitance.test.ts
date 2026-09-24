@@ -541,3 +541,124 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
     }).not.toThrow();
   });
 });
+
+describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT records (§5.2, §5.10.1)', () => {
+  it("an ABSTRACT record with no subtype in this schema's closure is not itself a productivity error -- its own (satisfiable) field set is what answers the question, not the absence of members its importers have yet to supply", () => {
+    const merged = new Map<string, TypeDefinition>([
+      [
+        'pet',
+        {
+          supertypes: [],
+          subtypes: [], // no member anywhere in this closure
+          annotations: [],
+          body: {
+            kind: 'record',
+            supertypes: [],
+            // A selector (§5.2's own example): unmarked, atom-typed, ordinarily satisfiable on
+            // its own -- nothing here recurs, so the ordinary field walk finds this inhabited
+            // with no need for a subtype to exist at all.
+            fields: [field('pet_type', ref('text')), field('name', ref('text'))],
+            groups: [],
+            extension: 'ABSTRACT',
+            discriminators: ['pet_type'],
+          },
+        },
+      ],
+      ['text', text],
+    ]);
+    expect(() => {
+      check(merged);
+    }).not.toThrow();
+  });
+
+  it('an ABSTRACT record whose own field set cannot be satisfied is uninhabited exactly as an OPEN record with the same fields would be -- gains no exemption from having no subtype either', () => {
+    const merged = new Map<string, TypeDefinition>([
+      [
+        'lib',
+        {
+          supertypes: [],
+          subtypes: [],
+          annotations: [],
+          body: {
+            kind: 'record',
+            supertypes: [],
+            // A required, non-voidable self-reference: the ordinary loop this file's own top
+            // describes (`x => { y: y }`), unaffected by `extension`.
+            fields: [field('inner', ref('lib'))],
+            groups: [],
+            extension: 'ABSTRACT',
+            discriminators: [],
+          },
+        },
+      ],
+    ]);
+    expect(() => {
+      check(merged);
+    }).toThrow(TsonSchemaValidationError);
+  });
+
+  it('an ABSTRACT record with an unmarked `void`-typed field is uninhabited (§5.2: `a: void` empties the record, §5.10.1)', () => {
+    const merged = new Map<string, TypeDefinition>([
+      [
+        'lib',
+        {
+          supertypes: [],
+          subtypes: [],
+          annotations: [],
+          body: {
+            kind: 'record',
+            supertypes: [],
+            fields: [field('a', ref('void'))],
+            groups: [],
+            extension: 'ABSTRACT',
+            discriminators: [],
+          },
+        },
+      ],
+    ]);
+    expect(() => {
+      check(merged);
+    }).toThrow(TsonSchemaValidationError);
+  });
+
+  it("an ABSTRACT base's own inhabitance does not depend on its subtypes at all: an uninhabited-looking base with an uninhabited subtype is judged on its own (satisfiable) fields alone, and an inhabited-looking base with only uninhabited subtypes stays inhabited", () => {
+    const merged = new Map<string, TypeDefinition>([
+      [
+        'pet',
+        {
+          supertypes: [],
+          subtypes: ['dog'],
+          annotations: [],
+          body: {
+            kind: 'record',
+            supertypes: [],
+            fields: [], // trivially satisfiable by itself, whatever dog does
+            groups: [],
+            extension: 'ABSTRACT',
+            discriminators: [],
+          },
+        },
+      ],
+      [
+        'dog',
+        {
+          supertypes: ['pet'],
+          subtypes: [],
+          annotations: [],
+          body: {
+            kind: 'record',
+            supertypes: [ref('pet')],
+            fields: [field('self', ref('dog'))], // dog itself never terminates
+            groups: [],
+            extension: 'OPEN',
+            discriminators: [],
+          },
+        },
+      ],
+    ]);
+    // `dog` is uninhabited and reported; `pet` is judged on its own empty field set and is not.
+    expect(() => {
+      check(merged);
+    }).toThrow(/'dog' can never be satisfied/u);
+  });
+});

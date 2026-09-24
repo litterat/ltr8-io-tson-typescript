@@ -22,7 +22,14 @@ function def(
   };
 }
 
-const RECORD: Top = { kind: 'record', supertypes: [], fields: [], groups: [] };
+const RECORD: Top = {
+  kind: 'record',
+  supertypes: [],
+  fields: [],
+  groups: [],
+  extension: 'OPEN',
+  discriminators: [],
+};
 
 function schema(
   id: string,

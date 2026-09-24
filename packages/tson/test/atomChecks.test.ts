@@ -231,8 +231,116 @@ describe('text_type', () => {
     ).toBeGreaterThan(0);
   });
 
-  it('coherence leaves `pattern` unchecked (regex containment is undecidable without tson-regex)', () => {
+  it('coherence leaves `pattern` narrowing unchecked (regex containment is undecidable), but a pattern alone with no `members` has nothing else to check', () => {
     expect(checkAtomCoherence({ kind: 'text_type', pattern: '[a-z]+' })).toEqual([]);
+  });
+
+  // ── §5.7's settable-once facets: `pattern` and `members` (#22) ───────────────────────────────
+
+  it('pattern is settable once: unset -> set narrows, restated verbatim narrows, changed is refused', () => {
+    const unset: TextType = { kind: 'text_type' };
+    const source: TextType = { kind: 'text_type', pattern: '[A-Z]{2}' };
+    expect(checkAtomNarrows(unset, source)).toEqual([]);
+    expect(checkAtomNarrows(source, { kind: 'text_type', pattern: '[A-Z]{2}' })).toEqual([]);
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', pattern: '[a-z]{2}' }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('members is settable once, the same as pattern: unset -> set narrows, restated verbatim narrows, changed (even by shrinking) is refused', () => {
+    const unset: TextType = { kind: 'text_type' };
+    const source: TextType = { kind: 'text_type', members: ['SE', 'NO', 'DK'] };
+    expect(checkAtomNarrows(unset, source)).toEqual([]);
+    expect(checkAtomNarrows(source, { kind: 'text_type', members: ['SE', 'NO', 'DK'] })).toEqual(
+      [],
+    );
+    // A member set narrows a plain member-set facet (§7.4's numeric tiers) by shrinking, but
+    // `text_type.members` is settable-once, not a member-set facet -- even a subset is a change.
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', members: ['SE', 'NO'] }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  // ── §7.4's uniform members rule: every member satisfies the body's other facets ──────────────
+
+  it('coherence: every member of `members` must satisfy min_length/max_length/length, counted in code points', () => {
+    expect(
+      checkAtomCoherence({ kind: 'text_type', minLength: 2n, members: ['AU', 'A'] }).length,
+    ).toBeGreaterThan(0);
+    expect(checkAtomCoherence({ kind: 'text_type', length: 2n, members: ['AU', 'NZ'] })).toEqual(
+      [],
+    );
+  });
+
+  it('coherence: every member of `members` must match `pattern` -- the one member check needing a regex match rather than a comparison', () => {
+    const violations = checkAtomCoherence({
+      kind: 'text_type',
+      pattern: '[A-Z]{2}',
+      members: ['AU', 'nz'],
+    });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]).toContain('nz');
+  });
+
+  it('coherence: a member set with no facets beside it to violate is coherent', () => {
+    expect(checkAtomCoherence({ kind: 'text_type', members: ['a', 'b'] })).toEqual([]);
+  });
+
+  // ── `text_member_set`'s own non-emptiness and uniqueness (§7.4) ────────────────────────────
+
+  it('coherence: an empty `members` admits no value, exactly as an empty numeric member set does', () => {
+    expect(checkAtomCoherence({ kind: 'text_type', members: [] }).length).toBeGreaterThan(0);
+  });
+
+  it('coherence: a member stated twice is refused -- text_member_set is unique_items: true (§7.4)', () => {
+    const violations = checkAtomCoherence({ kind: 'text_type', members: ['SE', 'SE'] });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]).toContain('SE');
+  });
+
+  it('coherence: members compare as text, NFC -- two spellings of one string are one member stated twice (§7.4)', () => {
+    const decomposedE = 'café'; // "café" spelled with a combining acute accent
+    const precomposedE = 'café'; // "café" spelled precomposed
+    expect(
+      checkAtomCoherence({ kind: 'text_type', members: [decomposedE, precomposedE] }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  // ── `pattern` syntax is validated at coherence, not silently skipped (§5.7, RFC 9485) ───────
+
+  it('coherence: a syntactically invalid pattern is itself a coherence violation, not a silently skipped member check', () => {
+    const violations = checkAtomCoherence({
+      kind: 'text_type',
+      pattern: '[',
+      members: ['x'],
+    });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => v.includes('I-Regexp'))).toBe(true);
+  });
+
+  // ── settable-once `members` narrows by NFC-compared set, not written order (§7.5, §7.4) ─────
+
+  it('narrows: members restated in another order is a restatement, not a change -- §7.5 gives set element order no meaning', () => {
+    const source: TextType = { kind: 'text_type', members: ['SE', 'NO'] };
+    expect(checkAtomNarrows(source, { kind: 'text_type', members: ['NO', 'SE'] })).toEqual([]);
+  });
+});
+
+// ── regex_type: a member's own parsing contract is "a valid I-Regexp pattern" (§7.4) ───────────
+
+describe('regex_type', () => {
+  const spec = 'https://www.rfc-editor.org/rfc/rfc9485';
+
+  it("coherence: every member must itself parse as I-Regexp -- the family's own parsing contract still applies (§7.4)", () => {
+    const violations = checkAtomCoherence({ kind: 'regex_type', spec, members: ['[a-z]+', '['] });
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => v.includes('I-Regexp'))).toBe(true);
+  });
+
+  it('coherence: a member set of well-formed patterns is coherent', () => {
+    expect(checkAtomCoherence({ kind: 'regex_type', spec, members: ['[a-z]+', '[0-9]+'] })).toEqual(
+      [],
+    );
   });
 });
 
@@ -432,6 +540,58 @@ describe('enum', () => {
       checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], profile: 'IDENTIFIER' })
         .length,
     ).toBeGreaterThan(0);
+  });
+
+  // ── §7.4, §5.4, #21: an enum's profile ──────────────────────────────────────────────────────
+
+  it("coherence: under IDENTIFIER (the default), every member MUST match [TSON-DATA] §7.7's identifier grammar", () => {
+    const vocabulary: EnumBody = {
+      kind: 'enum',
+      members: ['OPEN', 'ACTIVE'],
+      profile: 'IDENTIFIER',
+    };
+    expect(checkAtomCoherence(vocabulary)).toEqual([]);
+
+    const notAName: EnumBody = {
+      kind: 'enum',
+      members: ['sedentary', 'lightly active'],
+      profile: 'IDENTIFIER',
+    };
+    const violations = checkAtomCoherence(notAName);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]).toContain('lightly active');
+  });
+
+  it('coherence: under TEXT, any text is a member -- no identifier grammar applies', () => {
+    const valueSet: EnumBody = {
+      kind: 'enum',
+      members: ['sedentary', 'lightly active'],
+      profile: 'TEXT',
+    };
+    expect(checkAtomCoherence(valueSet)).toEqual([]);
+  });
+
+  it('coherence: a member stated twice is refused, under either profile -- enum_set is unique_items: true (§9)', () => {
+    const identifierDup: EnumBody = {
+      kind: 'enum',
+      members: ['OPEN', 'OPEN'],
+      profile: 'IDENTIFIER',
+    };
+    expect(checkAtomCoherence(identifierDup).length).toBeGreaterThan(0);
+    const textDup: EnumBody = { kind: 'enum', members: ['x', 'x'], profile: 'TEXT' };
+    expect(checkAtomCoherence(textDup).length).toBeGreaterThan(0);
+  });
+
+  it('narrows: IDENTIFIER is inside TEXT, so a refinement may withdraw the latitude of TEXT and never grant it back (§5.7)', () => {
+    const identifier: EnumBody = { kind: 'enum', members: ['a', 'b'], profile: 'IDENTIFIER' };
+    const text: EnumBody = { kind: 'enum', members: ['a', 'b'], profile: 'TEXT' };
+    // TEXT -> IDENTIFIER narrows (withdraws latitude).
+    expect(checkAtomNarrows(text, identifier)).toEqual([]);
+    // IDENTIFIER -> TEXT widens and is refused.
+    expect(checkAtomNarrows(identifier, text).length).toBeGreaterThan(0);
+    // Restating the same profile is always vacuously fine.
+    expect(checkAtomNarrows(identifier, identifier)).toEqual([]);
+    expect(checkAtomNarrows(text, text)).toEqual([]);
   });
 });
 

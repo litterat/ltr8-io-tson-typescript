@@ -984,6 +984,55 @@ describe('refinement (§5.7)', () => {
   });
 });
 
+// ── Definition marks: FINAL admits no subtype (§5.2, §5.9) ──────────────────────────────────────
+
+describe('FINAL admits no subtype (§5.2)', () => {
+  it('refuses composition onto a FINAL record', () => {
+    const doc = parse(`
+      reading    => final { sensor: token }
+      calibrated => reading & { offset: token }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('reading', resolver.resolve(declarationOf(doc, 'reading')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'calibrated'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('FINAL');
+  });
+
+  it('refuses refinement of a FINAL record', () => {
+    const doc = parse(`
+      reading => final { sensor: token }
+      named   => reading ^ { sensor?: token = "thermometer" }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('reading', resolver.resolve(declarationOf(doc, 'reading')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'named'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('FINAL');
+  });
+
+  it('subtraction from a FINAL record is admissible -- it mints no IS-A edge, the one thing FINAL constrains (§5.9)', () => {
+    const doc = parse(`
+      reading => final { sensor: token  celsius: token }
+      bare    => reading - { celsius }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('reading', resolver.resolve(declarationOf(doc, 'reading')));
+    const bare = resolveOne(resolver, doc, 'bare');
+    expect(bare.supertypes).toEqual([]); // IS-A broken, per §5.9's own resolution rule
+    if (!isRecordBody(bare.body)) throw new Error('unreachable');
+    expect(bare.body.fields.map((f) => f.name)).toEqual(['sensor']);
+  });
+
+  it("refuses 'final' beside a selector -- the members a selector implies could never exist under FINAL (§5.2)", () => {
+    const doc = parse(`pet => final { pet_type: token =?  name: token }`);
+    const { resolver } = harness();
+    const error = thrownBy(() => resolveOne(resolver, doc, 'pet'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('final');
+  });
+});
+
 // ── Annotations (§6) ─────────────────────────────────────────────────────────────────────────
 
 describe('annotations (§6)', () => {
@@ -1677,11 +1726,14 @@ describe('coverage gaps reported as TsonNotImplementedError, never silently mis-
   });
 
   it('closing an application needs a whole-schema materialiser this resolver was not built with', () => {
-    const doc = parse('closed => box_t<text> & {}');
+    const doc = parse('closed => box_t<text> ^ {}');
     const { resolver } = harness();
-    // `box_t<text>` is a fully-bound (closed) application at a supertype position -- closing it
-    // to the entry it denotes needs a whole-schema materialiser (`ApplicationCloser`), checked
-    // before this resolver would even look `box_t` up in the type-name namespace.
+    // `box_t<text>` is a fully-bound (closed) application at a refinement source position --
+    // closing it to the entry it denotes needs a whole-schema materialiser (`ApplicationCloser`),
+    // checked before this resolver would even look `box_t` up in the type-name namespace. (A
+    // *composition* operand no longer takes this path at all: §5.8's last sentence subsumes a
+    // closed application there structurally, via `openOperand`, and mints no entry -- see the
+    // '§5.8 composition' describe block's own coverage.)
     const error = thrownBy(() => resolveOne(resolver, doc, 'closed'));
     expect(error).toBeInstanceOf(TsonNotImplementedError);
   });

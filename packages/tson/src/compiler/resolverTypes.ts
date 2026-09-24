@@ -85,6 +85,26 @@ export type AnnotationValueReader = (type: string, value: DataValue) => unknown;
 export type ApplicationCloser = (application: TypeRef) => string;
 
 /**
+ * §8.2's "a declaration whose body denotes a type is that type's entry": closes `application` (as
+ * {@link ApplicationCloser} would) but, when the application's own template admits it, publishes
+ * the result *as* `name` — the declaring entry itself, no content-derived name minted beside it and
+ * no `!reference` hop (§5.10, §8.2) — and returns the resulting `TypeDefinition` directly so
+ * `definitionResolver.ts` can use it as the declaration's own resolved entry.
+ *
+ * Returns `undefined` for a case this owns nothing of: the head is not a template, the arity
+ * disagrees (left for the ordinary path's own diagnostic), or the template is reference-headed
+ * (§5.10's partial application composes away and mints no entry to own) — `definitionResolver.ts`
+ * falls back to its ordinary, lazy `!reference` handling in every such case.
+ *
+ * Optional on the same terms as {@link ApplicationCloser}: omitted for a caller with no
+ * whole-schema materialiser to hand.
+ */
+export type DeclaredApplicationCloser = (
+  name: string,
+  application: TypeRef,
+) => TypeDefinition | undefined;
+
+/**
  * Converts an already-bound `Top` body back to a bare wire `CoreValue` — this port's own
  * replacement for the Java original's `TsonObjectWriter` field, needed for exactly one thing:
  * §5.6's chained atom-refinement merge (`mergeWithSource` in `definitionResolver.ts`), which has
