@@ -4,8 +4,8 @@
  * all, rather than stopping at the first.
  */
 export const SCHEMA = `!!id:"https://example.com/people.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 @doc:"The demo schema: an employee record."
 {
   @doc:"A person on the payroll."
@@ -16,7 +16,7 @@ export const SCHEMA = `!!id:"https://example.com/people.tn"
     email:     email
     started:   date
     active:    boolean
-    tags:      [non_empty_text]?
+    tags?:     [non_empty_text]
   }
 }
 `;

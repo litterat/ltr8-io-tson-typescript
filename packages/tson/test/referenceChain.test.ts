@@ -17,7 +17,14 @@ function ref(name: string, args: readonly TypeRef[] = []): TypeRef {
 
 /** A plain, non-reference PRODUCT entry -- the terminal every alias chain below walks to. */
 function recordEntry(): TypeDefinition {
-  const body: RecordBody = { kind: 'record', supertypes: [], fields: [], groups: [] };
+  const body: RecordBody = {
+    kind: 'record',
+    supertypes: [],
+    fields: [],
+    groups: [],
+    extension: 'OPEN',
+    discriminators: [],
+  };
   return { supertypes: [], subtypes: [], body, annotations: [] };
 }
 

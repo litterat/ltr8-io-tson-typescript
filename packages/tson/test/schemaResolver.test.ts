@@ -66,12 +66,21 @@ function testMetaReader(type: string, value: DataValue): Top {
         fields.push({
           name,
           type: typeRefField(fieldRecord, 'type'),
-          state: 'REQUIRED',
+          optional: false,
+          voidable: false,
+          role: 'FREE',
           annotations: [],
         });
       }
     }
-    return { kind: 'record', supertypes: [], fields, groups: [] } satisfies RecordBody;
+    return {
+      kind: 'record',
+      supertypes: [],
+      fields,
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    } satisfies RecordBody;
   }
   if (type === 'array') {
     return {
@@ -101,18 +110,41 @@ function testStructureNamespace(): (name: string) => TypeDefinition | undefined 
     // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
     supertypes: ['product', 'top'],
     subtypes: [],
-    body: { kind: 'record', supertypes: [], fields, groups: [] },
+    body: {
+      kind: 'record',
+      supertypes: [],
+      fields,
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    },
     annotations: [],
   });
   const structure = new Map<string, TypeDefinition>([
     [
       'record',
-      constructorEntry([{ name: 'fields', type: anyType, state: 'REQUIRED', annotations: [] }]),
+      constructorEntry([
+        {
+          name: 'fields',
+          type: anyType,
+          optional: false,
+          voidable: false,
+          role: 'FREE',
+          annotations: [],
+        },
+      ]),
     ],
     [
       'array',
       constructorEntry([
-        { name: 'element_type', type: anyType, state: 'REQUIRED', annotations: [] },
+        {
+          name: 'element_type',
+          type: anyType,
+          optional: false,
+          voidable: false,
+          role: 'FREE',
+          annotations: [],
+        },
       ]),
     ],
   ]);
@@ -208,15 +240,19 @@ describe('resolving a whole document, on demand and dependency-following', () =>
     expect(schema.entries.size).toBe(2);
     const child = recordBodyOf(schema, 'child');
     expect(child.fields.map((f) => f.name).sort()).toEqual(['x', 'y']);
-    expect(child.supertypes).toEqual(['parent']);
+    expect(child.supertypes).toEqual([{ name: 'parent', arguments: [], annotations: [] }]);
   });
 
   it('resolves every declaration exactly once, however many others depend on it', () => {
     const doc = document('a => base & {} b => base & {} base => { x: text }');
     const schema = resolveSchema(doc, deps());
     expect(schema.entries.size).toBe(3);
-    expect(recordBodyOf(schema, 'a').supertypes).toEqual(['base']);
-    expect(recordBodyOf(schema, 'b').supertypes).toEqual(['base']);
+    expect(recordBodyOf(schema, 'a').supertypes).toEqual([
+      { name: 'base', arguments: [], annotations: [] },
+    ]);
+    expect(recordBodyOf(schema, 'b').supertypes).toEqual([
+      { name: 'base', arguments: [], annotations: [] },
+    ]);
   });
 
   it('rejects a circular composition chain', () => {
@@ -241,7 +277,14 @@ describe('!!import merging into the type-name namespace', () => {
         {
           supertypes: [],
           subtypes: [],
-          body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+          body: {
+            kind: 'record',
+            supertypes: [],
+            fields: [],
+            groups: [],
+            extension: 'OPEN',
+            discriminators: [],
+          },
           annotations: [],
         },
       ],
@@ -260,7 +303,9 @@ describe('!!import merging into the type-name namespace', () => {
         },
       }),
     );
-    expect(recordBodyOf(schema, 'child').supertypes).toEqual(['base']);
+    expect(recordBodyOf(schema, 'child').supertypes).toEqual([
+      { name: 'base', arguments: [], annotations: [] },
+    ]);
     // Imported entries are visible during resolution but never part of the local-only result.
     expect(schema.entries.has('base')).toBe(false);
   });
@@ -272,7 +317,14 @@ describe('!!import merging into the type-name namespace', () => {
         {
           supertypes: [],
           subtypes: [],
-          body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+          body: {
+            kind: 'record',
+            supertypes: [],
+            fields: [],
+            groups: [],
+            extension: 'OPEN',
+            discriminators: [],
+          },
           annotations: [],
         },
       ],
@@ -334,7 +386,14 @@ function structureNamespaceWith(ctorName: string): (name: string) => TypeDefinit
     // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
     supertypes: ['product', 'top'],
     subtypes: [],
-    body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+    body: {
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    },
     annotations: [],
   };
   return (name) => (name === ctorName ? entry : undefined);
@@ -525,12 +584,21 @@ function richMetaReader(type: string, value: DataValue): Top {
         fields.push({
           name: fname,
           type: richTypeRefField(fieldRecord, 'type'),
-          state: 'REQUIRED',
+          optional: false,
+          voidable: false,
+          role: 'FREE',
           annotations: [],
         });
       }
     }
-    return { kind: 'record', supertypes: [], fields, groups: [] } satisfies RecordBody;
+    return {
+      kind: 'record',
+      supertypes: [],
+      fields,
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    } satisfies RecordBody;
   }
   if (type === 'array') {
     return {
@@ -549,7 +617,7 @@ function richMetaReader(type: string, value: DataValue): Top {
         members.push((element.value.coreValue as TokenValue).text);
       }
     }
-    return { kind: 'enum', members } satisfies EnumBody;
+    return { kind: 'enum', members, profile: 'IDENTIFIER' } satisfies EnumBody;
   }
   throw new Error(`richMetaReader: unhandled constructor '${type}'`);
 }
@@ -568,18 +636,41 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
     // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
     supertypes: ['product', 'top'],
     subtypes: [],
-    body: { kind: 'record', supertypes: [], fields, groups: [] },
+    body: {
+      kind: 'record',
+      supertypes: [],
+      fields,
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    },
     annotations: [],
   });
   const extra = new Map<string, TypeDefinition>([
     [
       'record',
-      constructorEntry([{ name: 'fields', type: typeRefType, state: 'REQUIRED', annotations: [] }]),
+      constructorEntry([
+        {
+          name: 'fields',
+          type: typeRefType,
+          optional: false,
+          voidable: false,
+          role: 'FREE',
+          annotations: [],
+        },
+      ]),
     ],
     [
       'array',
       constructorEntry([
-        { name: 'element_type', type: typeRefType, state: 'REQUIRED', annotations: [] },
+        {
+          name: 'element_type',
+          type: typeRefType,
+          optional: false,
+          voidable: false,
+          role: 'FREE',
+          annotations: [],
+        },
       ]),
     ],
     [
@@ -588,7 +679,9 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
         {
           name: 'members',
           type: { name: 'enum_set', arguments: [], annotations: [] },
-          state: 'REQUIRED',
+          optional: false,
+          voidable: false,
+          role: 'FREE',
           annotations: [],
         },
       ]),

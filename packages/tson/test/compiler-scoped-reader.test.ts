@@ -223,11 +223,15 @@ function narrowingSchema(): LinkedSchema {
           kind: 'record',
           supertypes: [],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
           fields: [
             {
               name: 'attachment',
               type: { name: 'narrow_scope', arguments: [], annotations: [] },
-              state: 'REQUIRED',
+              optional: false,
+              voidable: false,
+              role: 'FREE',
               annotations: [],
             },
           ],

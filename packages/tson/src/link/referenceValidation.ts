@@ -227,11 +227,7 @@ function validateBody(
     case 'record': {
       const r: RecordBody = body;
       for (const supertype of r.supertypes) {
-        if (!namespace.has(supertype)) {
-          throw new TsonSchemaValidationError(
-            `'${entryName}' has an unresolved supertype '${supertype}'`,
-          );
-        }
+        validateTypeRef(supertype, namespace, ownParameters, entryName, ' supertype');
       }
       for (const field of r.fields) {
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
@@ -393,7 +389,7 @@ function checkFieldValue(
     // here restates it.
     throw new TsonSchemaValidationError(
       `'${entryName}': field '${field.name}' is declared '${field.type.name}', but its ` +
-        `${field.state === 'REQUIRED_DEFAULT' ? 'default' : 'fixed value'} ${asWritten(value)} is ` +
+        `${field.role === 'DEFAULT' ? 'default' : 'fixed value'} ${asWritten(value)} is ` +
         `not a value of that type -- ${e.message}. §5.2 makes a field's fixed or default value a ` +
         "value of the field's own declared type",
     );
@@ -415,7 +411,7 @@ function notAScalarType(
   return new TsonSchemaValidationError(
     `'${entryName}': field '${field.name}' is declared '${field.type.name}', which is ` +
       `${describeBody(body)}, so it cannot have ` +
-      `${field.state === 'REQUIRED_DEFAULT' ? 'a default' : 'a fixed value'} -- ${asWritten(value)} ` +
+      `${field.role === 'DEFAULT' ? 'a default' : 'a fixed value'} -- ${asWritten(value)} ` +
       'is a token, and §5.2 admits only a bare token there. A fixed or default value is ' +
       'available on a field typed by an atom or an enum, and nowhere else: drop the modifier, or ' +
       'declare the field with a scalar type',

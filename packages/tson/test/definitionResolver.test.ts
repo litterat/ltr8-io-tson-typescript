@@ -169,13 +169,17 @@ describe('a fresh record definition (§5.2)', () => {
       {
         name: 'bits',
         type: { name: 'integer', arguments: [], annotations: [] },
-        state: 'REQUIRED',
+        optional: false,
+        voidable: false,
+        role: 'FREE',
         annotations: [],
       },
       {
         name: 'signed',
         type: { name: 'boolean', arguments: [], annotations: [] },
-        state: 'REQUIRED',
+        optional: false,
+        voidable: false,
+        role: 'FREE',
         annotations: [],
       },
     ]);
@@ -221,88 +225,115 @@ describe('field default/fixed modifiers (§5.2)', () => {
     expect(fieldNamed(body, 'a')).toEqual({
       name: 'a',
       type: { name: 'token', arguments: [], annotations: [] },
-      state: 'REQUIRED',
+      optional: false,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     });
   });
 
-  it('`type ~ value` is REQUIRED_DEFAULT, carrying the literal', () => {
-    const doc = parse('t => { port: integer ~ 8080 }');
+  it('`name?: type ~ value` is optional with role DEFAULT, carrying the literal', () => {
+    const doc = parse('t => { port?: integer ~ 8080 }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
     const field = fieldNamed(body, 'port');
-    expect(field.state).toBe('REQUIRED_DEFAULT');
+    expect(field.optional).toBe(true);
+    expect(field.voidable).toBe(false);
+    expect(field.role).toBe('DEFAULT');
     expect(field.value).toEqual({ text: '8080', form: 'UNQUOTED' });
   });
 
-  it('`type = value` is REQUIRED_FIXED', () => {
+  it('`name: type = value` is a marker: unmarked name, role FIXED', () => {
     const doc = parse('t => { host: token = "prod.example.com" }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
-    expect(fieldNamed(body, 'host').state).toBe('REQUIRED_FIXED');
+    const host = fieldNamed(body, 'host');
+    expect(host.optional).toBe(false);
+    expect(host.role).toBe('FIXED');
   });
 
-  it('`type?` is OPTIONAL with no value', () => {
+  it('`name?: type` is optional, non-voidable, role FREE, no value', () => {
+    const doc = parse('t => { note?: token }');
+    const { resolver } = harness();
+    const body = resolveOne(resolver, doc, 't').body;
+    if (!isRecordBody(body)) throw new Error('unreachable');
+    const note = fieldNamed(body, 'note');
+    expect(note.optional).toBe(true);
+    expect(note.voidable).toBe(false);
+    expect(note.role).toBe('FREE');
+  });
+
+  it("`name: type?` is required (unmarked name) and voidable -- the type's own `?` (§5.2)", () => {
     const doc = parse('t => { note: token? }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
-    expect(fieldNamed(body, 'note').state).toBe('OPTIONAL');
+    const note = fieldNamed(body, 'note');
+    expect(note.optional).toBe(false);
+    expect(note.voidable).toBe(true);
+    expect(note.role).toBe('FREE');
   });
 
-  it('`type? = value` is OPTIONAL_FIXED, carrying the literal', () => {
-    const doc = parse('t => { flag: boolean? = false }');
+  it('`name?: type = value` is optional with role FIXED, carrying the literal, injected on omission', () => {
+    const doc = parse('t => { flag?: boolean = false }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
     const field = fieldNamed(body, 'flag');
-    expect(field.state).toBe('OPTIONAL_FIXED');
+    expect(field.optional).toBe(true);
+    expect(field.voidable).toBe(false);
+    expect(field.role).toBe('FIXED');
     expect(field.value).toEqual({ text: 'false', form: 'UNQUOTED' });
   });
 
-  it("`type? = _` is OPTIONAL_FIXED with no value at all (§5.2's sixth spelling)", () => {
-    const doc = parse('t => { hidden: token? = _ }');
+  it("`name?: void?` may be omitted or written `_` and nothing else (§5.2's spelling for the retired `= _`)", () => {
+    const doc = parse('t => { hidden?: void? }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
     const field = fieldNamed(body, 'hidden');
-    expect(field.state).toBe('OPTIONAL_FIXED');
+    expect(field.optional).toBe(true);
+    expect(field.voidable).toBe(true);
+    expect(field.role).toBe('FREE');
     expect(field.value).toBeUndefined();
   });
 
-  it('rejects `~ _` on any field', () => {
-    const doc = parse('bad => { a: token ~ _ }');
+  it('rejects a pin on a voidable type (`type? = value`, §5.2)', () => {
+    const doc = parse('bad => { a?: token? = "x" }');
     const { resolver } = harness();
     expect(thrownBy(() => resolveOne(resolver, doc, 'bad'))).toBeInstanceOf(
       TsonSchemaValidationError,
     );
   });
 
-  it('rejects `= _` on a required (non-`?`) field', () => {
-    const doc = parse('bad => { a: token = _ }');
-    const { resolver } = harness();
-    expect(thrownBy(() => resolveOne(resolver, doc, 'bad'))).toBeInstanceOf(
-      TsonSchemaValidationError,
-    );
-  });
-
-  it('rejects a default on an optional field (`type? ~ value`)', () => {
-    const doc = parse('bad => { a: token? ~ "x" }');
+  it('rejects a default on an unmarked name (`name: type ~ value`, §5.2)', () => {
+    const doc = parse('bad => { a: token ~ "x" }');
     const { resolver } = harness();
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('contradicts optional');
+    expect((error as TsonSchemaValidationError).message).toContain('always written');
   });
 
-  it('a parametric `=` inside a template stays REQUIRED, not REQUIRED_FIXED (§5.7 open modifiers)', () => {
+  it('the selector `=?` on an unmarked, non-voidable name resolves to role FREE with no value (§5.2)', () => {
+    const doc = parse('t => { kind: token =? }');
+    const { resolver } = harness();
+    const body = resolveOne(resolver, doc, 't').body;
+    if (!isRecordBody(body)) throw new Error('unreachable');
+    const kind = fieldNamed(body, 'kind');
+    expect(kind.optional).toBe(false);
+    expect(kind.voidable).toBe(false);
+    expect(kind.role).toBe('FREE');
+    expect(kind.value).toBeUndefined();
+  });
+
+  it('a parametric `=` inside a template stays on an unmarked name, held, with the parameter riding `value` (§5.7 open modifiers)', () => {
     const doc = parse('tmpl => <T> { element_type: type_ref = T }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 'tmpl').body;
     // Parameterised, so the body is held -- this exercises resolveField's own parametric branch
-    // indirectly via holdIfOpen; assert the held wire form carries `element_type` with no `state`
-    // member (REQUIRED is the default, omitted).
+    // indirectly via holdIfOpen.
     expect('application' in body).toBe(true);
   });
 });
@@ -395,7 +426,7 @@ describe('composition (§5.8)', () => {
     if (!isRecordBody(fixed.body)) throw new Error('unreachable');
     // Tightening replaces in place: still two fields, same order, access_pattern now fixed.
     expect(fixed.body.fields.map((f) => f.name)).toEqual(['access_pattern', 'size_type']);
-    expect(fieldNamed(fixed.body, 'access_pattern').state).toBe('REQUIRED_FIXED');
+    expect(fieldNamed(fixed.body, 'access_pattern').role).toBe('FIXED');
     expect(fieldNamed(fixed.body, 'access_pattern').value).toEqual({
       text: 'INDEX',
       form: 'SINGLE_LINE_QUOTED',
@@ -413,9 +444,7 @@ describe('composition (§5.8)', () => {
     entries.set('fixed', resolver.resolve(declarationOf(doc, 'fixed')));
     const error = thrownBy(() => resolveOne(resolver, doc, 'loose'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain(
-      'not a permitted state transition',
-    );
+    expect((error as TsonSchemaValidationError).message).toContain('backwards');
   });
 
   it("an elided type-ref on a tightening entry inherits the source field's type (§5.7)", () => {
@@ -429,7 +458,7 @@ describe('composition (§5.8)', () => {
     if (!isRecordBody(production.body)) throw new Error('unreachable');
     const host = fieldNamed(production.body, 'host');
     expect(host.type).toEqual({ name: 'token', arguments: [], annotations: [] });
-    expect(host.state).toBe('REQUIRED_FIXED');
+    expect(host.role).toBe('FIXED');
   });
 
   it("a restated field carries the restatement's own annotations, in source order, followed by the inherited field's, in source order -- through a three-deep chain (§5.8)", () => {
@@ -514,7 +543,7 @@ describe('subtraction (§5.9)', () => {
     const thin = resolveOne(resolver, doc, 'thin');
     expect(thin.supertypes).toEqual([]); // contract emptied
     if (!isRecordBody(thin.body)) throw new Error('unreachable');
-    expect(thin.body.supertypes).toEqual(['base']); // lineage kept
+    expect(thin.body.supertypes).toEqual([{ name: 'base', arguments: [], annotations: [] }]); // lineage kept
     expect(thin.body.fields.map((f) => f.name)).toEqual(['keep']);
   });
 
@@ -552,7 +581,7 @@ describe('subtraction (§5.9)', () => {
     const thin = resolveOne(resolver, doc, 'thin');
     if (!isRecordBody(thin.body)) throw new Error('unreachable');
     expect(thin.body.groups).toEqual([]);
-    expect(fieldNamed(thin.body, 'a').state).toBe('REQUIRED');
+    expect(fieldNamed(thin.body, 'a').optional).toBe(false);
   });
 });
 
@@ -619,13 +648,13 @@ describe('§11.5\'s "supertype chain" limit', () => {
 // ── Field groups (§5.11) ─────────────────────────────────────────────────────────────────────
 
 describe('field groups (§5.11)', () => {
-  it("flattens each member to an OPTIONAL field regardless of the group's own state", () => {
+  it("flattens each member to optional: true, role: FREE regardless of the group's own state", () => {
     const doc = parse('t => { (a: token | b: token) }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
-    expect(fieldNamed(body, 'a').state).toBe('OPTIONAL');
-    expect(fieldNamed(body, 'b').state).toBe('OPTIONAL');
+    expect(fieldNamed(body, 'a')).toMatchObject({ optional: true, voidable: false, role: 'FREE' });
+    expect(fieldNamed(body, 'b')).toMatchObject({ optional: true, voidable: false, role: 'FREE' });
     expect(body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
   });
 
@@ -637,16 +666,21 @@ describe('field groups (§5.11)', () => {
     expect(body.groups[0]?.state).toBe('OPTIONAL');
   });
 
-  it('rejects a refinement/composition body that makes two group members simultaneously always-present', () => {
+  it('a bare restatement of both group members via ordinary field syntax leaves both governed by the group -- "no restated member is ever always present, so the rule an earlier revision needed against two always-present members of one group has nothing left to refuse" (§5.11) -- the schema loads cleanly, and a document with both present is validate\'s own concern, not the resolver\'s', () => {
     const doc = parse(`
       base => { (a: token | b: token) }
       bad  => base & { a: token  b: token }
     `);
     const { resolver, entries } = harness();
     entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
-    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('always present');
+    const bad = resolveOne(resolver, doc, 'bad');
+    if (!isRecordBody(bad.body)) throw new Error('unreachable');
+    // Neither restated member moves off the group's own governance: a bare, unmarked restatement
+    // through ordinary field syntax (not the group-restatement clause) still takes no name mark of
+    // its own, so `optional` stays `true` for both -- the group, not the field, answers omission.
+    expect(fieldNamed(bad.body, 'a')).toMatchObject({ optional: true, role: 'FREE' });
+    expect(fieldNamed(bad.body, 'b')).toMatchObject({ optional: true, role: 'FREE' });
+    expect(bad.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
   });
 
   it('a composition body restates an inherited group, tightening OPTIONAL to REQUIRED', () => {
@@ -733,16 +767,88 @@ describe('field groups (§5.11)', () => {
     expect((error as TsonSchemaValidationError).message).toContain("member 'a'");
   });
 
-  it('a `= _` (fixed-to-absent) member is not "always present", so it does not trip the presence check', () => {
+  it("a restated member narrowed to `void?` stays a member, taking no name mark of its own (§5.11, the spelling an earlier revision wrote '= _') -- void refines every type at a voidable position, so the member must already be voidable", () => {
     const doc = parse(`
-      base => { (a: token | b: token) }
-      ok   => base & { a: token? = _ }
+      base => { (a: token? | b: token) }
+      ok   => base & { a: void? }
     `);
     const { resolver, entries } = harness();
     entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
     const ok = resolveOne(resolver, doc, 'ok');
     if (!isRecordBody(ok.body)) throw new Error('unreachable');
-    expect(fieldNamed(ok.body, 'a').state).toBe('OPTIONAL_FIXED');
+    const a = fieldNamed(ok.body, 'a');
+    expect(a.type).toEqual({ name: 'void', arguments: [], annotations: [] });
+    expect(a.optional).toBe(true);
+    expect(a.voidable).toBe(true);
+    expect(a.role).toBe('FREE');
+    // `a` stays a member -- the group is untouched by the restatement.
+    expect(ok.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+  });
+
+  it("a restated member's name mark is refused -- it takes none, since its omission answer is the group's (§5.11)", () => {
+    const doc = parse(`
+      base => { (a: token | b: token) }
+      bad  => base & { a?: token }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('name mark');
+  });
+
+  it("a restated member's default ('~') is refused -- a default is a value only omission reaches, and omission is the group's (§5.11)", () => {
+    const doc = parse(`
+      base => { (a: text | b: text) }
+      bad  => base & { a: ~ "x" }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+  });
+
+  it("a restated member may take '=', checked when written and never injected -- omission still yields nothing, and the pin does not make the member always present (§5.11)", () => {
+    const doc = parse(`
+      base => { (a: text | b: text) }
+      sub  => base & { a: = "x" }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const sub = resolveOne(resolver, doc, 'sub');
+    if (!isRecordBody(sub.body)) throw new Error('unreachable');
+    const a = fieldNamed(sub.body, 'a');
+    expect(a).toMatchObject({ optional: true, voidable: false, role: 'FIXED' });
+    expect(a.value?.text).toBe('x');
+    // The member is still governed by the group, so it is never `fieldOmission`-`'INJECTED'` --
+    // the reader must not manufacture `a` on omission just because it now carries a pinned value.
+    expect(sub.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+  });
+
+  it("a member reachable by refinement may not acquire the selector '=?' (§5.2, §5.11)", () => {
+    const doc = parse(`
+      base => { (a: text | b: text) }
+      bad  => base & { a: =? }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('=?');
+  });
+});
+
+describe('tightening entries never acquire a fresh selector (§5.2, §5.7)', () => {
+  it("rejects '=?' on an ordinary (non-member) tightening entry -- a discriminator is declared once, at the base, and a restatement narrows an inherited field rather than minting a new one", () => {
+    const doc = parse(`
+      base => { k: text }
+      bad  => base ^ { k: =? }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('=?');
   });
 });
 
@@ -762,8 +868,8 @@ describe('refinement (§5.7)', () => {
     if (!isRecordBody(narrow.body)) throw new Error('unreachable');
     expect(narrow.body.fields.map((f) => f.name)).toEqual(['x', 'y']);
     expect(narrow.body.supertypes).toEqual([]); // record.supertypes records only direct `&`, never `^`
-    expect(fieldNamed(narrow.body, 'x').state).toBe('REQUIRED_FIXED');
-    expect(fieldNamed(narrow.body, 'y').state).toBe('REQUIRED');
+    expect(fieldNamed(narrow.body, 'x').role).toBe('FIXED');
+    expect(fieldNamed(narrow.body, 'y').role).toBe('FREE');
   });
 
   it('rejects a body field naming nothing inherited (refinement adds no fields)', () => {
@@ -811,6 +917,70 @@ describe('refinement (§5.7)', () => {
         derived => ~base ^ { x: token = "fixed" }
       `),
     ).toThrow(TsonParseError);
+  });
+
+  it('the definition mark is never inherited through refinement -- "the member is never inherited... and must be, or no concrete subtype of an abstract base could exist" holds for `^` exactly as it does for `&` (§5.2)', () => {
+    const doc = parse(`
+      p => abstract { x: token }
+      q => p ^ {}
+    `);
+    const { resolver, entries } = harness();
+    entries.set('p', resolver.resolve(declarationOf(doc, 'p')));
+    const q = resolveOne(resolver, doc, 'q');
+    if (!isRecordBody(q.body)) throw new Error('unreachable');
+    expect(q.body.extension).toBe('OPEN');
+    expect(q.body.discriminators).toEqual([]);
+  });
+
+  it("a restatement pinning a discriminator field FIXED does not inherit the base's own discriminators -- the subtype is a member, not itself a further base", () => {
+    const doc = parse(`
+      pet => abstract { pet_type: text =?  name: text }
+      dog => pet ^ { pet_type: = "dog" }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('pet', resolver.resolve(declarationOf(doc, 'pet')));
+    const dog = resolveOne(resolver, doc, 'dog');
+    if (!isRecordBody(dog.body)) throw new Error('unreachable');
+    expect(dog.body.extension).toBe('OPEN');
+    expect(dog.body.discriminators).toEqual([]);
+    expect(fieldNamed(dog.body, 'pet_type')).toMatchObject({ role: 'FIXED', optional: false });
+  });
+
+  it('restating a pinned field with a different spelling of the same value is not a change of pin -- `= 255` and `= 0xFF` collide as values (§5.5, §5.7)', () => {
+    const doc = parse(`
+      x => { n?: int32 = 255 }
+      y => x ^ { n?: = 0xFF }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
+    expect(() => {
+      resolveOne(resolver, doc, 'y');
+    }).not.toThrow();
+  });
+
+  it('restating a pinned field with a genuinely different value is still refused (§5.7)', () => {
+    const doc = parse(`
+      x => { n?: int32 = 255 }
+      y => x ^ { n?: = 254 }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
+    const error = thrownBy(() => resolveOne(resolver, doc, 'y'));
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('different value');
+  });
+
+  it('restating a pinned text field with a different Unicode normalisation form of the same content is not a change of pin (§5.7: "text pins compare NFC-normalised")', () => {
+    // "é" (é, NFC) vs "é" (e + combining acute, NFD) -- the same grapheme, two encodings.
+    const doc = parse(`
+      x => { n?: text = "café" }
+      y => x ^ { n?: = "café" }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
+    expect(() => {
+      resolveOne(resolver, doc, 'y');
+    }).not.toThrow();
   });
 });
 
@@ -921,37 +1091,49 @@ function integerTypeStructure(): TypeDefinition {
     {
       name: 'size',
       type: { name: 'integer_size', arguments: [], annotations: [] },
-      state: 'OPTIONAL',
+      optional: true,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     },
     {
       name: 'min',
       type: { name: 'integer', arguments: [], annotations: [] },
-      state: 'OPTIONAL',
+      optional: true,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     },
     {
       name: 'exclusive_min',
       type: { name: 'integer', arguments: [], annotations: [] },
-      state: 'OPTIONAL',
+      optional: true,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     },
     {
       name: 'max',
       type: { name: 'integer', arguments: [], annotations: [] },
-      state: 'OPTIONAL',
+      optional: true,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     },
     {
       name: 'exclusive_max',
       type: { name: 'integer', arguments: [], annotations: [] },
-      state: 'OPTIONAL',
+      optional: true,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     },
     {
       name: 'multiple_of',
       type: { name: 'integer', arguments: [], annotations: [] },
-      state: 'OPTIONAL',
+      optional: true,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     },
   ];
@@ -1381,13 +1563,17 @@ function widgetStructure(): TypeDefinition {
         {
           name: 'size',
           type: { name: 'integer', arguments: [], annotations: [] },
-          state: 'REQUIRED',
+          optional: false,
+          voidable: false,
+          role: 'FREE',
           annotations: [],
         },
         {
           name: 'label',
           type: { name: 'token', arguments: [], annotations: [] },
-          state: 'REQUIRED',
+          optional: false,
+          voidable: false,
+          role: 'FREE',
           annotations: [],
         },
       ],

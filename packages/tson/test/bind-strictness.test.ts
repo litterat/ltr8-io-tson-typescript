@@ -22,8 +22,18 @@ function typeRef(name: string): TypeRef {
   return { name, arguments: [], annotations: [] };
 }
 
-function recordField(name: string, state: RecordField['state'] = 'REQUIRED'): RecordField {
-  return { name, type: typeRef('int32'), state, annotations: [] };
+function recordField(
+  name: string,
+  marks: { optional?: boolean; voidable?: boolean; role?: RecordField['role'] } = {},
+): RecordField {
+  return {
+    name,
+    type: typeRef('int32'),
+    optional: marks.optional ?? false,
+    voidable: marks.voidable ?? false,
+    role: marks.role ?? 'FREE',
+    annotations: [],
+  };
 }
 
 interface Point {
@@ -55,32 +65,40 @@ describe('checkRecordBinding -- every non-FIXED field needs a slot (§5.2)', () 
     }).toThrow(TsonBindMismatchError);
   });
 
-  it('throws when a REQUIRED_DEFAULT field has no slot -- its injected value still needs storage', () => {
-    const fields = [recordField('x'), recordField('y'), recordField('z', 'REQUIRED_DEFAULT')];
+  it('throws when a role: DEFAULT field has no slot -- its injected value still needs storage', () => {
+    const fields = [
+      recordField('x'),
+      recordField('y'),
+      recordField('z', { optional: true, role: 'DEFAULT' }),
+    ];
     const binding = pointBinding();
     expect(() => {
       checkRecordBinding('point', fields, binding);
     }).toThrow(TsonBindMismatchError);
   });
 
-  it('throws when an OPTIONAL field has no slot -- OPTIONAL is deliberately not exempt', () => {
-    const fields = [recordField('x'), recordField('y'), recordField('label', 'OPTIONAL')];
+  it('throws when an optional, FREE field has no slot -- optional is deliberately not exempt', () => {
+    const fields = [recordField('x'), recordField('y'), recordField('label', { optional: true })];
     const binding = pointBinding();
     expect(() => {
       checkRecordBinding('point', fields, binding);
     }).toThrow(TsonBindMismatchError);
   });
 
-  it('does not require a slot for a REQUIRED_FIXED field', () => {
-    const fields = [recordField('x'), recordField('y'), recordField('pinned', 'REQUIRED_FIXED')];
+  it('does not require a slot for a role: FIXED field on an unmarked name', () => {
+    const fields = [recordField('x'), recordField('y'), recordField('pinned', { role: 'FIXED' })];
     const binding = pointBinding();
     expect(() => {
       checkRecordBinding('point', fields, binding);
     }).not.toThrow();
   });
 
-  it('does not require a slot for an OPTIONAL_FIXED field', () => {
-    const fields = [recordField('x'), recordField('y'), recordField('pinned', 'OPTIONAL_FIXED')];
+  it('does not require a slot for a role: FIXED field on a marked name', () => {
+    const fields = [
+      recordField('x'),
+      recordField('y'),
+      recordField('pinned', { optional: true, role: 'FIXED' }),
+    ];
     const binding = pointBinding();
     expect(() => {
       checkRecordBinding('point', fields, binding);
@@ -106,7 +124,7 @@ describe('checkRecordBinding -- every slot needs to fill a field', () => {
       fields: [field<Pinned, 'x'>(0, 'x', 'x', INT), field<Pinned, 'y'>(1, 'y', 'y', INT)],
       construct: ([x, y]) => ({ x: x as number, y: y as number }),
     });
-    const fields = [recordField('x'), recordField('y', 'REQUIRED_FIXED')];
+    const fields = [recordField('x'), recordField('y', { role: 'FIXED' })];
     expect(() => {
       checkRecordBinding('pinned', fields, binding);
     }).not.toThrow();
@@ -134,7 +152,14 @@ describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowin
     return {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'record', supertypes: [], fields, groups: [] },
+      body: {
+        kind: 'record',
+        supertypes: [],
+        fields,
+        groups: [],
+        extension: 'OPEN',
+        discriminators: [],
+      },
       annotations: [],
     };
   }

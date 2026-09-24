@@ -23,7 +23,17 @@ const binding = metaBindings.get('type_definition');
 
 describe('type_definition.body can be written, not just read', () => {
   it.each([
-    ['record', { kind: 'record', supertypes: [], fields: [], groups: [] }],
+    [
+      'record',
+      {
+        kind: 'record',
+        supertypes: [],
+        fields: [],
+        groups: [],
+        extension: 'OPEN',
+        discriminators: [],
+      },
+    ],
     ['unit', { kind: 'unit' }],
   ])('writes a %s body without a write error', (_name, body) => {
     if (binding === undefined) throw new Error('type_definition binding missing');

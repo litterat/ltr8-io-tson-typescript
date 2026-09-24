@@ -1,96 +1,101 @@
 /**
- * Part 2 §5.2's field-state table: a field's presence marker (`?`) and value modifier (`~`/`=`)
- * decide its resolved `FieldState` and what value, if any, rides with it. The table is closed and
- * consults nothing but the two marks the author wrote, which is why it can be answered before a
- * field's type is even known.
+ * Part 2 §5.2's field-marks table -- the single place that turns a field's two marks
+ * (`optional`/`voidable`) and its modifier (`~`/`=`/`=?`) into the three facts
+ * (`optional`/`voidable`/`role`) and the value a `schema.meta` `RecordField` carries. The table
+ * is closed and consults nothing but the marks the author wrote (plus, for a template body's own
+ * open modifiers, the enclosing declaration's parameter list), which is why it can be answered
+ * before a field's type is even known.
  *
- * Consulted by `definitionResolver.ts`'s own `resolveFieldEntry` when it resolves a closed record
- * body; the reference implementation's `SchemaDesugarer` asks the identical question when it
- * rewrites a record template's body into the `!record { ... }` form §5.2 says it denotes, so the
- * two agree on all six spellings — this port's `desugar.ts` does the equivalent rewrite inline
- * (see its own `resolveFieldModifiers`) rather than sharing this exact function, since the
- * desugarer runs on unresolved AST tokens while this one runs on an already-resolved `FieldState`
- * axis; both are transcribed from this one table and must be kept in step by hand if the table
- * ever changes.
+ * **One table, not two.** `desugar.ts` (building a template's held body from unresolved AST) and
+ * `definitionResolver.ts` (resolving a closed record's own fields) both consult this function --
+ * the Java reference has one, `FieldModifiers.of`
+ * (`tson-compiler/.../resolver/FieldModifiers.java`), and a second, hand-kept copy is exactly how
+ * the two drift.
+ *
+ * Consulted by `definitionResolver.ts`'s own `resolveFieldEntry` and by `desugar.ts`'s own
+ * `recordFieldValue`.
  */
 import { TsonSchemaValidationError } from '../core/errors.js';
 import type { FieldModifier } from '../ast/schema/fields.js';
 import type { TokenValue } from '../ast/value.js';
-import type { FieldState } from '../schema/meta/bodies.js';
+import type { FieldRole } from '../schema/meta/bodies.js';
 
 /**
- * What §5.2 makes of one field's marks. `value` is absent for the two states that carry none —
- * plain `REQUIRED`/`OPTIONAL`, and `OPTIONAL_FIXED`'s `= _` spelling, whose output encoding is a
- * `record_field` with no `value` member (§8.1).
+ * What §5.2 makes of one field's marks: the three independent facts a `RecordField` carries.
+ * `value` is present exactly when `role` is not `FREE`. `selector` is `true` for `=?` -- the
+ * discriminator a family's members pin (§5.2); every other field of this shape is then at its
+ * bare `FREE`/unpinned defaults, `=?` taking no value of its own.
  *
  * A token naming a type parameter rides `value` like any other (§5.7's "Open modifiers"); nothing
- * here labels it as one — §8.1's shadowing rule (a token is a parameter exactly when its text
+ * here labels it as one -- §8.1's shadowing rule (a token is a parameter exactly when its text
  * resolves into the enclosing entry's own `parameters`) is what tells the two apart wherever the
- * question is asked. What a parametric modifier *does* decide is the `state` beside it, which is
- * exactly what {@link resolveFieldModifiers} decides below.
+ * question is asked.
  */
-export interface ResolvedFieldModifiers {
-  readonly state: FieldState;
+export interface ResolvedFieldMarks {
+  readonly optional: boolean;
+  readonly voidable: boolean;
+  readonly role: FieldRole;
   readonly value?: TokenValue;
+  readonly selector: boolean;
 }
 
 /**
- * §5.2's table for one field. `optional` is the presence axis — the entry's own `?`, or (for a
- * tightening entry that restates only a modifier) the state it inherits. `parameters` is the
- * enclosing declaration's type-parameter list, empty outside a template.
+ * §5.2's table for one field. `optional`/`voidable` are the two marks as written -- the entry's
+ * own `?` on the name and on the type. `parameters` is the enclosing declaration's
+ * type-parameter list, empty outside a template.
  *
- * @throws TsonSchemaValidationError for the three spellings §5.2 rules out: `~ _` on any field,
- *   `= _` on a required one, and a default on an optional one.
+ * @throws TsonSchemaValidationError for the four spellings §5.2 rules out: a default on an
+ *   unmarked name (unless the value names an enclosing template parameter, §5.7's "Open
+ *   modifiers"), a pin on a voidable type, and the selector `=?` on a marked name or a voidable
+ *   type. (A modifier on a `void`-typed field is a resolver error checked once the field's type
+ *   is known, at the field's own resolution site -- this table does not see the type.)
  */
-export function resolveFieldModifiers(
+export function resolveFieldMarks(
   fieldName: string,
   optional: boolean,
+  voidable: boolean,
   modifier: FieldModifier | undefined,
   parameters: readonly string[],
-): ResolvedFieldModifiers {
+): ResolvedFieldMarks {
   if (modifier === undefined) {
-    return { state: optional ? 'OPTIONAL' : 'REQUIRED' };
+    return { optional, voidable, role: 'FREE', selector: false };
   }
+  if (modifier.kind === 'selector') {
+    if (optional) {
+      throw new TsonSchemaValidationError(
+        `field '${fieldName}' writes the selector '=?' on a name that also carries '?' -- a marked ` +
+          "name already answers its own omission question, and '=?' is refused there (§5.2). Write " +
+          `'${fieldName}: type =?' on the unmarked name`,
+      );
+    }
+    if (voidable) {
+      throw new TsonSchemaValidationError(
+        `field '${fieldName}' writes the selector '=?' on a voidable type -- a selector's declared ` +
+          "type MUST be non-voidable (§5.2): '_' selects nothing, and the family's members are what " +
+          'pin this field',
+      );
+    }
+    return { optional, voidable, role: 'FREE', selector: true };
+  }
+
   const fixed = modifier.kind === 'fixed';
-
-  if (modifier.value.kind === 'absent') {
-    // §5.2's sixth spelling, `field: type? = _`: OPTIONAL_FIXED carrying no value at all, so the
-    // field MUST be omitted or written as `_`.
-    if (!fixed) {
-      throw new TsonSchemaValidationError(
-        `field '${fieldName}' uses '~ _' -- a required field cannot fall back to not-being-filled, ` +
-          "so an absent default is a resolver error on any field (§5.2). Write 'type?' for a field " +
-          'that may be absent',
-      );
-    }
-    if (!optional) {
-      throw new TsonSchemaValidationError(
-        `field '${fieldName}' fixes a required field to absent ('= _') -- a field cannot be both ` +
-          `required and forbidden from being present (§5.2). Make it optional ('${fieldName}: type? = _') ` +
-          'to forbid its value while keeping it in the contract',
-      );
-    }
-    return { state: 'OPTIONAL_FIXED' };
-  }
-
-  const token = modifier.value.token;
-  if (optional && !fixed) {
+  if (fixed && voidable) {
     throw new TsonSchemaValidationError(
-      `field '${fieldName}' gives an optional field a default ('type? ~ value') -- a default implies ` +
-        "the field is always present, which contradicts optional (§5.2). Use 'type ~ value' for a " +
-        "fallback, 'type?' for absence, or 'type? = value' for present-implies-value",
+      `field '${fieldName}' pins a voidable type ('type? = value') -- a pin names the only value ` +
+        "the field admits, and '_' is not it: the '_' question is settled before the pin is " +
+        "consulted (§5.2). Drop the type's '?', or spell \"may be omitted or _ and nothing else\" " +
+        `as '${fieldName}: void?'`,
     );
   }
-  // §5.7's "Open modifiers": a parametric modifier lands in a REQUIRED-family state whatever the
-  // presence axis says, because nothing is fixed at declaration -- the value arrives at
-  // application, and every application MUST bind every parameter.
-  if (parameters.includes(token.text)) {
-    return { state: fixed ? 'REQUIRED' : 'REQUIRED_DEFAULT', value: token };
+  const token = modifier.token;
+  const isParameter = parameters.includes(token.text);
+  if (!optional && !fixed && !isParameter) {
+    throw new TsonSchemaValidationError(
+      `field '${fieldName}' gives a default to a key that is always written ('type ~ value') -- an ` +
+        "unmarked name says the key is always written, and '~ value' is a value only omission can " +
+        `reach (§5.2). Write '${fieldName}?: type ~ value'`,
+    );
   }
-  const state: FieldState = optional
-    ? 'OPTIONAL_FIXED'
-    : fixed
-      ? 'REQUIRED_FIXED'
-      : 'REQUIRED_DEFAULT';
-  return { state, value: token };
+  const role: FieldRole = fixed ? 'FIXED' : 'DEFAULT';
+  return { optional, voidable, role, value: token, selector: false };
 }

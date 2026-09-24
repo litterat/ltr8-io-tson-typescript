@@ -61,7 +61,14 @@ type Canonical = unknown;
  */
 
 /** "Fields at their default values are omitted." An absent list and an empty one are the same (§8.1). */
-const FALSE_BY_DEFAULT = new Set(['constructor', 'unordered', 'unique_items', 'disjoint']);
+const FALSE_BY_DEFAULT = new Set([
+  'constructor',
+  'unordered',
+  'unique_items',
+  'disjoint',
+  'optional',
+  'voidable',
+]);
 
 /** Set-typed fields, which the fixture header says a comparison tool canonicalises before comparing. */
 const SET_TYPED = new Set(['subtypes', 'members']);
@@ -111,12 +118,18 @@ const encodeAtom: AtomEncoder = (binding, value): TokenValue => {
     return { kind: 'token', text: token.text, form: token.form };
   }
   if (typeof value === 'string') {
-    // `text` is the only quoted atom in the whole resolved-schema vocabulary; every other
-    // string-hosted leaf (`type_kind`, `field_state`, `ieee_format`, ...) is an unquoted lexeme.
+    // Every closed-enumeration leaf (`type_kind`, `field_role`, `ieee_format`, ...) is an
+    // unquoted lexeme, and so is `enum.members` even though its own element type is `text` now
+    // (#12, §7.4) rather than `identifier`: a member spelled as a bare identifier still reads
+    // unquoted in canonical output, since [TSON-DATA] §2.4's "form is not meaning" makes an
+    // unquoted token a perfectly good `text` value. Free text that is NOT identifier-shaped
+    // (a URL, a sentence) still needs quoting to round-trip at all, so the two are told apart by
+    // the string's own shape rather than by the binding's wire type.
+    const identifierShaped = /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
     return {
       kind: 'token',
       text: value,
-      form: binding.wireType === 'text' ? 'single-line' : 'unquoted',
+      form: binding.wireType === 'text' && !identifierShaped ? 'single-line' : 'unquoted',
     };
   }
   if (typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'number') {
@@ -187,6 +200,9 @@ function canonicalCore(value: CoreValue, entry: boolean): Canonical {
         if (Array.isArray(held) && held.length === 0) continue;
         if (FALSE_BY_DEFAULT.has(field.name) && held === 'false') continue;
         if (field.name === 'state' && held === 'REQUIRED') continue;
+        if (field.name === 'role' && held === 'FREE') continue;
+        if (field.name === 'extension' && held === 'OPEN') continue;
+        if (field.name === 'profile' && held === 'IDENTIFIER') continue;
         // `type_definition.supertypes` is a set the fixture sorts and a resolver may not; a
         // *body*'s own `supertypes` records what was written, in source order, and is compared
         // as written.
@@ -533,8 +549,8 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
   // (`base32`/`base64`/`base64url`/`hex`) and `unknown`, and gains `bytes`, `period`, `set`, and
   // the `scoped` instances `declared`/`extern`/`dynamic` plus `extern_of`/`extern_type`.
   it.each([
-    ['meta-kernel', 50, 58],
-    ['meta', 38, 45],
+    ['meta-kernel', 53, 61],
+    ['meta', 36, 43],
     ['core', 50, 50],
   ])('%s.tn declares %i names and its fixture holds %i entries', (name, declared, entries) => {
     const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
@@ -558,16 +574,17 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
     },
     {
       pattern:
-        /^(enum_set|integer_member_set|set_type_[a-z_0-9]+)\.body\.(!|v\.(unordered|unique_items|min_items))$/,
+        /^(enum_set|integer_member_set|text_member_set|set_type_[a-z_0-9]+)\.body\.(!|v\.(unordered|unique_items|min_items))$/,
       reason:
         'topBinding writes every host ArrayBody as `array`, so a `!set_type {}` application ' +
         'round-trips as an unordered unique array rather than as `set_type` -- `min_items` is ' +
         'lost along with it, since plain ArrayBody carries no such field. This is the `!set` ' +
-        'versus `!array` divergence `CLAUDE.md` records as reported upstream, under Revision ' +
-        "35's names: `set` is a refinement of `array` sharing its shape, so the applied name is " +
-        'not recoverable from the value being written, and both this port and the reference ' +
-        'write `!array`. `integer_member_set` and the `set_type_*` entries meta mints for ' +
-        '`set<T>` are the same gap, not further defects',
+        'versus `!array` divergence `CLAUDE.md` records as reported upstream, and it survives ' +
+        'this revision under the same names: `set` is a refinement of `array` sharing its ' +
+        'shape, so the applied name is not recoverable from the value being written, and both ' +
+        'this port and the reference write `!array`. `integer_member_set`, `text_member_set` ' +
+        'and the `set_type_*` entries meta mints for `set<T>` are the same gap, not further ' +
+        'defects',
     },
     {
       pattern: /^(extern_of|extern_type)\.body\.v\.template$/,

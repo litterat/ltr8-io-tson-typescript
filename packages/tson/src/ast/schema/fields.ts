@@ -9,8 +9,10 @@ import type { TypeRef } from './typeref.js';
 export type RecordEntry = FieldDef | GroupDef;
 
 /**
- * `field-def = *annotation field-name ws ":" ws ( field-type field-modifier / field-type /
- * field-modifier )` (§12.1, §5.2) — one record field.
+ * `field-def = *annotation field-name ["?"] ws ":" ws ( field-type field-modifier / field-type /
+ * field-modifier )` (§12.1, §5.2) — one record field, answering three independent questions: the
+ * name's own `?` (`optional`, below), the type's own `?` ({@link FieldType.voidable}), and the
+ * modifier (`~`/`=`/`=?`).
  *
  * Exactly one of `type`/`modifier` may be absent, never both — a bare `field:` with neither a
  * type-ref nor a modifier is not a grammar production; a parser building this type is
@@ -19,65 +21,62 @@ export type RecordEntry = FieldDef | GroupDef;
  * source (§5.7's "elided type-refs") — legal only there; rejecting an elided type-ref in a
  * fresh record definition is a later, semantic-layer job (§5.2).
  *
- * **Field states: six spellings, five states.** §5.2 collapses the `type`/`modifier`
- * combination this node holds into one of five resolved states — the state itself is a
- * resolver fact (a future `schema.meta` `FieldState`, out of scope for this grammar-only AST),
- * never stored on this node — but all six spellings that produce it are representable here:
- *
- * | Syntax                 | `type` present, optional? | `modifier`                  | State (resolved) |
- * |-------------------------|---------------------------|-----------------------------|-------------------|
- * | `field: type`           | yes, not optional          | absent                       | REQUIRED |
- * | `field: type ~ value`   | yes, not optional          | `'default'` / `Literal`      | REQUIRED_DEFAULT |
- * | `field: type = value`   | yes, not optional          | `'fixed'` / `Literal`        | REQUIRED_FIXED |
- * | `field: type?`          | yes, optional               | absent                       | OPTIONAL |
- * | `field: type? = value`  | yes, optional               | `'fixed'` / `Literal`        | OPTIONAL_FIXED |
- * | `field: type? = _`      | yes, optional               | `'fixed'` / `Absent`         | OPTIONAL_FIXED (no value) |
- *
- * The three combinations §5.2 forbids — `~ _` on any field, `= _` on a non-optional field, and
- * `type? ~ value` (a default on an optional field) — are grammar-shaped (they parse into this
- * same node) but are resolver errors, not parse errors; this layer does not reject them.
+ * **Three slots, spelled independently.** §5.2 gives a field three marks that never interact
+ * grammatically: `optional` here, `voidable` on {@link FieldType}, and the modifier's own kind
+ * and value. What each combination *resolves to*
+ * — a `schema.meta` `RecordField`'s `optional`/`voidable`/`role`/`value` — is a resolver fact,
+ * out of scope for this grammar-only AST; every spelling §5.2 tables is representable here, and
+ * the four refusals it states over them (a default on an unmarked name, a pin on a voidable
+ * type, a modifier on `void`, `=?` outside its one admitted shape) are resolver errors, not
+ * parse errors — this layer does not reject them.
  */
 export interface FieldDef {
   readonly kind: 'fieldDef';
   readonly annotations: readonly Annotation[];
   readonly name: string;
+  /** The name's own `?` (§5.2): the key MAY be omitted when `true`. */
+  readonly optional: boolean;
   readonly type?: FieldType;
   readonly modifier?: FieldModifier;
 }
 
-/** `field-type = type-ref ["?"]` — `optional` is FIELD optionality (§5.2), not element/tuple optionality. */
+/** `field-type = type-ref ["?"]` (§12.1, §5.2) — `voidable` is the type's own `?`: a written `_` is admitted at this field when `true`. */
 export interface FieldType {
   readonly typeRef: TypeRef;
-  readonly optional: boolean;
+  readonly voidable: boolean;
 }
 
 /**
- * `field-modifier = ws ("~" / "=") ws (token / absent)` (§12.1, §5.2) — `~` is
- * {@link FieldModifierKind} `'default'`, `=` is `'fixed'`. The value is a bare token or the
- * absent sentinel only — never annotated, never typed, never a container: §12.1 states that no
+ * `field-modifier = ws ("~" / "=") ws token / ws "=" ws "?"` (§12.1, §5.2) — `~` is
+ * {@link FieldModifierDefault}, `=` is {@link FieldModifierFixed}, and `=?` is
+ * {@link FieldModifierSelector}, the discriminator a family's members pin (§5.2). The absent
+ * sentinel is not a modifier value: a field that may be omitted or written as `_` and nothing
+ * else is spelled `a?: void?`, never `~ _` or `= _`. Every value-bearing modifier carries an
+ * ordinary scalar token, never annotated, never typed, never a container: §12.1 states that no
  * production of the schema grammar uses the full `data-value`, and §5.2 restricts modifier
  * values to scalar tokens.
  */
-export interface FieldModifier {
-  readonly kind: FieldModifierKind;
-  readonly value: FieldModifierValue;
-}
+export type FieldModifier = FieldModifierDefault | FieldModifierFixed | FieldModifierSelector;
 
-/** `~` (default) or `=` (fixed) — the two field-value modifiers (§5.2). */
-export type FieldModifierKind = 'default' | 'fixed';
-
-/** A field modifier's value: a scalar token, or the absent sentinel `_` (§5.2). */
-export type FieldModifierValue = FieldModifierLiteral | FieldModifierAbsent;
-
-/** An ordinary scalar token value: `~ 8080`, `= "prod.example.com"`, `= false`. */
-export interface FieldModifierLiteral {
-  readonly kind: 'literal';
+/** `~ token` — the value is a **default**, supplied when the key is omitted and overridable by a written value (§5.2). */
+export interface FieldModifierDefault {
+  readonly kind: 'default';
   readonly token: TokenValue;
 }
 
-/** `= _` — valid only on an OPTIONAL field (§5.2); `~ _` is always a resolver error. */
-export interface FieldModifierAbsent {
-  readonly kind: 'absent';
+/** `= token` — the value is **fixed**; a written value MUST equal it (§5.2). */
+export interface FieldModifierFixed {
+  readonly kind: 'fixed';
+  readonly token: TokenValue;
+}
+
+/**
+ * `= ?` — the selector a discriminated family's members pin (§5.2): no value follows. Legal only
+ * on an unmarked name and a non-voidable type; a resolver error everywhere else (checked at
+ * resolution, not here).
+ */
+export interface FieldModifierSelector {
+  readonly kind: 'selector';
 }
 
 /**
@@ -100,14 +99,17 @@ export interface GroupDef {
 }
 
 /**
- * `group-member = *annotation field-name ws ":" ws type-ref` (§12.1, §5.11) — one labelled
- * alternative of a {@link GroupDef}. Deliberately bare: no `?` and no `~`/`=` value modifier —
- * selection belongs to the label, presence belongs to the group.
+ * `group-member = *annotation field-name ws ":" ws type-ref ["?"]` (§12.1, §5.11) — one labelled
+ * alternative of a {@link GroupDef}. Deliberately bare on the name: no `?` on it and no `~`/`=`/
+ * `=?` value modifier — selection belongs to the label, presence belongs to the group, and a
+ * group never injects. The type's own `?` is admitted (`voidable`): a voidable member written
+ * `_` is present and selects its alternative (§5.11).
  */
 export interface GroupMember {
   readonly annotations: readonly Annotation[];
   readonly name: string;
   readonly typeRef: TypeRef;
+  readonly voidable: boolean;
 }
 
 /**

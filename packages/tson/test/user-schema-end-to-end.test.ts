@@ -41,8 +41,8 @@ import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.j
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 {
   reading => {
     id: uuid
@@ -51,7 +51,7 @@ const USER_SCHEMA = `
     sample: sample
     tags: [text]
     limits: {text => float64}
-    site: site?
+    site?: site
   }
   site => {
     name: non_empty_text

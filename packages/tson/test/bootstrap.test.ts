@@ -56,7 +56,7 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   // package cites but does not derive is the one place a future kernel edit could silently
   // drift out of sync with what this test actually asserts.
   it('resolves to exactly as many entries as the bundled meta-kernel.tn declares plus its desugar-lifted synthetics', () => {
-    expect(schema.entries.size).toBe(58);
+    expect(schema.entries.size).toBe(61);
   });
 
   it("attaches no @synthetic marker -- the bootstrap route is deliberately unmarked (see this module's own doc)", () => {
@@ -75,7 +75,14 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     const top = entryOf(schema, 'top');
     expect(kindOf(schema, 'top')).toBe('PRODUCT');
     expect(top.supertypes).toEqual([]);
-    expect(top.body).toEqual({ kind: 'record', supertypes: [], fields: [], groups: [] });
+    expect(top.body).toEqual({
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    });
   });
 
   it('resolves unit as a constructor composing with atom', () => {
@@ -100,7 +107,11 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     const boolean = entryOf(schema, 'boolean');
     expect(kindOf(schema, 'boolean')).toBe('ATOM');
     expect(boolean.source).toEqual({ name: 'enum', arguments: [], annotations: [] });
-    expect(boolean.body).toEqual({ kind: 'enum', members: ['true', 'false'] } satisfies EnumBody);
+    expect(boolean.body).toEqual({
+      kind: 'enum',
+      members: ['true', 'false'],
+      profile: 'IDENTIFIER',
+    } satisfies EnumBody);
   });
 
   it('resolves integer as an unconstrained instance of integer_type', () => {

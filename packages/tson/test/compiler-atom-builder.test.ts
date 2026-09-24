@@ -60,6 +60,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('status', {
       kind: 'enum',
       members: ['PENDING', 'SHIPPED', 'DELIVERED'],
+      profile: 'IDENTIFIER',
     });
     expect(runSync(reader.read(bodyContextOver('SHIPPED')))).toEqual({
       kind: 'atom',
@@ -70,14 +71,22 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
   });
 
   it('reports ATOM_CONSTRAINT_VIOLATION for a token that names no member', () => {
-    const reader = buildAtomReader('status', { kind: 'enum', members: ['UP', 'DOWN'] });
+    const reader = buildAtomReader('status', {
+      kind: 'enum',
+      members: ['UP', 'DOWN'],
+      profile: 'IDENTIFIER',
+    });
     const { ctx, diagnostics } = collectingContextOver('SIDEWAYS');
     runSync(reader.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });
 
   it('narrows core.tn\'s own boolean (!enum [true false]) to a real host boolean, not the strings "true"/"false"', () => {
-    const reader = buildAtomReader('boolean', { kind: 'enum', members: ['true', 'false'] });
+    const reader = buildAtomReader('boolean', {
+      kind: 'enum',
+      members: ['true', 'false'],
+      profile: 'IDENTIFIER',
+    });
     expect(runSync(reader.read(bodyContextOver('true')))).toEqual({
       kind: 'atom',
       value: true,

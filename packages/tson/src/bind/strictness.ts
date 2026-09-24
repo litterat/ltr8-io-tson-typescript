@@ -11,8 +11,8 @@
  * its type, not on first read.
  *
  * **Scope.** Field-level coverage is a `record`-specific question: `record_field` is the one
- * meta-kernel shape carrying the five-member {@link FieldState} vocabulary (§5.2) this check
- * reads, because it is the one shape a FIXED value can make legitimately slot-free. No other
+ * meta-kernel shape carrying a `role` fact (§5.2, `FieldRole`: `FREE`/`DEFAULT`/`FIXED`) this
+ * check reads, because it is the one shape a FIXED value can make legitimately slot-free. No other
  * PRODUCT/SUM body has an analogous per-position "this position never needs binding coverage"
  * case -- a tuple position and an array element carry only the two-member {@link ElementState}
  * (§5.3), with no FIXED counterpart, and a `choice`'s variants (§5.4) are plain type references,
@@ -21,19 +21,23 @@
  * uses without narrowing its body by hand, and is a deliberate no-op outside the `record`/`record`
  * pairing -- see its own doc.
  */
-import type { FieldState, RecordBody, RecordField } from '../schema/meta/bodies.js';
+import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
 import type { TypeDefinition } from '../schema/meta/typedef.js';
 import { TsonBindMismatchError } from '../core/errors.js';
 import type { Binding, RecordBinding } from './binding.js';
 
 /**
- * `state` values a {@link RecordField} may carry with no corresponding {@link FieldSlot} required
- * -- the two FIXED states (§5.2): the decoder injects `REQUIRED_FIXED`'s value and never reads
- * `OPTIONAL_FIXED` past checking it against the pin, so neither needs a host-side slot to land in.
- * `REQUIRED_DEFAULT` is deliberately absent from this set: its injected value still has to be
- * *stored* somewhere, so it needs a slot exactly like a plain `REQUIRED` field does.
+ * Whether a {@link RecordField} needs no corresponding {@link FieldSlot} -- `role: 'FIXED'`
+ * (§5.2): a written value is only ever verified against the pin, never stored, and an omitted one
+ * (legal only where the name is also marked, `a?: T = v`) injects the schema's own pin rather than
+ * anything the document supplied -- so a FIXED field's value never comes from the wire, marked
+ * name or not, and neither case needs a host-side slot to land in. `role: 'DEFAULT'` is
+ * deliberately not this: its injected value still has to be *stored* somewhere, so it needs a slot
+ * exactly like a plain `FREE` field does.
  */
-const FIXED_STATES: ReadonlySet<FieldState> = new Set(['REQUIRED_FIXED', 'OPTIONAL_FIXED']);
+function isFixedField(field: RecordField): boolean {
+  return field.role === 'FIXED';
+}
 
 /**
  * Checks that `binding` covers `fields` exactly: every non-FIXED field has a matching slot
@@ -57,7 +61,7 @@ export function checkRecordBinding(
   const matchedWireNames = new Set<string>();
 
   for (const recordField of fields) {
-    if (FIXED_STATES.has(recordField.state)) continue;
+    if (isFixedField(recordField)) continue;
     const slot = binding.byWireName.get(recordField.name);
     if (slot === undefined) {
       uncoveredFields.push(recordField.name);
@@ -86,7 +90,7 @@ export function checkRecordBinding(
 
 /** True when `wireName` names a FIXED field of `fields` -- a slot bound there is redundant, not wrong, so it is not reported as unmatched. */
 function isFixedFieldName(fields: readonly RecordField[], wireName: string): boolean {
-  return fields.some((f) => f.name === wireName && FIXED_STATES.has(f.state));
+  return fields.some((f) => f.name === wireName && isFixedField(f));
 }
 
 /**

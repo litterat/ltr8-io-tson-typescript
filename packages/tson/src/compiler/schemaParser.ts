@@ -39,8 +39,6 @@ import type {
   AtomRefinement,
   FieldDef,
   FieldModifier,
-  FieldModifierKind,
-  FieldModifierValue,
   GroupDef,
   GroupMember,
   Instance,
@@ -170,8 +168,33 @@ function* parseDeclaration(state: CursorState): Task<Declaration> {
   const name = yield* expectTypeName(state, 'a declaration name');
   yield* expect(state, 'map-arrow-token', "a declaration's '=>'");
   const typeDefAnnotations = yield* parseAnnotationList(state);
+  const mark = yield* parseDefinitionMarkOpt(state);
   const typeDef = yield* parseTypeDef(state);
-  return { nameAnnotations, name, typeDefAnnotations, typeDef };
+  return {
+    nameAnnotations,
+    name,
+    typeDefAnnotations,
+    ...(mark !== undefined ? { mark } : {}),
+    typeDef,
+  };
+}
+
+/**
+ * `[ definition-mark ws ]` (§12.1, §5.2): `abstract`/`final`, read UNCONDITIONALLY at this one
+ * slot -- `pet => abstract base & { ... }` is a marked composition, not a reference to a type
+ * named `base` applied to `abstract`. The two words are ordinary identifiers everywhere else
+ * ([TSON-DATA] §7.7); what cannot be written is a declaration whose whole type-def is the bare
+ * word, which {@link parseTypeDef} then fails to parse (nothing valid follows the consumed mark),
+ * surfacing as "a declaration missing its definition".
+ */
+function* parseDefinitionMarkOpt(state: CursorState): Task<'abstract' | 'final' | undefined> {
+  if (!(yield* check(state, 'unquoted-token'))) return undefined;
+  const t = yield* peekToken(state);
+  if (t.type === 'unquoted-token' && (t.text === 'abstract' || t.text === 'final')) {
+    yield* advance(state);
+    return t.text;
+  }
+  return undefined;
 }
 
 // ── Type Definitions (§5, §12.1) ────────────────────────────────────────
@@ -451,6 +474,7 @@ function* parseRecordEntry(state: CursorState): Task<RecordEntry> {
 
 function* parseFieldDef(state: CursorState, annotations: readonly Annotation[]): Task<FieldDef> {
   const name = yield* expectFieldNameToken(state, 'a record field name');
+  const optional = yield* consumeAdjacentQuestion(state);
   if (yield* check(state, 'map-arrow-token')) {
     const here = yield* peekToken(state);
     throw parseError(
@@ -467,8 +491,8 @@ function* parseFieldDef(state: CursorState, annotations: readonly Annotation[]):
     modifier = yield* parseFieldModifier(state);
   } else {
     const ref = yield* parseTypeRef(state);
-    const optional = yield* consumeAdjacentQuestion(state);
-    type = { typeRef: ref, optional };
+    const voidable = yield* consumeAdjacentQuestion(state);
+    type = { typeRef: ref, voidable };
     if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
       modifier = yield* parseFieldModifier(state);
     }
@@ -477,44 +501,50 @@ function* parseFieldDef(state: CursorState, annotations: readonly Annotation[]):
     kind: 'fieldDef',
     annotations,
     name: name.text,
+    optional,
     ...(type !== undefined ? { type } : {}),
     ...(modifier !== undefined ? { modifier } : {}),
   };
 }
 
+/**
+ * `field-modifier = ws ("~" / "=") ws token / ws "=" ws "?"` (§12.1, §5.2). `~` is always a
+ * default; `=` is a fixed value UNLESS immediately followed by `?` with nothing else, which is
+ * the selector -- `a: T =? v` (a value after the selector) is a parse error, since `field-modifier`
+ * admits no token there.
+ */
 function* parseFieldModifier(state: CursorState): Task<FieldModifier> {
   const isDefault = yield* check(state, 'tilde');
-  const kind: FieldModifierKind = isDefault ? 'default' : 'fixed';
   yield* advance(state);
 
-  let value: FieldModifierValue;
-  if (yield* check(state, 'absent-token')) {
+  if (!isDefault && (yield* check(state, 'question'))) {
     yield* advance(state);
-    value = { kind: 'absent' };
-  } else {
-    const t = yield* peekToken(state);
-    let form: TokenForm;
-    switch (t.type) {
-      case 'unquoted-token':
-        form = 'unquoted';
-        break;
-      case 'single-line-token':
-        form = 'single-line';
-        break;
-      case 'multi-line-token':
-        form = 'multi-line';
-        break;
-      default:
-        throw mismatch(
-          `a scalar token or the absent sentinel '_' after '${kind === 'default' ? '~' : '='}'`,
-          t,
-        );
-    }
-    yield* advance(state);
-    const token: TokenValue = { kind: 'token', text: t.text, form };
-    value = { kind: 'literal', token };
+    return { kind: 'selector' };
   }
-  return { kind, value };
+
+  const t = yield* peekToken(state);
+  let form: TokenForm;
+  switch (t.type) {
+    case 'unquoted-token':
+      form = 'unquoted';
+      break;
+    case 'single-line-token':
+      form = 'single-line';
+      break;
+    case 'multi-line-token':
+      form = 'multi-line';
+      break;
+    default:
+      throw mismatch(
+        isDefault
+          ? "a scalar token after '~'"
+          : "a scalar token after '=', or '?' with nothing following (the selector, §5.2)",
+        t,
+      );
+  }
+  yield* advance(state);
+  const token: TokenValue = { kind: 'token', text: t.text, form };
+  return isDefault ? { kind: 'default', token } : { kind: 'fixed', token };
 }
 
 function* parseGroupDef(state: CursorState, annotations: readonly Annotation[]): Task<GroupDef> {
@@ -545,7 +575,9 @@ function* parseGroupMember(state: CursorState): Task<GroupMember> {
   const annotations = yield* parseAnnotationList(state);
   const name = yield* expectFieldNameToken(state, "a field group member's name");
   yield* expect(state, 'colon', "a field group member's ':'");
-  return { annotations, name: name.text, typeRef: yield* parseTypeRef(state) };
+  const typeRef = yield* parseTypeRef(state);
+  const voidable = yield* consumeAdjacentQuestion(state);
+  return { annotations, name: name.text, typeRef, voidable };
 }
 
 // ── Type References (§5.3, §12.1) ───────────────────────────────────────

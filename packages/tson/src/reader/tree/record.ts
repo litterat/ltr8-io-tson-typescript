@@ -18,7 +18,13 @@ import type { Task } from '../../io/bytes.js';
 import type { Position } from '../../core/position.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
-import type { FieldGroup, FieldState, RecordBody, RecordField } from '../../schema/meta/bodies.js';
+import {
+  fieldOmission,
+  isGroupMember,
+  type FieldGroup,
+  type RecordBody,
+  type RecordField,
+} from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
 import { absentNode, recordNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
@@ -27,7 +33,6 @@ import {
   refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
-  skipDataValue,
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
@@ -40,18 +45,17 @@ interface CompiledField {
   readonly scoped: boolean;
 }
 
-/** §5.2's sixth spelling (`type? = _`): nothing to parse, and the only conforming document omits the field or writes `_`. */
+/**
+ * A FIXED field's own check (§5.2): `role: 'FIXED'` fields are never voidable (a pin on a
+ * voidable type is a resolver error), so a written `_` at one is always refused, never a second
+ * spelling of the pin.
+ */
 interface FixedCheck {
-  readonly mustBeAbsent: boolean;
   readonly value: Value | undefined;
   readonly parser: TypeReader<Value>;
 }
 
 type Shape = 'fields' | 'empty' | 'positional' | 'mismatch';
-
-function isFixedState(state: FieldState): boolean {
-  return state === 'REQUIRED_FIXED' || state === 'OPTIONAL_FIXED';
-}
 
 /** A record's compiled field is looked up by an index this module itself derived (a schema-map count or a `fieldIndex` hit) -- never out of range in a correct build, so a miss is this module's own bug, not a document problem. */
 function at<T>(array: readonly (T | undefined)[], index: number, what: string): T {
@@ -88,33 +92,33 @@ export function recordTreeReader(
   const groups: readonly FieldGroup[] = body.groups;
   const precomputedValue = new Array<Value | undefined>(fields.length);
   const fixedCheck = new Array<FixedCheck | undefined>(fields.length);
+  // §5.11: a field-group member's omission is the group's, never the field's own -- computed once
+  // here so {@link valueForAbsentField}/{@link valueForStatedAbsentField} can pass it through to
+  // {@link fieldOmission} without walking `groups` on every field.
+  const memberOfGroup = fields.map((field) => isGroupMember(groups, field.schema.name));
   let solePositionalField = -1;
   let bareRequiredCount = 0;
 
   fields.forEach((field, i) => {
     fieldIndex.set(field.schema.name, i);
-    const state = field.schema.state;
-    if (
-      state === 'REQUIRED_DEFAULT' ||
-      state === 'REQUIRED_FIXED' ||
-      (state === 'OPTIONAL_FIXED' && field.schema.value !== undefined)
-    ) {
+    const role = field.schema.role;
+    if (role !== 'FREE') {
       const token = field.schema.value;
       if (token === undefined) {
         throw new Error(
-          `'${field.schema.name}' on '${displayName}' is ${state} but the schema carries no value for it -- the resolver should never produce this`,
+          `'${field.schema.name}' on '${displayName}' has role ${role} but the schema carries no ` +
+            'value for it -- the resolver should never produce this (§8.1: value is present ' +
+            "exactly when role is not 'FREE')",
         );
       }
       precomputedValue[i] = readSchemaLiteral(token, field.parser);
     }
-    if (isFixedState(state)) {
-      fixedCheck[i] = {
-        mustBeAbsent: field.schema.value === undefined,
-        value: precomputedValue[i],
-        parser: field.parser,
-      };
+    if (role === 'FIXED') {
+      fixedCheck[i] = { value: precomputedValue[i], parser: field.parser };
     }
-    if (state === 'REQUIRED') {
+    // §5.6's positional form counts fields whose NAME is unmarked, whatever their modifier: a
+    // voidable field must still be written, and so must a marker.
+    if (!field.schema.optional) {
       bareRequiredCount += 1;
       solePositionalField = i;
     }
@@ -154,11 +158,14 @@ export function recordTreeReader(
     return { shape: 'mismatch', anchor };
   }
 
-  /** The value a field takes when the document never mentioned it at all -- §5.2's five states, one place. */
+  /**
+   * The value a field takes when the document never mentioned it at all -- §5.2's one derivation
+   * ({@link fieldOmission}), applied.
+   */
   function valueForAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
-    switch (schema.state) {
-      case 'REQUIRED':
+    switch (fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'))) {
+      case 'MISSING':
         ctx
           .schemaField(schema.name)
           .report(
@@ -168,34 +175,46 @@ export function recordTreeReader(
             '(absent)',
           );
         return undefined;
-      case 'OPTIONAL':
+      case 'ABSENT':
         return undefined;
-      case 'REQUIRED_DEFAULT':
-      case 'REQUIRED_FIXED':
+      case 'INJECTED':
         return precomputedValue[schemaIndex];
-      case 'OPTIONAL_FIXED':
-        return undefined;
     }
   }
 
-  /** The value a field takes when the document explicitly wrote `_` at it -- differs from omission for `OPTIONAL` (§2.9: present with an absent value, distinct from never written) and for `REQUIRED_DEFAULT` (§5.2). */
+  /**
+   * The value a field takes when the document explicitly wrote `_` at it. Never reached for a
+   * `role: 'FIXED'` field -- {@link readFields} routes those through {@link verifyFixed} before a
+   * value is even peeked, and a FIXED field is never voidable (§5.2's own refusal), so this
+   * function's own `role` is always `'FREE'` or `'DEFAULT'`.
+   *
+   * Admitted exactly when `voidable` (§2.9: present with an absent value, distinct from never
+   * written); refused everywhere else, recovering to whatever the key's own omission would have
+   * yielded (§5.2: "a written `_` at a field that is not voidable is a validation error whatever
+   * the modifier; at `a?: T ~ v` the fix is to omit the field, and omission remains the injection
+   * route").
+   */
   function valueForStatedAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
-    if (schema.state === 'OPTIONAL') {
+    if (schema.voidable) {
       return absentNode();
     }
-    if (schema.state === 'REQUIRED_DEFAULT') {
-      ctx
-        .schemaField(schema.name)
-        .report(
-          'ATOM_CONSTRAINT_VIOLATION',
-          `'${schema.name}' on '${displayName}' is always filled from the schema and cannot be written '_' -- omit the field to take its default (§5.2)`,
-          `the field omitted, or a value for '${schema.name}'`,
-          '_',
-        );
-      return precomputedValue[schemaIndex];
-    }
-    return valueForAbsentField(ctx, schemaIndex);
+    const omission = fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'));
+    const expected =
+      omission === 'INJECTED'
+        ? `the field omitted (its default value), or a value for '${schema.name}'`
+        : omission === 'ABSENT'
+          ? `the field omitted, or a value for '${schema.name}'`
+          : `a value for '${schema.name}'`;
+    ctx
+      .schemaField(schema.name)
+      .report(
+        'ATOM_CONSTRAINT_VIOLATION',
+        `'${schema.name}' on '${displayName}' is not voidable and refuses '_' (§5.2)`,
+        expected,
+        '_',
+      );
+    return omission === 'INJECTED' ? precomputedValue[schemaIndex] : undefined;
   }
 
   /**
@@ -213,27 +232,16 @@ export function recordTreeReader(
     const fieldCtx = ctx.schemaField(fieldName);
     yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
     const check = at(fixedCheck, schemaIndex, 'fixed-check');
-    const schema = field.schema;
     const peeked = yield* ctx.peek();
     if (peeked.kind === 'absent') {
       yield* ctx.next();
-      if (schema.state === 'REQUIRED_FIXED') {
-        fieldCtx.report(
-          'FIELD_FIXED',
-          `'${fieldName}' is fixed on '${displayName}' and cannot be absent`,
-          check.value === undefined ? '(none)' : renderValue(check.value),
-          '_',
-        );
-      }
-      return; // OPTIONAL_FIXED, valued or `= _`: absence is exactly what it permits
-    }
-    if (check.mustBeAbsent) {
-      yield* skipDataValue(ctx);
+      // §5.2: a pin on a voidable type is refused at the schema, so a FIXED field is never
+      // voidable -- a written `_` is always refused here, never a second spelling of the pin.
       fieldCtx.report(
         'FIELD_FIXED',
-        `'${fieldName}' is fixed to absent on '${displayName}' and may only be omitted or written as '_'`,
+        `'${fieldName}' is fixed on '${displayName}' and is not voidable, so it cannot be written '_' (§5.2)`,
+        check.value === undefined ? '(none)' : renderValue(check.value),
         '_',
-        'a value',
       );
       return;
     }

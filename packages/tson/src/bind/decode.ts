@@ -64,13 +64,13 @@ function defaultAtomDecoder(_binding: AtomBinding<unknown>, wire: TokenValue): u
 }
 
 /**
- * What a caller who knows `binding`'s own *schema* field states (`§5.2`'s `FieldState`) offers a
- * `record`-shaped decode -- deliberately opaque to this module, which knows only `RecordBinding`
- * shapes and nothing of `FieldState`/`RecordField` (see this file's own top comment on the
- * `ast/`+`bind/`-only boundary). `schema/metaReader.ts` is the one caller today: `type_ref`'s own
- * `name` is `REQUIRED` with no default, so it names `positionalField`; `record_field.state`
- * defaults to `REQUIRED` when the wire omits it, so `defaultFor('state')` hands back that default
- * re-spelled as a `DataValue`.
+ * What a caller who knows `binding`'s own *schema* field facts (§5.2's `record_field`, §5.3's
+ * `field_group`) offers a `record`-shaped decode -- deliberately opaque to this module, which
+ * knows only `RecordBinding` shapes and nothing of `RecordField`/`FieldGroup` (see this file's own
+ * top comment on the `ast/`+`bind/`-only boundary). `schema/metaReader.ts` is the one caller
+ * today: `type_ref`'s own `name` is required with no default, so it names `positionalField`;
+ * `field_group.state` defaults to `REQUIRED` when the wire omits it, so `defaultFor('state')`
+ * hands back that default re-spelled as a `DataValue`.
  */
 export interface RecordFieldPolicy {
   /** The wire name of the one field a non-record value fills positionally (§5.6), or `undefined` if none/ambiguous for this binding. */
@@ -138,8 +138,8 @@ function tokenOf(value: CoreValue, wireType: string): TokenValue {
  * value must fill); when every field is collection-shaped (a record with exactly one field, all
  * of it a list -- `enum_body.members`), that sole field is the fallback. Correct for the closed
  * meta-kernel vocabulary this module was built against (`type_ref.name`, `binary_type.encoding`,
- * `enum_body.members`) without knowing a single `FieldState`; ambiguous elsewhere, in which case
- * this returns `undefined` and positional form is refused.
+ * `enum_body.members`) without consulting a single `record_field`; ambiguous elsewhere, in which
+ * case this returns `undefined` and positional form is refused.
  */
 export function inferPositionalField<
   F extends {

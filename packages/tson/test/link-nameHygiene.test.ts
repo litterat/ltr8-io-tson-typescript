@@ -97,18 +97,32 @@ function def(
   };
 }
 
-const RECORD: Top = { kind: 'record', supertypes: [], fields: [], groups: [] };
+const RECORD: Top = {
+  kind: 'record',
+  supertypes: [],
+  fields: [],
+  groups: [],
+  extension: 'OPEN',
+  discriminators: [],
+};
 
 function field(name: string, type: TypeRef): RecordField {
-  return { name, type, state: 'REQUIRED', annotations: [] };
+  return { name, type, optional: false, voidable: false, role: 'FREE', annotations: [] };
 }
 
 function record(fields: readonly RecordField[]): Top {
-  return { kind: 'record', supertypes: [], fields, groups: [] };
+  return {
+    kind: 'record',
+    supertypes: [],
+    fields,
+    groups: [],
+    extension: 'OPEN',
+    discriminators: [],
+  };
 }
 
 function enumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members };
+  return { kind: 'enum', members, profile: 'IDENTIFIER' };
 }
 
 function choiceOf(variants: readonly TypeRef[]): Top {

@@ -71,6 +71,16 @@ export const MEMBERS = 'members';
 export const TYPE = 'type';
 export const STATE = 'state';
 export const SUPERTYPES = 'supertypes';
+/** `record_field.optional` — the name's own `?` (§5.2). */
+export const OPTIONAL = 'optional';
+/** `record_field.voidable` — the type's own `?` (§5.2). */
+export const VOIDABLE = 'voidable';
+/** `record_field.role` — `field_role` (§5.2, §8.1). */
+export const ROLE = 'role';
+/** `record.extension` — `record_extension_type` (§5.2, §8.1). */
+export const EXTENSION = 'extension';
+/** `record.discriminators` — the base's own selector fields, in declaration order (§5.2, §8.1). */
+export const DISCRIMINATORS = 'discriminators';
 
 // ── Building blocks ──────────────────────────────────────────────────────────────────────────
 
@@ -169,8 +179,14 @@ export function heldRecord(
       nameField(NAME, f.name),
       { name: TYPE, value: scoped(refValue(f.type)) },
     ];
-    if (f.state !== 'REQUIRED') {
-      members.push(nameField(STATE, f.state));
+    if (f.optional) {
+      members.push(nameField(OPTIONAL, 'true'));
+    }
+    if (f.voidable) {
+      members.push(nameField(VOIDABLE, 'true'));
+    }
+    if (f.role !== 'FREE') {
+      members.push(nameField(ROLE, f.role));
     }
     if (f.value !== undefined) {
       const form = lexerFormOfMeta(f.value.form);
@@ -202,13 +218,25 @@ export function heldRecord(
       name: SUPERTYPES,
       value: scoped({
         kind: 'array',
-        elements: body.supertypes.map((s: string) => scoped(tokenValue(s))),
+        elements: body.supertypes.map((s) => scoped(refValue(s))),
       }),
     });
   }
   binding.push({ name: FIELDS, value: scoped({ kind: 'array', elements: fields }) });
   if (groups.length > 0) {
     binding.push({ name: GROUPS, value: scoped({ kind: 'array', elements: groups }) });
+  }
+  if (body.extension !== 'OPEN') {
+    binding.push(nameField(EXTENSION, body.extension));
+  }
+  if (body.discriminators.length > 0) {
+    binding.push({
+      name: DISCRIMINATORS,
+      value: scoped({
+        kind: 'array',
+        elements: body.discriminators.map((d) => scoped(tokenValue(d))),
+      }),
+    });
   }
   return { annotations: [], typeRef: RECORD, coreValue: { kind: 'record', fields: binding } };
 }

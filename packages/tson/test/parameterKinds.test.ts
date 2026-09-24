@@ -50,10 +50,14 @@ function recordVocab(
     kind: 'record',
     supertypes: [],
     groups: [],
+    extension: 'OPEN',
+    discriminators: [],
     fields: fields.map((f) => ({
       name: f.name,
       type: refT(f.type),
-      state: 'REQUIRED',
+      optional: false,
+      voidable: false,
+      role: 'FREE',
       annotations: [],
     })),
   };

@@ -424,10 +424,13 @@ describe('date_type', () => {
 
 describe('enum', () => {
   it('members may only shrink under refinement', () => {
-    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'] };
-    expect(checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'] })).toEqual([]);
+    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], profile: 'IDENTIFIER' };
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'] }).length,
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], profile: 'IDENTIFIER' }),
+    ).toEqual([]);
+    expect(
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], profile: 'IDENTIFIER' })
+        .length,
     ).toBeGreaterThan(0);
   });
 });

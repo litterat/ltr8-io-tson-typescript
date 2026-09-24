@@ -21,19 +21,18 @@
  *    is general over every `record`-shaped position, not only a top-level constructor application
  *    -- a `type_ref`-typed field (`type: int32`) is *itself* written positionally almost always
  *    (§8.1: "canonical output MUST use the bare token whenever `arguments` is absent"). Which
- *    field a given constructor fills positionally depends on its own `record_field.state`
- *    (`REQUIRED`, with no default or fixed value) -- information a `Binding` never carries
+ *    field a given constructor fills positionally depends on its own `record_field.optional`
+ *    (`false`, an unmarked name, whatever its modifier) -- information a `Binding` never carries
  *    (`FieldSlot.required` is a *write*-direction flag, `combinators.ts`'s own `field()`/
- *    `optional()` set it from the host type's own optionality, not from `FieldState`).
- * 2. **`REQUIRED_DEFAULT`/`REQUIRED_FIXED` field defaulting.** `[T]` desugars to
- *    `!array { element_type: T }` alone (`desugar.ts`'s own array-sugar rewrite) -- `unordered`,
- *    `unique_items` and `state` are the *kernel's* own declared defaults
- *    (`array => ~product & { unordered: boolean ~ false ... }`, meta-kernel.tn), not something the
- *    wire ever restates, and the same is true one level down (`record_field.state ~ REQUIRED`).
- *    `bind/decode.ts`'s own "absent and empty are the same list" rule already covers a missing
- *    `ArrayBinding`/`MapBinding`-shaped field; every other missing `REQUIRED_DEFAULT`/
- *    `REQUIRED_FIXED` scalar field needs its default token here, from the governing meta's own
- *    `RecordField.value`.
+ *    `optional()` set it from the host type's own optionality, not from the field's own marks).
+ * 2. **Injected field defaulting.** `[T]` desugars to `!array { element_type: T }` alone
+ *    (`desugar.ts`'s own array-sugar rewrite) -- `unordered`, `unique_items` and `state` are the
+ *    *kernel's* own declared defaults (`array => ~product & { unordered: boolean ~ false ... }`,
+ *    meta-kernel.tn), not something the wire ever restates, and the same is true one level down
+ *    (`record_field.optional`/`voidable` `~ false`, `role ~ FREE`). `bind/decode.ts`'s own
+ *    "absent and empty are the same list" rule already covers a missing `ArrayBinding`/
+ *    `MapBinding`-shaped field; every other missing field whose `role` is not `FREE` needs its
+ *    default token here, from the governing meta's own `RecordField.value`.
  *
  * **Two distinct sources feed the one `RecordFieldsProvider`** {@link createDefinitionMetaReader}
  * builds, because a nested `record`-shaped field's own constructor name is not recoverable from
@@ -69,7 +68,7 @@ import {
   tupleElementBinding,
   typeRefBinding,
 } from './bindings.js';
-import type { RecordBody, RecordField } from './meta/bodies.js';
+import { fieldOmission, isGroupMember, type RecordBody, type RecordField } from './meta/bodies.js';
 import type { Top, TypeDefinition } from './meta/typedef.js';
 
 // -------------------------------------------------------------------------------------------
@@ -78,9 +77,10 @@ import type { Top, TypeDefinition } from './meta/typedef.js';
 
 /**
  * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`identifier`, `token`,
- * `text`, `boolean`, `integer`, `value`, `date`, `time`, `datetime`, `scope_kind`, and the five
- * other enum-shaped constraint atoms `field_state`/`element_state`/`complex_component`/
- * `ieee_format`/`bytes_encoding`). Deliberately narrow: this is not a general-purpose `atom/`
+ * `text`, `boolean`, `integer`, `value`, `date`, `time`, `datetime`, `scope_kind`, and the other
+ * enum-shaped constraint atoms -- `field_role`, `element_state`, `record_extension_type`,
+ * `enum_profile`, `complex_component`, `ieee_format`, `bytes_encoding`). Deliberately narrow: this
+ * is not a general-purpose `atom/`
  * replacement, only what a schema *source* document's own constructor-application bodies ever
  * carry -- min/max bounds, size bits, enum members, boolean flags, and the temporal bound facets.
  * Every one of those bounds is `value`-typed in `spec/m/meta.tn` (`( min: value | exclusive_min:
@@ -173,9 +173,10 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
     }
 
     // The remaining meta-kernel/meta atoms are all closed enumerations (`scope_kind`,
-    // `field_state`, `element_state`, `complex_component`, `ieee_format`, `bytes_encoding`):
-    // every member is written as its own bare unquoted name, so the token's own text already
-    // is the host value -- `schema/meta`'s corresponding types are plain string-literal unions.
+    // `field_role`, `element_state`, `record_extension_type`, `enum_profile`,
+    // `complex_component`, `ieee_format`, `bytes_encoding`): every member is written as its own
+    // bare unquoted name, so the token's own text already is the host value -- `schema/meta`'s
+    // corresponding types are plain string-literal unions.
     default:
       return wire.text;
   }
@@ -205,8 +206,8 @@ function readError(message: string): TsonReadError {
 // Turning a constructor's own resolved fields into a RecordFieldPolicy
 // -------------------------------------------------------------------------------------------
 
-/** `def`'s own `RecordBody.fields`, or `undefined` when `def` is unknown or not record-shaped. */
-function recordFieldsOf(def: TypeDefinition | undefined): readonly RecordField[] | undefined {
+/** `def`'s own `RecordBody`, or `undefined` when `def` is unknown or not record-shaped. */
+function recordBodyOf(def: TypeDefinition | undefined): RecordBody | undefined {
   if (def === undefined) return undefined;
   const body: Top = def.body;
   // `TemplateBody` carries no `kind` tag at all (see `typedef.ts`'s own doc) -- membership must
@@ -215,21 +216,23 @@ function recordFieldsOf(def: TypeDefinition | undefined): readonly RecordField[]
   // `Data.kind` is a plain `string` (a meta-schema's own constructor name), not a literal, so the
   // check above narrows to `RecordBody | Data` rather than `RecordBody` alone -- the same
   // narrowing gap `bind/strictness.ts`'s own `checkBinding` documents and casts past.
-  return (body as RecordBody).fields;
+  return body as RecordBody;
 }
 
-/** The one field name §5.6 lets a bare (non-record) value fill: the constructor's single `REQUIRED` field, if it has exactly one. */
+/** The one field name §5.6 lets a bare (non-record) value fill: the constructor's single field whose NAME is unmarked, if it has exactly one -- whatever its modifier (§5.6: "fields whose name carries `?` do not count, whether or not they carry a value"). */
 function singleRequiredField(fields: readonly RecordField[]): string | undefined {
-  const required = fields.filter((f) => f.state === 'REQUIRED');
+  const required = fields.filter((f) => !f.optional);
   return required.length === 1 ? required[0]?.name : undefined;
 }
 
-/** A default/fixed `RecordField.value` re-spelled as the wire `DataValue` it denotes, via `bindings.ts`'s own form map. */
-function defaultAsDataValue(field: RecordField): DataValue | undefined {
-  if (
-    (field.state !== 'REQUIRED_DEFAULT' && field.state !== 'REQUIRED_FIXED') ||
-    field.value === undefined
-  ) {
+/**
+ * A default/fixed `RecordField.value` re-spelled as the wire `DataValue` it denotes, via
+ * `bindings.ts`'s own form map, using {@link fieldOmission}'s own `'INJECTED'` verdict (§5.2) --
+ * never for a field-group member, which the group governs and never supplies (§5.11) whatever its
+ * own `role` says.
+ */
+function defaultAsDataValue(field: RecordField, memberOfGroup: boolean): DataValue | undefined {
+  if (fieldOmission(field, memberOfGroup) !== 'INJECTED' || field.value === undefined) {
     return undefined;
   }
   return {
@@ -240,14 +243,17 @@ function defaultAsDataValue(field: RecordField): DataValue | undefined {
 
 /** Builds the {@link RecordFieldPolicy} `def`'s own resolved fields describe, or `undefined` when `def` is unknown/not record-shaped -- {@link fromCoreValue} then falls back to its own self-contained heuristic. */
 function policyFor(def: TypeDefinition | undefined): RecordFieldPolicy | undefined {
-  const fields = recordFieldsOf(def);
-  if (fields === undefined) return undefined;
+  const body = recordBodyOf(def);
+  if (body === undefined) return undefined;
+  const { fields, groups } = body;
   const positionalField = singleRequiredField(fields);
   return {
     ...(positionalField === undefined ? {} : { positionalField }),
     defaultFor: (wireName) => {
       const field = fields.find((f) => f.name === wireName);
-      return field === undefined ? undefined : defaultAsDataValue(field);
+      return field === undefined
+        ? undefined
+        : defaultAsDataValue(field, isGroupMember(groups, field.name));
     },
   };
 }

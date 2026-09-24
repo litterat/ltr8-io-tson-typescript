@@ -8,8 +8,9 @@
  * base classes they share with the tree-mode siblings this package does not build).
  *
  * **No schema in view, by design.** A `Binding` is authored independently of any schema
- * (`PORT-PLAN.md`, architectural decision 2) and carries none of the five-member `FieldState`
- * vocabulary (§5.2), `ElementState` (§5.3), or the size/uniqueness facets `ArrayBody`/`MapBody`
+ * (`PORT-PLAN.md`, architectural decision 2) and carries none of a `record_field`'s own
+ * `optional`/`voidable`/`role` facts (§5.2), `ElementState` (§5.3), or the size/uniqueness facets
+ * `ArrayBody`/`MapBody`
  * declare -- those are `schema/meta` questions, and `bind/strictness.ts`'s `checkBinding` already
  * answers the one such question a `Binding` alone can be checked against (does it cover its
  * record type's fields). What is left for *this* module is exactly what a `Binding` alone can

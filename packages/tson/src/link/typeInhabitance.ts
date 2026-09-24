@@ -188,6 +188,14 @@ function recordInhabited(
     if (grouped.has(field.name) || isOptionalField(field)) {
       continue;
     }
+    // §5.10.1, §5.2: `a: void` — a field the document MUST write and MUST NOT write `_` at — is
+    // the one declaration this rule refuses on its own, the record having no member at all: `_`
+    // is the only value `void` admits, and this field admits neither a value nor `_`. Checked by
+    // bare name against the kernel's own `void`; a field typed by an *alias* of `void` is left to
+    // a later work package's reference-chain walk.
+    if (field.type.name === 'void') {
+      return false;
+    }
     if (!refInhabited(field.type, namespace, inhabited)) {
       return false;
     }
@@ -209,12 +217,14 @@ function recordInhabited(
 }
 
 /**
- * A field a document may leave out places no demand on its type. Every other state does, the two
- * that carry a value included: a fixed or default value of a type nothing can satisfy does not
- * exist either.
+ * A field that terminates recursion on its own -- a document may leave its key out, or write it
+ * `_`, either of which places no demand on the field's own type (§5.10.1: "a field whose key may
+ * be omitted or whose type admits `_`"). A field with a value (a default or a fixed one) is not
+ * exempted by that alone: a marker's value must still be a value of the field's own type, so a
+ * type nothing can satisfy does not exist either.
  */
 function isOptionalField(field: RecordField): boolean {
-  return field.state === 'OPTIONAL' || field.state === 'OPTIONAL_FIXED';
+  return field.optional || field.voidable;
 }
 
 function positionInhabited(

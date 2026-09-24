@@ -77,7 +77,7 @@ import { typeParameters } from '../schema/meta/typedef.js';
 import { checkAtomCoherence, isAtom } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
-import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
+import { FIELDS, NAME, VALUE, field, isApplication, rescope, typeRefOf } from './wireForm.js';
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
 import { inferOne, type Kind } from './parameterKinds.js';
@@ -619,11 +619,12 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     bindings: ReadonlyMap<string, TypeArgument>,
   ): TypeDefinition {
     const closed = closeHeld(head, open, bindings);
+    const parametricNames = parametricFieldNames(open.application.coreValue, open.parameters);
     return {
       source: { name: head, arguments: args, annotations: [] },
       supertypes: template.supertypes,
       subtypes: template.subtypes,
-      body: fixRoutedValues(closed.body),
+      body: fixRoutedValues(closed.body, parametricNames),
       annotations: [],
     };
   }
@@ -804,8 +805,25 @@ function isHeldBody(body: Top): body is HeldBody {
   return 'application' in body;
 }
 
-/** §5.7's fixation, applied where the section says it happens: "fixation happens downstream, where values are concrete". A field routed by `= P` is held as `state: REQUIRED` with the parameter standing in `value`; once substitution has made the value concrete the field takes the state its literal spelling would have had. A `~ P` default arrives as `REQUIRED_DEFAULT` and stays one. */
-function fixRoutedValues(body: Top): Top {
+/**
+ * §5.7's fixation, applied where the section says it happens: "fixation happens at
+ * materialisation, where values are concrete". A field routed by `= P` or `~ P` is written on an
+ * *unmarked* name (§5.7's "Open modifiers") and held with its role already `FIXED`/`DEFAULT` --
+ * the eventual role its own modifier spells, `fieldModifiers.ts`'s `resolveFieldMarks` deciding
+ * `= P` from `~ P` by modifier kind the same way it decides between a literal `= v` and `~ v` --
+ * and the parameter riding `value`, satisfying §8.1's invariant that `value` is present exactly
+ * when `role` is not `FREE` throughout, held phase included. Once substitution has made the value
+ * concrete, the one fact closing still owes the field is the mark: `optional` becomes `true`,
+ * "the name mark supplied by the closing".
+ *
+ * `parametricNames` is exactly the set of field names whose *pre-substitution* value was one of
+ * the template's own parameters ({@link parametricFieldNames}) -- computed before substitution
+ * runs, since afterwards a promoted field and an ordinary unmarked marker (`a: T = "2.0"`, never
+ * promoted) are indistinguishable by value alone. It is what tells the promotable fields apart
+ * from an ordinary unmarked marker of the template's own -- `role` alone cannot, both already
+ * carrying `FIXED`/`DEFAULT` before substitution runs.
+ */
+function fixRoutedValues(body: Top, parametricNames: ReadonlySet<string>): Top {
   // `'fields' in body`, not `body.kind === 'record'`: see `mapBodyRefs`'s own note on why a
   // `Data` body's bare-`string` `kind` cannot be excluded by a literal comparison.
   if (!('fields' in body)) {
@@ -814,11 +832,38 @@ function fixRoutedValues(body: Top): Top {
   return {
     ...body,
     fields: body.fields.map((field) =>
-      field.state === 'REQUIRED' && field.value !== undefined
-        ? { ...field, state: 'REQUIRED_FIXED' as const }
-        : field,
+      parametricNames.has(field.name) ? { ...field, optional: true } : field,
     ),
   };
+}
+
+/**
+ * The names of every field in the *held* (pre-substitution) wire form whose `value` slot is a
+ * bare unquoted token naming one of `parameters` -- see {@link fixRoutedValues}.
+ */
+function parametricFieldNames(
+  preSubstitution: CoreValue,
+  parameters: readonly string[],
+): ReadonlySet<string> {
+  const names = new Set<string>();
+  if (preSubstitution.kind !== 'record') return names;
+  const fieldsValue = field(preSubstitution, FIELDS);
+  if (fieldsValue?.kind !== 'array') return names;
+  for (const element of fieldsValue.elements) {
+    const fieldRecord = element.value.coreValue;
+    if (fieldRecord.kind !== 'record') continue;
+    const nameToken = field(fieldRecord, NAME);
+    const valueToken = field(fieldRecord, VALUE);
+    if (
+      nameToken?.kind === 'token' &&
+      valueToken?.kind === 'token' &&
+      valueToken.form === 'unquoted' &&
+      parameters.includes(valueToken.text)
+    ) {
+      names.add(nameToken.text);
+    }
+  }
+  return names;
 }
 
 /** The entry for an application whose closure is a synthetic: a reference to that synthetic, sourced to the application itself. */

@@ -356,5 +356,5 @@ function toEnumBody(value: DataValue): EnumBody {
     }
     members.push(core.text);
   }
-  return { kind: 'enum', members };
+  return { kind: 'enum', members, profile: 'IDENTIFIER' };
 }
