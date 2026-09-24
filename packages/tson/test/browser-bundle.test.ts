@@ -37,6 +37,7 @@ const BROWSER_SUBPATHS = [
   '@ltr8/tson/write',
   '@ltr8/tson/identity',
   '@ltr8/tson/stdlib',
+  '@ltr8/tson/json',
 ] as const;
 
 async function bundleForBrowser(

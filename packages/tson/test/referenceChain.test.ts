@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { terminal, terminalDefinition } from '../src/compiler/referenceChain.js';
+import { terminal, terminalDefinition } from '../src/link/referenceChain.js';
 import { TsonLimitRefusedError } from '../src/core/errors.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { Reference, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';

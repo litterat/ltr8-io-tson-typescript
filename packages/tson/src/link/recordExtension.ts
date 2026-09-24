@@ -42,7 +42,7 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isAtom } from '../compiler/atomChecks.js';
 import { buildAtomReader } from '../compiler/atomBuilder.js';
-import { terminal, terminalDefinition } from '../compiler/referenceChain.js';
+import { terminal, terminalDefinition } from './referenceChain.js';
 import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';

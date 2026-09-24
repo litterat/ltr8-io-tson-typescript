@@ -98,7 +98,7 @@ import { FIELDS, NAME, VALUE, field, isApplication, rescope, typeRefOf } from '.
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
 import { inferOne, type Kind } from './parameterKinds.js';
-import { terminal } from './referenceChain.js';
+import { terminal } from '../link/referenceChain.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────

@@ -32,7 +32,7 @@ export interface TreeReaderContext {
    * §7.8's typed-position question for one declared type name -- whether it resolves to a
    * `scoped` instance, so a nested `!!schema` may stand at a position of that type at all.
    * Optional and defaulting to "never" here: answering it for real means walking the whole
-   * schema's own namespace (`compiler/referenceChain.ts`'s own `resolvesToScoped`), which this
+   * schema's own namespace (`link/referenceChain.ts`'s own `resolvesToScoped`), which this
    * deliberately narrow module has no such namespace to walk -- `compiler/compile.ts` is what
    * supplies a real one.
    */

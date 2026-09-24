@@ -29,7 +29,7 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { terminal } from '../compiler/referenceChain.js';
+import { terminal } from './referenceChain.js';
 import { isDataBody } from './bodyKind.js';
 import type { RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';

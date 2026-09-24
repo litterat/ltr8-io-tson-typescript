@@ -37,7 +37,7 @@ import { isDataBody, type NonDataTop } from './bodyKind.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import { isHeldBody } from '../compiler/heldBody.js';
-import { terminal, type EntryLookup } from '../compiler/referenceChain.js';
+import { terminal, type EntryLookup } from './referenceChain.js';
 import type {
   ArrayBody,
   ChoiceBody,

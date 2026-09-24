@@ -134,7 +134,7 @@ import { substitute } from './templateSubstitution.js';
 import { fixRoutedValues, parametricFieldNames } from './templates.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
-import { terminal, terminalDefinition } from './referenceChain.js';
+import { terminal, terminalDefinition } from '../link/referenceChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────

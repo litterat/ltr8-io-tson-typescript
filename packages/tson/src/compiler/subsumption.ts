@@ -82,7 +82,7 @@ import { valuesEqual } from '../reader/tree/equality.js';
 import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
 import { isAtom } from './atomChecks.js';
 import { directMembers, type Member } from '../link/recordExtension.js';
-import { terminal } from './referenceChain.js';
+import { terminal } from '../link/referenceChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
 const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);

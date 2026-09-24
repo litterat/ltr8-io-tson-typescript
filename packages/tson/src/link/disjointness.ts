@@ -36,7 +36,7 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isDataBody } from './bodyKind.js';
 import { isAtom } from '../compiler/atomChecks.js';
-import { terminal, terminalDefinition } from '../compiler/referenceChain.js';
+import { terminal, terminalDefinition } from './referenceChain.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { FloatType } from '../schema/meta/atoms-numeric.js';
 import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';

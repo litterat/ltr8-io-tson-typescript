@@ -62,7 +62,7 @@ import { choiceTreeReader } from './choiceReader.js';
 import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
-import { resolvesToScoped } from './referenceChain.js';
+import { resolvesToScoped } from '../link/referenceChain.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
 
