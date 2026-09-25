@@ -38,6 +38,19 @@
  * - **Annotations are not part of a value's identity** ([TSON-DATA] §2.6: "A key's annotations
  *   and type annotation do not participate in identity at any layer"). Skipped structurally, by
  *   key, wherever both sides of a comparison carry an `annotations` field.
+ * - **Text compares under NFC, a `rational` by cross-multiplication, and a NaN as one canonical
+ *   value.** [TSON-DATA] §7.2.1 read narrowly could mean a plain string stays spelling-exact for
+ *   comparison too ("two string values ... remain distinct strings") -- but that line is about
+ *   what a decoded value *keeps* (spelling is preserved here exactly as scale and offset are, this
+ *   note's own point above), not about what two spellings compare *as*. The reference
+ *   implementation's own `ValueIdentity` (`tson-compiler` and `tson-json` alike) NFC-folds every
+ *   string for comparison, meta.tn's own `rational_type` doc states the cross-multiplication rule
+ *   outright ("2/4 equals 1/2"), and IEEE 754-2019 makes every NaN one value regardless of
+ *   payload. This module follows the reference on all three -- a reported, open reading of
+ *   [TSON-DATA] §7.2.1 (`IDIOM-DEBT.md` has the pinned rationale) chosen because the narrower one
+ *   would put this module's own two functions, {@link deepEqual} and {@link identityKey}, in
+ *   disagreement with each other over the very comparisons both encodings' readers must not
+ *   disagree on.
  */
 import { compareDecimal } from '../atom/numeric/decimalMath.js';
 import {
@@ -50,7 +63,8 @@ import {
   type ComparableTime,
   type DateFields,
 } from '../atom/temporal/rfc3339.js';
-import type { PlainDateTime, PlainTime, TsonDecimal } from './types.js';
+import { toNfc } from '../unicode/nfc.js';
+import type { Complex, PlainDateTime, PlainTime, Rational, TsonDecimal } from './types.js';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -139,11 +153,21 @@ export function decimalIdentityKey(value: TsonDecimal): string {
   return `${unscaled.toString()}e${exponent.toString()}`;
 }
 
-/** Deep structural equality over two arbitrary host values -- primitives, `bigint`, `Uint8Array`, arrays, and plain records, recursively -- normalising decimal scale and temporal offset to value identity (this module's own top note) rather than comparing fields verbatim. */
+/** Deep structural equality over two arbitrary host values -- primitives, `bigint`, `Uint8Array`, arrays, and plain records, recursively -- normalising decimal scale, temporal offset, text NFC form, rational reduction and NaN identity to value identity (this module's own top note) rather than comparing fields verbatim. */
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a === 'bigint' || typeof b === 'bigint') {
     return typeof a === typeof b && a === b;
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    return toNfc(a) === toNfc(b);
+  }
+  if (typeof a === 'number' && typeof b === 'number') {
+    // Reached only when `a !== b` already failed above, so two ordinary reals are correctly
+    // `false` here too -- this is IEEE 754-2019's "every NaN denotes the canonical quiet NaN"
+    // ([TSON-DATA] §5.6), the one case a real number can equal a different-bit-pattern real
+    // number under value identity without `===` already having said so.
+    return Number.isNaN(a) && Number.isNaN(b);
   }
   if (a instanceof Uint8Array && b instanceof Uint8Array) {
     if (a.length !== b.length) return false;
@@ -180,6 +204,13 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     if (isPlainTime(a) && isPlainTime(b)) {
       return timeOfDayWrapped(a) === timeOfDayWrapped(b) && a.nanosecond === b.nanosecond;
     }
+    if (isRationalValue(a) && isRationalValue(b)) {
+      // meta.tn's own doc: "the token is preserved as written ... equality and constraints
+      // operate on the value (2/4 equals 1/2)" -- {@link rationalIdentityKey}'s reduction to
+      // lowest terms is exactly that value, so two rationals compare equal by it without a
+      // separate cross-multiplication here.
+      return rationalIdentityKey(a) === rationalIdentityKey(b);
+    }
     // [TSON-DATA] §2.6: annotations "do not participate in identity at any layer" -- every
     // `Value` tree node but `MissingNode` carries its own `annotations` (`tree/nodes.ts`), and
     // this module's top note is where that rule reaches equality. Skipped only when BOTH sides
@@ -197,4 +228,114 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     return aKeys.every((key) => Object.hasOwn(b, key) && deepEqual(a[key], b[key]));
   }
   return false;
+}
+
+// ── `identityKey`: a decoded host value's identity, as one string ────────────────────────────
+//
+// {@link deepEqual} answers one comparison at a time; a set's duplicate check, a map's key
+// identity and a record's FIXED-field check all want *membership* -- "is this value already in
+// the set/map/pin table" -- which a pairwise comparator turns into an O(n) scan. {@link
+// identityKey} reduces a decoded value to the same equivalence classes {@link deepEqual} judges
+// (scale is a spelling, `time`/`datetime` compare as instants, text folds to NFC, a
+// `rational`/`complex` reduces to lowest terms, every NaN is one value) collapsed into one
+// canonical string, so every one of those checks becomes a plain `Map<string, …>` lookup.
+// `json/schema/valueIdentity.ts`'s own `identityOfHost` re-exports this function directly, for
+// the JSON encoding's own membership checks; the text encoding's FIXED/set/map checks go through
+// {@link deepEqual} instead (`reader/tree/equality.ts`'s own `valuesEqual`), since a `Value` tree
+// node's own annotations need `deepEqual`'s structural skip and a key-reduction would have to
+// recompute the same reduction on both sides of every comparison anyway -- but the two functions
+// judge the same value-space equality either way, which is the property this module's own top
+// note requires of them.
+
+function bytesIdentityKey(bytes: Uint8Array): string {
+  let hex = '';
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0');
+  return hex;
+}
+
+function isRationalValue(
+  record: Record<string, unknown>,
+): record is Record<string, unknown> & Rational {
+  return typeof record.numerator === 'bigint' && typeof record.denominator === 'bigint';
+}
+
+/** `a`/`b`'s (positive) greatest common divisor, `1n` when both are zero -- Euclid's algorithm over `bigint`. */
+function gcdBigInt(a: bigint, b: bigint): bigint {
+  let x = a < 0n ? -a : a;
+  let y = b < 0n ? -b : b;
+  while (y !== 0n) {
+    const remainder = x % y;
+    x = y;
+    y = remainder;
+  }
+  return x === 0n ? 1n : x;
+}
+
+/**
+ * `value` reduced to its lowest terms with a positive denominator -- [TSON-DATA] §5.6/[TSON-SCHEMA]
+ * §5.5's value space: `numerator`/`denominator` are preserved exactly as parsed
+ * (`value/types.ts`'s own `Rational` doc), so `"1/2"` and `"2/4"` are two different host values
+ * that denote one rational, and only the *identity* reduces them, never the stored fields.
+ */
+function rationalIdentityKey(value: Rational): string {
+  let { numerator, denominator } = value;
+  if (denominator < 0n) {
+    numerator = -numerator;
+    denominator = -denominator;
+  }
+  if (numerator === 0n) return 'r:0/1';
+  const divisor = gcdBigInt(numerator, denominator);
+  return `r:${(numerator / divisor).toString()}/${(denominator / divisor).toString()}`;
+}
+
+function isComplexValue(
+  record: Record<string, unknown>,
+): record is Record<string, unknown> & Complex {
+  const real = record.real;
+  const imaginary = record.imaginary;
+  return (
+    typeof real === 'object' &&
+    real !== null &&
+    isTsonDecimal(real as Record<string, unknown>) &&
+    typeof imaginary === 'object' &&
+    imaginary !== null &&
+    isTsonDecimal(imaginary as Record<string, unknown>)
+  );
+}
+
+/** `value`'s two {@link TsonDecimal} components, each reduced by {@link decimalIdentityKey} -- so `"1.50+2i"` and `"1.5+2i"` are one complex value, matching scale's own non-significance for the exact tier. */
+function complexIdentityKey(value: Complex): string {
+  return `c:${decimalIdentityKey(value.real)}+${decimalIdentityKey(value.imaginary)}i`;
+}
+
+/**
+ * `value` (a decoded host value -- `bigint`, {@link TsonDecimal}, a plain `number`, a `string`,
+ * `Uint8Array`, a temporal record, a `Rational`/`Complex`, …) reduced to a canonical value-space
+ * identity string: the key two values compare equal under, on the same terms {@link deepEqual}
+ * judges pairwise. Every host shape this package's atom parsers produce is covered; a compound
+ * host shape with no dedicated reduction here falls back to a structural `JSON.stringify` of its
+ * own fields, which is exact but not reduced -- correct for a shape that is already canonical in
+ * its own fields (the network families: `ipv4`/`ipv6`/`cidr4`/`cidr6`/`mac`, each parsed to raw
+ * address octets rather than kept as written text) and a documented gap for one that might not be
+ * (`IDIOM-DEBT.md`'s own entry on this function).
+ */
+export function identityKey(value: unknown): string {
+  if (typeof value === 'boolean') return `b:${String(value)}`;
+  if (typeof value === 'bigint') return `i:${value.toString()}`;
+  if (typeof value === 'number') return `f:${Number.isNaN(value) ? 'nan' : value.toString()}`;
+  if (typeof value === 'string') return `s:${toNfc(value)}`;
+  if (value instanceof Uint8Array) return `y:${bytesIdentityKey(value)}`;
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (isTsonDecimal(record)) return `n:${decimalIdentityKey(record)}`;
+    if (isPlainDateTime(record))
+      return `dt:${dateTimeInstantSeconds(record).toString()}.${record.time.nanosecond.toString()}`;
+    if (isPlainTime(record))
+      return `t:${timeOfDayWrapped(record).toString()}.${record.nanosecond.toString()}`;
+    if (isRationalValue(record)) return rationalIdentityKey(record);
+    if (isComplexValue(record)) return complexIdentityKey(record);
+  }
+  const replacer = (_key: string, v: unknown): unknown =>
+    typeof v === 'bigint' ? v.toString() : v;
+  return `o:${JSON.stringify(value, replacer)}`;
 }

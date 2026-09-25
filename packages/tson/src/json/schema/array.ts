@@ -50,7 +50,7 @@ export function buildArrayReader(
       const outer = readCtx.underDeclaration(schemaLocation);
       const first = yield* outer.next();
       if (first.kind !== 'array-start') {
-        yield* reportUnreadable(outer, name, first, () => {
+        yield* reportUnreadable(outer, first, () => {
           outer.report(
             'TYPE_MISMATCH',
             `'${name}' takes a JSON array, and this is ${describeEvent(first)}`,

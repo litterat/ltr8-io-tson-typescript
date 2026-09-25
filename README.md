@@ -180,6 +180,47 @@ and `fileSchemaSource` (containment checked after `realpath`) live behind the se
 `@ltr8/tson/source` subpath — never imported by the package's default entry, so a browser bundle
 never pulls in Node's `fs`/`http`.
 
+### JSON encoding
+
+[TSON-JSON] (`spec/tson-part3-json.md`) is a second encoding of the same model, for when the
+document on the wire has to be plain JSON — a schema-directed reader, not a superset relationship:
+a JSON document names no schema of its own, so reading one always takes a compiled schema and a
+root type, the way `readTree`/`validate`'s own `{ schema, root }` does. It lives behind its own
+`./json` subpath so that nothing in the TSON text stack — lexer, parser, compiler — is pulled in by
+a consumer that only ever reads JSON, and vice versa:
+
+```ts
+import { standardLibrary } from '@ltr8/tson/stdlib';
+import { compileJsonSchema, readJsonTree, validateJson } from '@ltr8/tson/json';
+
+const tson = standardLibrary();
+const linked = tson.resolveSchema(orderSchemaText); // the same LinkedSchema readTree/validate use
+const schema = compileJsonSchema(linked);
+
+// readJsonTree: throws TsonReadError on the first problem, same posture as readTree.
+const tree = readJsonTree(
+  '{"order_id": 1042, "customer": {"name": "Ada Lovelace"}, "total": 149.95}',
+  { schema, root: 'order' },
+);
+
+// validateJson: collects every problem (base-syntax failures included) instead of throwing --
+// the same shape as validate's own ValidationResult, as ValidateJsonResult. Only a §10.1
+// nesting-limit refusal still throws (a policy refusal, not a verdict on the document).
+const result = validateJson(jsonBytes, { schema, root: 'order' });
+result.diagnostics; // []
+```
+
+Both take an async, chunked source too (`readJsonTreeAsync`/`validateJsonAsync`), driven by the
+identical `Task<T>` suspension the text stack uses, so memory stays proportional to nesting depth
+either way. A schemaless read exists only at the JSON-grammar level — `parseJson`/`parseJsonAsync`
+return a plain `JsonValue` tree with no type applied — because [TSON-JSON] §3.4 gives this encoding
+no vocabulary-only reading the way TSON text's base type resolution does.
+
+What this subpath does not do, today: read a document's own in-band `$schema`/`$type` binding with
+no schema supplied out of band, read a `scoped` position (`declared`/`extern`/`dynamic`), speak the
+§3.5 `TSON-Schema`/`TSON-Accept-Schema` HTTP header fields, or encode a schema-governed value back
+to JSON. See [STATUS.md](STATUS.md)'s Part 3 section for the full list.
+
 ### Classifying a document
 
 Whether a file is data or schema is a property of its header, not its extension (§2.2), and §7.1
@@ -234,6 +275,12 @@ npx @ltr8/tson-cli validate person-data.tn --schema person.tn --root person
 npx @ltr8/tson-cli compile person.tn
 npx @ltr8/tson-cli policy                # the [TSON-DATA] §8.2 policy this run would apply
 npx @ltr8/tson-cli hash person.tn        # prints the canonical content hash (§2.2.1)
+
+# .json (case-insensitive) is a JSON encoding of TSON data (TSON-JSON §3.1) and is bound the
+# same way: --schema/--root, required for a .json input. Standard input is read as JSON when
+# a binding is given, TSON text otherwise.
+npx @ltr8/tson-cli validate person-data.json --schema person.tn --root person
+cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root person -
 ```
 
 Five commands: `validate`, `compile`, `policy`, `hash`, `init-example`. `validate`/`compile`/`hash`
@@ -266,15 +313,21 @@ recursion is real — see [STATUS.md](STATUS.md).
 
 ## What is and isn't implemented
 
-Both spec parts are implemented and the shared conformance suite passes in full — see
+Both Parts 1 and 2, plus Part 2's shared conformance suite, are implemented in full — see
 [STATUS.md](STATUS.md) for the itemised checklist, including the small number of documented
 deferrals (e.g. `token_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
-resolved schema output) and known gaps. In particular:
+resolved schema output) and known gaps. Part 3, the JSON encoding, covers a schema-directed tree
+read and its CLI/package surface — narrower than the reference implementation's own scope, which
+also has an `objectReader` binding a JSON document straight into a host object; this port has no
+JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band-only
+binding, a scoped-position reader, the §3.5 HTTP header fields, or a schema-directed encoder — see
+[STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps. In particular:
 
 ## Specification
 
 - Part 1 — Text Data Format: https://tson.io/raw/2026/35/tson-part1-data.md
 - Part 2 — Type System and Schema: https://tson.io/raw/2026/35/tson-part2-schema.md
+- Part 3 — JSON Encoding, vendored at `spec/tson-part3-json.md` (new in Revision 36)
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.

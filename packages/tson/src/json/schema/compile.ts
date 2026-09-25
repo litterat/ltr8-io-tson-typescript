@@ -4,16 +4,25 @@
  * time rather than on the first document that reaches it, mirroring the Java reference's own
  * `JsonSchemaCompiler`.
  *
- * **What this compiler builds, and what it does not (§4, §5, §6.1.1–§6.1.4, §6.1.6, §6.2, §6.3, §6.4,
- * §7).** Every atom family (`json/schema/atoms.ts`), every closed record (no subtypes to
- * dispatch among — `json/schema/record.ts`), arrays/sets and tuples (`json/schema/array.ts`,
- * `json/schema/tuple.ts`), and maps in both wire forms (`json/schema/map.ts`). A position that
- * needs **dispatch** — an ABSTRACT or member-dispatched record (§6.1.5), an untagged choice
- * (§8), a scoped position (§8.5), or the annotation object itself (§3.3), since recognising one
- * at all is dispatch's own first step — compiles to {@link notImplementedReader}: the plan stays
- * **total** (every entry gets a reader, so a schema whose types include one of these still
- * compiles), and reading such a position reports `NOT_IMPLEMENTED`, [TSON-DATA] §8.1's own
- * non-verdict "a construct this implementation has not built yet".
+ * **What this compiler builds (§3–§8.4).** Every atom family (`json/schema/atoms.ts`), every
+ * record — closed (`json/schema/record.ts`) and every record-family position §6.1.5 governs:
+ * OPEN-with-subtypes and ABSTRACT-with-no-`discriminators` (`json/schema/dispatchTag.ts`),
+ * ABSTRACT/family-base-template naming `discriminators` (`json/schema/dispatchMember.ts`) —
+ * arrays/sets and tuples (`json/schema/array.ts`, `json/schema/tuple.ts`), maps in both wire
+ * forms (`json/schema/map.ts`), and every choice (§8, `json/schema/dispatchChoice.ts`). §3.3's
+ * annotation object is read at every position that admits it: records and every record-family
+ * dispatcher read it themselves; an atom, array or tuple position — which has no subtype of its
+ * own to select into — is wrapped with `json/schema/atoms.ts`'s own `withAnnotationObject` right
+ * here, at compile time, so a redundant `$type` restating the position's own type (or an alias of
+ * it) is the only form §7.2 subsumption admits there.
+ *
+ * **What it does not (§8.5, and one corner of §5.10).** A scoped position, and a template naming
+ * no type parameters' worth of `extension` (a genuine open template, never applied bare) both
+ * compile to {@link notImplementedReader}: the plan stays **total** (every entry gets a reader, so
+ * a schema whose types include one of these still compiles), and reading such a position reports
+ * `NOT_IMPLEMENTED`, [TSON-DATA] §8.1's own non-verdict "a construct this implementation has not
+ * built yet" — recorded gaps, matching the Java reference's own scope (`design/json-schema-
+ * directed-reading.md`: "§8.5's scoped positions reach a NOT_IMPLEMENTED reader").
  *
  * **A closed reference collapses at compile time** ([TSON-SCHEMA] §8.3): `day => date` compiles
  * to exactly the reader `date` itself compiles to, resolved once here rather than walked on every
@@ -36,9 +45,13 @@ import {
   treeAtomReader,
   valuePositionReader,
   voidReader,
+  withAnnotationObject,
   type AtomReader,
 } from './atoms.js';
 import { buildArrayReader } from './array.js';
+import { buildChoiceReader } from './dispatchChoice.js';
+import { buildMemberDispatcher } from './dispatchMember.js';
+import { buildTagDispatcher } from './dispatchTag.js';
 import { skipNextValue } from './eventSkip.js';
 import { buildMapReader } from './map.js';
 import { buildRecordReader } from './record.js';
@@ -177,7 +190,32 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
     const location = locationOf(linkedSchema, name);
 
     if (isTemplateBody(body)) {
-      return notImplementedReader(name, 'an open template family base');
+      if (body.extension === undefined) {
+        // Not yet a type at all (§5.10): a template is applied, never read directly. Matches the
+        // pinned Java reference's own `OpenTemplateReader`, which this package has not built as a
+        // dedicated "not a type" refusal yet -- reported as a gap rather than misdiagnosed.
+        return notImplementedReader(name, 'an open template family base');
+      }
+      const discriminators = body.discriminators ?? [];
+      return discriminators.length > 0
+        ? buildMemberDispatcher({
+            name,
+            displayName: name,
+            discriminators,
+            baseFields: undefined,
+            entries: linkedSchema.entries,
+            schemaLocation: location,
+            ctx: context,
+          })
+        : buildTagDispatcher({
+            name,
+            displayName: name,
+            entries: linkedSchema.entries,
+            subtypes: def.subtypes,
+            untagged: undefined,
+            schemaLocation: location,
+            resolve,
+          });
     }
     if (isDataBody(body)) {
       return notImplementedReader(name, "a meta-layer 'data' construct, which names no value");
@@ -202,18 +240,22 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
       case 'unit':
         switch (name) {
           case 'void':
-            return voidReader(name, location);
+            return withAnnotationObject(name, linkedSchema.entries, voidReader(name, location));
           case 'value':
             // Tree-mode-wrapped like every other atom position, so a `value`-typed record field
             // or container element stores the `JsonValue` node this package's containers expect
             // rather than the bare host scalar `valuePositionReader` itself produces (its own
             // classification is still what validates the position -- `treeAtomReader` discards
             // the classified value and keeps the node, exactly as it does for every other atom).
-            return treeAtomReader(valuePositionReader(name, location));
+            return withAnnotationObject(
+              name,
+              linkedSchema.entries,
+              treeAtomReader(valuePositionReader(name, location)),
+            );
           case 'identifier': {
             const raw = identifierReader(name, location);
             atomReaders.set(name, raw);
-            return treeAtomReader(raw);
+            return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
           }
           default:
             return notImplementedReader(
@@ -224,32 +266,64 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
       case 'enum': {
         const raw = enumReader(name, constructorBody, location);
         atomReaders.set(name, raw);
-        return treeAtomReader(raw);
+        return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
       }
       case 'record':
         if (constructorBody.extension === 'ABSTRACT') {
-          return notImplementedReader(
+          return constructorBody.discriminators.length > 0
+            ? buildMemberDispatcher({
+                name,
+                displayName: name,
+                discriminators: constructorBody.discriminators,
+                baseFields: constructorBody.fields,
+                entries: linkedSchema.entries,
+                schemaLocation: location,
+                ctx: context,
+              })
+            : buildTagDispatcher({
+                name,
+                displayName: name,
+                entries: linkedSchema.entries,
+                subtypes: def.subtypes,
+                untagged: undefined,
+                schemaLocation: location,
+                resolve,
+              });
+        }
+        if (constructorBody.extension === 'OPEN' && def.subtypes.length > 0) {
+          return buildTagDispatcher({
             name,
-            constructorBody.discriminators.length > 0
-              ? 'a member-dispatched record family'
-              : 'an abstract record',
-          );
+            displayName: name,
+            entries: linkedSchema.entries,
+            subtypes: def.subtypes,
+            untagged: buildRecordReader(name, constructorBody, location, context),
+            schemaLocation: location,
+            resolve,
+          });
         }
         return buildRecordReader(name, constructorBody, location, context);
       case 'array':
-        return buildArrayReader(name, constructorBody, location, context);
+        return withAnnotationObject(
+          name,
+          linkedSchema.entries,
+          buildArrayReader(name, constructorBody, location, context),
+        );
       case 'tuple':
-        return buildTupleReader(name, constructorBody, location, context);
+        return withAnnotationObject(
+          name,
+          linkedSchema.entries,
+          buildTupleReader(name, constructorBody, location, context),
+        );
       case 'map':
         return buildMapReader(name, constructorBody, location, context);
       case 'choice':
-        return notImplementedReader(name, 'an untagged choice (§8)');
+        return buildChoiceReader(name, constructorBody, location, context);
       case 'scoped':
         return notImplementedReader(name, 'a scoped position (§8.5)');
       default: {
         const raw = atomReader(name, constructorBody, location);
         atomReaders.set(name, raw);
-        return treeAtomReader(raw);
+        return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
       }
     }
   }

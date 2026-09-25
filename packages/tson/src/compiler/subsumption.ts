@@ -82,7 +82,7 @@ import { valuesEqual } from '../reader/tree/equality.js';
 import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
 import { isAtom } from './atomChecks.js';
 import { directMembers, type Member } from '../link/recordExtension.js';
-import { terminal } from '../link/referenceChain.js';
+import { selfNames, terminal } from '../link/referenceChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
 const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
@@ -102,21 +102,6 @@ function isGuardedBody(body: Top): boolean {
 /** `Top`'s open `Data.kind: string` member defeats a plain `'kind' in body && body.kind === 'record'` narrowing (`compiler/compile.ts`'s own note); this guard is this module's own copy. */
 function isRecordBody(body: Top): body is RecordBody {
   return 'kind' in body && body.kind === 'record';
-}
-
-/** The written names that mean `name`: itself, plus every entry whose own chain (`referenceChain.ts`'s shared §8.3 walk) terminates at it. */
-function selfNames(
-  name: string,
-  entries: ReadonlyMap<string, TypeDefinition>,
-): ReadonlySet<string> {
-  const lookup = (n: string): TypeDefinition | undefined => entries.get(n);
-  const names = new Set<string>([name]);
-  for (const alias of entries.keys()) {
-    if (terminal(alias, lookup) === name) {
-      names.add(alias);
-    }
-  }
-  return names;
 }
 
 /**

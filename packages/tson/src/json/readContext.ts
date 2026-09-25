@@ -5,17 +5,20 @@
  * ESLint zone (`eslint.config.js`) forbids reaching into `reader/` at all, mirroring the
  * reference's "no dependency on tson-compiler" (`design/json-encoding.md`).
  *
- * Considerably smaller than its TSON-text counterpart, for a structural reason rather than a
+ * Smaller than its TSON-text counterpart in one respect, for a structural reason rather than a
  * missing feature: every recursive descent this package's JSON readers make corresponds 1:1 with
  * an object or array container the event stream itself opened, and `json/stream.ts` already
  * refuses a document past [TSON-JSON] §10.1's nesting bound *before* a consumer descends into it
  * (`push` in that module). The TSON text `ReadContext` carries its own depth guard because an
  * annotation's value recurses with no container event to bound it; nothing here does, so this
- * context adds no second bound of its own and needs no `lookingAhead`/rewind machinery either —
- * every reader in `json/schema/**` reads at most one event of lookahead at a time (the readers
- * that need dispatch -- an annotation object, an untagged choice, a scoped position -- would
- * need more, and are `NOT_IMPLEMENTED` here instead — see `json/schema/compile.ts`'s own top
- * note).
+ * context adds no second bound of its own.
+ *
+ * **{@link lookingAhead}, and the `rewound`/`recording` pair on {@link Cursor} it runs on**, give
+ * every reader in `json/schema/**` more than the one event of lookahead {@link next}/{@link peek}
+ * offer on their own — what a dispatcher needs to decide which reader owns an object from its
+ * opening members (`json/schema/reservedMembers.ts`'s own `lead`) before any reader actually
+ * consumes them, and to then hand that reader the object exactly as if nothing had peeked at it
+ * first, `object-start` included.
  *
  * **Schema-location tracking** (`inRecord`/`underDeclaration`/`schemaField`/`schemaLocation`)
  * mirrors `reader/context.ts`'s identically named methods, for a schema-directed read only: it
@@ -38,6 +41,7 @@ import type {
   DiagnosticsReceiver,
   SchemaLocation,
 } from '../core/diagnostic.js';
+import { TsonInternalError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
 import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
@@ -73,6 +77,18 @@ interface Cursor {
   readonly identifierPolicy: NamePolicy;
   position: Position | undefined;
   reported: number;
+  /**
+   * Events a {@link lookingAhead} pass consumed and rewound, replayed ahead of `events` until they
+   * run out -- this package's own analogue of `reader/context.ts`'s identically-named field: a
+   * dispatcher ([TSON-JSON] §3.3, §6.1.5, §8.2) must decide which reader owns an object from its
+   * opening members *before* any reader actually consumes them, and the reader it selects (an
+   * ordinary record reader, `readWrapped`'s target, …) must then see that object exactly as if
+   * nothing had peeked at it first, `object-start` included. Empty for the whole of an ordinary
+   * read that reaches no dispatcher.
+   */
+  readonly rewound: JsonEvent[];
+  /** Where `next()` records what it consumes while a {@link lookingAhead} pass is running, else `undefined`. */
+  recording: JsonEvent[] | undefined;
 }
 
 /** A context over one {@link JsonEventSource}, scoped by {@link field}/{@link index} as a read descends. */
@@ -171,12 +187,13 @@ function makeContext(
 
   const ctx: JsonReadContext = {
     *next(): Task<JsonEvent> {
-      const event = yield* cursor.events.next();
+      const event = cursor.rewound.shift() ?? (yield* cursor.events.next());
       cursor.position = event.position;
+      cursor.recording?.push(event);
       return event;
     },
     *peek(): Task<JsonEvent> {
-      const event = yield* cursor.events.peek();
+      const event = cursor.rewound.at(0) ?? (yield* cursor.events.peek());
       cursor.position = event.position;
       return event;
     },
@@ -255,6 +272,7 @@ function makeContext(
       return cursor.reported;
     },
   };
+  (ctx as JsonReadContext & { [CURSOR]?: Cursor })[CURSOR] = cursor;
   return ctx;
 }
 
@@ -265,8 +283,72 @@ export function createJsonReadContext(
   identifierPolicy: NamePolicy = DEFAULT_NAME_POLICY,
 ): JsonReadContext {
   return makeContext(
-    { events, receiver, identifierPolicy, position: undefined, reported: 0 },
+    {
+      events,
+      receiver,
+      identifierPolicy,
+      position: undefined,
+      reported: 0,
+      rewound: [],
+      recording: undefined,
+    },
     undefined,
     undefined,
   );
+}
+
+/**
+ * The key every {@link JsonReadContext} this module creates carries its {@link Cursor} under --
+ * `reader/context.ts`'s own identically-purposed `CURSOR` symbol, ported rather than imported
+ * (the `src/json/**` ESLint zone forbids reaching into `reader/` at all). A registry-global symbol
+ * so a context built through one bundler copy of this module is still reachable from another --
+ * see the text encoding's own copy of this note for why that matters.
+ */
+const CURSOR = Symbol.for('io.ltr8.tson.json.readContext.cursor');
+
+interface CursorCarrier {
+  [CURSOR]?: Cursor;
+}
+
+/**
+ * Runs `lookahead` over `ctx`, then rewinds every event it consumed so the next reader to touch
+ * `ctx` sees a stream nothing has read -- this package's own port of `reader/context.ts`'s
+ * `lookingAhead`, for a dispatcher's decision that needs to see an object's opening members before
+ * it knows which reader owns them ({@link JsonReadContext.next}/{@link JsonReadContext.peek} give
+ * only one event of lookahead on their own).
+ *
+ * **Nested lookaheads compose.** An enclosing pass's own `recording` is saved and restored around
+ * the nested one, so a nested rewind lands ahead of whatever the outer pass has itself consumed so
+ * far, and the outer pass does not double-count what the inner one already rewound (`consumed`
+ * leaves `recording` and re-enters it only if the outer pass reads through it for itself).
+ *
+ * **`rewound` is rebuilt front-to-back, not `unshift`-ed one at a time** -- linear rather than
+ * quadratic, and it avoids spreading a long `consumed` array into `Array.prototype.push`, which
+ * throws past a few tens of thousands of elements (`reader/context.ts`'s own note on the same
+ * choice, found there through a real failure).
+ */
+export function* lookingAhead<T>(
+  ctx: JsonReadContext,
+  lookahead: (ctx: JsonReadContext) => Task<T>,
+): Task<T> {
+  const cursor = (ctx as JsonReadContext & CursorCarrier)[CURSOR];
+  if (cursor === undefined) {
+    throw new TsonInternalError(
+      'lookingAhead was called with a JsonReadContext this module did not create -- ' +
+        'json/readContext.ts is the only implementation of the interface',
+    );
+  }
+  const consumed: JsonEvent[] = [];
+  const outer = cursor.recording;
+  cursor.recording = consumed;
+  try {
+    return yield* lookahead(ctx);
+  } finally {
+    cursor.recording = outer;
+    if (consumed.length > 0) {
+      const pending = cursor.rewound.splice(0, cursor.rewound.length);
+      for (const event of consumed) cursor.rewound.push(event);
+      for (const event of pending) cursor.rewound.push(event);
+    }
+  }
 }

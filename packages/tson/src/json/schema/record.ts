@@ -1,36 +1,49 @@
 /**
- * A closed record as a JSON object ([TSON-JSON] §6.1, minus §6.1.5's dispatch — see
- * `json/schema/compile.ts`'s own top note on why an ABSTRACT/member-dispatched position never
- * reaches this module at all). One member per present field, member name = field name (NFC), and
- * every rule of §6.1.1–§6.1.4/§6.1.6 applied in one loop that fills a slot per field and hands the
- * slots to a tree builder once — the port of the Java reference's `RecordPlan`/`RecordReader`/
- * `TreeRecordBuilder`, collapsed into one file since this package builds tree mode alone.
+ * A record as a JSON object ([TSON-JSON] §6.1), in every position that reaches this module: a
+ * closed (non-family, or FINAL/OPEN-with-no-local-subtype) record read directly, and every
+ * record-family position's own *concrete* reading (`json/schema/dispatchTag.ts`'s `untagged`,
+ * `json/schema/dispatchMember.ts`'s dispatched member) — one member per present field, member
+ * name = field name (NFC), and every rule of §6.1.1–§6.1.4/§6.1.6 applied in one loop that fills a
+ * slot per field and hands the slots to a tree builder once. The port of the Java reference's
+ * `RecordPlan`/`RecordReader`/`TreeRecordBuilder`, collapsed into one file since this package
+ * builds tree mode alone.
  *
- * **§3.2's reserved namespace, without §3.3's annotation object.** A member name beginning with
- * `$` never matches a declared field (§3.2: "no identifier begins with `$`"), so it is never a
- * §6.1.1 closure violation. Two cases, decided without needing §3.3's own apparatus (reading a
- * wrapper or an inline tag), which this package does not implement yet:
+ * **§3.3's annotation object, read with no lookahead of its own.** A record position's own reader
+ * is the one place §3.3's leading members are read *sequentially*, as the ordinary member loop
+ * meets them, rather than peeked ahead (`json/schema/reservedMembers.ts`'s `lead`, which every
+ * dispatcher in this directory uses instead): this reader is reached only once a dispatcher has
+ * already decided the object is its own type to read (or reached directly, at a non-family
+ * position, where nothing dispatches at all), so there is nothing left to decide from a peek —
+ * only whether the leading members it meets are placed and spelled correctly.
  *
- * - **One of the three reserved names** (`$schema`, `$type`, `$value`) needs that apparatus to
- *   interpret at all — whether the object is a redundant tag, a genuine subtype selection, or a
- *   wrapper changes what the *rest* of the object means, none of which this module can decide. It
- *   reports `NOT_IMPLEMENTED` (a gap, not a verdict) and stops judging this record's remaining
- *   members entirely — reading past it as an ordinary closed record would report false verdicts
- *   (`UNRECOGNIZED_FIELD` on a field a subtype the tag selects genuinely declares) against a
- *   shape this module never actually understood.
- * - **Any other `$`-initial name** is decidable on its own: §3.2's reserved set is closed, so a
- *   name outside the three-member table is a resolver error at this position regardless of what
- *   the rest of the object turns out to mean, and the read continues past it — it says nothing
- *   about dispatch either way.
+ * - **`$type` at the object's first member** MAY restate this record's own type (itself, or an
+ *   alias whose reference chain terminates at it, `link/referenceChain.ts`'s `selfNames`) — never
+ *   anything else, since a value reaching this reader has already been placed at exactly this
+ *   type by whichever dispatcher (if any) sits in front of it. Admitted, the read continues to
+ *   this record's own fields (the inline form) or, immediately following, to a lone `$value` (the
+ *   wrapper form, below).
+ * - **`$value`, immediately after a leading, admitted `$type`,** makes the object a wrapper: read
+ *   at `wrapped` — the reader an enclosing dispatcher chose for this position ({@link
+ *   ExactReader.readExact}'s own `wrapped` parameter; `read` passes this reader itself, since a
+ *   record reached with no dispatcher in front of it is its own wrapper target too) — because the
+ *   value inside may itself carry a tag selecting a subtype, which only `wrapped` (not this
+ *   record's own, subtype-blind fields) knows how to place. This record's own fields are never
+ *   read in this branch: a wrapper is apparatus, not a record (§3.3).
+ * - **Anything else `$`-initial** — `$schema` at any position (never admitted: no record position
+ *   is scoped, §7.8), `$type` anywhere but first, `$value` with no leading, admitted `$type`
+ *   before it, or a name outside the closed three-member table — is a resolver error, and the
+ *   whole record is abandoned: reading past it as ordinary fields would report false verdicts
+ *   against a shape a misplaced or unknown selector has already made unreadable.
  *
  * **A recognized field is read at `ctx.schemaField(name)`, never `ctx.field(name)` followed by a
  * second step.** `schemaField` extends both the data path and (once `inRecord` has anchored one)
  * the schema pointer in one step; `field` extends the data path alone, and is used here only for
- * an *unmatched* member, which names no field for a schema pointer to extend to.
+ * an *unmatched* member (§6.1.1's closure test never reaches a name §3.2 already claimed) or a
+ * misplaced/unknown reserved one, neither of which names a field for a schema pointer to extend to.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { terminalDefinition } from '../../link/referenceChain.js';
+import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
   isGroupMember,
@@ -39,9 +52,10 @@ import {
   type RecordBody,
   type RecordField,
 } from '../../schema/meta/bodies.js';
-import type { Atom } from '../../schema/meta/typedef.js';
+import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
 import { toNfc } from '../../unicode/nfc.js';
 import type { JsonReadContext } from '../readContext.js';
+import type { JsonEvent } from '../stream.js';
 import {
   jsonBoolean,
   jsonNull,
@@ -61,11 +75,20 @@ import {
 import type { CompileContext } from './compile.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
+import {
+  readWrappedValue,
+  refuseMisplaced,
+  refuseUnknown,
+  SCHEMA,
+  TYPE,
+  VALUE,
+} from './reservedMembers.js';
+import type { ExactReader } from './route.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost } from './valueIdentity.js';
 
 /** A field's schema-stated `~`/`=` value, resolved once at compile time: the host value it denotes (for the FIXED comparison) and the JSON node that spells it (for injection, §6.1.3). */
-interface FieldValue {
+export interface FieldValue {
   readonly hostValue: unknown;
   readonly node: JsonValue;
 }
@@ -104,8 +127,14 @@ function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): 
   }
 }
 
-/** `fieldTypeName`'s reference chain walked to the atom body it terminates at (§8.3) — the one step {@link fieldValueOf} and {@link fixedFieldReader} share. */
-function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): Atom {
+/**
+ * `fieldTypeName`'s reference chain walked to the atom body it terminates at (§8.3) — the one step
+ * {@link fieldValueOf} and {@link fixedFieldReader} share. Exported for
+ * `json/schema/dispatchMember.ts`'s own use: a sealed family's discriminator fields are read at
+ * the BASE's own declared type ([TSON-JSON] §6.1.5, "the one set of types known before dispatch"),
+ * which is exactly this walk applied to a discriminator field's `type.name`.
+ */
+export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): Atom {
   const entries = ctx.linkedSchema.entries;
   const definition = terminalDefinition(fieldTypeName, (name) => entries.get(name));
   if (definition === undefined) {
@@ -125,8 +154,13 @@ function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): Atom {
   return body as Atom;
 }
 
-/** `fieldTypeName`'s reference chain walked to an atom (§8.3), and its stated `token` resolved against it — the port of the Java reference's `FieldValue.of`. */
-function fieldValueOf(
+/**
+ * `fieldTypeName`'s reference chain walked to an atom (§8.3), and its stated `token` resolved
+ * against it — the port of the Java reference's `FieldValue.of`. Exported for
+ * `json/schema/dispatchMember.ts`'s own use: a sealed member's own pin for a discriminator field is
+ * exactly this, applied to that field's stated `~`/`=` token at the base's own declared type.
+ */
+export function fieldValueOf(
   ctx: CompileContext,
   fieldTypeName: string,
   token: { readonly text: string },
@@ -168,6 +202,10 @@ function fixedFieldReader(
 
 interface RecordPlan {
   readonly displayName: string;
+  /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose reference chain terminates at it (`link/referenceChain.ts`'s `selfNames`). */
+  readonly own: ReadonlySet<string>;
+  /** The whole linked schema's namespace, for {@link admissibleTag}'s own two-step resolution question ("does the name resolve at all"). */
+  readonly entries: ReadonlyMap<string, TypeDefinition>;
   readonly schemaLocation: SchemaLocation;
   readonly names: readonly string[];
   readonly fields: readonly RecordField[];
@@ -217,6 +255,8 @@ function buildRecordPlan(
 
   return {
     displayName: name,
+    own: selfNames(name, ctx.linkedSchema.entries),
+    entries: ctx.linkedSchema.entries,
     schemaLocation,
     names,
     fields,
@@ -243,18 +283,76 @@ function slotToNode(slot: Slot): JsonValue | undefined {
   return slot === ABSENT ? jsonNull() : slot;
 }
 
-/** §3.2's table — the only three names the reserved namespace admits. */
-const RESERVED_MEMBERS: ReadonlySet<string> = new Set(['$schema', '$type', '$value']);
+/**
+ * Whether `content` (the value peeked right after a leading `$type` member) admits this record's
+ * own type: a JSON string whose content is one of `plan.own`. Reports the appropriate refusal and
+ * answers `false` when it does not — never a second report on top of one {@link
+ * ./nameHygiene.js#nameHygieneRefuses} already made.
+ */
+function admissibleTag(ctx: JsonReadContext, plan: RecordPlan, content: JsonEvent): boolean {
+  const admissible = Array.from(plan.own).join(' | ');
+  if (content.kind !== 'string') {
+    ctx
+      .field(TYPE)
+      .report(
+        'TYPE_MISMATCH',
+        `'$type' is a string naming a type, and this is ${describeEvent(content)}`,
+        admissible,
+        describeEvent(content),
+      );
+    return false;
+  }
+  if (plan.own.has(content.value)) return true;
+  if (nameHygieneRefuses(ctx.field(TYPE), content.value)) return false;
+  const resolves = plan.entries.has(content.value);
+  ctx
+    .field(TYPE)
+    .report(
+      resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+      resolves
+        ? `'$type' names '${content.value}', which is not '${plan.displayName}' or an alias of it ` +
+            `(§7.2) -- expected ${admissible}`
+        : `'$type' names '${content.value}', which does not resolve in the governing schema's ` +
+            `namespace (§7.2) -- expected ${admissible}`,
+      admissible,
+      content.value,
+    );
+  return false;
+}
 
-/** Consumes every remaining member of the object this context is inside, reporting nothing — for a record read that has learned it cannot judge the rest of this object (a reserved member requiring §3.3's own apparatus was met). Keeps the event stream balanced without drawing any further verdict. */
-function* skipRestOfObject(ctx: JsonReadContext): Task<void> {
-  for (;;) {
-    const event = yield* ctx.next();
-    if (event.kind === 'object-end') return;
-    if (event.kind !== 'member-name') {
-      throw new Error(`a member name or '}' was due and the stream produced '${event.kind}'`);
-    }
-    yield* skipNextValue(ctx);
+/**
+ * §3.3's `$schema`/misplaced-`$type`/misplaced-`$value`/unknown-`$`-name refusal, at a record
+ * position: `$schema` is never admitted (no record position is scoped, [TSON-SCHEMA] §7.8), and
+ * the rest are `reservedMembers.ts`'s own leading-member rules restated at whichever member this
+ * loop actually met. Always a resolver error, and always abandons the whole record: reading past
+ * a misplaced or unknown selector as ordinary fields would report false verdicts against a shape
+ * it has already made unreadable.
+ */
+function refuseReserved(ctx: JsonReadContext, name: string, displayName: string): void {
+  if (name === SCHEMA) {
+    ctx
+      .field(SCHEMA)
+      .report(
+        'UNRECOGNIZED_FIELD',
+        `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
+          `position -- '${displayName}' is a record`,
+        'no $schema at this position',
+        SCHEMA,
+      );
+  } else if (name === TYPE) {
+    refuseMisplaced(ctx, TYPE);
+  } else if (name === VALUE) {
+    ctx
+      .field(VALUE)
+      .report(
+        'UNRECOGNIZED_FIELD',
+        "'$value' stands in an object not led by an admitted '$type' (§3.3) -- a wrapper's " +
+          "'$value' follows its own leading, admitted '$type' and nothing else",
+        "'$value' immediately after a leading '$type'",
+        VALUE,
+      );
+  } else {
+    refuseUnknown(ctx, name);
   }
 }
 
@@ -267,11 +365,14 @@ export function buildRecordReader(
   body: RecordBody,
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
-): JsonTypeReader<JsonValue> {
+): JsonTypeReader<JsonValue> & ExactReader {
   const plan = buildRecordPlan(name, body, schemaLocation, ctx);
 
-  return {
+  const reader: JsonTypeReader<JsonValue> & ExactReader = {
     *read(readCtx: JsonReadContext): Task<JsonValue | undefined> {
+      return (yield* reader.readExact(readCtx, reader)) as JsonValue | undefined;
+    },
+    *readExact(readCtx: JsonReadContext, wrapped: JsonTypeReader): Task<unknown> {
       const outer = readCtx.inRecord(plan.schemaLocation);
       const opening = yield* outer.next();
       if (opening.kind !== 'object-start') {
@@ -287,7 +388,8 @@ export function buildRecordReader(
 
       const reportedBefore = outer.reported();
       const slots: Slot[] = new Array<Slot>(plan.names.length).fill(undefined);
-      let dispatchNeeded = false;
+      let position = 0;
+      let tagged = false;
 
       for (;;) {
         const event = yield* outer.next();
@@ -295,37 +397,29 @@ export function buildRecordReader(
         if (event.kind !== 'member-name') {
           throw new Error(`a member name or '}' was due and the stream produced '${event.kind}'`);
         }
-        if (event.name.startsWith('$')) {
-          const at = outer.field(event.name);
-          if (RESERVED_MEMBERS.has(event.name)) {
-            at.report(
-              'NOT_IMPLEMENTED',
-              `'${event.name}' is a reserved member ([TSON-JSON] §3.2), and the annotation ` +
-                'object (§3.3) that would interpret it is not built yet',
-            );
-            yield* skipNextValue(at);
-            // Whatever this object means from here is §3.3's to decide (a redundant tag, a
-            // subtype selection whose own fields this plan does not know, or a wrapper whose
-            // other members are not this record's fields at all) -- so no further member of it
-            // draws a verdict from this plan; only the stream stays balanced.
-            yield* skipRestOfObject(outer);
-            dispatchNeeded = true;
-            break;
+        const rawName = event.name;
+        if (rawName.startsWith('$')) {
+          if (tagged && position === 1 && rawName === VALUE) {
+            const value = yield* readWrappedValue(outer, wrapped);
+            return value;
           }
-          // Outside the three-member table, §3.2's closed set already answers this on its own,
-          // with no dispatch apparatus needed -- decidable and reported regardless of what the
-          // rest of the object turns out to mean.
-          at.report(
-            'UNKNOWN_TYPE_REF',
-            `'${event.name}' begins with '$' and is not one of this encoding's reserved ` +
-              `members ($schema, $type, $value) -- [TSON-JSON] §3.2's reserved namespace is closed`,
-            'a declared field, or one of $schema/$type/$value',
-            event.name,
-          );
-          yield* skipNextValue(at);
-          continue;
+          if (position === 0 && rawName === TYPE) {
+            const content = yield* outer.peek();
+            if (admissibleTag(outer, plan, content)) {
+              yield* outer.next();
+              tagged = true;
+              position += 1;
+              continue;
+            }
+            yield* skipValue(outer, opening);
+            return undefined;
+          }
+          refuseReserved(outer, rawName, plan.displayName);
+          yield* skipValue(outer, opening);
+          return undefined;
         }
-        const memberName = toNfc(event.name);
+        position += 1;
+        const memberName = toNfc(rawName);
         const at = plan.index.get(memberName);
         if (at === undefined) {
           yield* unmatched(outer, memberName);
@@ -344,12 +438,10 @@ export function buildRecordReader(
         slots[at] = yield* readField(outer, plan, at, memberName);
       }
 
-      if (!dispatchNeeded) {
-        if (plan.groups.length > 0) {
-          validateGroups(outer, plan, slots);
-        }
-        fillAbsent(outer, plan, slots);
+      if (plan.groups.length > 0) {
+        validateGroups(outer, plan, slots);
       }
+      fillAbsent(outer, plan, slots);
 
       if (outer.reported() !== reportedBefore) return undefined;
       const members = new Map<string, JsonValue>();
@@ -361,6 +453,7 @@ export function buildRecordReader(
       return jsonObject(members);
     },
   };
+  return reader;
 }
 
 function* unmatched(ctx: JsonReadContext, memberName: string): Task<void> {

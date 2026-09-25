@@ -3,8 +3,9 @@
 ← back to the [README](README.md)
 
 Built against TSON Part 1 (lexer + data format), a working draft:
-https://tson.io/raw/2026/35/tson-part1-data.md, and Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/35/tson-part2-schema.md
+https://tson.io/raw/2026/35/tson-part1-data.md, Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/35/tson-part2-schema.md, and Part 3 (the JSON encoding,
+`./json`, new in Revision 36): `spec/tson-part3-json.md`.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
 corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 277 subjects
@@ -99,6 +100,42 @@ day it does not match is the day it matters.
 - [x] Compilation — a compiled, schema-validating reader
 - [x] Diagnostics — the data- and schema-side problem model
 
+## Part 3 — JSON encoding (Class 3)
+
+A second, parallel stack under `@ltr8/tson/json`, with no dependency on the text encoding's lexer,
+stream, reader, compiler, tree or facade modules (`eslint.config.js`'s own zone for `src/json/**`;
+`IDIOM-DEBT.md` records why it is a stack of its own rather than a mode of the text one). Built
+against [TSON-JSON] (`spec/tson-part3-json.md`).
+
+- [x] Lexer and event stream (§3.1) — RFC 8259 over bytes this package decodes itself, code-point
+      addressed; one leading BOM discarded; a lone surrogate is a lexer error, a surrogate pair one
+      character; numbers kept as lexemes, never rounded through a host float
+- [x] `JsonValue` tree and schemaless read/write — duplicate member names refused after NFC;
+      `parseJson`/`parseJsonAsync`/`parseJsonCollecting` (`json/index.ts`)
+- [x] Schema-directed read (§5–§8), compiled once from a `LinkedSchema` (`compileJsonSchema`) —
+      atoms by their own parsing contracts, enums matched on content; records closed, NFC names,
+      the three field slots, injection, FIXED by value, groups; arrays, sets, tuples; object-form
+      and pairs-form maps; the annotation object (§3.3) and its leading-member rule; tag dispatch
+      at OPEN/ABSTRACT positions and member dispatch at a sealed family (§6.1.5); the choice kind
+      table (§8) over the resolver's `disjoint` fact; all-or-nothing reads (§9.1)
+- [x] Front door (`json/facade.ts`) — `readJsonTree`/`readJsonTreeAsync`,
+      `validateJson`/`validateJsonAsync`, sync over bytes and async over a chunked `Task<T>` source
+      exactly as the text stack's `readTree`/`validate`; a caller supplies an already-compiled
+      `JsonCompiledSchema` and a root name, mirroring how `readTree`/`validate` take a
+      `CompiledSchema` (§3.4's out-of-band binding route — the only route this port implements,
+      see Known gaps)
+- [x] CLI (`tson validate`) — a `.json` input (case-insensitive) is bound by `--schema`/`--root`;
+      standard input is read as JSON when a binding is given, TSON text otherwise; a `.json` input
+      with no binding, and a `--root` naming no entry, are usage errors (exit 2) checked before any
+      file opens. `--identifier-policy` reaches a `.json` input's schema-directed read too (§9.4),
+      not only `.tn`'s. **Behaviour change from before this package**: `--schema`/`--root` bound
+      standard input to a TSON-text read unconditionally; it now reads bound stdin as JSON, with no
+      flag to say otherwise (matching the reference CLI's own `ValidateCommand.isJson`, which gives
+      stdin no escape hatch either once a binding is given) — a script that piped `.tn` content into
+      a bound `tson validate -` now needs a named file instead of stdin.
+- [x] Package surface — `./json` subpath (ESM + CJS + types), `check:package` (publint,
+      are-the-types-wrong), the browser bundle test, `smoke-cli.sh`'s `.json` case
+
 ## Beyond the reference implementation's shape
 
 - [x] I-Regexp engine (RFC 9485) — linear-time, ReDoS-safe
@@ -164,11 +201,50 @@ day it does not match is the day it matters.
 
 ## Known gaps
 
-- **No JSON reader (§6).** Revision 35 deletes the JSON-superset claim, states that a JSON document
-  is not a TSON document, and replaces the claim with a distinct JSON reader: a second encoding of
-  the same model, mapping JSON `null` to absence and a non-identifier-keyed object to a map rather
-  than a record. Neither this port nor the reference has one. `README.md` and `skills/tson-ts/` no
-  longer assert the superset; the reader itself is unbuilt.
+- **The JSON encoding's ([TSON-JSON]) scope is narrower than the full spec's, and in one respect
+  narrower than the reference implementation's own** (`REVISION-36-PLAN.md`'s own "Scope
+  decisions"; the reference records most of these as deferrals, not conclusions). Everything below
+  except the object-binding gap matches a deferral the reference records too:
+  - **§3.4's in-band root binding is not read.** A document naming its own `$schema`/`$type` at
+    the root, with no schema supplied out of band, is not a route this package implements — every
+    call to `readJsonTree`/`validateJson` requires `schema`/`root`. `$type` tag dispatch _inside_
+    a document already bound out of band (subsumption, record families, choices) is implemented in
+    full; what is missing is starting a read with no binding at all.
+  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`)
+    compile to a `NOT_IMPLEMENTED` reader (`json/schema/compile.ts`'s own top note) — the plan
+    stays total (every entry still compiles), but reading such a position reports the gap rather
+    than a value. A template naming no `extension` — a genuine open template used bare, never
+    applied — takes the same `NOT_IMPLEMENTED` reader.
+  - **The §3.5 `TSON-Schema`/`TSON-Accept-Schema` header fields are not implemented.** They are an
+    HTTP-transport convention over §3.4's out-of-band route; nothing in this package or the CLI
+    reads or writes them. A caller wiring an HTTP layer implements them itself, on top of the
+    out-of-band binding this package already takes as a plain argument.
+  - **There is no schema-directed JSON encoder.** §9.2's encoder MUSTs (refuse the uncarryable,
+    lead an annotation object with its reserved members, tag wherever §8.2 requires, emit
+    canonical key content in object-form maps, preserve exact-tier digits and scale, ...) are
+    unimplemented; `json/write.ts` only writes a schemaless `JsonValue` tree back to text
+    (§9.3's round-trip latitude), never a schema-governed value the way the text stack's own
+    `write()` does for `tree/nodes.ts`'s `Value`.
+  - **§10.1's resource bounds beyond nesting depth are not enforced by this package specifically**
+    — member/element counts, string and number lengths, and decoded-binary sizes are the same gap
+    the text encoding already has (`Config`'s own `maxNestingDepth` is the one limit either stack
+    checks); default-injection amplification (§10.1's own note) is not tracked either.
+  - **There is no JSON counterpart of `readBind`/object binding, unlike the reference.** `json/`
+    reads a JSON document into a `JsonValue` tree only (`json/index.ts`'s own top note explains
+    why, at length, citing [TSON-JSON] §3.4's "no schemaless reading" and the reference's own
+    `JsonValue`-only design note for the _tree_ read); the reference's own `Json` additionally
+    exposes an `objectReader()`, and this port has no `objectReader`-shaped function binding a
+    JSON document straight into a host object the way `@ltr8/tson/bind`'s `readBind` does for TSON
+    text. `src/bind/**` is importable from `src/json/**` (`eslint.config.js`'s own zone comment),
+    so nothing structural blocks adding one; it is simply unbuilt.
+  - **§9.4's token policy is not wired up anywhere in this package.** `ReadJsonOptions` carries no
+    `tokenPolicy` field at all, so a schema-directed JSON read judges map keys and string values
+    under no token policy; the schemaless door (`parseJson`/`parseJsonAsync`/`parseJsonCollecting`)
+    takes no token or identifier policy either, though §9.4's policies have nothing to reach there
+    in the first place ([TSON-JSON] §3.4: no field names, no `$type`, no schema-typed position at
+    all). `identifierPolicy` **is** implemented for the schema-directed read (`ReadJsonOptions`,
+    `json/schema/nameHygiene.ts`) and the CLI passes `--identifier-policy` through to it for a
+    `.json` input exactly as it does for a `.tn` one.
 
 - **`type_argument` is bound as a variant where the kernel declares a field group.** The kernel has
   `type_argument => { ( name: type_ref | value: value ) }` — one record whose two members form a

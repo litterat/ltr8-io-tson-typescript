@@ -130,6 +130,15 @@ Java: \`tson-json/.../json/reader/\` — \`ReservedMembers\` (\`lead\`), \`Tags\
   \`JsonChoiceReadTest\`, \`JsonAliasTagReadTest\`, \`SealedFactoryEncodingParityTest\`,
   \`TemplateFamilyEncodingParityTest\`.
 
+- **One value identity.** \`json/schema/valueIdentity.ts\` is a second value-identity implementation
+  (string keys) beside \`value/equality.ts\`, which the text stack uses. Pin comparison, set
+  duplicates and map-key identity must all go through ONE definition of a value space's equality —
+  make the JSON reader use \`value/equality.ts\` (extend it with a keying function there if hashing
+  is needed), and delete the second.
+- The \`$\`-initial member that is not one of the three reserved names is currently reported as
+  \`UNKNOWN_TYPE_REF\`; §3.2 makes it a resolver error — choose the code by what it is (a name
+  that is not a field, in the resolver category) and say why.
+
 You are alone on the tree.`,
   },
   {

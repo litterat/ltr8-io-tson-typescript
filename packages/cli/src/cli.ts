@@ -54,8 +54,9 @@ Usage:
   tson init-example [<dir>]
 
 Commands:
-  validate       Validate data documents against a schema they name, or (with no --schema)
-                 base syntax and the built-in type vocabulary alone. See 'tson validate --help'.
+  validate       Validate data documents (.tn text, or .json under a schema) against a schema
+                 they name, or (with no --schema) base syntax and the built-in type vocabulary
+                 alone for .tn text. See 'tson validate --help'.
   compile        Resolve and link a schema document against the bundled standard library and
                  report whether it compiles. See 'tson compile --help'.
   policy         Print the [TSON-DATA] §8.2 Unicode policy this run would apply, with no
@@ -116,10 +117,16 @@ const VALIDATE_USAGE =
 const VALIDATE_HELP = `usage: tson validate [--schema <file-or-url> --root <name>] [<policy options>] [--format text|json|tson] <file|->...
 
 Validates data documents. With no --schema: base syntax and the built-in type vocabulary
-only (Class 1). With --schema: also give --root, and every file's root value is read
-against that schema entry. '-' reads one data document from standard input, at most once,
-always as data. Never fetches or opens a schema a data file's own !!schema directive
-names -- only --schema/--root, given on the command line, is ever consulted.
+only (Class 1), for TSON text. With --schema: also give --root, and every file's root value
+is read against that schema entry. Never fetches or opens a schema a data file's own
+!!schema directive names -- only --schema/--root, given on the command line, is ever
+consulted.
+
+A file named *.json (case-insensitive) is a JSON encoding of TSON data ([TSON-JSON] §3.1)
+and is read against --schema/--root, which are then required -- this encoding has no
+schemaless reading ([TSON-JSON] §3.4). Every other file is TSON text. '-' reads one data
+document from standard input, at most once: as JSON when --schema/--root are given (nothing
+here can say otherwise), as TSON text when they are not.
 
 options:
   --schema <file-or-url>   schema to validate against (a local path or an https:// URL)

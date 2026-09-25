@@ -1,9 +1,11 @@
 /**
  * `@ltr8/tson/json` — the JSON encoding ([TSON-JSON], `spec/tson-part3-json.md`). This subpath
- * currently carries the encoding-independent bottom of the stack: the lexer, the event stream,
- * the `JsonValue` tree, a schemaless read of one, and the tree writer — everything schema-directed
- * reading (§5–§8) is layered on top of. See `IDIOM-DEBT.md` for why this subpath is a parallel
- * stack rather than a mode of the TSON text one.
+ * carries the whole stack: the lexer, the event stream, the `JsonValue` tree, a schemaless read
+ * of one, the tree writer, the schema-directed reader (§5–§8, `json/schema/**`), and the
+ * schema-directed front door this module re-exports at its bottom (`readJsonTree`/
+ * `readJsonTreeAsync`/`validateJson`/`validateJsonAsync`/`compileJsonSchema`, `json/facade.ts`).
+ * See `IDIOM-DEBT.md` for why this subpath is a parallel stack rather than a mode of the TSON
+ * text one.
  *
  * **A schemaless read returns {@link JsonValue}, never `tree/nodes.ts`'s `Value`.** Three
  * converging reasons, not just a style pick:
@@ -164,8 +166,14 @@ export interface JsonParseResult {
  * {@link parseJson}, collecting every §3.1 duplicate-member problem in one pass rather than
  * stopping at the first — a base-syntax failure (malformed UTF-8, a bad token, a grammar
  * violation) or a resource-limit refusal still throws, since everything past either point is
- * unreachable by construction and there is nothing further to collect (the same posture
- * `facade/tree.ts`'s own `validate` takes for the TSON text encoding).
+ * unreachable by construction and there is nothing further to collect. **This is a narrower
+ * posture than `facade/tree.ts`'s own `validate`** (which catches a base-syntax failure and
+ * reports it through the receiver instead) **and than this same subpath's own schema-directed
+ * `validateJson`/`validateJsonAsync`** (`json/facade.ts`, which does the same, now that its own
+ * documented divergence from the text convention has been narrowed to only a §10.1 limit
+ * refusal): the schemaless door stays simpler on purpose, since a caller who wants a base-syntax
+ * failure collected already has a `DiagnosticsReceiver`-shaped door lower in this same module
+ * (`readJsonDocument`, over a `collector()`) to reach for instead of this convenience wrapper.
  */
 export function parseJsonCollecting(
   source: Uint8Array | string,
@@ -180,11 +188,12 @@ export function parseJsonCollecting(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The schema-directed layer (WP4B, [TSON-JSON] §4–§8): compiling a `LinkedSchema` to a reader per
-// entry, and reading a JSON document against one into a `JsonValue` tree. See `json/schema/compile.ts`'s
-// own top note for exactly which positions this package reads (and which — dispatch: an ABSTRACT
-// or member-dispatched record, an untagged choice, a scoped position, the annotation object itself
-// — are WP4C's, reported as `NOT_IMPLEMENTED` rather than silently skipped).
+// The schema-directed layer ([TSON-JSON] §3–§8): compiling a `LinkedSchema` to a reader per entry,
+// and reading a JSON document against one into a `JsonValue` tree, including §3.2/§3.3's reserved
+// namespace and annotation object and §6.1.5/§8's dispatch. See `json/schema/compile.ts`'s own top
+// note for exactly which positions this package does not read yet (a scoped position, and a
+// template family base named with no `extension`) — reported as `NOT_IMPLEMENTED` rather than
+// silently skipped.
 // ---------------------------------------------------------------------------------------------
 
 export type { JsonCompiledSchema, JsonTypeReader } from './schema/compile.js';

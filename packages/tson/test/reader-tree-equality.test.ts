@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { deepEqual, valuesEqual } from '../src/reader/tree/equality.js';
+import { identityKey } from '../src/value/equality.js';
 import { atomNode, recordNode } from '../src/tree/nodes.js';
 
 /** `reader/tree/equality.ts` -- the structural comparison `record.ts`'s FIXED-field check needs (§5.2). */
@@ -85,6 +86,46 @@ describe('deepEqual -- value identity, not spelling ([TSON-DATA] §2.6, §5.2; [
     const c = { hour: 9, minute: 1, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } };
     expect(deepEqual(a, b)).toBe(true);
     expect(deepEqual(a, c)).toBe(false);
+  });
+
+  it('text compares under NFC: a precomposed and a decomposed spelling of one grapheme are one value', () => {
+    const precomposed = 'é'; // é
+    const decomposed = 'é'; // e + combining acute accent
+    expect(deepEqual(precomposed, decomposed)).toBe(true);
+    expect(deepEqual(precomposed, 'e')).toBe(false);
+  });
+
+  it('a rational compares by cross-multiplied value, not by numerator/denominator spelling -- meta.tn: "2/4 equals 1/2"', () => {
+    expect(deepEqual({ numerator: 1n, denominator: 2n }, { numerator: 2n, denominator: 4n })).toBe(
+      true,
+    );
+    expect(deepEqual({ numerator: 1n, denominator: 2n }, { numerator: 1n, denominator: 3n })).toBe(
+      false,
+    );
+    expect(
+      deepEqual({ numerator: -1n, denominator: 2n }, { numerator: 1n, denominator: -2n }),
+    ).toBe(true);
+  });
+
+  it('every NaN is the canonical quiet NaN (IEEE 754-2019, [TSON-DATA] §5.6) -- equal to itself, unlike ===', () => {
+    expect(deepEqual(Number.NaN, Number.NaN)).toBe(true);
+    expect(deepEqual(Number.NaN, 1)).toBe(false);
+    expect(deepEqual(1, 2)).toBe(false); // two ordinary, distinct reals still compare unequal
+  });
+
+  it('deepEqual and identityKey judge the same equivalence classes -- the property both encodings’ readers must not disagree on (WP4C repair: previously they disagreed on exactly these three)', () => {
+    const pairs: readonly (readonly [unknown, unknown])[] = [
+      ['é', 'é'],
+      [
+        { numerator: 1n, denominator: 2n },
+        { numerator: 2n, denominator: 4n },
+      ],
+      [Number.NaN, Number.NaN],
+    ];
+    for (const [a, b] of pairs) {
+      expect(deepEqual(a, b)).toBe(true);
+      expect(identityKey(a)).toBe(identityKey(b));
+    }
   });
 });
 

@@ -215,6 +215,10 @@ describe('§5 atoms', () => {
     expect(refusal('nothing', '0').code).toBe('TYPE_MISMATCH');
   });
 
+  it('§3.3 recognition reaches void too -- a redundant $type restating it wraps null the same way', () => {
+    expect(accepted('nothing', '{"$type": "nothing", "$value": null}')).toBe('null');
+  });
+
   it('null at an atom position is a refusal rather than a value (§7)', () => {
     expect(refusal('label', 'null').code).toBe('TYPE_MISMATCH');
     expect(refusal('count', 'null').code).toBe('TYPE_MISMATCH');
@@ -231,10 +235,24 @@ describe('§5 atoms', () => {
     expect(accepted('alias', '42')).toBe('42');
   });
 
-  it('a redundant tag at an atom position gaps as NOT_IMPLEMENTED, not the wrong-kind error the object would otherwise draw (§3.3 recognition)', () => {
-    const result = read('count', '{"$type": "count", "$value": 42}');
-    expect(result.diagnostics.length).toBe(1);
-    expect(result.diagnostics[0]?.code).toBe('NOT_IMPLEMENTED');
+  it('a redundant tag at an atom position is read straight through -- §3.3 recognition, an atom having no subtype to select into but its own name (or an alias of it)', () => {
+    expect(accepted('count', '{"$type": "count", "$value": 42}')).toBe('42');
+  });
+
+  it('a $type at an atom position naming something other than itself (or an alias of it) is refused, resolves-or-not deciding the code', () => {
+    expect(refusal('count', '{"$type": "label", "$value": "x"}').code).toBe('TYPE_MISMATCH');
+    expect(refusal('count', '{"$type": "nope", "$value": 42}').code).toBe('UNKNOWN_TYPE_REF');
+  });
+
+  it('a $value with no leading $type at an atom position is refused -- §3.3: a $value not led by $type is a resolver error', () => {
+    expect(refusal('count', '{"$value": 42}').code).toBe('VALIDATION_ERROR');
+  });
+
+  it('$schema at an atom position is refused -- no atom position here is scoped (§7.8)', () => {
+    expect(
+      refusal('count', '{"$schema": "https://example.test/x.tn", "$type": "count", "$value": 42}')
+        .code,
+    ).toBe('UNRECOGNIZED_FIELD');
   });
 });
 
@@ -292,17 +310,16 @@ describe('§6.1 records', () => {
     expect(refusal('person', '{"name": "Ada", "name": "Grace"}').code).toBe('DUPLICATE_FIELD');
   });
 
-  it('a reserved member outside the three-name table is a resolver error, decidable without dispatch (§3.2)', () => {
+  it('a reserved member outside the three-name table is a resolver error (§3.2) -- WP4C moves this off UNKNOWN_TYPE_REF (json-dispatch.test.ts has the full annotation-object surface)', () => {
     const d = refusal('person', '{"name": "Ada", "$bogus": 1}');
-    expect(d.code).toBe('UNKNOWN_TYPE_REF');
+    expect(d.code).toBe('UNRECOGNIZED_FIELD');
     expect(d.path).toBe('/$bogus');
   });
 
-  it('a leading $type gaps the whole record as NOT_IMPLEMENTED and draws no other verdict from members it can no longer judge (§3.2, §3.3)', () => {
-    const result = read('person', '{"$type": "person", "name": "Ada", "extra_field": 1}');
-    expect(result.diagnostics.length).toBe(1);
-    expect(result.diagnostics[0]?.code).toBe('NOT_IMPLEMENTED');
-    expect(result.diagnostics[0]?.path).toBe('/$type');
+  it("a leading, self-restating $type is admitted (§3.3, §6.1.5) and this record has no subtypes to dispatch among, so an unmatched field past it is an ordinary closure violation -- WP4C's dispatch, not a gap; json-dispatch.test.ts has the family-position cases", () => {
+    const d = refusal('person', '{"$type": "person", "name": "Ada", "extra_field": 1}');
+    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.path).toBe('/extra_field');
   });
 
   it('an atom position that refuses a composite value consumes it whole, keeping the surrounding record readable (event-skip)', () => {
@@ -443,6 +460,11 @@ describe('§6.2/§6.3 arrays, sets, tuples', () => {
 
   it('an array refuses an element of the wrong type', () => {
     expect(refusal('tags', '["a", 2]').code).toBe('TYPE_MISMATCH');
+  });
+
+  it('§3.3 recognition reaches an array position too -- no subtype to select into, so only a redundant $type restating it is admitted', () => {
+    expect(accepted('tags', '{"$type": "tags", "$value": ["a", "b"]}')).toBe('["a","b"]');
+    expect(refusal('tags', '{"$type": "label", "$value": ["a"]}').code).toBe('TYPE_MISMATCH');
   });
 
   it('an element-optional array admits null as an absent element (§2.9)', () => {
@@ -631,45 +653,14 @@ describe('§8.2 name hygiene', () => {
   });
 });
 
-// ── Gaps: dispatch positions are total but unread (WP4C's) ──────────────────────────────────
-
-describe('dispatch positions compile to a gap, not a verdict', () => {
-  const DISPATCH_SCHEMA = resolveUserSchema(`
-!!id:"https://example.test/dispatch-1.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
-{
-  pet => abstract { pet_type: text =?  name: text }
-  cat => pet & { pet_type: = cat }
-  shape => ( int32 | text )
-  holder => { animal: pet  outline: shape }
-}
-`);
-  const DISPATCH_COMPILED = compileJsonSchema(DISPATCH_SCHEMA);
-
-  it('an abstract record position reports NOT_IMPLEMENTED and is not a verdict', () => {
-    const result = validateJson('{"pet_type": "dog", "name": "Rex"}', {
-      schema: DISPATCH_COMPILED,
-      root: 'pet',
-    });
-    expect(result.diagnostics.length).toBe(1);
-    const only = result.diagnostics[0];
-    expect(only?.code).toBe('NOT_IMPLEMENTED');
-  });
-
-  it('a nested dispatch position inside an otherwise-readable record also gaps', () => {
-    const result = validateJson('{"animal": {"pet_type": "dog"}, "outline": 1}', {
-      schema: DISPATCH_COMPILED,
-      root: 'holder',
-    });
-    expect(result.diagnostics.some((d) => d.code === 'NOT_IMPLEMENTED')).toBe(true);
-  });
-
-  it('a schema with unreadable entries still compiles the rest', () => {
-    expect(() => DISPATCH_COMPILED.get('cat')).not.toThrow();
-    expect(() => DISPATCH_COMPILED.get('pet')).not.toThrow();
-  });
-});
+// ── Dispatch positions (WP4C, `json-dispatch.test.ts`) ──────────────────────────────────────
+//
+// Record-family and choice positions no longer gap -- WP4C (`json/schema/dispatchTag.ts`,
+// `json/schema/dispatchMember.ts`, `json/schema/dispatchChoice.ts`) replaced the NOT_IMPLEMENTED
+// this describe block used to assert. The dispatch surface itself -- the annotation object, tag
+// and member dispatch, choice discrimination, cross-encoding parity -- is `json-dispatch.test.ts`'s
+// own concern; §8.5's scoped positions are the one dispatch-adjacent gap still open
+// (`json/schema/compile.ts`'s own top note).
 
 // ── Streaming: async equals sync over every byte-offset split ───────────────────────────────
 

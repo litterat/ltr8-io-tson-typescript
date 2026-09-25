@@ -1,8 +1,9 @@
 /**
- * [TSON-DATA] §8.2's per-name hygiene rules, at the one schema-directed position that carries an
- * arriving name this package reads — a record member matching no declared field ([TSON-JSON]
- * §9.4's reach, §6.1.1). `$type` name-hygiene (§9.4: "every `$type`, and every member name...")
- * reaches no code here yet, since this package does not read a `$type` member.
+ * [TSON-DATA] §8.2's per-name hygiene rules, at every schema-directed position that carries an
+ * arriving name this package judges before drawing a verdict on it ([TSON-JSON] §9.4's reach): a
+ * record member matching no declared field (§6.1.1), and a `$type` that does not resolve, or
+ * resolves to something inadmissible, at a record-family dispatch, a choice, or a no-subtype atom/
+ * array/tuple position (§9.4: "every `$type`, and every member name...").
  *
  * **A refusal is not a verdict, and that is the whole reason this exists.** §8.2 requires a
  * name-hygiene refusal to be reported apart from [TSON-DATA] §8.1's four categories — never as one

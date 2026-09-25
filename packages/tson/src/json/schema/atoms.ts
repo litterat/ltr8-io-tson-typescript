@@ -52,13 +52,16 @@ import { toExactDecimal, toExactInteger } from '../../base/numberNarrowing.js';
 import { isHexFloat, tryParseNumber } from '../../base/numberGrammar.js';
 import { isIdentifierText } from '../../unicode/identifier-profile.js';
 import type { EnumBody } from '../../schema/meta/bodies.js';
-import type { Atom } from '../../schema/meta/typedef.js';
+import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
+import { selfNames } from '../../link/referenceChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
 import { jsonBoolean, jsonNull, jsonNumber, jsonString, type JsonValue } from '../tree.js';
-import { skipValue } from './eventSkip.js';
+import { skipNextValue, skipValue } from './eventSkip.js';
+import { nameHygieneRefuses } from './nameHygiene.js';
+import { lead as leadOf, leadPresent, readWrapped, SCHEMA, TYPE } from './reservedMembers.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost, type Identified } from './valueIdentity.js';
 
@@ -83,8 +86,13 @@ export function atomFormOf(body: Atom): AtomForm {
   }
 }
 
-/** The text `event` carries for `form`'s parser, or `undefined` when `event`'s kind is one `form` does not admit. */
-function contentOf(form: AtomForm, event: JsonEvent): string | undefined {
+/**
+ * The text `event` carries for `form`'s parser, or `undefined` when `event`'s kind is one `form`
+ * does not admit — exported for `json/schema/dispatchMember.ts`'s own use: a sealed family's
+ * discriminator content is read by exactly this rule, at the base's own declared type ([TSON-JSON]
+ * §6.1.5), before the member-dispatch table is even consulted.
+ */
+export function contentOf(form: AtomForm, event: JsonEvent): string | undefined {
   switch (event.kind) {
     case 'boolean':
       // `boolean` and `enum` both match on content (§5.2), so both admit a JSON boolean's own
@@ -200,47 +208,102 @@ function isApproximateStringForm(content: string): boolean {
 }
 
 /**
- * Whether `found` (an object-typed value, already consumed) is recognized as an annotation
- * object attempt ([TSON-JSON] §3.3's recognition rule: "at any typed position other than a
- * map-typed one, when the object's first member is a reserved member") -- checked with the one
- * token of lookahead this package's contexts carry, peeking the event right after `found` without
- * consuming it. `$`-initial covers the whole reserved namespace (§3.2), not only the three named
- * members, since recognizing an attempt is what is being decided here, not which member it is.
- *
- * Recognizing the attempt is as far as this package goes: reading it needs the annotation
- * object's own apparatus (§3.3), not built yet (`json/schema/compile.ts`'s own top note), so a
- * caller that gets `true` back reports `NOT_IMPLEMENTED` -- a gap, never a verdict on the
- * document -- rather than the wrong-kind error the same event would otherwise draw.
- */
-export function* looksLikeAnnotationObject(ctx: JsonReadContext, found: JsonEvent): Task<boolean> {
-  if (found.kind !== 'object-start') return false;
-  const after = yield* ctx.peek();
-  return after.kind === 'member-name' && after.name.startsWith('$');
-}
-
-/**
- * Reports and consumes `found` for a position that cannot read it: `NOT_IMPLEMENTED` when `found`
- * looks like an annotation object this package does not read yet ({@link
- * looksLikeAnnotationObject}), else the wrong-kind report `reportMismatch` builds. Either way the
- * whole value is skipped ({@link skipValue}), so the event stream is exactly where a reader that
- * understood this position would have left it.
+ * Reports and consumes `found` for a position that cannot read it: the wrong-kind report
+ * `reportMismatch` builds, then the whole value is skipped ({@link skipValue}), so the event
+ * stream is exactly where a reader that understood this position would have left it. `found` is
+ * never itself the start of a §3.3 annotation object at a position this module wraps with
+ * {@link withAnnotationObject} — that recognition runs, and consumes, before this position's own
+ * reader ever sees the object at all — so reaching here with an object-typed `found` means one
+ * this position's own reader must still refuse on its own terms (a map or a record's own object,
+ * for instance, at a position this generic report never wraps).
  */
 export function* reportUnreadable(
   ctx: JsonReadContext,
-  displayName: string,
   found: JsonEvent,
   reportMismatch: () => void,
 ): Task<void> {
-  if (yield* looksLikeAnnotationObject(ctx, found)) {
-    ctx.report(
-      'NOT_IMPLEMENTED',
-      `'${displayName}' is annotated with a reserved member ([TSON-JSON] §3.3), and the ` +
-        'annotation object this package does not read yet stands here',
-    );
-  } else {
-    reportMismatch();
-  }
+  reportMismatch();
   yield* skipValue(ctx, found);
+}
+
+/**
+ * Wraps `inner` (an atom, array or tuple position's own reader — a shape with no subtype of its
+ * own to select into) with §3.3's voluntary recognition: "at any typed position other than a
+ * map-typed one, when the object's first member is a reserved member — this is what admits
+ * voluntary tags: a redundant `$type` restating the position's own type". §7.2 subsumption at a
+ * shape with no subtypes reduces to exactly that — itself, or an alias of itself
+ * ({@link selfNames}) — so a `$type` naming anything else is refused the same way a record-family
+ * dispatcher refuses one: resolves and is inadmissible (`TYPE_MISMATCH`), or resolves nowhere
+ * (`UNKNOWN_TYPE_REF`). Records, choices and every record-family dispatch position read §3.3
+ * themselves (`json/schema/record.ts`, `dispatchTag.ts`, `dispatchMember.ts`, `dispatchChoice.ts`)
+ * and are never wrapped with this; a map position is never recognized at all (§3.2) and is never
+ * wrapped either.
+ *
+ * A peek, never a consume, when the position holds an ordinary value: `inner` then reads the
+ * stream exactly as it would unwrapped, at the cost of one `peek`/{@link lead} this package's
+ * contexts already give for free.
+ */
+export function withAnnotationObject(
+  displayName: string,
+  entries: ReadonlyMap<string, TypeDefinition>,
+  inner: JsonTypeReader,
+): JsonTypeReader {
+  const own = selfNames(displayName, entries);
+  return {
+    *read(ctx: JsonReadContext): Task<unknown> {
+      const first = yield* ctx.peek();
+      if (first.kind !== 'object-start') return yield* inner.read(ctx);
+      const found = yield* leadOf(ctx);
+      if (!leadPresent(found)) return yield* inner.read(ctx);
+      if (found.schema) {
+        ctx
+          .field(SCHEMA)
+          .report(
+            'UNRECOGNIZED_FIELD',
+            `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
+              `position -- '${displayName}' is not scoped`,
+            'no $schema at this position',
+            SCHEMA,
+          );
+        yield* skipNextValue(ctx);
+        return undefined;
+      }
+      if (found.type === undefined) {
+        // §3.3: "a $value in an object that does not lead with $type is a resolver error" -- a
+        // bare `$value` (`found.wrapper`) with nothing naming a type has nothing for this
+        // no-subtype position to validate it as.
+        ctx.report(
+          'VALIDATION_ERROR',
+          `an annotation object at '${displayName}' needs a leading '$type' before '$value' ` +
+            `(§3.3) -- a bare '$value' names nothing to read it as`,
+          `'$type' naming '${displayName}'`,
+          '(no $type)',
+        );
+        yield* skipNextValue(ctx);
+        return undefined;
+      }
+      if (!own.has(found.type)) {
+        if (!nameHygieneRefuses(ctx.field(TYPE), found.type)) {
+          const resolves = entries.has(found.type);
+          ctx
+            .field(TYPE)
+            .report(
+              resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+              resolves
+                ? `'$type' names '${found.type}', which is not '${displayName}' or an alias of ` +
+                    `it -- this position has no subtype for §7.2 subsumption to select`
+                : `'$type' names '${found.type}', which does not resolve in the governing ` +
+                    `schema's namespace (§7.2)`,
+              displayName,
+              found.type,
+            );
+        }
+        yield* skipNextValue(ctx);
+        return undefined;
+      }
+      return yield* readWrapped(ctx, inner);
+    },
+  };
 }
 
 /** The atom-position reader for an ordinary (non-`unit`, non-`enum`) family: §5's table, then `atomParserFor`'s own parser. */
@@ -374,7 +437,7 @@ function makeAtomReader(
       const event = yield* ctx.next();
       const content = contentOf(form, event);
       if (content === undefined) {
-        yield* reportUnreadable(ctx, displayName, event, () => {
+        yield* reportUnreadable(ctx, event, () => {
           reportWrongForm(ctx, displayName, form, event);
         });
         return undefined;
@@ -420,7 +483,7 @@ export function voidReader(
       ctx = ctx.underDeclaration(schemaLocation);
       const event = yield* ctx.next();
       if (event.kind === 'null') return jsonNull();
-      yield* reportUnreadable(ctx, displayName, event, () => {
+      yield* reportUnreadable(ctx, event, () => {
         ctx.report(
           'TYPE_MISMATCH',
           `'${displayName}' admits only the absent sentinel, spelled null, and this is ${describeEvent(event)}`,
@@ -475,7 +538,7 @@ export function valuePositionReader(
           );
         }
         default:
-          yield* reportUnreadable(ctx, displayName, event, () => {
+          yield* reportUnreadable(ctx, event, () => {
             ctx.report(
               'TYPE_MISMATCH',
               `'${displayName}' admits a boolean, number or string, and this is ${describeEvent(event)}`,

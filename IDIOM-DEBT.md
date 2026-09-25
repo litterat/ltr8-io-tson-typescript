@@ -297,45 +297,117 @@ raises is `core/errors.ts`'s existing `TsonLexError`/`TsonParseError`/`TsonLimit
 rather than a second error hierarchy — a simplification beyond what the Java carries (its own
 `ParseException` is one class covering both eventual [TSON-JSON] §9.4 categories; this port's two
 existing TSON-text error classes already carry that split, so JSON reuses them instead of
-inventing a `JsonParseException`). WP4B adds one more shared piece rather than a duplicate: the
-value-identity comparison `record.ts`'s FIXED check and `array.ts`/`map.ts`'s duplicate checks all
-need (§5.5 — two spellings of one value, `1`/`1.0`, comparing equal) used to live only in
-`reader/tree/equality.ts`, unreachable from `src/json/**`. It moved to `value/equality.ts` — a
-directory the zone already permits — with `reader/tree/equality.ts` reduced to a thin `Value`-typed
-wrapper (`valuesEqual`) re-exporting the rest, so both encodings compare by the _same_ function
+inventing a `JsonParseException`). WP4B added one more shared piece rather than a duplicate: the value-identity comparison
+`record.ts`'s FIXED check and `array.ts`/`map.ts`'s duplicate checks all need (§5.5 — two
+spellings of one value, `1`/`1.0`, comparing equal) used to live only in `reader/tree/equality.ts`,
+unreachable from `src/json/**`. It moved to `value/equality.ts` — a directory the zone already
+permits — with `reader/tree/equality.ts` reduced to a thin `Value`-typed wrapper (`valuesEqual`)
+re-exporting the rest, so both encodings compare by the _same_ function
 (`design/json-schema-directed-reading.md`'s own `ValueIdentity` note: "the peer of
 `tson-compiler`'s `ValueIdentity`, and one whose two copies must agree") rather than agreeing by
-coincidence. `json/schema/valueIdentity.ts` is JSON's own addition on top of it — reducing a value
-or a `JsonValue` tree to one comparable string key — since TypeScript has no `Object.equals`/
-`hashCode` pair for a `Map`/`Set` to key duplicate-detection on the way the Java reference's own
-`ValueIdentity` does. `identityOfHost` has a dedicated reduction for every tier this package's own
-conformance-shaped test suite exercises as a set element or a FIXED pin, `rational` and `complex`
-included (`gcdBigInt`-reduced lowest terms for the former, `decimalIdentityKey` over each
-component for the latter — both real value-space reductions, not `JSON.stringify` of the stored
-fields, which preserve spelling rather than value by design, `value/types.ts`'s own `Rational`
-doc). The generic `JSON.stringify` fallback remains for the network families (`ipv4`, `ipv6`,
-`cidr4`, `cidr6`, `mac`) only, and is sound there today because each already parses to a canonical
-field representation (raw address octets, never the written text) rather than because the
-fallback itself understands their value space — a host shape added later that is _not_ already
-canonical in its own fields would need a dedicated case the way `rational`/`complex` now have one,
-same as this package's `array.ts`/`map.ts` duplicate checks already do by reusing
-`identityOfHost` rather than re-deriving it.
+coincidence.
+
+**WP4C finished that consolidation rather than adding a second copy beside it.** `json/schema/
+valueIdentity.ts` used to carry its own reduction of a decoded host value to one comparable string
+key (`identityOfHost`) — TypeScript's `Map`/`Set` have no `Object.equals`/`hashCode` pair to key
+duplicate-detection on the way the Java reference's own `ValueIdentity` does, so a _keying_
+function was still needed and `value/equality.ts`'s own `deepEqual` does not provide one (it
+compares two values pairwise, never reduces one to a string). Rather than let that keying function
+go on living only in `json/schema/valueIdentity.ts`, it moved to `value/equality.ts` itself as
+`identityKey` — the natural home the item above already established for this exact fact ("the
+peer of `tson-compiler`'s `ValueIdentity`") — and every one of its dedicated per-tier reductions
+moved with it (`gcdBigInt`-reduced lowest terms for `rational`, `decimalIdentityKey` over each
+component for `complex`, the generic `JSON.stringify` fallback for the network families that are
+already canonical in their own parsed fields). `json/schema/valueIdentity.ts`'s own
+`identityOfHost` is now a two-line re-export of `identityKey`, and the module keeps only what
+genuinely has no counterpart outside `src/json/**`: `identityOfNode`, the same reduction applied to
+a `JsonValue` tree rather than a decoded host value (§6.4's pairs-form compound key), which cannot
+move to `value/equality.ts` because a `JsonValue` is this encoding's own tree shape and `value/`
+has no dependency on either encoding's tree model. Pin comparison, set duplicates and map-key
+identity in both `json/schema/**` and (via `deepEqual`, extended in the repair pass below to share
+every one of `identityKey`'s own normalisations — scale is a spelling, `time`/`datetime` compare
+as instants, text folds to NFC, a `rational` reduces to lowest terms, every NaN is one value) the
+text encoding now go through one definition of what a value space's equality is, not two that
+happened to agree.
+
+**The repair pass's own reading, stated plainly.** [TSON-DATA] §7.2.1 says a decoded string value
+keeps its exact spelling ("two string values ... remain distinct strings"), which is true of what
+`deepEqual`/`identityKey` hand back but was, until this pass, also taken as the rule for what two
+spellings compare _as_ — `deepEqual` compared strings by `===` and left `rational` uncompared by
+value at all, so a set of `text` or `rational`, or a FIXED check on either, could accept in one
+encoding what the other refused on the identical document (probed directly: `set<text>` holding a
+precomposed and a decomposed spelling of one grapheme, and `set<rational>` holding `1/2` and
+`2/4`). The reference implementation's own `ValueIdentity` (`tson-compiler` and `tson-json` alike)
+resolves this by NFC-folding every string and reducing every rational for comparison regardless of
+family, with `meta.tn`'s own `rational_type` doc stating the reduction outright ("2/4 equals
+1/2"). This port now follows the reference on both counts and adds the matching IEEE 754-2019 NaN
+rule (every NaN one value), because the alternative — narrowing §7.2.1's own reading instead —
+would leave `deepEqual` and `identityKey` disagreeing with each other, which is the one outcome
+this item's whole consolidation exists to rule out. Reported upstream as worth a sentence in
+[TSON-DATA] §7.2.1 distinguishing "what a decoder returns" from "what two returned values compare
+equal as", since the two questions currently share one paragraph.
+
+**WP4C also landed the dispatch layer this item's own trigger asked to be measured against**:
+`json/schema/dispatchTag.ts`, `dispatchMember.ts` and `dispatchChoice.ts` are the JSON encoding's
+own `DispatchTagReader`/`DispatchMemberReader`/`DispatchChoiceReader`, each restating a rule
+`compiler/subsumption.ts` (record-family tag/member dispatch) or `compiler/choiceReader.ts`
+(choice discrimination) already carries for TSON text — a fourth and fifth deliberate duplication
+this item's own list did not yet name, for the identical reason every other one on it holds: the
+`src/json/**` zone forbids importing `compiler/` at all. Unlike the earlier entries, this pair
+reuses real machinery rather than restating it from scratch wherever the model already exposes the
+fact as data: `link/recordExtension.ts`'s `directMembers` (not a second walk of a family's direct
+members), `link/disjointness.ts`'s `discriminationClassOf`/`choiceDisjoint` (not a second
+class-stability derivation — Revision 36 already folded that question into the one class function
+both stacks share, unlike the Java reference's own JSON-side `DiscriminationClass.stable`, which
+duplicates a predicate the model itself now answers once), and `json/schema/record.ts`'s own
+`fieldValueOf`/`resolveFieldBody`/`fieldValueParser` (a discriminator's pin, decoded once, the same
+way a FIXED field's pin already was). §7.2's alias-flattened admissible-name set (`selfNames`/
+`admitting`) is not a sixth duplication: the repair pass moved it out of `compiler/subsumption.ts`'s
+own module-private copy and into `link/referenceChain.ts`, beside `terminal` (the walk it is built
+on), so both `compiler/subsumption.ts` and every dispatcher here import the one function rather
+than each holding a copy — the reuse this item's own trigger describes, reached a step early
+because `link/` was already the walk's home and nothing stopped the text side from importing it
+too.
+
+**`json/readContext.ts` grew the second capability this item predicted it would.** WP4B gave it
+`inRecord`/`underDeclaration`/`schemaField`/`schemaLocation`; WP4C's dispatchers need to _peek_ an
+object's leading members and then hand the whole, untouched object to whichever reader they select
+— `reader/context.ts`'s own `lookingAhead`/rewind mechanism, ported line for line as
+`json/readContext.ts`'s own `lookingAhead` (a `rewound` queue and a `recording` buffer on the
+shared `Cursor`, exactly mirroring the text encoding's `PathStep`-adjacent fields), because
+`src/json/**` cannot import the implementation it duplicates. The two `ReadContext`-shaped types
+are now closer in shape than the trigger below already argued they were.
+
+**One more narrowing this pair shares, deliberately.** `json/schema/dispatchChoice.ts`'s `$type`
+at a choice position matches a written variant name exactly — no §7.2 alias flattening, no subtype
+admission for a record variant. A literal reading of §8.1 admits both ("a record whose `$type`
+names a proper subtype of a variant validates as that subtype"), but `compiler/choiceReader.ts`
+does the identical exact-name match for the text encoding (confirmed by reading it), so this is
+the dispatch pair's own cross-encoding parity holding, not a JSON-only shortcut: widening only the
+JSON side would create a new divergence in the act of fixing an old one. Left narrower than the
+literal spec text on both sides, recorded here rather than only in a code comment because it is a
+design decision for the pair, not an implementation detail of either half.
 
 **Trigger.** The reference's own: a shared `tson-encoding` module extracting "everything above
 the event level" once a second working stack exists to find the seam from
 (`.references/ltr8-io-tson-java/BACKLOG.md`, "Module structure" — "The encoding-neutral reader
 parts move into a module both stacks share… With two working stacks the seam is visible… today it
 exists twice, guarded by `CrossEncodingParityTest` rather than by being one thing"). Concretely
-for this port, now that WP4B's schema-directed JSON readers exist beside this package's own
-`compiler/`-backed ones: the two `ReadContext`-shaped types (`reader/context.ts`'s `ReadContext`
-and this item's `json/readContext.ts`) are the first candidate to unify, since both already
-report through the same `core/diagnostic.ts` vocabulary, carry the identical
-`SchemaAnchor`/`PathStep` shape, and differ only in how they pull an event; `json/schema/record.ts`
-and `reader/tree/record.ts` are the second, closer in shape now than either is to any other file
-in its own package. WP4C (dispatch, the annotation object) is this port's next chance to measure
-how much further the two stacks' shapes converge before deciding where the seam actually sits;
-until either that or the trigger above, `CrossEncodingParityTest`'s own future TypeScript port
-(WP4C) is this port's guard against the two drifting apart silently.
+for this port, now that WP4C's dispatchers exist beside this package's own `compiler/`-backed
+`subsumption.ts`/`choiceReader.ts`: the two `ReadContext`-shaped types (`reader/context.ts`'s
+`ReadContext` and this item's `json/readContext.ts`) are the first candidate to unify, since both
+now carry the identical `lookingAhead`/rewind capability on top of the identical
+`SchemaAnchor`/`PathStep` shape and differ only in how they pull an event; `json/schema/record.ts`
+and `reader/tree/record.ts` are the second, and `json/schema/dispatchTag.ts`/`dispatchMember.ts`
+and `compiler/subsumption.ts` are a third pair now provably close enough to name — both walk "the
+leading members/fields, decide, delegate", both derive the same `own`/alias set, and both report
+the identical `VALIDATION_ERROR`/`TYPE_MISMATCH`/`UNKNOWN_TYPE_REF` split
+(`json-dispatch.test.ts`'s own cross-encoding parity block is what checks that split has not
+drifted, standing in for the Java reference's `CrossEncodingParityTest` this port did not have
+until WP4C). `CrossEncodingParityTest`'s own guard is now real rather than a promise for a future
+work package: it is this port's ongoing defence against the two stacks drifting apart silently,
+not the trigger for unifying them — that trigger is still the shared module above, now with three
+named candidate pairs waiting for it rather than one.
 
 ## Summary
 

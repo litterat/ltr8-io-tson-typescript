@@ -332,6 +332,83 @@ under its own output), then `meta.tn`, then `core.tn`.
 
 ---
 
+## `@ltr8/tson/json` — [TSON-JSON], Part 3
+
+A separate stack, no dependency on the default entry's lexer/parser/compiler (`eslint.config.js`'s
+own zone for `src/json/**`). The schema-directed front door mirrors the default entry's own shape:
+
+**No sync/async overloads here** — unlike the default entry's `readTree`/`validate` (one name, picked
+apart by `source instanceof Uint8Array`), every JSON front-door function is sync over a complete
+buffer, and its `*Async` counterpart is a **separate, explicitly named export** over an
+`AsyncIterable<Uint8Array>` (never `AsyncByteSource`, which is the default entry's own
+`facade/byteSource.ts` type and unreachable from `src/json/**` at all — `eslint.config.js`'s own
+zone for this directory):
+
+```ts
+function readJsonTree(source: Uint8Array | string, options: ReadJsonOptions): JsonValue;
+function readJsonTreeAsync(
+  source: AsyncIterable<Uint8Array>,
+  options: ReadJsonOptions,
+): Promise<JsonValue>;
+function validateJson(source: Uint8Array | string, options: ReadJsonOptions): ValidateJsonResult;
+function validateJsonAsync(
+  source: AsyncIterable<Uint8Array>,
+  options: ReadJsonOptions,
+): Promise<ValidateJsonResult>;
+
+interface ReadJsonOptions extends NestingLimitOptions {
+  readonly schema: JsonCompiledSchema;
+  readonly root: string;
+  readonly identifierPolicy?: NamePolicy; // §9.4: every $type, and any member matching no declared field
+}
+interface ValidateJsonResult {
+  readonly value?: JsonValue;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+function compileJsonSchema(schema: LinkedSchema): JsonCompiledSchema; // the same LinkedSchema tson.compile() takes
+interface JsonCompiledSchema {
+  readonly linkedSchema: LinkedSchema;
+  find(name: string): JsonTypeReader | undefined;
+  get(name: string): JsonTypeReader; // throws when absent
+  rootDeclaration(name: string): SchemaLocation | undefined; // where a read through `name` roots its schema pointer
+}
+
+function parseJson(source: Uint8Array | string, options?: NestingLimitOptions): JsonValue;
+function parseJsonAsync(
+  source: AsyncIterable<Uint8Array>,
+  options?: NestingLimitOptions,
+): Promise<JsonValue>;
+function parseJsonCollecting(
+  source: Uint8Array | string,
+  options?: NestingLimitOptions,
+): JsonParseResult;
+interface JsonParseResult {
+  readonly value?: JsonValue;
+  readonly diagnostics: readonly Diagnostic[];
+}
+```
+
+`validateJson`/`validateJsonAsync` collect every problem in one pass, `value` present only when
+`diagnostics` is empty — including a base-syntax failure (malformed UTF-8, a bad token, a §3.1
+grammar violation), which reports through `diagnostics` rather than throwing, matching the default
+entry's own `validate`. `parseJsonCollecting` is narrower: it still throws for a base-syntax
+failure or a §10.1 limit refusal, and only collects §3.1 duplicate-member problems.
+
+`JsonValue` (`json/tree.ts`) is a separate tree from `Value` (`@ltr8/tson/tree`) -- a schema-directed
+JSON read decodes to a `JsonValue`, never to `tree/nodes.ts`'s own node kinds, matching the reference
+implementation's own design (`json/facade.ts`'s top note has the full reasoning). `jsonValueToText`/
+`jsonValueToDisplayString` (`json/write.ts`) write one back; there is no schema-directed JSON encoder
+(§9.2 is unimplemented).
+
+Also exported: the lexer/stream/tree building blocks (`createJsonLexer`, `createJsonStream`,
+`jsonObject`/`jsonArray`/`jsonString`/`jsonNumber`/`jsonBoolean`/`jsonNull`, `get`/`at`/`as*` over
+`JsonValue`), for a caller that wants the JSON-grammar layer without the schema-directed one.
+
+No `objectReader`/bind counterpart exists here -- see "Known API gaps" below.
+
+---
+
 ## `@ltr8/tson/source` — Node only
 
 ```ts
@@ -409,3 +486,6 @@ Real, and worth knowing before you write around them:
 - **A data document's annotations are preserved but never resolved (§6).** An unknown `@annotation`
   on data, or one whose value does not match its declared type, passes. The schema side does
   enforce this.
+- **`@ltr8/tson/json` has no `objectReader`/bind counterpart, no in-band-only `$schema`/`$type`
+  binding, no `scoped`-position reader, and no schema-directed encoder.** See `STATUS.md`'s Part 3
+  section for the full, current list.

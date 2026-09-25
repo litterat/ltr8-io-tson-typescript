@@ -33,7 +33,7 @@ export function buildTupleReader(
       const outer = readCtx.underDeclaration(schemaLocation);
       const first = yield* outer.next();
       if (first.kind !== 'array-start') {
-        yield* reportUnreadable(outer, name, first, () => {
+        yield* reportUnreadable(outer, first, () => {
           outer.report(
             'TYPE_MISMATCH',
             `'${name}' is a tuple and takes a JSON array, and this is ${describeEvent(first)}`,

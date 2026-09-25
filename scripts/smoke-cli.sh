@@ -57,6 +57,21 @@ set -e
 [ "$usage" -eq 2 ]   || fail "an unrecognized option exited $usage, expected 2"
 [ "$unknown" -eq 2 ] || fail "an unknown command exited $unknown, expected 2"
 
+echo "==> validate: a .json input under --schema/--root ([TSON-JSON])"
+printf '{ "name": "Ada", "age": 36, "active": true }' > ./person-data.json
+"$TSON" validate ./person-data.json --schema ./demo/person.tn --root person >/dev/null \
+  || fail "a conforming .json document did not exit 0"
+
+printf '{ "age": 36, "active": true }' > ./bad.json
+set +e
+"$TSON" validate ./bad.json --schema ./demo/person.tn --root person >/dev/null 2>&1
+json_invalid=$?
+"$TSON" validate ./person-data.json >/dev/null 2>&1
+json_unbound=$?
+set -e
+[ "$json_invalid" -eq 1 ] || fail ".json missing a required field exited $json_invalid, expected 1"
+[ "$json_unbound" -eq 2 ] || fail "a .json input with no --schema/--root exited $json_unbound, expected 2"
+
 echo "==> hash and compile produce output"
 [ -n "$("$TSON" hash ./demo/person.tn)" ] || fail "hash printed nothing"
 [ -n "$("$TSON" compile ./demo/person.tn)" ] || fail "compile printed nothing"
@@ -66,13 +81,17 @@ cat > check.mjs <<'JS'
 import { readTree } from '@ltr8/tson';
 import { sha256Hex } from '@ltr8/tson/identity';
 import { standardLibrary } from '@ltr8/tson/stdlib';
+import { parseJson } from '@ltr8/tson/json';
 if (readTree(new TextEncoder().encode('{ a: 1 }')).kind !== 'record') throw new Error('esm readTree');
 if ((await sha256Hex(new TextEncoder().encode('!!id:"x"\nb'))).length !== 64) throw new Error('esm hash');
 if (typeof standardLibrary !== 'function') throw new Error('esm stdlib');
+if (parseJson('[1]').kind !== 'array') throw new Error('esm parseJson');
 JS
 cat > check.cjs <<'JS'
 const { readTree } = require('@ltr8/tson');
+const { parseJson } = require('@ltr8/tson/json');
 if (readTree(new TextEncoder().encode('{ a: 1 }')).kind !== 'record') throw new Error('cjs readTree');
+if (parseJson('[1]').kind !== 'array') throw new Error('cjs parseJson');
 JS
 node check.mjs || fail "ESM import of the published package failed"
 node check.cjs || fail "CJS require of the published package failed"
