@@ -14,12 +14,12 @@
  * spaces and parentheses into a field most consumers treat as a simple token -- §5.5's own
  * scoping of the RFC 5322 pin, not a narrowing of it.
  *
- * **`pattern` (I-Regexp, RFC 9485) is accepted but not yet enforced.** `email_type` composes
- * `text_type`'s `pattern` facet the same way `EmailParser.java` checks it via `TsonRegex`, but
- * this port's I-Regexp engine (`regex/`, a separate work package) has not yet landed a matcher as
- * of this module's writing -- only its error type and Unicode category tables exist. Enforcing
- * `pattern` here is deferred until that lands; see this package's own `STATUS.md`/work-package
- * notes. `minLength`/`maxLength`/`length` are fully enforced.
+ * **`pattern` (I-Regexp, RFC 9485) is enforced, but not by this module.** `email_type` composes
+ * `text_type`'s `pattern`/`members` facets (§9); `compiler/atomBuilder.ts`'s own `withTextFacets`
+ * wraps this parser's `read` with both, the same way `text.ts`'s own `createTextParser` enforces
+ * them for `text_type`/`regex_type` directly -- one check reused by every family that composes
+ * the facet, rather than a copy grown here too. `minLength`/`maxLength`/`length` are enforced
+ * directly, below.
  *
  * Host value is `string`: an address IS-A piece of text (it composes `text_type`), so like
  * `regex.ts` it hands back the text itself rather than a parsed structure.
@@ -127,8 +127,8 @@ export function createEmailParser(typeRef: string, constraints: EmailType): Atom
         `at most ${constraints.maxLength.toString()} characters`,
       );
     }
-    // `pattern` (I-Regexp) is deferred until `regex/` lands a matcher -- see this module's TSDoc.
-    const { pattern: _pattern } = constraints;
+    // `pattern` (I-Regexp) is enforced by `compiler/atomBuilder.ts`'s own wrapper, not here --
+    // see this module's own TSDoc.
   }
 
   function write(value: string): string {

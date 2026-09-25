@@ -193,9 +193,9 @@ function resolveEntries(document: SchemaDocument): Map<string, TypeDefinition> {
  * Resolves one declaration into `entries`.
  *
  * An `Instance` takes its own route: §5.5's constructor application produces a fresh entry with
- * no supertypes and no parameters of its own -- `kind` is no longer transferred at all, now that
- * it is derived rather than stored (`schema/meta/typedef.ts`'s own `typeKind`, consulted by a
- * later caller that needs it, not by this bootstrap). Waiting for `target` to exist in `entries`
+ * no supertypes and no parameters of its own -- `kind` is never transferred, since it is derived
+ * rather than stored (`schema/meta/typedef.ts`'s own `typeKind`, consulted by a later caller that
+ * needs it, not by this bootstrap). Waiting for `target` to exist in `entries`
  * before proceeding still matters, though: it is what makes the two-pass sweep converge in
  * declaration order regardless of forward references, since {@link instanceBody} builds the new
  * entry's body directly from the kernel's own vocabulary without consulting `target` any further
@@ -356,5 +356,5 @@ function toEnumBody(value: DataValue): EnumBody {
     }
     members.push(core.text);
   }
-  return { kind: 'enum', members };
+  return { kind: 'enum', members, profile: 'IDENTIFIER' };
 }

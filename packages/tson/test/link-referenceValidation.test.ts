@@ -23,10 +23,21 @@ function token(text: string, form: Token['form'] = 'UNQUOTED'): Token {
 function field(
   name: string,
   type: TypeRef,
-  state: RecordField['state'],
+  state: 'REQUIRED' | 'REQUIRED_DEFAULT' | 'REQUIRED_FIXED',
   value?: Token,
 ): RecordField {
-  return { name, type, state, annotations: [], ...(value === undefined ? {} : { value }) };
+  const role: RecordField['role'] =
+    state === 'REQUIRED_DEFAULT' ? 'DEFAULT' : state === 'REQUIRED_FIXED' ? 'FIXED' : 'FREE';
+  const optional = state === 'REQUIRED_DEFAULT';
+  return {
+    name,
+    type,
+    optional,
+    voidable: false,
+    role,
+    annotations: [],
+    ...(value === undefined ? {} : { value }),
+  };
 }
 
 function def(
@@ -64,10 +75,30 @@ const text = def({ kind: 'text_type' });
  * `validateEntry` separately checks every named supertype actually resolves in scope.
  */
 const DATA_KIND_FIXTURE: readonly (readonly [string, TypeDefinition])[] = [
-  ['top', def({ kind: 'record', supertypes: [], fields: [], groups: [] })],
+  [
+    'top',
+    def({
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    }),
+  ],
   [
     'data',
-    def({ kind: 'record', supertypes: [], fields: [], groups: [] }, { supertypes: ['top'] }),
+    def(
+      {
+        kind: 'record',
+        supertypes: [],
+        fields: [],
+        groups: [],
+        extension: 'OPEN',
+        discriminators: [],
+      },
+      { supertypes: ['top'] },
+    ),
   ],
 ];
 
@@ -80,8 +111,19 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [{ name: 'x', type: ref('nowhere'), state: 'REQUIRED', annotations: [] }],
+          fields: [
+            {
+              name: 'x',
+              type: ref('nowhere'),
+              optional: false,
+              voidable: false,
+              role: 'FREE',
+              annotations: [],
+            },
+          ],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -98,8 +140,19 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [{ name: 'x', type: ref('text'), state: 'REQUIRED', annotations: [] }],
+          fields: [
+            {
+              name: 'x',
+              type: ref('text'),
+              optional: false,
+              voidable: false,
+              role: 'FREE',
+              annotations: [],
+            },
+          ],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
       [
@@ -159,8 +212,19 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
           {
             kind: 'record',
             supertypes: [],
-            fields: [{ name: 'v', type: ref('T'), state: 'REQUIRED', annotations: [] }],
+            fields: [
+              {
+                name: 'v',
+                type: ref('T'),
+                optional: false,
+                voidable: false,
+                role: 'FREE',
+                annotations: [],
+              },
+            ],
             groups: [],
+            extension: 'OPEN',
+            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -242,8 +306,19 @@ describe('validateReferences: arity (§5.10)', () => {
     {
       kind: 'record',
       supertypes: [],
-      fields: [{ name: 'v', type: ref('T'), state: 'REQUIRED', annotations: [] }],
+      fields: [
+        {
+          name: 'v',
+          type: ref('T'),
+          optional: false,
+          voidable: false,
+          role: 'FREE',
+          annotations: [],
+        },
+      ],
       groups: [],
+      extension: 'OPEN',
+      discriminators: [],
     },
     { parameters: ['T'] },
   );
@@ -303,11 +378,15 @@ describe('validateReferences: arity (§5.10)', () => {
               {
                 name: 'v',
                 type: ref('T', [{ kind: 'ref', ref: ref('text') }]),
-                state: 'REQUIRED',
+                optional: false,
+                voidable: false,
+                role: 'FREE',
                 annotations: [],
               },
             ],
             groups: [],
+            extension: 'OPEN',
+            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -371,8 +450,19 @@ describe('validateReferences: parameter usage (§5.10)', () => {
           {
             kind: 'record',
             supertypes: [],
-            fields: [{ name: 'v', type: ref('text'), state: 'REQUIRED', annotations: [] }],
+            fields: [
+              {
+                name: 'v',
+                type: ref('text'),
+                optional: false,
+                voidable: false,
+                role: 'FREE',
+                annotations: [],
+              },
+            ],
             groups: [],
+            extension: 'OPEN',
+            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -390,7 +480,14 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
       [
         'widget',
         def(
-          { kind: 'record', supertypes: [], fields: [], groups: [] },
+          {
+            kind: 'record',
+            supertypes: [],
+            fields: [],
+            groups: [],
+            extension: 'OPEN',
+            discriminators: [],
+          },
           { supertypes: ['nowhere'] },
         ),
       ],
@@ -404,7 +501,17 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
     const merged = new Map<string, TypeDefinition>([
       [
         'widget',
-        def({ kind: 'record', supertypes: [], fields: [], groups: [] }, { subtypes: ['nowhere'] }),
+        def(
+          {
+            kind: 'record',
+            supertypes: [],
+            fields: [],
+            groups: [],
+            extension: 'OPEN',
+            discriminators: [],
+          },
+          { subtypes: ['nowhere'] },
+        ),
       ],
     ]);
     expect(() => {
@@ -428,7 +535,17 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
     const merged = new Map<string, TypeDefinition>([
       [
         'widget',
-        def({ kind: 'record', supertypes: [], fields: [], groups: [] }, { source: ref('array') }),
+        def(
+          {
+            kind: 'record',
+            supertypes: [],
+            fields: [],
+            groups: [],
+            extension: 'OPEN',
+            discriminators: [],
+          },
+          { source: ref('array') },
+        ),
       ],
     ]);
     // `array` resolves only via the structure-namespace fallback, not the ordinary namespace --
@@ -443,7 +560,14 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
 });
 
 describe('validateReferences: field values (§5.2)', () => {
-  const point = def({ kind: 'record', supertypes: [], fields: [], groups: [] });
+  const point = def({
+    kind: 'record',
+    supertypes: [],
+    fields: [],
+    groups: [],
+    extension: 'OPEN',
+    discriminators: [],
+  });
   const status = def({ kind: 'enum', members: ['UP', 'DOWN'] });
   const int = def({ kind: 'integer_type' });
 
@@ -457,6 +581,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('p', ref('point'), 'REQUIRED_DEFAULT', token('3'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -485,6 +611,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('a', ref('arr'), 'REQUIRED_FIXED', token('x'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -505,6 +633,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('c', ref('choice'), 'REQUIRED_DEFAULT', token('x'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -523,6 +653,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('state', ref('status'), 'REQUIRED_DEFAULT', token('UP'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -541,6 +673,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('state', ref('status'), 'REQUIRED_DEFAULT', token('SIDEWAYS'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -559,6 +693,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('n', ref('int'), 'REQUIRED_FIXED', token('not-a-number'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -578,6 +714,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('not-a-number'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -599,6 +737,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('3'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -617,6 +757,8 @@ describe('validateReferences: field values (§5.2)', () => {
             supertypes: [],
             fields: [field('v', ref('T'), 'REQUIRED_DEFAULT', token('T'))],
             groups: [],
+            extension: 'OPEN',
+            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -637,6 +779,8 @@ describe('validateReferences: field values (§5.2)', () => {
             supertypes: [],
             fields: [field('v', ref('T'), 'REQUIRED')],
             groups: [],
+            extension: 'OPEN',
+            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -655,6 +799,8 @@ describe('validateReferences: field values (§5.2)', () => {
             ),
           ],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
       ['text', text],
@@ -674,6 +820,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('v', ref('void'), 'REQUIRED_DEFAULT', token('x'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -692,6 +840,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('t', ref('token'), 'REQUIRED_DEFAULT', token('anything at all'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);
@@ -710,6 +860,8 @@ describe('validateReferences: field values (§5.2)', () => {
           supertypes: [],
           fields: [field('p', ref('point'), 'REQUIRED_DEFAULT', token('hi', 'SINGLE_LINE_QUOTED'))],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);

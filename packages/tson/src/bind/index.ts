@@ -6,8 +6,8 @@
  * whole mechanism -- there is no class analysis anywhere. `binding.ts` declares the `Binding`
  * union and its options types only and emits no JavaScript itself, which is why every runtime
  * export below lives in a sibling module: re-exporting both here is what makes them resolvable
- * from one subpath with no name collision, since `binding.ts` no longer declares the combinator
- * names it merely documents.
+ * from one subpath with no name collision, since `binding.ts` declares only the `Binding` union
+ * and its options types, not the combinator names its TSDoc merely documents.
  */
 export * from './binding.js';
 export * from './combinators.js';

@@ -66,30 +66,26 @@ describe('mapTreeReader -- shape and entries (§2.6, §2.8)', () => {
     expect(value.entries).toEqual([]);
   });
 
-  it('reports TYPE_MISMATCH for a non-map value', () => {
+  it('reports TYPE_MISMATCH for a non-map value, and abandons the read (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('"nope"');
     const value = runSync(reader().read(ctx));
-    expect(value.kind).toBe('absent');
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 });
 
 describe('mapTreeReader -- keys (§2.6, §2.9)', () => {
-  it('rejects the absent sentinel in key position', () => {
+  it('rejects the absent sentinel in key position, and abandons the map (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('{ _ => 1 }');
     const value = runSync(reader().read(ctx));
-    if (value.kind !== 'map') throw new Error('unreachable');
-    expect(value.entries).toEqual([]);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('reports DUPLICATE_MAP_KEY for a repeated decoded key; the last entry wins', () => {
+  it('reports DUPLICATE_MAP_KEY for a repeated decoded key, and abandons the map (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('{ "a" => 1  "a" => 2 }');
     const value = runSync(reader().read(ctx));
-    if (value.kind !== 'map') throw new Error('unreachable');
-    expect(value.entries.map((e) => (e.value.kind === 'atom' ? e.value.value : undefined))).toEqual(
-      [1, 2],
-    );
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
   });
 });

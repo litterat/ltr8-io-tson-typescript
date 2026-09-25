@@ -1,81 +1,96 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveFieldModifiers } from '../src/compiler/fieldModifiers.js';
+import { resolveFieldMarks } from '../src/compiler/fieldModifiers.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { FieldModifier } from '../src/ast/schema/fields.js';
 
-const literal = (text: string): FieldModifier['value'] => ({
-  kind: 'literal',
+const literal = (kind: 'default' | 'fixed', text: string): FieldModifier => ({
+  kind,
   token: { kind: 'token', text, form: 'unquoted' },
 });
-const absent = (): FieldModifier['value'] => ({ kind: 'absent' });
+const selector = (): FieldModifier => ({ kind: 'selector' });
 
-describe("resolveFieldModifiers (§5.2's field-state table)", () => {
-  it('no modifier: REQUIRED (required) / OPTIONAL (optional), no value', () => {
-    expect(resolveFieldModifiers('f', false, undefined, [])).toEqual({ state: 'REQUIRED' });
-    expect(resolveFieldModifiers('f', true, undefined, [])).toEqual({ state: 'OPTIONAL' });
+describe("resolveFieldMarks (§5.2's field-marks table)", () => {
+  it('no modifier: optional/voidable as written, role FREE, no value', () => {
+    expect(resolveFieldMarks('f', false, false, undefined, [])).toEqual({
+      optional: false,
+      voidable: false,
+      role: 'FREE',
+      selector: false,
+    });
+    expect(resolveFieldMarks('f', true, true, undefined, [])).toEqual({
+      optional: true,
+      voidable: true,
+      role: 'FREE',
+      selector: false,
+    });
   });
 
-  it('`~ value` on a required field: REQUIRED_DEFAULT, carrying the value', () => {
-    expect(
-      resolveFieldModifiers('f', false, { kind: 'default', value: literal('8080') }, []),
-    ).toEqual({
-      state: 'REQUIRED_DEFAULT',
+  it('`~ value` on a marked name: role DEFAULT, carrying the value', () => {
+    expect(resolveFieldMarks('f', true, false, literal('default', '8080'), [])).toEqual({
+      optional: true,
+      voidable: false,
+      role: 'DEFAULT',
       value: { kind: 'token', text: '8080', form: 'unquoted' },
+      selector: false,
     });
   });
 
-  it('`= value` on a required field: REQUIRED_FIXED', () => {
-    expect(
-      resolveFieldModifiers('f', false, { kind: 'fixed', value: literal('x') }, []).state,
-    ).toBe('REQUIRED_FIXED');
+  it('`= value` on an unmarked name: role FIXED, a marker the document states itself', () => {
+    expect(resolveFieldMarks('f', false, false, literal('fixed', 'x'), []).role).toBe('FIXED');
   });
 
-  it('`= value` on an optional field: OPTIONAL_FIXED', () => {
-    expect(resolveFieldModifiers('f', true, { kind: 'fixed', value: literal('x') }, []).state).toBe(
-      'OPTIONAL_FIXED',
+  it('`= value` on a marked, non-voidable field: role FIXED, injected on omission', () => {
+    expect(resolveFieldMarks('f', true, false, literal('fixed', 'x'), []).role).toBe('FIXED');
+  });
+
+  it('a pin on a voidable type is rejected (§5.2)', () => {
+    expect(() => resolveFieldMarks('f', true, true, literal('fixed', 'x'), [])).toThrow(
+      TsonSchemaValidationError,
     );
-  });
-
-  it('`= _` on an optional field: OPTIONAL_FIXED with no value', () => {
-    expect(resolveFieldModifiers('f', true, { kind: 'fixed', value: absent() }, [])).toEqual({
-      state: 'OPTIONAL_FIXED',
-    });
-  });
-
-  it('`= _` on a required field is rejected', () => {
-    expect(() => resolveFieldModifiers('f', false, { kind: 'fixed', value: absent() }, [])).toThrow(
+    expect(() => resolveFieldMarks('f', false, true, literal('fixed', 'x'), [])).toThrow(
       TsonSchemaValidationError,
     );
   });
 
-  it('`~ _` is rejected on any field', () => {
-    expect(() =>
-      resolveFieldModifiers('f', false, { kind: 'default', value: absent() }, []),
-    ).toThrow(TsonSchemaValidationError);
-    expect(() =>
-      resolveFieldModifiers('f', true, { kind: 'default', value: absent() }, []),
-    ).toThrow(TsonSchemaValidationError);
+  it('a default on an unmarked name is rejected (§5.2)', () => {
+    expect(() => resolveFieldMarks('f', false, false, literal('default', 'x'), [])).toThrow(
+      TsonSchemaValidationError,
+    );
   });
 
-  it('a default on an optional field is rejected (contradicts optional)', () => {
-    expect(() =>
-      resolveFieldModifiers('f', true, { kind: 'default', value: literal('x') }, []),
-    ).toThrow(TsonSchemaValidationError);
+  it('the selector `=?` on an unmarked, non-voidable name: FREE, no value, `selector: true`', () => {
+    expect(resolveFieldMarks('f', false, false, selector(), [])).toEqual({
+      optional: false,
+      voidable: false,
+      role: 'FREE',
+      selector: true,
+    });
   });
 
-  it('a token naming a declared parameter is parametric: `= P` stays REQUIRED, `~ P` is REQUIRED_DEFAULT (§5.7 open modifiers)', () => {
-    expect(
-      resolveFieldModifiers('f', false, { kind: 'fixed', value: literal('T') }, ['T']).state,
-    ).toBe('REQUIRED');
-    expect(
-      resolveFieldModifiers('f', false, { kind: 'default', value: literal('T') }, ['T']).state,
-    ).toBe('REQUIRED_DEFAULT');
+  it('the selector `=?` on a marked name is rejected (§5.2)', () => {
+    expect(() => resolveFieldMarks('f', true, false, selector(), [])).toThrow(
+      TsonSchemaValidationError,
+    );
   });
 
-  it('a token merely spelled like a parameter, outside a template, is an ordinary literal', () => {
-    expect(
-      resolveFieldModifiers('f', false, { kind: 'fixed', value: literal('T') }, []).state,
-    ).toBe('REQUIRED_FIXED');
+  it('the selector `=?` on a voidable type is rejected (§5.2)', () => {
+    expect(() => resolveFieldMarks('f', false, true, selector(), [])).toThrow(
+      TsonSchemaValidationError,
+    );
+  });
+
+  it('a token naming a declared parameter is parametric even on an unmarked name (§5.7 open modifiers)', () => {
+    expect(resolveFieldMarks('f', false, false, literal('fixed', 'T'), ['T']).role).toBe('FIXED');
+    expect(resolveFieldMarks('f', false, false, literal('default', 'T'), ['T']).role).toBe(
+      'DEFAULT',
+    );
+  });
+
+  it('a token merely spelled like a parameter, outside a template, is an ordinary literal, and still needs the name marked for a default', () => {
+    expect(resolveFieldMarks('f', true, false, literal('fixed', 'T'), []).role).toBe('FIXED');
+    expect(() => resolveFieldMarks('f', false, false, literal('default', 'T'), [])).toThrow(
+      TsonSchemaValidationError,
+    );
   });
 });

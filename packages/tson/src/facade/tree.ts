@@ -18,8 +18,10 @@
  * frozen work from an earlier wave, and duplicating nine lines here costs less than editing it.
  *
  * `readTree` throws {@link TsonReadError} at the first problem (the fail-fast counterpart);
- * `validate` collects every one and always returns a value, `diagnostics` empty meaning the
- * document conforms -- `compile.ts`'s own `read`/`validate` split, generalised the same way.
+ * `validate` collects every one and reports it, in one pass, but hands back `value` only when
+ * `diagnostics` is empty (a read is all-or-nothing, `compiler/compile.ts`'s own
+ * {@link ValidationResult} doc has the reasoning) -- `compile.ts`'s own `read`/`validate` split,
+ * generalised the same way.
  *
  * **Both hold to that split even for a failure raised before any reader is running.** A document
  * that will not lex or parse, and a construct this library has no reader for, are both routed
@@ -51,7 +53,8 @@ import {
 } from '../reader/schemaless/index.js';
 import type { NestingLimitOptions } from '../core/limits.js';
 import type { CompiledSchema, ValidationResult } from '../compiler/compile.js';
-import { missingNode, type Value } from '../tree/nodes.js';
+import type { Value } from '../tree/nodes.js';
+import { abandonedValue } from '../reader/tree/support.js';
 import {
   runOverAsyncSource,
   runOverBytes,
@@ -105,15 +108,6 @@ function isBaseSyntaxError(
     error instanceof TsonParseError ||
     error instanceof TsonUnsupportedDocumentError
   );
-}
-
-/**
- * The root value handed back for a document that produced none. `''` is the RFC 6901 pointer for
- * the document root, and it is deliberately not `undefined`: `''` is a *valid* pointer meaning
- * exactly "the root", where `undefined` would mean "no location at all".
- */
-function noRootValue(): Value {
-  return missingNode('');
 }
 
 /**
@@ -207,11 +201,11 @@ function* readWholeDocument(
         { code: 'VALIDATION_ERROR', message: error.message, dataPosition: error.position },
         error,
       );
-      return noRootValue();
+      return abandonedValue();
     }
     if (error instanceof TsonNotImplementedError) {
       reportCaused(receiver, { code: 'NOT_IMPLEMENTED', message: error.message }, error);
-      return noRootValue();
+      return abandonedValue();
     }
     throw error;
   }
@@ -247,6 +241,11 @@ export function readTree(source: ByteSource, options?: ReadTreeOptions): Value |
  * than stopping at the first -- an empty `diagnostics` means the document conforms. Schemaless
  * with no `options.schema`; validated against `options.schema`'s `options.root` entry otherwise.
  *
+ * **A read is all-or-nothing**: every diagnostic is still reported, in one pass, but
+ * `value` is present only when `diagnostics` is empty -- see `compiler/compile.ts`'s own
+ * {@link ValidationResult} doc, which this facade's schemaless branch shares unchanged (a
+ * token-policy refusal counts here exactly as a schema-governed construction failure does there).
+ *
  * Synchronous for a complete `Uint8Array`; a streaming `source` returns a `Promise` instead.
  */
 export function validate(source: Uint8Array, options?: ReadTreeOptions): ValidationResult;
@@ -260,11 +259,17 @@ export function validate(
 ): ValidationResult | Promise<ValidationResult> {
   const diagnostics = collector();
   const makeTask = readTreeTask(options, diagnostics);
+  // The document-level counting checkpoint (`CountingReceiver`): `value` is withheld whenever
+  // anything was reported, whatever route it took -- see `ValidationResult`'s own doc.
   if (source instanceof Uint8Array) {
-    return { value: runOverBytes(source, makeTask), diagnostics: diagnostics.diagnostics };
+    const value = runOverBytes(source, makeTask);
+    return diagnostics.diagnostics.length === 0
+      ? { value, diagnostics: diagnostics.diagnostics }
+      : { diagnostics: diagnostics.diagnostics };
   }
-  return runOverAsyncSource(source, makeTask).then((value) => ({
-    value,
-    diagnostics: diagnostics.diagnostics,
-  }));
+  return runOverAsyncSource(source, makeTask).then((value) =>
+    diagnostics.diagnostics.length === 0
+      ? { value, diagnostics: diagnostics.diagnostics }
+      : { diagnostics: diagnostics.diagnostics },
+  );
 }

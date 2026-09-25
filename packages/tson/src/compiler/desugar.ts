@@ -66,7 +66,6 @@ import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument, SchemaMap } from '../ast/schema/document.js';
 import type {
   FieldDef,
-  FieldModifier,
   GroupDef,
   GroupMember,
   Instance,
@@ -82,19 +81,24 @@ import type {
   TypeDef,
 } from '../ast/schema/typedef.js';
 import type { ElementType, GenericRef, TypeArg, TypeRef } from '../ast/schema/typeref.js';
-import type { CoreValue, RecordField, RecordValue, ScopedValue, TokenValue } from '../ast/value.js';
+import type { CoreValue, RecordField, RecordValue, ScopedValue } from '../ast/value.js';
 import { canonicalBinding, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
+import { resolveFieldMarks } from './fieldModifiers.js';
 import {
   ARGUMENTS,
+  DISCRIMINATORS,
   FIELDS,
   GROUPS,
   MEMBERS,
   NAME,
+  OPTIONAL,
   RECORD,
+  ROLE,
   STATE,
   TYPE,
   VALUE,
+  VOIDABLE,
   nameField,
   scoped,
   tokenValue,
@@ -443,7 +447,7 @@ function fieldDefPass(field: FieldDef, context: DesugarContext): FieldDef {
   const ref = typeRefPass(field.type.typeRef, context);
   return ref === field.type.typeRef
     ? field
-    : { ...field, type: { typeRef: ref, optional: field.type.optional } };
+    : { ...field, type: { typeRef: ref, voidable: field.type.voidable } };
 }
 
 function groupMemberPass(member: GroupMember, context: DesugarContext): GroupMember {
@@ -719,18 +723,21 @@ function choiceBinding(variants: readonly TypeRef[]): Binding {
  * applied where the body is written so that a record template holds an application like every
  * other open form.
  *
- * **Only what the author wrote is written.** A field's unmarked `REQUIRED` is the `record`
- * constructor's own default, so it is never stated — the same economy {@link arrayBinding} makes
- * with an unmarked element's `state`.
+ * **Only what the author wrote is written.** A field's unmarked `optional: false`/`voidable:
+ * false`/`role: FREE` is the `record_field` constructor's own default, so it is never stated —
+ * the same economy {@link arrayBinding} makes with an unmarked element's `state`.
  */
 function recordBinding(record: RecordDef, parameters: readonly string[]): Binding {
   const fields: ScopedValue[] = [];
   const groups: ScopedValue[] = [];
+  const discriminators: string[] = [];
   const seen = new Set<string>();
   for (const entry of record.entries) {
     if (entry.kind === 'fieldDef') {
       requireFieldNameUnseen(entry.name, seen, 'this body declares it twice');
-      fields.push(recordFieldValue(entry, parameters));
+      const field = recordFieldValue(entry, parameters);
+      fields.push(field.value);
+      if (field.selector) discriminators.push(entry.name);
       continue;
     }
     const members: ScopedValue[] = [];
@@ -740,18 +747,18 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
         seen,
         "a group member repeats it -- member labels share the enclosing record's field namespace",
       );
-      // A group's members are ordinary OPTIONAL fields of the record; the group itself records
-      // only their names and its own state (§5.11).
-      fields.push(
-        scoped(
-          recordValue([
-            nameField(NAME, member.name),
-            { name: TYPE, value: scoped(refValueOf(member.typeRef)) },
-            nameField(STATE, 'OPTIONAL'),
-          ]),
-          member.annotations,
-        ),
-      );
+      // A group's members lower to ordinary fields with `optional: true` (plus `voidable` for a
+      // `T?` member); the group itself records only their names and its own state (§5.11,
+      // `spec/m/meta-kernel-resolved.tn`).
+      const memberFields: RecordField[] = [
+        nameField(NAME, member.name),
+        { name: TYPE, value: scoped(refValueOf(member.typeRef)) },
+        nameField(OPTIONAL, 'true'),
+      ];
+      if (member.voidable) {
+        memberFields.push(nameField(VOIDABLE, 'true'));
+      }
+      fields.push(scoped(recordValue(memberFields), member.annotations));
       members.push(scoped(tokenValue(member.name, 'unquoted')));
     }
     const groupFields: RecordField[] = [{ name: MEMBERS, value: scoped(arrayValue(members)) }];
@@ -763,6 +770,17 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
   const binding: RecordField[] = [{ name: FIELDS, value: scoped(arrayValue(fields)) }];
   if (groups.length > 0) {
     binding.push({ name: GROUPS, value: scoped(arrayValue(groups)) });
+  }
+  // §5.2's `=?` selector, lowered the same way `resolveEntry`'s own non-template path lowers it
+  // (`definitionResolver.ts`): the base's own statement of which fields its members pin, in
+  // declaration order -- a fresh record TEMPLATE reaches this constructor via `desugar.ts` rather
+  // than that path (§5.2's canonical-form rewrite, `structuralTypeDefPass`), so it has to be
+  // written here too, or a template's own selectors would never reach the held text at all.
+  if (discriminators.length > 0) {
+    binding.push({
+      name: DISCRIMINATORS,
+      value: scoped(arrayValue(discriminators.map((d) => scoped(tokenValue(d, 'unquoted'))))),
+    });
   }
   return { head: RECORD, fields: binding, applicationSlots: new Map() };
 }
@@ -783,11 +801,18 @@ function requireFieldNameUnseen(name: string, seen: Set<string>, explanation: st
   seen.add(name);
 }
 
+/** {@link recordFieldValue}'s own result: the field's wire value, plus whether §5.2's `=?` marked it a selector (`recordBinding`'s own `discriminators` list, never carried on the field itself -- §8.1's `record_field` has no such member). */
+interface RecordFieldValue {
+  readonly value: ScopedValue;
+  readonly selector: boolean;
+}
+
 /**
- * One `record_field`, with `state` and `value` written only where the author's marks say
- * something the constructor's own defaults do not.
+ * One `record_field`'s wire value, with `optional`/`voidable`/`role`/`value` written only where
+ * the author's marks say something the constructor's own defaults do not (§5.2's
+ * `resolveFieldMarks` table, `fieldModifiers.ts`).
  */
-function recordFieldValue(field: FieldDef, parameters: readonly string[]): ScopedValue {
+function recordFieldValue(field: FieldDef, parameters: readonly string[]): RecordFieldValue {
   if (field.type === undefined) {
     throw new TsonSchemaValidationError(
       `field '${field.name}' states only a modifier and no type-ref, but names no inherited ` +
@@ -796,9 +821,10 @@ function recordFieldValue(field: FieldDef, parameters: readonly string[]): Scope
         'declares (§5.7)',
     );
   }
-  const resolved = resolveFieldModifiers(
+  const resolved = resolveFieldMarks(
     field.name,
-    field.type.optional,
+    field.optional,
+    field.type.voidable,
     field.modifier,
     parameters,
   );
@@ -806,85 +832,22 @@ function recordFieldValue(field: FieldDef, parameters: readonly string[]): Scope
     nameField(NAME, field.name),
     { name: TYPE, value: scoped(refValueOf(field.type.typeRef)) },
   ];
-  if (resolved.state !== 'REQUIRED') {
-    members.push(nameField(STATE, resolved.state));
+  if (resolved.optional) {
+    members.push(nameField(OPTIONAL, 'true'));
+  }
+  if (resolved.voidable) {
+    members.push(nameField(VOIDABLE, 'true'));
+  }
+  if (resolved.role !== 'FREE') {
+    members.push(nameField(ROLE, resolved.role));
   }
   if (resolved.value !== undefined) {
     members.push({ name: VALUE, value: scoped(resolved.value) });
   }
-  return scoped(recordValue(members), field.annotations);
-}
-
-/** The five `field_state` (§8.1) spellings a resolved field can carry. */
-type FieldStateName =
-  'REQUIRED' | 'REQUIRED_DEFAULT' | 'REQUIRED_FIXED' | 'OPTIONAL' | 'OPTIONAL_FIXED';
-
-interface ResolvedFieldModifier {
-  readonly state: FieldStateName;
-  readonly value?: TokenValue;
-}
-
-/**
- * §5.2's field-state table: a field's presence marker and value modifier decide its state and
- * what value, if any, rides with it. The table is closed and consults nothing but the two marks
- * the author wrote, which is why it can be answered before a field's type is known.
- *
- * A token naming a type parameter rides `value` like any other (§5.7's "Open modifiers"); nothing
- * here labels it as one — §8.1's shadowing rule (a token is a parameter exactly when its text
- * resolves into the enclosing entry's own parameter list) is what tells the two apart wherever the
- * question is asked. What a parametric modifier does decide is the `state` beside it.
- *
- * @throws {@link TsonSchemaValidationError} for the three spellings §5.2 rules out: `~ _` on any
- *   field, `= _` on a required one, and a default on an optional one.
- */
-function resolveFieldModifiers(
-  fieldName: string,
-  optional: boolean,
-  modifier: FieldModifier | undefined,
-  parameters: readonly string[],
-): ResolvedFieldModifier {
-  if (modifier === undefined) {
-    return { state: optional ? 'OPTIONAL' : 'REQUIRED' };
-  }
-  const fixed = modifier.kind === 'fixed';
-  if (modifier.value.kind === 'absent') {
-    // §5.2's sixth spelling, `field: type? = _`: OPTIONAL_FIXED carrying no value at all.
-    if (!fixed) {
-      throw new TsonSchemaValidationError(
-        `field '${fieldName}' uses '~ _' -- a required field cannot fall back to not-being-` +
-          "filled, so an absent default is a resolver error on any field (§5.2). Write 'type?' " +
-          'for a field that may be absent',
-      );
-    }
-    if (!optional) {
-      throw new TsonSchemaValidationError(
-        `field '${fieldName}' fixes a required field to absent ('= _') -- a field cannot be ` +
-          'both required and forbidden from being present (§5.2). Make it optional ' +
-          `('${fieldName}: type? = _') to forbid its value while keeping it in the contract`,
-      );
-    }
-    return { state: 'OPTIONAL_FIXED' };
-  }
-  const token = modifier.value.token;
-  if (optional && !fixed) {
-    throw new TsonSchemaValidationError(
-      `field '${fieldName}' gives an optional field a default ('type? ~ value') -- a default ` +
-        "implies the field is always present, which contradicts optional (§5.2). Use 'type ~ " +
-        "value' for a fallback, 'type?' for absence, or 'type? = value' for present-implies-value",
-    );
-  }
-  // §5.7's "Open modifiers": a parametric modifier lands in a REQUIRED-family state whatever the
-  // presence axis says, since nothing is fixed at declaration -- the value arrives at
-  // application, and every application MUST bind every parameter.
-  if (parameters.includes(token.text)) {
-    return { state: fixed ? 'REQUIRED' : 'REQUIRED_DEFAULT', value: token };
-  }
-  const state: FieldStateName = optional
-    ? 'OPTIONAL_FIXED'
-    : fixed
-      ? 'REQUIRED_FIXED'
-      : 'REQUIRED_DEFAULT';
-  return { state, value: token };
+  return {
+    value: scoped(recordValue(members), field.annotations),
+    selector: resolved.selector,
+  };
 }
 
 /**

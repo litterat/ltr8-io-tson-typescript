@@ -29,6 +29,7 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
+import { terminal } from './referenceChain.js';
 import { isDataBody } from './bodyKind.js';
 import type { RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
@@ -140,6 +141,18 @@ function isInhabited(
   }
   switch (body.kind) {
     case 'record':
+      // §5.2: "Inhabitance gains no case" -- ABSTRACT is not a productivity question at all, and
+      // gets no branch here. A record's own field set is judged the same way whatever its
+      // `extension`: an ABSTRACT base with no subtype in this schema's own closure is the
+      // ordinary shape of a library schema whose importers supply the members (§3.3.4 makes
+      // `subtypes` open across schemas), and that is *why* refusing it would be wrong -- not
+      // because this function special-cases it, but because an ABSTRACT base's own fields are, in
+      // the ordinary case, satisfiable on their own (a selector field typed by an atom or enum is
+      // always productive) regardless of whether any subtype exists yet. A base whose own fields
+      // genuinely cannot be satisfied -- a required self-reference, an `a: void` -- is uninhabited
+      // exactly as an OPEN record with the same shape would be; no reader ever supplies an
+      // ABSTRACT base's field set directly (§7.2), but that is a *read-time* dispatch rule, not a
+      // productivity exemption.
       return recordInhabited(body, namespace, inhabited);
     case 'array':
       return (
@@ -188,6 +201,15 @@ function recordInhabited(
     if (grouped.has(field.name) || isOptionalField(field)) {
       continue;
     }
+    // §5.10.1, §5.2: `a: void` — a field the document MUST write and MUST NOT write `_` at — is
+    // the one declaration this rule refuses on its own, the record having no member at all: `_`
+    // is the only value `void` admits, and this field admits neither a value nor `_`. Followed
+    // through the reference chain (§8.3) rather than checked by bare name, since a rename
+    // (`nothing => void`) is the same type under another name and `a: nothing` empties the
+    // record exactly as `a: void` would.
+    if (refIsVoid(field.type, namespace)) {
+      return false;
+    }
     if (!refInhabited(field.type, namespace, inhabited)) {
       return false;
     }
@@ -209,12 +231,14 @@ function recordInhabited(
 }
 
 /**
- * A field a document may leave out places no demand on its type. Every other state does, the two
- * that carry a value included: a fixed or default value of a type nothing can satisfy does not
- * exist either.
+ * A field that terminates recursion on its own -- a document may leave its key out, or write it
+ * `_`, either of which places no demand on the field's own type (§5.10.1: "a field whose key may
+ * be omitted or whose type admits `_`"). A field with a value (a default or a fixed one) is not
+ * exempted by that alone: a marker's value must still be a value of the field's own type, so a
+ * type nothing can satisfy does not exist either.
  */
 function isOptionalField(field: RecordField): boolean {
-  return field.state === 'OPTIONAL' || field.state === 'OPTIONAL_FIXED';
+  return field.optional || field.voidable;
 }
 
 function positionInhabited(
@@ -246,6 +270,18 @@ function refInhabited(
   inhabited: ReadonlySet<string>,
 ): boolean {
   return !namespace.has(ref.name) || inhabited.has(ref.name);
+}
+
+/**
+ * Whether `ref`, followed through its reference chain (§8.3), terminates at the kernel's own
+ * `void` -- what a required, non-voidable field's own `a: void` refusal (§5.10.1, §5.2) must ask
+ * rather than comparing `ref.name` by spelling, since a rename (`nothing => void`) is the same
+ * type under another name and `void` itself is otherwise an ordinary, trivially satisfiable
+ * `unit` atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
+ * one position-specific exemption from it, not a fact `void`'s own entry carries.
+ */
+function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, TypeDefinition>): boolean {
+  return terminal(ref.name, (n) => namespace.get(n)) === 'void';
 }
 
 // ── The diagnostic chain ─────────────────────────────────────────────────────────────────────
@@ -299,7 +335,7 @@ function recordDependency(
     if (
       !grouped.has(field.name) &&
       !isOptionalField(field) &&
-      !refInhabited(field.type, namespace, inhabited)
+      (refIsVoid(field.type, namespace) || !refInhabited(field.type, namespace, inhabited))
     ) {
       return field.type.name;
     }
@@ -333,6 +369,8 @@ function firstUnsatisfiedDependency(
   }
   switch (body.kind) {
     case 'record':
+      // Mirrors `isInhabited`'s own reading of "Inhabitance gains no case" -- a record's
+      // dependency chain is its own field set whatever its `extension`.
       return recordDependency(body, namespace, inhabited);
     case 'array':
       return refInhabited(body.elementType, namespace, inhabited)

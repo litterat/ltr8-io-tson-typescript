@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createTextParser } from '../src/atom/text/text.js';
+import {
+  createMembershipCheck,
+  createPatternCheck,
+  createTextParser,
+} from '../src/atom/text/text.js';
 import { TsonAtomValidationError } from '../src/core/errors.js';
 import type { TextType } from '../src/schema/meta/atoms-text.js';
 
@@ -46,5 +50,84 @@ describe('createTextParser -- text_type (§5.7)', () => {
       expect(error).toBeInstanceOf(TsonAtomValidationError);
       expect((error as TsonAtomValidationError).expected).toBe('at most 1 characters');
     }
+  });
+
+  // ── `text_type.members` enforced at read (§7.4, §5.7, #22) ─────────────────────────────────
+
+  it('a value outside the declared member set is a validation failure with a membership `expected` fragment', () => {
+    const parser = createTextParser('country_code', {
+      kind: 'text_type',
+      members: ['SE', 'NO', 'DK'],
+    });
+    expect(parser.read({ text: 'SE', form: 'single-line' })).toBe('SE');
+    try {
+      parser.read({ text: 'FI', form: 'single-line' });
+      expect.fail('expected a TsonAtomValidationError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(TsonAtomValidationError);
+      expect((error as TsonAtomValidationError).expected).toBe('one of (SE, NO, DK)');
+    }
+  });
+
+  it('members is compared as text, NFC -- a member and a candidate spelled with different (but canonically equivalent) decompositions are one value', () => {
+    // 'é' as one precomposed code point (U+00E9) vs. 'e' + combining acute (U+0065 U+0301): two
+    // spellings of the same NFC text.
+    const precomposed = 'é';
+    const decomposed = 'é';
+    const parser = createTextParser('accented', { kind: 'text_type', members: [precomposed] });
+    expect(parser.read({ text: decomposed, form: 'single-line' })).toBe(decomposed);
+  });
+
+  it('with no `members`, every token is admitted (an absent facet constrains nothing)', () => {
+    const parser = createTextParser('text', { kind: 'text_type' });
+    expect(parser.read({ text: 'anything', form: 'single-line' })).toBe('anything');
+  });
+
+  // ── `text_type.pattern` enforced at read (§7.4, §5.5) ───────────────────────────────────────
+
+  it('a value the pattern does not match is a validation failure with a pattern `expected` fragment', () => {
+    const parser = createTextParser('code', { kind: 'text_type', pattern: '[A-Z]{2}' });
+    expect(parser.read({ text: 'SE', form: 'single-line' })).toBe('SE');
+    try {
+      parser.read({ text: 'se', form: 'single-line' });
+      expect.fail('expected a TsonAtomValidationError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(TsonAtomValidationError);
+      expect((error as TsonAtomValidationError).expected).toBe("text matching '[A-Z]{2}'");
+    }
+  });
+
+  it('with no `pattern`, every token is admitted (an absent facet constrains nothing)', () => {
+    const parser = createTextParser('text', { kind: 'text_type' });
+    expect(parser.read({ text: 'anything at all', form: 'single-line' })).toBe('anything at all');
+  });
+
+  it('a `pattern` and a `members` set both apply -- a member outside the pattern is unreachable at load (#22), but read time still enforces both facets independently', () => {
+    const parser = createTextParser('code', {
+      kind: 'text_type',
+      pattern: '[A-Z]{2}',
+      members: ['SE', 'NO'],
+    });
+    expect(parser.read({ text: 'SE', form: 'single-line' })).toBe('SE');
+    expect(() => parser.read({ text: 'DK', form: 'single-line' })).toThrow(TsonAtomValidationError);
+  });
+});
+
+describe('createMembershipCheck', () => {
+  it('returns undefined when members is absent, so a caller may compose it unconditionally', () => {
+    expect(createMembershipCheck('text', undefined)).toBeUndefined();
+  });
+});
+
+describe('createPatternCheck', () => {
+  it('returns undefined when pattern is absent, so a caller may compose it unconditionally', () => {
+    expect(createPatternCheck('text', undefined)).toBeUndefined();
+  });
+
+  it('matches an I-Regexp pattern (RFC 9485), parsed once at build time', () => {
+    const check = createPatternCheck('code', '[A-Z]{2}');
+    expect(check).toBeDefined();
+    expect(() => check?.('SE')).not.toThrow();
+    expect(() => check?.('123')).toThrow(TsonAtomValidationError);
   });
 });

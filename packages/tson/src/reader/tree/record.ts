@@ -5,10 +5,12 @@
  * base, one subclass per output shape" need here -- tree mode is the only output shape this package
  * builds (bind mode is a separate work package, over the same {@link RecordBody}).
  *
- * **A field a read doesn't produce is simply omitted** (never a placeholder value) -- matching
- * `RecordNode`'s own frozen TSDoc ("a subsequent `get` of it yields `MissingNode`"): a missing REQUIRED
- * field is reported and then left out of the map exactly like a silently-omitted OPTIONAL one, the
- * diagnostic carrying what went wrong rather than the tree.
+ * **The read is all-or-nothing.** A missing REQUIRED field, a stray or repeated name, or a group
+ * violation is reported same as ever, but reporting anything abandons the whole record rather than
+ * building a partial one around the gap -- `support.ts`'s own `abandonedValue`, the tree-mode
+ * reading of the reference implementation's `ConstructionGuard`. A field this reader *does*
+ * produce is never a placeholder either way, matching `RecordNode`'s own frozen TSDoc ("a
+ * subsequent `get` of it yields `MissingNode`").
  *
  * **`typeRef` is this reader's own compiled `name`, not the wire token the document wrote** -- a
  * schema-driven record position always resolves to the schema's own name for the type in scope, mirroring
@@ -18,7 +20,13 @@ import type { Task } from '../../io/bytes.js';
 import type { Position } from '../../core/position.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
-import type { FieldGroup, FieldState, RecordBody, RecordField } from '../../schema/meta/bodies.js';
+import {
+  fieldOmission,
+  isGroupMember,
+  type FieldGroup,
+  type RecordBody,
+  type RecordField,
+} from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
 import { absentNode, recordNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
@@ -27,11 +35,10 @@ import {
   refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
-  skipDataValue,
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
-import { readSchemaLiteral, renderValue } from './support.js';
+import { abandonedValue, readSchemaLiteral, renderValue } from './support.js';
 
 interface CompiledField {
   readonly schema: RecordField;
@@ -40,18 +47,17 @@ interface CompiledField {
   readonly scoped: boolean;
 }
 
-/** §5.2's sixth spelling (`type? = _`): nothing to parse, and the only conforming document omits the field or writes `_`. */
+/**
+ * A FIXED field's own check (§5.2): `role: 'FIXED'` fields are never voidable (a pin on a
+ * voidable type is a resolver error), so a written `_` at one is always refused, never a second
+ * spelling of the pin.
+ */
 interface FixedCheck {
-  readonly mustBeAbsent: boolean;
   readonly value: Value | undefined;
   readonly parser: TypeReader<Value>;
 }
 
 type Shape = 'fields' | 'empty' | 'positional' | 'mismatch';
-
-function isFixedState(state: FieldState): boolean {
-  return state === 'REQUIRED_FIXED' || state === 'OPTIONAL_FIXED';
-}
 
 /** A record's compiled field is looked up by an index this module itself derived (a schema-map count or a `fieldIndex` hit) -- never out of range in a correct build, so a miss is this module's own bug, not a document problem. */
 function at<T>(array: readonly (T | undefined)[], index: number, what: string): T {
@@ -88,33 +94,33 @@ export function recordTreeReader(
   const groups: readonly FieldGroup[] = body.groups;
   const precomputedValue = new Array<Value | undefined>(fields.length);
   const fixedCheck = new Array<FixedCheck | undefined>(fields.length);
+  // §5.11: a field-group member's omission is the group's, never the field's own -- computed once
+  // here so {@link valueForAbsentField}/{@link valueForStatedAbsentField} can pass it through to
+  // {@link fieldOmission} without walking `groups` on every field.
+  const memberOfGroup = fields.map((field) => isGroupMember(groups, field.schema.name));
   let solePositionalField = -1;
   let bareRequiredCount = 0;
 
   fields.forEach((field, i) => {
     fieldIndex.set(field.schema.name, i);
-    const state = field.schema.state;
-    if (
-      state === 'REQUIRED_DEFAULT' ||
-      state === 'REQUIRED_FIXED' ||
-      (state === 'OPTIONAL_FIXED' && field.schema.value !== undefined)
-    ) {
+    const role = field.schema.role;
+    if (role !== 'FREE') {
       const token = field.schema.value;
       if (token === undefined) {
         throw new Error(
-          `'${field.schema.name}' on '${displayName}' is ${state} but the schema carries no value for it -- the resolver should never produce this`,
+          `'${field.schema.name}' on '${displayName}' has role ${role} but the schema carries no ` +
+            'value for it -- the resolver should never produce this (§8.1: value is present ' +
+            "exactly when role is not 'FREE')",
         );
       }
       precomputedValue[i] = readSchemaLiteral(token, field.parser);
     }
-    if (isFixedState(state)) {
-      fixedCheck[i] = {
-        mustBeAbsent: field.schema.value === undefined,
-        value: precomputedValue[i],
-        parser: field.parser,
-      };
+    if (role === 'FIXED') {
+      fixedCheck[i] = { value: precomputedValue[i], parser: field.parser };
     }
-    if (state === 'REQUIRED') {
+    // §5.6's positional form counts fields whose NAME is unmarked, whatever their modifier: a
+    // voidable field must still be written, and so must a marker.
+    if (!field.schema.optional) {
       bareRequiredCount += 1;
       solePositionalField = i;
     }
@@ -154,11 +160,14 @@ export function recordTreeReader(
     return { shape: 'mismatch', anchor };
   }
 
-  /** The value a field takes when the document never mentioned it at all -- §5.2's five states, one place. */
+  /**
+   * The value a field takes when the document never mentioned it at all -- §5.2's one derivation
+   * ({@link fieldOmission}), applied.
+   */
   function valueForAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
-    switch (schema.state) {
-      case 'REQUIRED':
+    switch (fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'))) {
+      case 'MISSING':
         ctx
           .schemaField(schema.name)
           .report(
@@ -168,34 +177,60 @@ export function recordTreeReader(
             '(absent)',
           );
         return undefined;
-      case 'OPTIONAL':
+      case 'ABSENT':
         return undefined;
-      case 'REQUIRED_DEFAULT':
-      case 'REQUIRED_FIXED':
+      case 'INJECTED':
         return precomputedValue[schemaIndex];
-      case 'OPTIONAL_FIXED':
-        return undefined;
     }
   }
 
-  /** The value a field takes when the document explicitly wrote `_` at it -- differs from omission for `OPTIONAL` (§2.9: present with an absent value, distinct from never written) and for `REQUIRED_DEFAULT` (§5.2). */
+  /**
+   * The value a field takes when the document explicitly wrote `_` at it. Never reached for a
+   * `role: 'FIXED'` field -- {@link readFields} routes those through {@link verifyFixed} before a
+   * value is even peeked, and a FIXED field is never voidable (§5.2's own refusal), so this
+   * function's own `role` is always `'FREE'` or `'DEFAULT'`.
+   *
+   * Admitted exactly when `voidable` (§2.9: present with an absent value, distinct from never
+   * written); refused everywhere else, split by `role` on the same terms the JSON encoding's own
+   * `json/schema/record.ts#statedNull` already does, both ports of the reference's one shared
+   * `RecordDiagnostics.absenceAtRequiredField`/`absenceAtDefaultedField` ([TSON-JSON] §9.4: one
+   * diagnostic vocabulary, no category of its own): `role: 'DEFAULT'` (`a?: T ~ v`) is
+   * `ATOM_CONSTRAINT_VIOLATION`, since §5.2 makes omission the injection route and the fix is to
+   * omit the field rather than disclaim its value; `role: 'FREE'` -- required or merely optional,
+   * §5.2's other non-voidable case -- is `FIELD_REQUIRED`, "admits no absence", matching what an
+   * *omitted* FREE field already reports ({@link readFields}'s own `FIELD_REQUIRED` for a missing
+   * required field) rather than the DEFAULT field's own constraint-violation reading.
+   */
   function valueForStatedAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
-    if (schema.state === 'OPTIONAL') {
+    if (schema.voidable) {
       return absentNode();
     }
-    if (schema.state === 'REQUIRED_DEFAULT') {
+    const omission = fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'));
+    if (schema.role === 'DEFAULT') {
       ctx
         .schemaField(schema.name)
         .report(
           'ATOM_CONSTRAINT_VIOLATION',
-          `'${schema.name}' on '${displayName}' is always filled from the schema and cannot be written '_' -- omit the field to take its default (§5.2)`,
+          `'${schema.name}' on '${displayName}' is always filled from the schema and cannot be ` +
+            `written as absent -- omit the field to take its default (§5.2)`,
           `the field omitted, or a value for '${schema.name}'`,
           '_',
         );
-      return precomputedValue[schemaIndex];
+      return omission === 'INJECTED' ? precomputedValue[schemaIndex] : undefined;
     }
-    return valueForAbsentField(ctx, schemaIndex);
+    // `role: 'FREE'` never carries a default, so `omission` here is always `'MISSING'` (required)
+    // or `'ABSENT'` (optional) -- never `'INJECTED'`, which is `fieldOmission`'s own DEFAULT-role
+    // case handled in the branch above.
+    ctx
+      .schemaField(schema.name)
+      .report(
+        'FIELD_REQUIRED',
+        `'${schema.name}' on '${displayName}' admits no absence (§5.2)`,
+        `a value for '${schema.name}'`,
+        '_',
+      );
+    return undefined;
   }
 
   /**
@@ -213,27 +248,16 @@ export function recordTreeReader(
     const fieldCtx = ctx.schemaField(fieldName);
     yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
     const check = at(fixedCheck, schemaIndex, 'fixed-check');
-    const schema = field.schema;
     const peeked = yield* ctx.peek();
     if (peeked.kind === 'absent') {
       yield* ctx.next();
-      if (schema.state === 'REQUIRED_FIXED') {
-        fieldCtx.report(
-          'FIELD_FIXED',
-          `'${fieldName}' is fixed on '${displayName}' and cannot be absent`,
-          check.value === undefined ? '(none)' : renderValue(check.value),
-          '_',
-        );
-      }
-      return; // OPTIONAL_FIXED, valued or `= _`: absence is exactly what it permits
-    }
-    if (check.mustBeAbsent) {
-      yield* skipDataValue(ctx);
+      // §5.2: a pin on a voidable type is refused at the schema, so a FIXED field is never
+      // voidable -- a written `_` is always refused here, never a second spelling of the pin.
       fieldCtx.report(
         'FIELD_FIXED',
-        `'${fieldName}' is fixed to absent on '${displayName}' and may only be omitted or written as '_'`,
+        `'${fieldName}' is fixed on '${displayName}' and is not voidable, so it cannot be written '_' (§5.2)`,
+        check.value === undefined ? '(none)' : renderValue(check.value),
         '_',
-        'a value',
       );
       return;
     }
@@ -262,6 +286,12 @@ export function recordTreeReader(
     sink: (schemaIndex: number, decoded: Value | undefined) => void,
   ): Task<boolean[]> {
     const seen: boolean[] = new Array(fields.length).fill(false) as boolean[];
+    // Every undeclared field name met so far -- tracked so a *repeated* undeclared name reports
+    // `DUPLICATE_FIELD` at its second occurrence rather than a second `UNRECOGNIZED_FIELD`.
+    // [TSON-DATA] §2.5's duplicate-field rule is name identity, not "identity among declared
+    // fields": `seen` (below) already gives declared fields this; an undeclared name needs its
+    // own set since it has no `schemaIndex` to key `seen` by.
+    const seenUnmatched = new Set<string>();
     for (;;) {
       const peeked = yield* ctx.peek();
       if (peeked.kind === 'record-end') break;
@@ -271,6 +301,19 @@ export function recordTreeReader(
       }
       const schemaIndex = fieldIndex.get(fieldNameEvent.name);
       if (schemaIndex === undefined) {
+        if (seenUnmatched.has(fieldNameEvent.name)) {
+          ctx
+            .field(fieldNameEvent.name)
+            .report(
+              'DUPLICATE_FIELD',
+              `duplicate field '${fieldNameEvent.name}' on '${displayName}' -- a record states each field at most once (§2.5), and the repeat states a value for nothing`,
+              'each field stated once',
+              `'${fieldNameEvent.name}' stated again`,
+            );
+          yield* skipScopedValue(ctx);
+          continue;
+        }
+        seenUnmatched.add(fieldNameEvent.name);
         ctx
           .field(fieldNameEvent.name)
           .report(
@@ -360,9 +403,13 @@ export function recordTreeReader(
     *read(ctx: ReadContext): Task<Value> {
       const recordCtx = ctx.inRecord(schemaLocation);
       const annotations = yield* captureAnnotations(recordCtx);
+      // The construction-guard checkpoint (`ConstructionGuard.mark`): after the framing (this
+      // value's own annotations/type-ref, consumed by `captureAnnotations`/`expectRecordShape`)
+      // and before the fields -- see `reader/tree/support.ts`'s own `abandonedValue` note.
+      const mark = recordCtx.reported();
       const shapeResult = yield* expectRecordShape(recordCtx);
       if (shapeResult.shape === 'mismatch') {
-        return absentNode(undefined, annotations);
+        return abandonedValue();
       }
       const result = new Map<string, Value>();
       const sink = (schemaIndex: number, decoded: Value | undefined): void => {
@@ -389,6 +436,12 @@ export function recordTreeReader(
         }
       }
       validateGroups(anchoredCtx, seen);
+      if (recordCtx.reported() > mark) {
+        // Tree mode is all-or-nothing: a field left unbuilt, a stray or repeated name, a group
+        // violation -- everything above already reported -- means no partial record to mistake
+        // for a valid one.
+        return abandonedValue();
+      }
       return recordNode(result, name, annotations);
     },
   };

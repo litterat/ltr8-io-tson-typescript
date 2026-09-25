@@ -3,9 +3,12 @@
  * source element, in source order. The port of `ArrayAbstractReader`/`ArrayTreeReader`. Distinct from
  * `tuple.ts`'s reader, which reads a fixed-arity, positionally-typed sequence.
  *
- * A failed or explicitly-`_` element is kept as an {@link AbsentNode} placeholder -- its own diagnostic
- * (if any) carries the story, not the node standing in for it -- so later elements' own indices stay
- * accurate against the original data.
+ * **The read is all-or-nothing.** An element whose own read reports anything abandons the whole
+ * array (`support.ts`'s own `abandonedValue`), not only that element -- the diagnostic carries the
+ * story, and building continues past it anyway (so later elements keep the indices the source
+ * data gave them, and `uniqueItems` never compares against the fake sentinel a failed read hands
+ * back), but the tree this reader ultimately returns for the array is never a partial one. An
+ * explicitly-`_` element is the one legitimate {@link AbsentNode} this reader ever produces.
  */
 import type { Task } from '../../io/bytes.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
@@ -21,7 +24,7 @@ import {
   skipCoreValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
-import { renderValue, type TreeTypeResolver } from './support.js';
+import { abandonedValue, renderValue, type TreeTypeResolver } from './support.js';
 
 /**
  * Builds an `array` tree reader for one compiled schema entry. `resolveType` resolves the element
@@ -86,6 +89,12 @@ export function arrayTreeReader(
       yield* refuseUnscopedSchemaRef(elementCtx, scopedElement, body.elementType.name);
       const elementPeek = yield* ctx.peek();
       let decoded: Value;
+      // Whether this element's own read reported anything -- an abandoned element (ConstructionGuard)
+      // is never compared for uniqueness (there is no value to compare, only the fake sentinel
+      // `reader/tree/support.ts`'s own `abandonedValue` hands back), the way `record.ts`'s own
+      // `verifyFixed` skips its equality check on the same checkpoint. The element is still handed
+      // to `sink` so later indices stay accurate; the whole array is abandoned below regardless.
+      let elementAbandoned: boolean;
       if (elementPeek.kind === 'absent') {
         yield* ctx.next(); // consume the absent event regardless of REQUIRED/OPTIONAL
         if (body.state === 'REQUIRED') {
@@ -97,10 +106,13 @@ export function arrayTreeReader(
           );
         }
         decoded = absentNode();
+        elementAbandoned = false;
       } else {
+        const before = ctx.reported();
         decoded = yield* elementParser.read(elementCtx);
+        elementAbandoned = ctx.reported() > before;
       }
-      if (seen !== undefined) {
+      if (seen !== undefined && !elementAbandoned) {
         if (seen.some((element) => valuesEqual(element, decoded))) {
           ctx
             .index(index)
@@ -125,13 +137,18 @@ export function arrayTreeReader(
     *read(ctx: ReadContext): Task<Value> {
       const arrayCtx = ctx.underDeclaration(schemaLocation);
       const annotations = yield* captureAnnotations(arrayCtx);
+      // The construction-guard checkpoint -- see `record.ts`'s own note on where the mark goes.
+      const mark = arrayCtx.reported();
       if (!(yield* expectArrayStart(arrayCtx))) {
-        return absentNode(undefined, annotations);
+        return abandonedValue();
       }
       const elements: Value[] = [];
       yield* readInto(arrayCtx, (decoded) => {
         elements.push(decoded);
       });
+      if (arrayCtx.reported() > mark) {
+        return abandonedValue();
+      }
       return arrayNode(elements, name, annotations);
     },
   };

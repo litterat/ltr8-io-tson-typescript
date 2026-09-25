@@ -183,7 +183,8 @@ export function* parseCoreValue(state: CursorState): Task<CoreValue> {
     // The two cases that can re-enter this production, and therefore the only two that need
     // bounding (§9.1) -- everything else below consumes one token and returns. A schema document
     // reaches here through an annotation value or a constructor-application payload, and a
-    // deeply nested one used to exhaust the host call stack inside `resolveSchema`/`compile`.
+    // deeply nested one can exhaust the host call stack inside `resolveSchema`/`compile` without
+    // this bound.
     case 'lbrace':
       return yield* nested(state, t, () => parseBraceValue(state));
     case 'lbracket':

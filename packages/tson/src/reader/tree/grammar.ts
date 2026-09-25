@@ -126,7 +126,7 @@ export function* typeRefAhead(ctx: ReadContext): Task<string | undefined> {
  * reader (`compiler/compile.ts`'s own scoped-body builder), which is the reading half. A nested
  * `!!schema` is admitted at a position exactly when the position's own type resolves to a
  * `scoped` instance -- `isScopedPosition` is that structural fact, computed once per position at
- * compile time (`compiler/referenceChain.ts`'s own `resolvesToScoped`). Where it does, this is a
+ * compile time (`link/referenceChain.ts`'s own `resolvesToScoped`). Where it does, this is a
  * no-op: the event is left exactly where it was, for that position's own reader to consume and
  * dispatch on (which cell it lands in -- LOCAL, EXTERN, or neither -- is that reader's own
  * concern, §7.8's own admits-EXTERN check included). Where it does not, the directive is consumed

@@ -51,20 +51,20 @@ describe('arrayTreeReader -- shape and elements (§2.7)', () => {
     expect(value.elements).toEqual([]);
   });
 
-  it('reports TYPE_MISMATCH for a non-array value', () => {
+  it('reports TYPE_MISMATCH for a non-array value, and abandons the read (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('"nope"');
     const value = runSync(reader().read(ctx));
-    expect(value.kind).toBe('absent');
+    // A read is all-or-nothing: no placeholder node stands in for a refused value.
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 });
 
 describe('arrayTreeReader -- absent elements (§5.3 element_state)', () => {
-  it('a REQUIRED element written `_` reports FIELD_REQUIRED and is kept as AbsentNode', () => {
+  it('a REQUIRED element written `_` reports FIELD_REQUIRED and abandons the whole array (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('[1 _ 3]');
     const value = runSync(reader({ state: 'REQUIRED' }).read(ctx));
-    if (value.kind !== 'array') throw new Error('unreachable');
-    expect(value.elements.map((e) => e.kind)).toEqual(['atom', 'absent', 'atom']);
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
@@ -78,11 +78,10 @@ describe('arrayTreeReader -- absent elements (§5.3 element_state)', () => {
 });
 
 describe('arrayTreeReader -- unique_items and size', () => {
-  it('reports TYPE_MISMATCH for a repeated decoded element when unique_items is set', () => {
+  it('reports TYPE_MISMATCH for a repeated decoded element when unique_items is set, and abandons the array (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('[1 2 1]');
     const value = runSync(reader({ uniqueItems: true }).read(ctx));
-    if (value.kind !== 'array') throw new Error('unreachable');
-    expect(value.elements).toHaveLength(3); // every element is still kept
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 

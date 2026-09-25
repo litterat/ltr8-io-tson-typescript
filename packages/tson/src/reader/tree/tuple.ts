@@ -7,8 +7,12 @@
  * up-front element count, so arity is checked incrementally: an element arriving past the declared
  * position count reports `WRONG_ARITY` once (every further extra element is still decoded and
  * discarded, keeping the cursor correctly positioned for `array-end`), and `array-end` arriving before
- * every position got a value reports `WRONG_ARITY` too. A slot that is absent (the sentinel `_` at an
- * OPTIONAL position) or never reached at all is kept as an {@link AbsentNode} placeholder.
+ * every position got a value reports `WRONG_ARITY` too.
+ *
+ * **The read is all-or-nothing.** A position that reported anything -- a wrong-arity gap, or a
+ * failed element read -- abandons the whole tuple (`support.ts`'s own `abandonedValue`), never a
+ * partial one built around the gap. A slot legitimately absent (the sentinel `_` at an OPTIONAL
+ * position) is the one case that produces a real {@link AbsentNode}.
  */
 import type { Task } from '../../io/bytes.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
@@ -24,7 +28,7 @@ import {
   skipCoreValue,
   skipScopedValue,
 } from './grammar.js';
-import type { TreeTypeResolver } from './support.js';
+import { abandonedValue, type TreeTypeResolver } from './support.js';
 
 interface CompiledSlot {
   readonly schema: TupleElement;
@@ -133,10 +137,15 @@ export function tupleTreeReader(
     *read(ctx: ReadContext): Task<Value> {
       const tupleCtx = ctx.underDeclaration(schemaLocation);
       const annotations = yield* captureAnnotations(tupleCtx);
+      // The construction-guard checkpoint -- see `record.ts`'s own note on where the mark goes.
+      const mark = tupleCtx.reported();
       if (!(yield* expectTupleStart(tupleCtx))) {
-        return absentNode(undefined, annotations);
+        return abandonedValue();
       }
       const decoded = yield* decode(tupleCtx);
+      if (tupleCtx.reported() > mark) {
+        return abandonedValue();
+      }
       const elements = decoded.map((value) => value ?? absentNode());
       return tupleNode(elements, name, annotations);
     },

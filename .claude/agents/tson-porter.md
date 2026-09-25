@@ -12,7 +12,7 @@ Read, in this order:
 
 1. `CLAUDE.md` — the hard constraints and conventions. They are not negotiable and they are not
    suggestions.
-2. The plan your work package comes from. For revision work that is `REVISION-35-PLAN.md`, whose
+2. The plan your work package comes from. For revision work that is `REVISION-36-PLAN.md`, whose
    stages name what moves and why; for the original port it is `PORT-PLAN.md`'s Part B wave tables.
    Your brief says which, and names the Java sources you port, the TypeScript you produce, and what
    you may assume exists.
@@ -56,8 +56,8 @@ npm run test:conformance
 ```
 
 **Your wave's brief says what the suite should do at your point in the run, and it governs.** The
-count is a moving number and the brief carries the current one — at the 2026 Revision 35 corpus pin
-it is **277 discovered subjects**. Read it off the brief, never off memory. Whatever the expected
+count is a moving number and the brief carries the current one — at the 2026 Revision 36 corpus pin
+it is **328 discovered subjects**. Read it off the brief, never off memory. Whatever the expected
 passing count is, the DISCOVERED count must not drop: a run that discovers fewer subjects has broken
 the harness rather than fixed anything, and that is the finding, ahead of any individual vector.
 

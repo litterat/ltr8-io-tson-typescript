@@ -2,12 +2,14 @@
 
 Everything else in this directory is **vendored verbatim** from the reference implementation at
 https://github.com/litterat/ltr8-io-tson-java, pinned to commit
-`6655418d666e26e333e8f3a17f3374c2e603951d` (the same commit `scripts/fetch-references.sh` pins).
+`0c1512c766a70792b409db3e5f6a717ae68ebd15` (the same commit `scripts/fetch-references.sh` pins).
 
 | File | What it is |
 | --- | --- |
-| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 35, Working Draft. |
-| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 35, Working Draft. |
+| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 36, Working Draft. |
+| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 36, Working Draft. |
+| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 36, its first revision. |
+| `tson-rev36-changelog.md` | The Revision 36 change log: every adjudicated change against Revision 35, by section. |
 | `m/meta-kernel.tn`, `m/meta.tn`, `m/core.tn` | The three live bundled schemas. |
 | `m/*-resolved.tn` | Resolver-output fixtures for the three above. |
 
@@ -20,8 +22,8 @@ They are copies, not sources. Two things depend on that:
 - The spec snapshots are the revision this port was written against. Editing one would make the
   code disagree with the document that justifies it, silently.
 
-`spec.test.ts` fails if any file here drifts from the pinned checkout. `.prettierignore` covers
-this directory so formatting cannot rewrite them either.
+`test/conformance/vendored-spec.test.ts` fails if any file here drifts from the pinned checkout.
+`.prettierignore` covers this directory so formatting cannot rewrite them either.
 
 To move to a newer spec revision, change the pin in `scripts/fetch-references.sh`, re-run it, and
 re-copy — as one commit, so the diff shows what changed in the spec.

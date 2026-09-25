@@ -10,9 +10,10 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/35/tson-part1-data.md
+  https://tson.io/raw/2026/36/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/35/tson-part2-schema.md
+  https://tson.io/raw/2026/36/tson-part2-schema.md
+- Part 3 — the JSON encoding: https://tson.io/raw/2026/36/tson-part3-json.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than
@@ -25,19 +26,19 @@ port is written against:
   port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the three
   live bundled schemas `spec/m/{meta-kernel,meta,core}.tn` plus their `*-resolved.tn` resolver-output
   fixtures.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 277
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 328
   subjects over `tests/<class>/<layer>/<bucket>/`. **Pinned**, like the Java: a corpus that tracked
   `main` turned this repo's CI red on an upstream commit with no change here.
 
 Both are required before the conformance project will run. A SessionStart hook fetches them
 automatically in cloud sessions; run the script yourself locally.
 
-`spec/` holds the same spec snapshots and bundled schemas, **vendored verbatim** from that pinned
-commit and committed here. `.references/` is gitignored and absent from a bare clone, but the three
-bundled schemas are loaded at runtime and every `§` citation in the source refers to the spec text,
-so both have to be readable without network access. They are copies: do not edit them, and move the
-pin and re-copy together. `spec/PROVENANCE.md` records where they came from and
-`vendored-spec.test.ts` fails if they drift.
+`spec/` holds the same spec snapshots, the change log, and bundled schemas — Parts 1 through 3 plus
+`tson-rev36-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
+`.references/` is gitignored and absent from a bare clone, but the three bundled schemas are loaded
+at runtime and every `§` citation in the source refers to the spec text, so both have to be readable
+without network access. They are copies: do not edit them, and move the pin and re-copy together.
+`spec/PROVENANCE.md` records where they came from and `vendored-spec.test.ts` fails if they drift.
 
 ## Hard constraints
 
@@ -70,7 +71,7 @@ text and are ordinary sync functions. Above `TypeReader`, the facades drive with
 
 There is one published library package with subpath entries rather than a package per Java module.
 JPMS is replaced by ESLint `import/no-restricted-paths` zones in `eslint.config.js`. If a zone rule
-fires, the fix is the import, not the rule. Two zones carry real design weight:
+fires, the fix is the import, not the rule. Three zones carry real design weight:
 
 - `src/schema/meta` may import only itself, `src/core` and `src/annotations`. It names no compiler
   type — that is what lets the schema model ship to a browser that never compiles a schema, and why
@@ -82,6 +83,13 @@ fires, the fix is the import, not the rule. Two zones carry real design weight:
   bidirectional by construction, so `src/bind/encode.ts` exposes `toCoreValue(binding, value)`
   depending only on `ast/` and `bind/`, the resolver merges on that, and the text round-trip is gone.
   Keep it that way.
+- `src/json` (the Part 3 JSON encoding, published under `./json`) may not import `lexer`, `stream`,
+  `reader`, `compiler`, `tree`, `write` or `facade` — the TypeScript form of the reference's own
+  `tson-json` module carrying no dependency on `tson-compiler`. It may import `core`, `io`,
+  `unicode`, `atom`, `base`, `value`, `schema`, `link`, `annotations` and `bind`. The two encodings
+  share the grammar below the token and the schema model above it; they do not share a reader, so a
+  JSON-side bug can never come from the text reader and cannot introduce one there. `IDIOM-DEBT.md`
+  §9 records where this costs a second copy of the read-plan shape and what would unify it.
 
 ## Conventions
 
@@ -158,7 +166,7 @@ in conversation rather than silently picking.
 
 - Resolved-output writing cannot name the applied constructor. §8.1 says a closed definition's
   body is "a binding record headed by the applied constructor", and `spec/m/*-resolved.tn` writes
-  `enum_set`'s body as `!set_type { element_type: identifier }`. Both this port and the reference write
+  `enum_set`'s body as `!set_type { element_type: text  min_items: 1 }`. Both this port and the reference write
   `!array { … unordered: true unique_items: true }`: `set_type` is a refinement of `array` sharing
   its shape, so the applied name is not recoverable from the value being written, though it is recorded
   one level up in the same entry's `source`. The reference's own fixture test cannot see this — it

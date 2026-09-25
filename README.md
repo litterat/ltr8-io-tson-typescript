@@ -3,8 +3,8 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: both spec parts implemented; 233/233 shared conformance subjects passing at the
-> pinned suite commit, Class 1 and Class 2.** See
+> **Status: all three spec parts implemented, including the Part 3 JSON encoding; 328/328 shared
+> conformance subjects passing at the pinned suite commit, Class 1 and Class 2.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
@@ -26,7 +26,7 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.35.x` implements the **2026 Revision 35** series. A new spec revision moves the
+built against, so `0.36.x` implements the **2026 Revision 36** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
@@ -44,9 +44,10 @@ authenticates a document together with its entire contract.
 
 The text format is Unicode-first and JSON-_like_, and deliberately not a JSON superset ([TSON-DATA]
 §4.1, §6): the notation carries no `null` keyword, treats field names as identifiers, and has no
-surrogate-pair escapes, so a JSON document is read through a JSON reader rather than as TSON.
-Commas and quotes are optional where unambiguous, identifiers may be in any script, and there are
-three structural forms distinguished by their contents rather than their brackets:
+surrogate-pair escapes, so a JSON document is read through the separate [TSON-JSON] encoding
+([`./json`](#json-encoding)) rather than as TSON text. Commas and quotes are optional where
+unambiguous, identifiers may be in any script, and there are three structural forms distinguished by
+their contents rather than their brackets:
 
 ```tson
 !!id:"https://example.com/orders/1042.tn"
@@ -81,11 +82,13 @@ A JSON document is **not** a TSON document ([TSON-DATA] §6). What the two share
 strings, `[ ]` arrays, `{ name: value }` records, the `\n \r \t \\ \"` escapes — is shared because
 each was a good idea on its own. What differs is load-bearing: TSON has no `null` keyword (§4.4),
 field names are identifiers (§2.5), and there are no surrogate-pair escapes (§7.2.2). JSON is read
-through a JSON reader — a second encoding of the same model, mapping `null` to absence and a
-non-identifier-keyed object to a map — which this port does not yet implement.
+through [TSON-JSON] instead — a second, schema-directed encoding of the same model, mapping `null`
+to absence and a non-identifier-keyed object to a map — behind this package's own [`./json`
+subpath](#json-encoding).
 
-Two conformance classes: **Class 1** implements the data format alone and needs nothing from Part 2;
-**Class 2** implements the schema layer too. This port targets both, and both are implemented.
+Two conformance classes in the shared corpus: **Class 1** implements the data format alone and needs
+nothing from Part 2; **Class 2** implements the schema layer too. This port targets both, and both
+are implemented, plus the Part 3 JSON encoding the corpus does not yet vector.
 
 ## API
 
@@ -118,9 +121,10 @@ const tree = readTree(bytes);
 asString(at(tree, '/customer/name')); // 'Ada Lovelace'
 asString(get(get(tree, 'customer'), 'name')); // 'Ada Lovelace'
 
-// validate: like readTree, but collects into a ValidationResult { value, diagnostics } instead
-// of throwing. An empty `diagnostics` is the only "valid": a document that will not lex or
-// parse at all is reported there too, as a VALIDATION_ERROR over a `missing` root value.
+// validate: like readTree, but collects into a ValidationResult { value?, diagnostics } instead
+// of throwing. An empty `diagnostics` is the only "valid", and the only case `value` is present
+// at all: a read is all-or-nothing, so a document that will not lex or parse (reported as a
+// VALIDATION_ERROR) leaves `value` omitted, same as any other reported problem does.
 const result = validate(bytes);
 result.diagnostics; // []
 
@@ -167,7 +171,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/35/m/meta.tn', 'https://tson.io/2026/35/m/core.tn']);
+await tson.preload(['https://tson.io/2026/36/m/meta.tn', 'https://tson.io/2026/36/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -178,6 +182,47 @@ reason — a schema fetch is real I/O and cannot honestly be synchronous in JS t
 and `fileSchemaSource` (containment checked after `realpath`) live behind the separate, Node-only
 `@ltr8/tson/source` subpath — never imported by the package's default entry, so a browser bundle
 never pulls in Node's `fs`/`http`.
+
+### JSON encoding
+
+[TSON-JSON] (`spec/tson-part3-json.md`) is a second encoding of the same model, for when the
+document on the wire has to be plain JSON — a schema-directed reader, not a superset relationship:
+a JSON document names no schema of its own, so reading one always takes a compiled schema and a
+root type, the way `readTree`/`validate`'s own `{ schema, root }` does. It lives behind its own
+`./json` subpath so that nothing in the TSON text stack — lexer, parser, compiler — is pulled in by
+a consumer that only ever reads JSON, and vice versa:
+
+```ts
+import { standardLibrary } from '@ltr8/tson/stdlib';
+import { compileJsonSchema, readJsonTree, validateJson } from '@ltr8/tson/json';
+
+const tson = standardLibrary();
+const linked = tson.resolveSchema(orderSchemaText); // the same LinkedSchema readTree/validate use
+const schema = compileJsonSchema(linked);
+
+// readJsonTree: throws TsonReadError on the first problem, same posture as readTree.
+const tree = readJsonTree(
+  '{"order_id": 1042, "customer": {"name": "Ada Lovelace"}, "total": 149.95}',
+  { schema, root: 'order' },
+);
+
+// validateJson: collects every problem (base-syntax failures included) instead of throwing --
+// the same shape as validate's own ValidationResult, as ValidateJsonResult. Only a §10.1
+// nesting-limit refusal still throws (a policy refusal, not a verdict on the document).
+const result = validateJson(jsonBytes, { schema, root: 'order' });
+result.diagnostics; // []
+```
+
+Both take an async, chunked source too (`readJsonTreeAsync`/`validateJsonAsync`), driven by the
+identical `Task<T>` suspension the text stack uses, so memory stays proportional to nesting depth
+either way. A schemaless read exists only at the JSON-grammar level — `parseJson`/`parseJsonAsync`
+return a plain `JsonValue` tree with no type applied — because [TSON-JSON] §3.4 gives this encoding
+no vocabulary-only reading the way TSON text's base type resolution does.
+
+What this subpath does not do, today: read a document's own in-band `$schema`/`$type` binding with
+no schema supplied out of band, read a `scoped` position (`declared`/`extern`/`dynamic`), speak the
+§3.5 `TSON-Schema`/`TSON-Accept-Schema` HTTP header fields, or encode a schema-governed value back
+to JSON. See [STATUS.md](STATUS.md)'s Part 3 section for the full list.
 
 ### Classifying a document
 
@@ -223,7 +268,7 @@ npm run demo:web                 # writes examples/web-demo/dist (index.html + d
 npx serve examples/web-demo/dist # ES modules need http://, not file://
 ```
 
-84 KB gzipped, all of it: lexer, parser, schema compiler, validator, and the three bundled schemas.
+155 KB gzipped, all of it: lexer, parser, schema compiler, validator, and the three bundled schemas.
 
 ### CLI
 
@@ -233,6 +278,14 @@ npx @ltr8/tson-cli validate person-data.tn --schema person.tn --root person
 npx @ltr8/tson-cli compile person.tn
 npx @ltr8/tson-cli policy                # the [TSON-DATA] §8.2 policy this run would apply
 npx @ltr8/tson-cli hash person.tn        # prints the canonical content hash (§2.2.1)
+
+# .json (case-insensitive) is a JSON encoding of TSON data (TSON-JSON §3.1) and is bound the
+# same way: --schema/--root, required for a .json input. Standard input is TSON text by
+# default, whatever binding is given -- --input tson|json forces either encoding for every
+# input this run reads, '-' included, overriding the by-extension default.
+npx @ltr8/tson-cli validate person-data.json --schema person.tn --root person
+cat person-data.tn | npx @ltr8/tson-cli validate --schema person.tn --root person -
+cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root person --input json -
 ```
 
 Five commands: `validate`, `compile`, `policy`, `hash`, `init-example`. `validate`/`compile`/`hash`
@@ -265,15 +318,21 @@ recursion is real — see [STATUS.md](STATUS.md).
 
 ## What is and isn't implemented
 
-Both spec parts are implemented and the shared conformance suite passes in full — see
+Parts 1 and 2, plus Part 2's shared conformance suite, are implemented in full — see
 [STATUS.md](STATUS.md) for the itemised checklist, including the small number of documented
-deferrals (e.g. `token_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
-resolved schema output) and known gaps. In particular:
+deferrals (e.g. `enum_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
+resolved schema output) and known gaps. Part 3, the JSON encoding, covers a schema-directed tree
+read and its CLI/package surface — narrower than the reference implementation's own scope, which
+also has an `objectReader` binding a JSON document straight into a host object; this port has no
+JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band-only
+binding, a scoped-position reader, the §3.5 HTTP header fields, or a schema-directed encoder — see
+[STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/35/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/35/tson-part2-schema.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/36/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/36/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/36/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.
@@ -287,7 +346,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test                        # unit
-npm run test:conformance        # 233 shared subjects, at the pinned suite commit
+npm run test:conformance        # 328 shared subjects, at the pinned suite commit
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 

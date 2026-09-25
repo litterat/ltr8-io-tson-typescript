@@ -96,9 +96,9 @@ describe('bindReader -- atom leaves (§5)', () => {
     );
   });
 
-  it('reports ATOM_CONSTRAINT_VIOLATION when the AtomReader rejects the token, fail-fast', () => {
+  it('reports ATOM_FORM_INVALID when the AtomReader rejects the token, fail-fast', () => {
     expect(() => readWith(bindReader(INT, { readAtom: intReader }), '"not a number"')).toThrow(
-      /ATOM_CONSTRAINT_VIOLATION/,
+      /ATOM_FORM_INVALID/,
     );
   });
 
@@ -109,7 +109,7 @@ describe('bindReader -- atom leaves (§5)', () => {
     );
     expect(value).toBeUndefined();
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.code).toBe('ATOM_CONSTRAINT_VIOLATION');
+    expect(diagnostics[0]?.code).toBe('ATOM_FORM_INVALID');
   });
 });
 
@@ -317,12 +317,12 @@ describe('bindReader -- variant (§3.2 !type-ref dispatch)', () => {
     expect(readWith(unionReader, '!b { s: "hi" }')).toEqual({ kind: 'b', s: 'hi' });
   });
 
-  it('reports UNKNOWN_TYPE_REF when the value carries no !type-ref at all', () => {
-    expect(() => readWith(unionReader, '{ n: 1 }')).toThrow(/UNKNOWN_TYPE_REF/);
+  it('reports TYPE_MISMATCH when the value carries no !type-ref at all -- a schema-directed dispatch, never UNKNOWN_TYPE_REF (§7.2)', () => {
+    expect(() => readWith(unionReader, '{ n: 1 }')).toThrow(/TYPE_MISMATCH/);
   });
 
-  it('reports UNKNOWN_TYPE_REF when the !type-ref names no member', () => {
-    expect(() => readWith(unionReader, '!c { n: 1 }')).toThrow(/UNKNOWN_TYPE_REF/);
+  it('reports TYPE_MISMATCH when the !type-ref names no member', () => {
+    expect(() => readWith(unionReader, '!c { n: 1 }')).toThrow(/TYPE_MISMATCH/);
   });
 
   it('leaves annotations on the dispatched-to value visible to its own reader, not consumed by dispatch', () => {
@@ -362,7 +362,7 @@ describe('bindReader -- variant (§3.2 !type-ref dispatch)', () => {
       reader,
       '[ @x @y !c { n: 1 }, !a { n: 2 }, @z !b { s: "ok" } ]',
     );
-    expect(diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
 
     // The positive control: the same shape with every element dispatching, read end to end.
     expect(readWith(reader, '[ @x @y !a { n: 1 }, !a { n: 2 }, @z !b { s: "ok" } ]')).toEqual([

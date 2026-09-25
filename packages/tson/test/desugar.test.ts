@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/errors.js';
+import {
+  TsonNotImplementedError,
+  TsonParseError,
+  TsonSchemaValidationError,
+} from '../src/core/errors.js';
 import { fromString, runSync } from '../src/io/bytes.js';
 import { position, type Position } from '../src/core/position.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
@@ -375,11 +379,11 @@ describe("a template's bare record body (§5.2)", () => {
     expect(template.typeParams).toEqual(['T']);
   });
 
-  it("writes state and value only where the author's marks say something the default does not", () => {
-    const instance = instanceOf(desugarDoc('box => <T> { v: T  count: integer ~ 0 }'), 'box');
+  it("writes optional/voidable/role/value only where the author's marks say something the default does not", () => {
+    const instance = instanceOf(desugarDoc('box => <T> { v: T  count?: integer ~ 0 }'), 'box');
     const fields = requiredField(instance, 'fields');
     expect(fieldNames(elementAt(fields, 0))).toEqual(['name', 'type']);
-    expect(fieldNames(elementAt(fields, 1))).toEqual(['name', 'type', 'state', 'value']);
+    expect(fieldNames(elementAt(fields, 1))).toEqual(['name', 'type', 'optional', 'role', 'value']);
   });
 
   it('rejects the same field declared twice (§5.11)', () => {
@@ -401,23 +405,30 @@ describe("a template's bare record body (§5.2)", () => {
 
 // ── §5.2's field-state table, exercised through a template body ─────────
 
-describe('field-state validation (§5.2)', () => {
-  it('rejects ~ _ (an absent default) on any field', () => {
-    expect(() => desugarDoc('box => <T> { v: T ~ _ }')).toThrow(TsonSchemaValidationError);
+describe('field-marks validation (§5.2)', () => {
+  it("the absent sentinel '_' is no longer a modifier value: '~ _' and '= _' are parse errors, not resolver errors", () => {
+    expect(() => desugarDoc('box => <T> { v: T ~ _ }')).toThrow(TsonParseError);
+    expect(() => desugarDoc('box => <T> { v: T = _ }')).toThrow(TsonParseError);
   });
 
-  it('rejects = _ on a required (non-optional) field', () => {
-    expect(() => desugarDoc('box => <T> { v: T = _ }')).toThrow(TsonSchemaValidationError);
+  it('rejects a default on an unmarked name (name: type ~ value)', () => {
+    expect(() => desugarDoc('box => <T> { v: T ~ 1 }')).toThrow(TsonSchemaValidationError);
   });
 
-  it('rejects a default on an optional field (type? ~ value)', () => {
-    expect(() => desugarDoc('box => <T> { v: T? ~ 1 }')).toThrow(TsonSchemaValidationError);
+  it('rejects a pin on a voidable type (name?: type? = value)', () => {
+    expect(() => desugarDoc('box => <T> { v?: T? = "x" }')).toThrow(TsonSchemaValidationError);
   });
 
-  it('accepts = _ on an optional field, producing OPTIONAL_FIXED with no value member', () => {
-    const instance = instanceOf(desugarDoc('box => <T> { v: T? = _ }'), 'box');
+  it("`v?: void?` is the spelling an earlier revision wrote as '= _': optional, voidable, no value member", () => {
+    const instance = instanceOf(desugarDoc('box => <T> { v?: void? }'), 'box');
     const fields = requiredField(instance, 'fields');
-    expect(fieldNames(elementAt(fields, 0))).toEqual(['name', 'type', 'state']);
+    expect(fieldNames(elementAt(fields, 0))).toEqual(['name', 'type', 'optional', 'voidable']);
+  });
+
+  it("the selector '=?' on an unmarked, non-voidable name writes no facet beyond name/type (it stays FREE, unpinned)", () => {
+    const instance = instanceOf(desugarDoc('box => <T> { v: T  kind: text =? }'), 'box');
+    const fields = requiredField(instance, 'fields');
+    expect(fieldNames(elementAt(fields, 1))).toEqual(['name', 'type']);
   });
 });
 

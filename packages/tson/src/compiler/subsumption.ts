@@ -21,37 +21,87 @@
  * belongs to `event_created`'s own instantiation. The accepted set -- `name` plus every entry
  * whose own chain terminates at it -- is computed once, at compile time, since the reader itself
  * cannot know which of its aliases a given position was written as.
+ *
+ * **§5.2's three readings of an unannotated/annotated value at an ABSTRACT position** are this
+ * module's other half, alongside the ordinary tag dispatch above (which still governs OPEN and
+ * FINAL positions unchanged, and an ABSTRACT one with no `discriminators` past its own tag
+ * requirement):
+ *
+ * - **No `discriminators`** (`body.discriminators.length === 0`): the base has no direct
+ *   instances and names no selector field either, so the tag is the only way a value can ever be
+ *   placed. The ordinary dispatch below is reused unchanged for the tagged case (a tag naming a
+ *   subtype dispatches to it exactly as it would at an OPEN position) with two additions gated on
+ *   `isAbstract`: an absent tag is a validation error rather than "the position's own type", and a
+ *   tag naming the base itself (`own.has(annotated)`) is refused rather than admitted, since no
+ *   value's effective type is ever the base (§5.2, §7.2's own "three readings").
+ * - **Non-empty `discriminators`** ({@link buildMemberDispatchReader}): the value is placed by
+ *   reading the marked field(s), not by a tag. **In text, a selector may arrive after the fields
+ *   it selects** ([TSON-DATA] §2.5) -- a record's fields carry no significant order -- so this
+ *   reader looks ahead over the *whole* record before it can decide anything, via
+ *   `reader/context.ts`'s existing {@link lookingAhead} mechanism (the same one
+ *   `compiler/choiceReader.ts` already uses for its own, shallower type-ref lookahead) rather than
+ *   a second lookahead mechanism. **Memory there is bounded by one record's own size, not by
+ *   depth**: the lookahead consumes and rewinds exactly the fields of the one record a
+ *   member-dispatched position governs, never descending into a nested container's own contents
+ *   (an unrelated field's value is discarded whole via {@link skipScopedValue}, not read into).
+ *   Every discriminator token the lookahead finds is captured raw, then decoded, outside the
+ *   lookahead, through the BASE's own declared type for that field -- "the pin and the member's
+ *   value are decoded by the same parser before either is compared" (§4.3), which is what lets
+ *   `= 0xFF` and a document's `255` collide correctly rather than by spelling.
+ *
+ *   **A discriminator this dispatch cannot read is refused directly, at that field, and nothing
+ *   else about the record is inspected** -- matching the reference's own
+ *   `RecordMemberDispatchReader.read` exactly (`tson-compiler/.../reader/`) and this port's own
+ *   JSON stack (`json/schema/dispatchMember.ts`): a selector missing from what the lookahead found
+ *   (omitted, written `_`, a nested shape, or the positional form of §5.6, which never reaches the
+ *   record-shape check at all) is `FIELD_REQUIRED` at that field, and one found but not parseable
+ *   as its declared type is `TYPE_MISMATCH` there, each reported the moment it is discovered and
+ *   the value abandoned on the spot -- one diagnostic per document, never a second one manufactured
+ *   by handing the record to a second reader for a whole-record opinion. The lookahead itself skips
+ *   a discriminator's own leading annotations/`!type-ref` before checking for its plain token, so a
+ *   self-annotated or redundantly self-tagged selector still dispatches; only a genuinely
+ *   non-scalar shape counts as missing.
  */
 import type { Task } from '../io/bytes.js';
+import { TsonInternalError } from '../core/errors.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
-import { skipDataValue, typeRefAhead } from '../reader/tree/grammar.js';
-import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { lookingAhead } from '../reader/context.js';
+import {
+  skipAnnotations,
+  skipAnnotationsAndTypeRef,
+  skipCoreValue,
+  skipDataValue,
+  skipScopedValue,
+  typeRefAhead,
+} from '../reader/tree/grammar.js';
+import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
+import type { Token, Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { isTemplateBody } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
-import { absentNode } from '../tree/nodes.js';
+import { valuesEqual } from '../reader/tree/equality.js';
+import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
 import { isAtom } from './atomChecks.js';
-import { terminal } from './referenceChain.js';
+import { directMembers, type Member } from '../link/recordExtension.js';
+import { selfNames, terminal } from '../link/referenceChain.js';
+import { metaFormOfLexer } from './tokenForms.js';
 
 const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
 
-/** Whether `body` is `Atom`- or `Product`-shaped -- the only bodies §7.2's rule governs. */
+/**
+ * Whether `body` is `Atom`- or `Product`-shaped, or a record-bodied template family base --
+ * the bodies §7.2's rule governs. A family base (§5.10) is the one `TemplateBody` shape this rule
+ * reaches: it may be named bare at a type position, and a position typed by one dispatches exactly
+ * as an ABSTRACT record's own does, over its instantiations.
+ */
 function isGuardedBody(body: Top): boolean {
   if (isAtom(body)) return true;
-  return 'kind' in body && PRODUCT_KINDS.has(body.kind);
+  if ('kind' in body) return PRODUCT_KINDS.has(body.kind);
+  return isTemplateBody(body) && body.extension !== undefined;
 }
 
-/** The written names that mean `name`: itself, plus every entry whose own chain (`referenceChain.ts`'s shared §8.3 walk) terminates at it. */
-function selfNames(
-  name: string,
-  entries: ReadonlyMap<string, TypeDefinition>,
-): ReadonlySet<string> {
-  const lookup = (n: string): TypeDefinition | undefined => entries.get(n);
-  const names = new Set<string>([name]);
-  for (const alias of entries.keys()) {
-    if (terminal(alias, lookup) === name) {
-      names.add(alias);
-    }
-  }
-  return names;
+/** `Top`'s open `Data.kind: string` member defeats a plain `'kind' in body && body.kind === 'record'` narrowing (`compiler/compile.ts`'s own note); this guard is this module's own copy. */
+function isRecordBody(body: Top): body is RecordBody {
+  return 'kind' in body && body.kind === 'record';
 }
 
 /**
@@ -64,9 +114,24 @@ function selfNames(
  * A value with no leading `!type-ref`, or one naming a member of `selfNames`, reads straight
  * through `reader` -- the position's own type is always admitted (§7.2's "S is T"). A value naming
  * one of `definition.subtypes` dispatches to that subtype's own compiled reader via `resolve`,
- * read against the same, still-unconsumed value. Anything else is `UNKNOWN_TYPE_REF`, with a
- * message distinguishing a position whose type has no subtypes at all from one whose subtypes just
- * don't include what was named -- and the whole value is discarded, since nothing consumed it.
+ * read against the same, still-unconsumed value. Anything else is a refusal, split on whether the
+ * written name denotes anything in `entries` at all: one `entries` has no entry for is
+ * `UNKNOWN_TYPE_REF` (§7.2's own opening paragraph -- "a built-in annotation name not defined by
+ * the active schema is an unresolved-type error" -- generalised past built-ins to any name this
+ * schema's namespace does not contain, and `typeRefCheck.ts`'s own top note on the same code for
+ * the schemaless path); one that resolves to a real entry this position simply does not admit is
+ * `TYPE_MISMATCH`, with a message distinguishing a position whose type has no subtypes at all from
+ * one whose subtypes just don't include what was named. Either way the whole value is discarded,
+ * since nothing consumed it. **This reads §7.2 rather than the reference's own
+ * `SubsumptionDiagnostics`/`VariantSchemaReader`, which report `TYPE_MISMATCH` unconditionally and
+ * never consult whether the name resolves elsewhere** -- a divergence this port takes deliberately
+ * (worth raising upstream) rather than silently, since §7.2's two-step reading ("resolve, then
+ * admit") is what the spec text actually states.
+ *
+ * **An ABSTRACT position takes this module's other branch** (see this file's own top note): with
+ * `discriminators`, every read goes through {@link buildMemberDispatchReader} instead of the tag
+ * dispatch below; without any, the tag dispatch below still runs, gaining two ABSTRACT-only
+ * refusals (an absent tag, and one naming the base itself).
  */
 export function guardSubsumption(
   name: string,
@@ -88,32 +153,468 @@ export function guardSubsumption(
     subtypeNames.map((subtype) => [terminal(subtype, (n) => entries.get(n)), subtype] as const),
   );
   const subtypeList = subtypeNames.join(', ');
+  const recordBody = isRecordBody(definition.body) ? definition.body : undefined;
+  // §5.10: a record-bodied template's own (open) entry carries the same two facts on its
+  // `TemplateBody` wrapper instead of on a `RecordBody` -- `isGuardedBody` above is what let one
+  // reach this function at all.
+  const isTemplateFamily = recordBody === undefined && isTemplateBody(definition.body);
+  const isAbstract = recordBody?.extension === 'ABSTRACT' || isTemplateFamily;
+  // A template family base's own `discriminators` mirrors a record base's (§5.10); it has no
+  // reader of its own for `buildMemberDispatchReader`'s fallback to run (a template is never read
+  // as itself), where a record base offers its ordinary record reader.
+  const discriminators =
+    recordBody?.discriminators ??
+    (isTemplateFamily && isTemplateBody(definition.body) ? definition.body.discriminators : []) ??
+    [];
+
+  if (discriminators.length > 0) {
+    return buildMemberDispatchReader(
+      name,
+      discriminators,
+      recordBody?.fields,
+      entries,
+      own,
+      resolve,
+    );
+  }
 
   return {
     *read(ctx: ReadContext): Task<Value> {
       const ref = yield* typeRefAhead(ctx);
-      if (ref === undefined || own.has(ref)) {
+      if (ref === undefined) {
+        if (isAbstract) {
+          const remedy =
+            subtypeNames.length === 0
+              ? `no schema in this closure declares a subtype of '${name}' -- the schema that ` +
+                'does is missing from the imports'
+              : `an untagged value is never one of (${subtypeList})`;
+          ctx.report(
+            'VALIDATION_ERROR',
+            `a value at '${name}' needs a '!type-ref' -- '${name}' is abstract and has no direct ` +
+              `instances (§5.2), so ${remedy}`,
+            subtypeNames.length === 0 ? `a subtype of '${name}'` : `one of (${subtypeList})`,
+            '(no type annotation)',
+          );
+          yield* skipDataValue(ctx);
+          return abandonedValue();
+        }
+        return yield* reader.read(ctx);
+      }
+      if (own.has(ref)) {
+        if (isAbstract) {
+          return yield* refuseTaggedBase(ctx, name, ref, subtypeList, subtypeNames.length === 0);
+        }
         return yield* reader.read(ctx);
       }
       const annotated = terminal(ref, (n) => entries.get(n));
       if (own.has(annotated)) {
+        if (isAbstract) {
+          return yield* refuseTaggedBase(ctx, name, ref, subtypeList, subtypeNames.length === 0);
+        }
         return yield* reader.read(ctx);
       }
       const subtype = subtypeTerminals.get(annotated);
       if (subtype !== undefined) {
         return yield* resolve(subtype).read(ctx);
       }
+      // §7.2's own opening paragraph resolves a type annotation in two steps, and this is the
+      // second: "all type annotations MUST resolve through the schema's type-name namespace; a
+      // built-in annotation name not defined by the active schema is an unresolved-type error" is
+      // the first (the name must denote *something* the schema declares), and subsumption -- is
+      // the denoted type admitted here -- is the second, asked only once the first holds. A name
+      // `entries` has no entry for at all fails the first step and is `UNKNOWN_TYPE_REF`
+      // ("the name denotes nothing", `typeRefCheck.ts`'s own top note, restated for the
+      // schema-directed path this comment is on); a name that resolves to a real entry the
+      // position simply does not admit fails only the second and is `TYPE_MISMATCH`. The
+      // reference's own `SubsumptionDiagnostics`/`VariantSchemaReader` report `TYPE_MISMATCH`
+      // unconditionally here and never make this split -- see this port's own spec-feedback note
+      // on the divergence -- but §7.2's text states the two-step rule plainly, and doing otherwise
+      // would mean a name that resolves nowhere in this schema at all is validated as though the
+      // schema had a considered opinion about it, which it never formed.
+      const resolves = entries.has(annotated);
       ctx.report(
-        'UNKNOWN_TYPE_REF',
-        subtypeNames.length === 0
-          ? `'!${ref}' is not valid at a '${name}' position -- a type annotation must name the ` +
+        resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+        resolves
+          ? subtypeNames.length === 0
+            ? `'!${ref}' is not valid at a '${name}' position -- a type annotation must name the ` +
               `position's own type, which has no subtypes (§7.2)`
-          : `'!${ref}' is not a known subtype of '${name}' (§7.2) -- expected one of (${subtypeList})`,
+            : `'!${ref}' is not a known subtype of '${name}' (§7.2) -- expected one of (${subtypeList})`
+          : `'!${ref}' does not resolve in the governing schema's namespace (§7.2) -- expected ` +
+              (subtypeNames.length === 0 ? `'${name}'` : `one of (${subtypeList})`),
         subtypeNames.length === 0 ? `'${name}'` : `one of (${subtypeList})`,
         `!${ref}`,
       );
       yield* skipDataValue(ctx); // framing included: nothing consumed it, this value being unreadable
-      return absentNode();
+      return abandonedValue();
     },
   };
+}
+
+/** §5.2: "a tag naming the base itself is refused, no value satisfying it" -- shared by both the no-`discriminators` and the member-dispatch branches. */
+function* refuseTaggedBase(
+  ctx: ReadContext,
+  name: string,
+  ref: string,
+  subtypeList: string,
+  noSubtypes: boolean,
+): Task<Value> {
+  ctx.report(
+    'VALIDATION_ERROR',
+    `'!${ref}' names '${name}' itself, but '${name}' is abstract and has no direct instances ` +
+      `(§5.2) -- no value satisfies it; expected ${noSubtypes ? `a subtype of '${name}'` : `one of (${subtypeList})`}`,
+    noSubtypes ? `a subtype of '${name}'` : `one of (${subtypeList})`,
+    `!${ref}`,
+  );
+  yield* skipDataValue(ctx);
+  return abandonedValue();
+}
+
+// ── Member dispatch (§5.2's discriminated family, non-empty `discriminators`) ──────────────────
+
+/** One direct member, precompiled: its name and its own pin for each of the base's `discriminators`, in the base's own declaration order. `undefined` where a member fails to pin one -- excluded from dispatch entirely, since `link/recordExtension.ts` already refuses such a schema at link time and a reader reaching this point is trusting that verdict, not re-deriving it. */
+interface DispatchCandidate {
+  readonly name: string;
+  readonly pins: readonly Value[];
+}
+
+/**
+ * `member`'s own pin for each of `discriminators`, decoded through `fieldReaders` (one per
+ * discriminator, all the BASE's own declared type -- see this file's own top note on why the
+ * whole family is parsed with one set of readers) -- or `undefined` where `member` fails to pin
+ * one, or its literal fails to parse against a type it was already checked to conform to at
+ * schema load (§5.2's own eager-resolution rule). Either way `member` is excluded from dispatch
+ * entirely: `link/recordExtension.ts` already refuses a schema whose members don't all pin, so a
+ * reader reaching this point is trusting that verdict, not re-deriving it, and a decode failure
+ * here can only mean a schema this build never linked.
+ */
+function candidatePins(
+  discriminators: readonly string[],
+  member: Member,
+  fieldReaders: ReadonlyMap<string, TypeReader<Value>>,
+): readonly Value[] | undefined {
+  const pins: Value[] = [];
+  for (const fieldName of discriminators) {
+    const field = member.body.fields.find((candidate) => candidate.name === fieldName);
+    const parser = fieldReaders.get(fieldName);
+    if (field?.role !== 'FIXED' || field.value === undefined || parser === undefined) {
+      return undefined;
+    }
+    try {
+      pins.push(readSchemaLiteral(field.value, parser));
+    } catch {
+      return undefined;
+    }
+  }
+  return pins;
+}
+
+function tuplesEqual(a: readonly Value[], b: readonly Value[]): boolean {
+  return a.length === b.length && a.every((value, i) => valuesEqual(value, at(b, i)));
+}
+
+function at<T>(array: readonly T[], index: number): T {
+  const value = array[index];
+  if (value === undefined) {
+    throw new TsonInternalError('internal error: tuplesEqual compared arrays of unequal length');
+  }
+  return value;
+}
+
+/** One lookahead pass's own verdict: the value's own tag (if any), and every discriminator token the record stated as a plain value, keyed by field name -- a discriminator absent from the map was not found as a plain token (omitted, written `_`, a nested shape, or the positional form of §5.6, which never reaches the record-shape check at all), and the caller reports `FIELD_REQUIRED` for it directly. */
+interface Lookahead {
+  readonly tag: string | undefined;
+  readonly tokens: ReadonlyMap<string, Token>;
+}
+
+const EMPTY_TOKENS: ReadonlyMap<string, Token> = new Map();
+
+/**
+ * Builds the member-dispatch reader for `name`, an ABSTRACT base with a non-empty
+ * `discriminators` (§5.2) -- a record base's own, or a record-bodied template family base's own
+ * (§5.10), whose selector fields live only on its instantiations, never on the base itself. Reads
+ * each discriminator in declaration order and refuses at the first one this dispatch cannot place
+ * (this file's own top note has the rationale and the reference this mirrors); a family base has
+ * no reader of its own for a value this dispatch places to be validated against besides the
+ * selected member's, since `name` is ABSTRACT and no value's effective type is ever the base
+ * itself (§5.2, §7.2).
+ */
+function buildMemberDispatchReader(
+  name: string,
+  discriminators: readonly string[],
+  baseFields: readonly RecordField[] | undefined,
+  entries: ReadonlyMap<string, TypeDefinition>,
+  own: ReadonlySet<string>,
+  resolve: (name: string) => TypeReader<Value>,
+): TypeReader<Value> & ChoiceSelfTagReader {
+  const discriminatorSet = new Set(discriminators);
+  const members = directMembers(name, entries);
+  // §5.2: "a decoder parses them with the one set of types it knows before dispatch" -- every
+  // discriminator's reader is the family's own declared type, resolved once here and reused both
+  // for every member's own pin (below) and for whatever the document states (read time). A record
+  // base declares the field itself (`baseFields`), which also covers a family with no members yet
+  // (§5.2's "empty family" case: there is nothing to scan, but there is still a base to read the
+  // type from). A template family base declares no fields of its own (§5.10 never reads the held
+  // body), so its selector's type is read off any member instead -- identical across every one by
+  // §5.10's own condition on a selector (it mentions no type parameter, so substitution never
+  // touches it).
+  const fieldReaders = new Map(
+    discriminators.map((fieldName) => {
+      const typedField =
+        baseFields?.find((candidate) => candidate.name === fieldName) ??
+        members
+          .map((member) => member.body.fields.find((candidate) => candidate.name === fieldName))
+          .find((candidate) => candidate !== undefined);
+      if (typedField === undefined) {
+        throw new TsonInternalError(
+          `internal error: '${name}' names '${fieldName}' in 'discriminators' but neither it nor ` +
+            'any member of it declares such a field',
+        );
+      }
+      return [fieldName, resolve(typedField.type.name)] as const;
+    }),
+  );
+  const candidates: DispatchCandidate[] = [];
+  for (const member of members) {
+    const pins = candidatePins(discriminators, member, fieldReaders);
+    if (pins !== undefined) candidates.push({ name: member.name, pins });
+  }
+  const memberList = candidates.map((c) => c.name).join(', ');
+  const tuple =
+    discriminators.length > 1
+      ? `discriminators (${discriminators.join(', ')})`
+      : `discriminator '${at(discriminators, 0)}'`;
+  // Every name a tag may agree *or* disagree with here: every direct member and, transitively,
+  // every one of its own subtypes (§6.1.5: "a family dispatches one level by member and every
+  // level below it by tag"). A tag outside this set never reaches the agreement question below --
+  // it is refused on §7.2's own two-step resolution terms first (this file's own top note has the
+  // rationale and the reference this mirrors), the same split `json/schema/dispatchMember.ts`'s
+  // own `notAMember` applies.
+  const familyNames = new Set<string>();
+  for (const member of members) {
+    familyNames.add(member.name);
+    for (const subtype of entries.get(member.name)?.subtypes ?? []) familyNames.add(subtype);
+  }
+
+  function* readMember(ctx: ReadContext): Task<Value> {
+    const lookahead = yield* lookingAhead(ctx, function* (aheadCtx): Task<Lookahead> {
+      yield* skipAnnotations(aheadCtx);
+      let tag: string | undefined;
+      const tagPeek = yield* aheadCtx.peek();
+      if (tagPeek.kind === 'type-ref') {
+        tag = tagPeek.name;
+        yield* aheadCtx.next();
+      }
+      const shapePeek = yield* aheadCtx.peek();
+      if (shapePeek.kind !== 'record-start') {
+        return { tag, tokens: EMPTY_TOKENS };
+      }
+      yield* aheadCtx.next();
+      const tokens = new Map<string, Token>();
+      for (;;) {
+        const peeked = yield* aheadCtx.peek();
+        if (peeked.kind === 'record-end') break;
+        const fieldNameEvent = yield* aheadCtx.next();
+        if (fieldNameEvent.kind !== 'field-name') {
+          throw new TsonInternalError(
+            `expected a field-name event while looking ahead over '${name}', found ` +
+              `'${fieldNameEvent.kind}'`,
+          );
+        }
+        if (discriminatorSet.has(fieldNameEvent.name) && !tokens.has(fieldNameEvent.name)) {
+          const scopedPeek = yield* aheadCtx.peek();
+          // No `!!schema` directive: a selector is never scoped (§5.2's own base-level checks
+          // rule that out structurally), so a `schema-ref` here always belongs to some other
+          // field's framing and this field is read the ordinary way, below. Otherwise a
+          // discriminator's own leading `annotation* type-ref?` (§2.3-§2.4) is skipped before
+          // looking for its plain token -- a self-annotation or a redundant `!type` on the
+          // value (§7.2's "S is T") carries the same lexeme either way, and the pin comparison
+          // below reads that lexeme through the BASE's own declared type regardless of how the
+          // document happened to decorate it.
+          if (scopedPeek.kind !== 'schema-ref') {
+            yield* skipAnnotationsAndTypeRef(aheadCtx);
+            const valuePeek = yield* aheadCtx.peek();
+            if (valuePeek.kind === 'token') {
+              yield* aheadCtx.next();
+              tokens.set(fieldNameEvent.name, {
+                text: valuePeek.text,
+                form: metaFormOfLexer(valuePeek.form),
+              });
+              continue;
+            }
+            // Not a plain token even past its own framing (nested, `_`, `{}`) -- discard the
+            // rest of its core-value; the framing already consumed is not re-skipped.
+            yield* skipCoreValue(aheadCtx);
+            continue;
+          }
+        }
+        yield* skipScopedValue(aheadCtx);
+      }
+      yield* aheadCtx.next(); // record-end
+      return { tag, tokens };
+    });
+
+    if (lookahead.tag !== undefined) {
+      const annotated = terminal(lookahead.tag, (n) => entries.get(n));
+      if (own.has(annotated)) {
+        return yield* refuseTaggedBase(
+          ctx,
+          name,
+          lookahead.tag,
+          memberList,
+          candidates.length === 0,
+        );
+      }
+    }
+
+    // Each discriminator is read and reported on its own, in declaration order, the first
+    // failure ending the read -- this file's own top note has the rationale and the reference
+    // this mirrors (`RecordMemberDispatchReader.read`).
+    const tokens = lookahead.tokens;
+    const documentPins: Value[] = [];
+    for (const fieldName of discriminators) {
+      const token = tokens.get(fieldName);
+      if (token === undefined) {
+        ctx
+          .field(fieldName)
+          .report(
+            'FIELD_REQUIRED',
+            `missing discriminator '${fieldName}' for '${name}' -- a sealed family selects its ` +
+              `member by reading it, so a value that leaves it out (omitted, written '_', or not ` +
+              `a plain token) selects nothing`,
+            `a value for '${fieldName}'`,
+            '(absent)',
+          );
+        yield* skipDataValue(ctx);
+        return abandonedValue();
+      }
+      const parser = fieldReaders.get(fieldName);
+      if (parser === undefined) {
+        throw new TsonInternalError(
+          `internal error: '${name}' names '${fieldName}' in 'discriminators' with no reader ` +
+            'built for it',
+        );
+      }
+      let decoded: Value | undefined;
+      try {
+        decoded = readSchemaLiteral(token, parser);
+      } catch {
+        decoded = undefined;
+      }
+      if (decoded === undefined) {
+        ctx
+          .field(fieldName)
+          .report(
+            'TYPE_MISMATCH',
+            `no member of '${name}' pins '${fieldName}' to '${token.text}' -- this value ` +
+              `matches none of (${candidates.length === 0 ? 'nothing' : memberList})`,
+            candidates.length === 0 ? `a member of '${name}'` : `one of (${memberList})`,
+            token.text,
+          );
+        yield* skipDataValue(ctx);
+        return abandonedValue();
+      }
+      documentPins.push(decoded);
+    }
+    const matched = candidates.find((candidate) => tuplesEqual(documentPins, candidate.pins));
+    if (matched === undefined) {
+      const remedy =
+        candidates.length === 0
+          ? `no schema in this closure declares a member of '${name}' -- the schema that does ` +
+            'is missing from the imports'
+          : `expected one of (${memberList})`;
+      ctx.report(
+        'VALIDATION_ERROR',
+        `no member of '${name}' pins its ${tuple} to the value this record states -- ${remedy}`,
+        candidates.length === 0 ? `a member of '${name}'` : `one of (${memberList})`,
+        `${tuple} as stated`,
+      );
+      yield* skipDataValue(ctx);
+      return abandonedValue();
+    }
+
+    if (lookahead.tag !== undefined) {
+      const annotated = terminal(lookahead.tag, (n) => entries.get(n));
+      const matchedDef = entries.get(matched.name);
+      const agrees =
+        annotated === matched.name || (matchedDef?.subtypes.includes(annotated) ?? false);
+      if (!agrees) {
+        // §7.2's own two-step resolution rule, asked *before* the agreement question below can
+        // even be posed: a tag that resolves nowhere in `entries` has nothing to agree or
+        // disagree with (`UNKNOWN_TYPE_REF`, resolver category), and one that resolves but
+        // names no member of this family at all -- `familyNames` -- is admissible
+        // somewhere, just not here (`TYPE_MISMATCH`, validation category, per this
+        // codebase's own split, `core/diagnostic.ts`'s own doc on both codes). Only a tag that
+        // *does* resolve to a member (or a member's own subtype) of this family, just not the one
+        // the discriminators selected, reaches "contradicts" below -- the reference this mirrors
+        // (`json/schema/dispatchMember.ts`'s own `notAMember`) reports the same two-step split; it
+        // reaches the analogous case not by a third code but by routing to the tag's own member
+        // reader and letting that reader's own FIXED check report the contradiction, a difference
+        // this port keeps (`compiler-subsumption.test.ts`'s own "a tag may agree, never overrule"
+        // case pins the VALIDATION_ERROR reading here).
+        if (!familyNames.has(annotated)) {
+          const resolves = entries.has(annotated);
+          ctx.report(
+            resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+            resolves
+              ? `'!${lookahead.tag}' names '${annotated}', which is not a member of the sealed ` +
+                  `'${name}' (§7.2) -- expected one of (${memberList})`
+              : `'!${lookahead.tag}' does not resolve in the governing schema's namespace ` +
+                  `(§7.2) -- expected one of (${memberList})`,
+            `one of (${memberList})`,
+            `!${lookahead.tag}`,
+          );
+          yield* skipDataValue(ctx);
+          return abandonedValue();
+        }
+        ctx.report(
+          'VALIDATION_ERROR',
+          `'!${lookahead.tag}' contradicts the ${tuple}, which selects '${matched.name}' -- a ` +
+            "tag at a sealed position may agree with the members' own pins and never overrule " +
+            'them (§5.2)',
+          matched.name,
+          `!${lookahead.tag}`,
+        );
+        yield* skipDataValue(ctx);
+        return abandonedValue();
+      }
+    }
+
+    return yield* resolve(matched.name).read(ctx);
+  }
+
+  return {
+    read: readMember,
+    /**
+     * Called only by `compiler/choiceReader.ts`, and only when this sealed family is a
+     * choice variant and the document's own `!type-ref` names the family's own base --
+     * admissible there (it is a declared variant, §5.4) though the base has no direct
+     * instances of its own (§5.2), and no more specific name is admissible at a choice's own
+     * tag (no subtype admission, `compiler/choiceReader.ts`'s own top note). `ctx`
+     * sits unconsumed at that tag; this consumes the annotation run and the type-ref for real --
+     * the caller has already judged it admissible, so it is not re-checked -- then reads exactly
+     * as the untagged route would: the choice mechanism finishing what it started, not a second,
+     * looser admissibility rule (`json/schema/dispatchMember.ts`'s own
+     * `readChoiceSelfTag` is the JSON-stack analogue).
+     */
+    *readChoiceSelfTag(ctx: ReadContext): Task<Value> {
+      yield* skipAnnotationsAndTypeRef(ctx);
+      return yield* readMember(ctx);
+    },
+  };
+}
+
+/**
+ * A capability `buildMemberDispatchReader`'s own reader implements alone
+ * (`hasChoiceSelfTag` below) -- see its own `readChoiceSelfTag` doc for why an
+ * enclosing choice, and only an enclosing choice, ever needs it.
+ */
+export interface ChoiceSelfTagReader {
+  readChoiceSelfTag(ctx: ReadContext): Task<Value>;
+}
+
+/** Whether `reader` implements {@link ChoiceSelfTagReader} -- only `buildMemberDispatchReader`'s own reader ever does. */
+export function hasChoiceSelfTag(
+  reader: TypeReader<Value>,
+): reader is TypeReader<Value> & ChoiceSelfTagReader {
+  return typeof (reader as Partial<ChoiceSelfTagReader>).readChoiceSelfTag === 'function';
 }

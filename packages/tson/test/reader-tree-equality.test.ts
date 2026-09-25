@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { deepEqual, valuesEqual } from '../src/reader/tree/equality.js';
+import { identityKey } from '../src/value/equality.js';
 import { atomNode, recordNode } from '../src/tree/nodes.js';
 
 /** `reader/tree/equality.ts` -- the structural comparison `record.ts`'s FIXED-field check needs (§5.2). */
@@ -23,6 +24,108 @@ describe('deepEqual', () => {
     expect(deepEqual([1, 2], [1, 2])).toBe(true);
     expect(deepEqual([1, 2], [1, 3])).toBe(false);
     expect(deepEqual([1, 2], [1, 2, 3])).toBe(false);
+  });
+});
+
+describe('deepEqual -- value identity, not spelling ([TSON-DATA] §2.6, §5.2; [TSON-SCHEMA] §5.5, §7.5)', () => {
+  it('§5.6: scale is a spelling -- 1, 1.0 and 1.00 are one exact-decimal value', () => {
+    expect(deepEqual({ unscaled: 1n, exponent: 0 }, { unscaled: 10n, exponent: -1 })).toBe(true);
+    expect(deepEqual({ unscaled: 1n, exponent: 0 }, { unscaled: 100n, exponent: -2 })).toBe(true);
+    expect(deepEqual({ unscaled: 10n, exponent: -1 }, { unscaled: 100n, exponent: -2 })).toBe(true);
+  });
+
+  it('§5.6: 199.90 and 199.9 are one decimal value', () => {
+    expect(deepEqual({ unscaled: 19990n, exponent: -2 }, { unscaled: 1999n, exponent: -1 })).toBe(
+      true,
+    );
+  });
+
+  it('§5.6: a different exact value is still unequal once scale is normalised away', () => {
+    expect(deepEqual({ unscaled: 1n, exponent: 0 }, { unscaled: 2n, exponent: 0 })).toBe(false);
+    expect(deepEqual({ unscaled: 1n, exponent: 0 }, { unscaled: 11n, exponent: -1 })).toBe(false);
+  });
+
+  it('§5.4: 10:00:00+01:00 and 09:00:00Z are one datetime -- offset is a spelling, not identity', () => {
+    const a = {
+      date: { year: 2026, month: 1, day: 1 },
+      time: { hour: 10, minute: 0, second: 0, nanosecond: 0, offset: { totalMinutes: 60 } },
+    };
+    const b = {
+      date: { year: 2026, month: 1, day: 1 },
+      time: { hour: 9, minute: 0, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } },
+    };
+    expect(deepEqual(a, b)).toBe(true);
+  });
+
+  // §5.4's "-00:00 (offset unknown) is the same instant as Z" is a parser-level guarantee, not
+  // one this module can test: `UtcOffset.totalMinutes` (`value/types.ts`) already represents both
+  // spellings as `0` by the time a value reaches this module, so there is no distinguishable input
+  // left here to compare -- the parse from `-00:00` to `totalMinutes: 0` is where that rule lives.
+
+  it('§5.4: a datetime a day apart in UTC instant is unequal, whatever the local wall-clock reads', () => {
+    const a = {
+      date: { year: 2026, month: 1, day: 1 },
+      time: { hour: 23, minute: 0, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } },
+    };
+    const b = {
+      date: { year: 2026, month: 1, day: 2 },
+      time: { hour: 23, minute: 0, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } },
+    };
+    expect(deepEqual(a, b)).toBe(false);
+  });
+
+  it('§5.4: a bare time-of-day compares as UTC time-of-day, wrapping across the day boundary -- 23:30:00-02:00 is 01:30:00Z', () => {
+    const a = { hour: 23, minute: 30, second: 0, nanosecond: 0, offset: { totalMinutes: -120 } };
+    const b = { hour: 1, minute: 30, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } };
+    expect(deepEqual(a, b)).toBe(true);
+  });
+
+  it('§5.4: a bare time with no offset difference at all compares equal, and a genuinely different time-of-day does not', () => {
+    const a = { hour: 10, minute: 0, second: 0, nanosecond: 0, offset: { totalMinutes: 60 } };
+    const b = { hour: 9, minute: 0, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } };
+    const c = { hour: 9, minute: 1, second: 0, nanosecond: 0, offset: { totalMinutes: 0 } };
+    expect(deepEqual(a, b)).toBe(true);
+    expect(deepEqual(a, c)).toBe(false);
+  });
+
+  it('text compares under NFC: a precomposed and a decomposed spelling of one grapheme are one value', () => {
+    const precomposed = 'é'; // é
+    const decomposed = 'é'; // e + combining acute accent
+    expect(deepEqual(precomposed, decomposed)).toBe(true);
+    expect(deepEqual(precomposed, 'e')).toBe(false);
+  });
+
+  it('a rational compares by cross-multiplied value, not by numerator/denominator spelling -- meta.tn: "2/4 equals 1/2"', () => {
+    expect(deepEqual({ numerator: 1n, denominator: 2n }, { numerator: 2n, denominator: 4n })).toBe(
+      true,
+    );
+    expect(deepEqual({ numerator: 1n, denominator: 2n }, { numerator: 1n, denominator: 3n })).toBe(
+      false,
+    );
+    expect(
+      deepEqual({ numerator: -1n, denominator: 2n }, { numerator: 1n, denominator: -2n }),
+    ).toBe(true);
+  });
+
+  it('every NaN is the canonical quiet NaN (IEEE 754-2019, [TSON-DATA] §5.6) -- equal to itself, unlike ===', () => {
+    expect(deepEqual(Number.NaN, Number.NaN)).toBe(true);
+    expect(deepEqual(Number.NaN, 1)).toBe(false);
+    expect(deepEqual(1, 2)).toBe(false); // two ordinary, distinct reals still compare unequal
+  });
+
+  it('deepEqual and identityKey judge the same equivalence classes -- the property both encodings’ readers must not disagree on (WP4C repair: previously they disagreed on exactly these three)', () => {
+    const pairs: readonly (readonly [unknown, unknown])[] = [
+      ['é', 'é'],
+      [
+        { numerator: 1n, denominator: 2n },
+        { numerator: 2n, denominator: 4n },
+      ],
+      [Number.NaN, Number.NaN],
+    ];
+    for (const [a, b] of pairs) {
+      expect(deepEqual(a, b)).toBe(true);
+      expect(identityKey(a)).toBe(identityKey(b));
+    }
   });
 });
 

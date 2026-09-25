@@ -89,32 +89,52 @@ import type {
   TypeRef,
 } from '../schema/meta/typedef.js';
 import { isConstructor } from '../schema/meta/typedef.js';
-import type {
-  ElementState,
-  FieldGroup,
-  FieldState,
-  RecordBody,
-  RecordField,
+import {
+  fieldOmission,
+  isGroupMember,
+  type ElementState,
+  type FieldGroup,
+  type FieldOmission,
+  type RecordBody,
+  type RecordExtensionType,
+  type RecordField,
 } from '../schema/meta/bodies.js';
+import type { Token } from '../schema/meta/typedef.js';
+import { tryParseNumber } from '../base/numberGrammar.js';
+import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
+import { toNfc } from '../unicode/nfc.js';
+import type { TsonDecimal } from '../value/types.js';
 import type {
   AnnotationValueReader,
   ApplicationCloser,
+  DeclaredApplicationCloser,
   DefinitionGetter,
   DefinitionMetaReader,
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { createHeldBody, type HeldBody } from './heldBody.js';
 import {
+  DISCRIMINATORS,
+  EXTENSION,
+  FIELDS,
+  NAME,
+  ROLE,
+  TYPE,
+  VALUE,
   defaultAnnotationValueEncoder as defaultHeldAnnotationEncoder,
+  field as wireField,
   heldEmptyRecord,
   heldRecord,
+  nameField,
   refValue,
   scoped,
+  typeRefOf,
 } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
-import { resolveFieldModifiers } from './fieldModifiers.js';
+import { fixRoutedValues, parametricFieldNames } from './templates.js';
+import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
-import { terminal, terminalDefinition } from './referenceChain.js';
+import { terminal, terminalDefinition } from '../link/referenceChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -130,6 +150,7 @@ export interface DefinitionResolverDeps {
   readonly metaDefinitions: DefinitionGetter;
   readonly namespaceDefinitions: DefinitionGetter;
   readonly applicationCloser?: ApplicationCloser;
+  readonly declaredApplicationCloser?: DeclaredApplicationCloser;
   readonly encodeSourceBody?: SourceBodyEncoder;
 }
 
@@ -155,7 +176,7 @@ export interface DefinitionResolver {
 export function createDefinitionResolver(deps: DefinitionResolverDeps): DefinitionResolver {
   return {
     resolve(declaration: Declaration, position?: SourcePosition): TypeDefinition {
-      let resolved = resolveTypeDef(deps, declaration.name, declaration.typeDef);
+      let resolved = resolveTypeDef(deps, declaration.name, declaration.typeDef, declaration.mark);
       if (position !== undefined) {
         resolved = { ...resolved, position };
       }
@@ -165,6 +186,139 @@ export function createDefinitionResolver(deps: DefinitionResolverDeps): Definiti
     annotationsFor(name: string, written: readonly WrittenAnnotation[]): Annotations {
       return annotationsOf(deps, name, written);
     },
+  };
+}
+
+/**
+ * §5.2's definition mark (`abstract`/`final`), lowered into `RecordBody.extension` — applied to a
+ * record body **before** it is ever held as a template's text (`holdIfOpen`, `resolveTypeDef`'s own
+ * structural branches), so a mark written on a template declaration (`outcome => abstract <T> {
+ * code: T }`) is baked into the held text itself and travels to every instantiation exactly as
+ * §5.10's own "stated, by `abstract` inside the held text" describes — the alternative, applying
+ * the mark to an already-`holdIfOpen`'d entry, is too late: the text has already been written.
+ *
+ * Also carries §5.2's `final`-beside-a-selector refusal and, for a template specifically, the
+ * refusal of `final` outright (a template's applications are subtypes by construction and can
+ * never be FINAL, §5.10) — checked here, ahead of holding, for the same reason.
+ *
+ * @throws TsonSchemaValidationError per §5.2's two refusals above.
+ */
+function applyRecordExtensionMark(
+  name: string,
+  body: RecordBody,
+  mark: 'abstract' | 'final' | undefined,
+  parameters: readonly string[],
+): RecordBody {
+  if (parameters.length > 0 && mark === 'final') {
+    throw new TsonSchemaValidationError(
+      `'${name}' writes 'final' on a template -- a template's applications are subtypes by ` +
+        "construction, so a template can never be FINAL; only 'abstract' asserts what a " +
+        'record-bodied template already is (§5.10)',
+    );
+  }
+  // §5.2: "`final` beside one [a selector] is refused, the members it selects being subtypes
+  // that could then never exist" -- FINAL admits no subtype and a selector's whole point is that
+  // the record has members, so the two are mutually exclusive whatever the author intended.
+  if (mark === 'final' && body.discriminators.length > 0) {
+    throw new TsonSchemaValidationError(
+      `'${name}' writes 'final' beside a selector ('=?') -- a selector says this record's members ` +
+        'pin it, and FINAL admits no subtype, so the members a selector implies could never exist ' +
+        '(§5.2)',
+    );
+  }
+  let extension: RecordExtensionType = body.discriminators.length > 0 ? 'ABSTRACT' : 'OPEN';
+  if (mark === 'abstract') extension = 'ABSTRACT';
+  if (mark === 'final') extension = 'FINAL';
+  return extension === body.extension ? body : { ...body, extension };
+}
+
+/**
+ * §5.10's family-base facts on a record-bodied template's own (open) entry — `TemplateBody.extension`
+ * always `'ABSTRACT'` and `.discriminators` whatever selectors survive erasure of the parameters —
+ * stamped onto `held` (already built by {@link holdIfOpen} from `record`, the same body the mark was
+ * already applied to). `undefined` for a template with no facts to stamp: a template that composes
+ * onto a meta-level base kind (`transitiveSupertypes.includes('top')`, a constructor refinement in a
+ * meta-schema) is the one §5.10 exemption -- "a refinement or composition template [that reaches a
+ * base kind] derives none" -- since no value is ever read against an ordinary type position typed by
+ * a constructor the way one is typed by a family base.
+ *
+ * `isFreshRecordTemplate` gates the second selector source §5.10 states: "a field written `=?`, or,
+ * in a *fresh* record template, a field pinned to a value parameter" -- composition/refinement
+ * templates contribute only `=?`-marked selectors (already in `record.discriminators`).
+ */
+function deriveTemplateFamilyFacts(
+  name: string,
+  record: RecordBody,
+  parameters: readonly string[],
+  transitiveSupertypes: readonly string[],
+  isFreshRecordTemplate: boolean,
+):
+  | { readonly extension: RecordExtensionType; readonly discriminators: readonly string[] }
+  | undefined {
+  if (parameters.length === 0 || transitiveSupertypes.includes('top')) {
+    return undefined;
+  }
+  const candidates = new Set(record.discriminators);
+  if (isFreshRecordTemplate) {
+    for (const field of record.fields) {
+      if (
+        field.role === 'FIXED' &&
+        field.value?.form === 'UNQUOTED' &&
+        parameters.includes(field.value.text)
+      ) {
+        candidates.add(field.name);
+      }
+    }
+  }
+  const discriminators: string[] = [];
+  for (const field of record.fields) {
+    if (!candidates.has(field.name)) continue;
+    if (typeRefMentionsParameter(field.type, parameters)) {
+      throw new TsonSchemaValidationError(
+        `'${name}': the selector '${field.name}' is typed '${field.type.name}', which mentions a ` +
+          "type parameter -- a selector's declared type MUST contain no type parameter, since a " +
+          'decoder parses the selectors before it knows the member and their pins are exactly what ' +
+          'the parameters supply (§5.10)',
+      );
+    }
+    discriminators.push(field.name);
+  }
+  return { extension: 'ABSTRACT', discriminators };
+}
+
+/** Whether `ref` mentions any of `parameters`, at any depth -- {@link deriveTemplateFamilyFacts}'s own selector-erasure condition. */
+function typeRefMentionsParameter(ref: TypeRef, parameters: readonly string[]): boolean {
+  if (parameters.includes(ref.name)) return true;
+  return ref.arguments.some(
+    (arg) => arg.kind === 'ref' && typeRefMentionsParameter(arg.ref, parameters),
+  );
+}
+
+/**
+ * {@link holdIfOpen} plus, for a record-bodied template, {@link deriveTemplateFamilyFacts}'s own
+ * stamp -- the two outer, always-derived facts a record-bodied template's own entry carries beside
+ * whatever mark {@link applyRecordExtensionMark} already baked into its held text.
+ */
+function holdRecordDraft(
+  name: string,
+  draft: Draft,
+  record: RecordBody,
+  isFreshRecordTemplate: boolean,
+): TypeDefinition {
+  const held = holdIfOpen(name, draft);
+  const facts = deriveTemplateFamilyFacts(
+    name,
+    record,
+    draft.parameters,
+    held.supertypes,
+    isFreshRecordTemplate,
+  );
+  if (facts === undefined || !isHeldBody(held.body)) {
+    return held;
+  }
+  return {
+    ...held,
+    body: { ...held.body, extension: facts.extension, discriminators: facts.discriminators },
   };
 }
 
@@ -236,6 +390,26 @@ function isRecordBody(body: Top): body is RecordBody {
 }
 
 /**
+ * §8.1: "`template` is resolver vocabulary: nothing is ever typed by it, and a source declaration
+ * applying it directly is a resolver error" -- checked at the end of the head's own reference chain
+ * (`resolveConstructorTarget` already walked it), since `template` composes with `top` directly and
+ * would otherwise pass every other structural check `resolveInstance`/`resolveInstanceTemplate`
+ * make of an ordinary constructor. The open spelling (`<U> !template { ... }`) is refused on the
+ * same terms: a parameter list on the declaration does not make a hand-written held body a derived
+ * one (§5.10's own `<...>` is the authored spelling of an open entry, not a licence to spell one by
+ * hand).
+ */
+function refuseTemplateAppliedDirectly(name: string, terminalHead: string): void {
+  if (terminalHead === 'template') {
+    throw new TsonSchemaValidationError(
+      `'${name}': '!template' is resolver vocabulary -- an open entry's own body, derived from a ` +
+        "declaration's parameter list -- and a source declaration applying it directly is a " +
+        "resolver error (§8.1); '<...>' is the authored spelling of an open entry (§5.10)",
+    );
+  }
+}
+
+/**
  * `TypeDefinition` plus the type parameters a declaration carries before {@link holdIfOpen} folds
  * them into a held body's own `TemplateBody.parameters` (§5.10) — `schema/meta`'s own
  * `TypeDefinition` carries no such field (parameters live on the body that
@@ -277,7 +451,24 @@ function resolveTypeDef(
   deps: DefinitionResolverDeps,
   name: string,
   typeDef: TypeDef,
+  mark: 'abstract' | 'final' | undefined,
 ): TypeDefinition {
+  // §5.2's mark is refused outright on every shape but a record and a *record-bodied* template --
+  // the latter reached below either as `structuralTypeDef`'s own `recordDef` (a non-parameterised
+  // fresh record, or a composition/refinement template, which the desugarer cannot flatten to an
+  // `instance` in advance) or, for a record TEMPLATE specifically, as `instance` with
+  // `typeParams.length > 0` (`desugar.ts`'s own `structuralTypeDefPass` rewrites a parameterised
+  // `recordDef` to `!record { fields: [...] }` ahead of resolution, §5.2's canonical form). Both
+  // branches below carry their own, narrower validation; this refuses every other shape.
+  const isRecordShaped =
+    typeDef.kind === 'structuralTypeDef' ||
+    (typeDef.kind === 'instance' && typeDef.typeParams.length > 0);
+  if (!isRecordShaped && mark !== undefined) {
+    throw new TsonSchemaValidationError(
+      `'${name}' writes the definition mark '${mark}', but its body is not a record -- only a ` +
+        'record states how it may be realised (§5.2)',
+    );
+  }
   if (typeDef.kind === 'structuralTypeDef') {
     // No marker to read here (§4.2): a fresh record, composition or refinement is a constructor
     // only by actually composing or refining IS-A `top` below -- `resolveComposition`/
@@ -287,19 +478,27 @@ function resolveTypeDef(
     const parameters = typeDef.typeParams;
     const body = typeDef.body;
     if (body.kind === 'recordDef') {
-      const recordBody = resolveRecordBody(deps, body.entries, parameters);
-      return holdIfOpen(name, {
+      const recordBody = applyRecordExtensionMark(
+        name,
+        resolveRecordBody(deps, body.entries, parameters),
+        mark,
         parameters,
-        supertypes: [],
-        subtypes: [],
-        body: recordBody,
-        annotations: [],
-      });
+      );
+      return holdRecordDraft(
+        name,
+        { parameters, supertypes: [], subtypes: [], body: recordBody, annotations: [] },
+        recordBody,
+        true,
+      );
     }
     if (body.kind === 'constructionDef') {
-      return holdIfOpen(name, resolveComposition(deps, name, body, parameters));
+      const draft = resolveComposition(deps, name, body, parameters);
+      const recordBody = applyRecordExtensionMark(name, asRecordBody(draft), mark, parameters);
+      return holdRecordDraft(name, { ...draft, body: recordBody }, recordBody, false);
     }
-    return holdIfOpen(name, resolveRefinement(deps, name, body, parameters));
+    const draft = resolveRefinement(deps, name, body, parameters);
+    const recordBody = applyRecordExtensionMark(name, asRecordBody(draft), mark, parameters);
+    return holdRecordDraft(name, { ...draft, body: recordBody }, recordBody, false);
   }
   if (typeDef.kind === 'referenceTypeDef') {
     const parameters = typeDef.typeParams;
@@ -324,9 +523,19 @@ function resolveTypeDef(
   if (typeDef.kind === 'instance') {
     return typeDef.typeParams.length === 0
       ? resolveInstance(deps, name, typeDef)
-      : resolveInstanceTemplate(deps, name, typeDef);
+      : resolveInstanceTemplate(deps, name, typeDef, mark);
   }
   return resolveAtomRefinement(deps, name, typeDef);
+}
+
+/** A composition/refinement `Draft`'s own body, which is always a `RecordBody` by construction -- {@link resolveComposition}/{@link resolveRefinement} never build any other shape. */
+function asRecordBody(draft: Draft): RecordBody {
+  if (!isRecordBody(draft.body)) {
+    throw new TsonInternalError(
+      "internal error: a composition/refinement draft's body is not a RecordBody",
+    );
+  }
+  return draft.body;
 }
 
 /**
@@ -380,6 +589,7 @@ function resolveInstance(
 ): TypeDefinition {
   const target = requireTypeRef(instance.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
+  refuseTemplateAppliedDirectly(name, head.name);
   if (!isConstructor(head.definition)) {
     throw new TsonSchemaValidationError(
       `'${name}': '!${target}' does not resolve to a constructor (§3.3.1) -- did you mean atom refinement ` +
@@ -414,9 +624,11 @@ function resolveInstanceTemplate(
   deps: DefinitionResolverDeps,
   name: string,
   template: Instance,
+  mark: 'abstract' | 'final' | undefined,
 ): TypeDefinition {
   const target = requireTypeRef(template.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
+  refuseTemplateAppliedDirectly(name, head.name);
   // `reference => top & { target: type_ref }` composes with `top` directly (§4.1), so it is
   // `isConstructor`-eligible on the same terms as every other constructor and needs no carve-out
   // here: §5.5 says the kernel's `reference` "is applicable like any other".
@@ -432,16 +644,169 @@ function resolveInstanceTemplate(
         'cannot be declared otherwise',
     );
   }
+  // §5.10: only a record-bodied template (`head.name === 'record'`, its held body applying the
+  // `record` constructor itself, not merely something record-*shaped* like `record_field`) may be
+  // a family base, and only `abstract` asserts it there (§5.2's other mark, `final`, is refused on
+  // any template: its applications are subtypes by construction).
+  const isRecordBodied = head.name === RECORD_CONSTRUCTOR;
+  if (mark !== undefined && (mark === 'final' || !isRecordBodied)) {
+    throw new TsonSchemaValidationError(
+      `'${name}' writes the definition mark '${mark}' on a template -- only a record-bodied ` +
+        "template may be a family base, and only 'abstract' asserts it there, since its " +
+        'applications are subtypes by construction and never FINAL (§5.10)',
+    );
+  }
   if (template.value.coreValue.kind === 'record') {
     checkTemplateBindings(name, target, head.definition.body, template.value.coreValue);
   }
-  return {
+  if (!isRecordBodied) {
+    return {
+      source: { name: target, arguments: [], annotations: [] },
+      supertypes: [],
+      subtypes: [],
+      body: createHeldBody(template.value, template.typeParams),
+      annotations: [],
+    };
+  }
+  // §5.2's mark, baked into the held text itself (`applyRecordExtensionMark`'s own top note says
+  // why: a mark on a template travels with the held text, per §5.10's "stated, by `abstract`
+  // inside the held text"), plus §5.10's own always-derived outer facts on this entry's `template`
+  // wrapper (`deriveTemplateFamilyFacts`) -- computed from the same wire fields, parsed once.
+  const wireFields =
+    template.value.coreValue.kind === 'record'
+      ? parseHeldRecordFields(template.value.coreValue)
+      : { fields: [], discriminators: [] };
+  const hasDiscriminators = wireFields.discriminators.length > 0;
+  const markedValue = markHeldRecordValue(name, template.value, mark, hasDiscriminators);
+  const held = createHeldBody(markedValue, template.typeParams);
+  const draft: TypeDefinition = {
     source: { name: target, arguments: [], annotations: [] },
     supertypes: [],
     subtypes: [],
-    body: createHeldBody(template.value, template.typeParams),
+    body: held,
     annotations: [],
   };
+  const asRecordFields: RecordField[] = wireFields.fields.map((f) => ({
+    name: f.name,
+    type: f.type,
+    optional: false,
+    voidable: false,
+    role: f.role === 'FIXED' || f.role === 'DEFAULT' ? f.role : 'FREE',
+    ...(f.value === undefined ? {} : { value: f.value }),
+    annotations: [],
+  }));
+  const facts = deriveTemplateFamilyFacts(
+    name,
+    {
+      kind: 'record',
+      supertypes: [],
+      fields: asRecordFields,
+      groups: [],
+      extension: 'OPEN',
+      discriminators: wireFields.discriminators,
+    },
+    template.typeParams,
+    draft.supertypes,
+    true,
+  );
+  return facts === undefined
+    ? draft
+    : {
+        ...draft,
+        body: { ...held, extension: facts.extension, discriminators: facts.discriminators },
+      };
+}
+
+/** The kernel's own constructor name for a record body (§4.2, §5.2) -- the terminal a record-bodied template's head resolves to. */
+const RECORD_CONSTRUCTOR = 'record';
+
+/**
+ * `coreValue` with §5.2's mark baked in as the wire `extension` field `heldRecord` would have
+ * written had the mark been known before the body was held -- the held-text counterpart of
+ * {@link applyRecordExtensionMark}, over an already-desugared `!record { fields: [...] }` wire
+ * value rather than a resolved `RecordBody` (§5.2's canonical form a *template*'s record body
+ * reaches through `desugar.ts`'s own `structuralTypeDefPass`, ahead of this module ever seeing it).
+ *
+ * @throws TsonSchemaValidationError per §5.2's `final`-beside-a-selector refusal.
+ */
+function markHeldRecordValue(
+  name: string,
+  value: DataValue,
+  mark: 'abstract' | 'final' | undefined,
+  hasDiscriminators: boolean,
+): DataValue {
+  if (mark === 'final' && hasDiscriminators) {
+    throw new TsonSchemaValidationError(
+      `'${name}' writes 'final' beside a selector ('=?') -- a selector says this record's members ` +
+        'pin it, and FINAL admits no subtype, so the members a selector implies could never exist ' +
+        '(§5.2)',
+    );
+  }
+  let extension: RecordExtensionType = hasDiscriminators ? 'ABSTRACT' : 'OPEN';
+  if (mark === 'abstract') extension = 'ABSTRACT';
+  if (mark === 'final') extension = 'FINAL';
+  if (extension === 'OPEN' || value.coreValue.kind !== 'record') {
+    return value;
+  }
+  return {
+    ...value,
+    coreValue: {
+      kind: 'record',
+      fields: [...value.coreValue.fields, nameField(EXTENSION, extension)],
+    },
+  };
+}
+
+/** One held record field, parsed enough for {@link deriveTemplateFamilyFacts}'s own selector check. */
+interface HeldFieldSummary {
+  readonly name: string;
+  readonly type: TypeRef;
+  readonly role: string;
+  readonly value?: Token;
+}
+
+/** {@link HeldFieldSummary}s for every field a held `!record { fields: [...] }` wire value carries, plus its own `discriminators` (§5.2's `=?` marks, already lowered by `resolveEntry`/`desugar.ts` before this body was held). */
+function parseHeldRecordFields(record: RecordValue): {
+  readonly fields: readonly HeldFieldSummary[];
+  readonly discriminators: readonly string[];
+} {
+  const fieldsValue = wireField(record, FIELDS);
+  const fields: HeldFieldSummary[] = [];
+  if (fieldsValue?.kind === 'array') {
+    for (const element of fieldsValue.elements) {
+      const fieldRecord = element.value.coreValue;
+      if (fieldRecord.kind !== 'record') continue;
+      const nameValue = wireField(fieldRecord, NAME);
+      const typeValue = wireField(fieldRecord, TYPE);
+      if (nameValue?.kind !== 'token' || typeValue === undefined) continue;
+      const type: TypeRef =
+        typeValue.kind === 'token'
+          ? { name: typeValue.text, arguments: [], annotations: [] }
+          : typeValue.kind === 'record'
+            ? typeRefOf(typeValue)
+            : { name: '', arguments: [], annotations: [] };
+      const roleValue = wireField(fieldRecord, ROLE);
+      const role = roleValue?.kind === 'token' ? roleValue.text : 'FREE';
+      const valueValue = wireField(fieldRecord, VALUE);
+      fields.push({
+        name: nameValue.text,
+        type,
+        role,
+        ...(valueValue?.kind === 'token'
+          ? { value: { text: valueValue.text, form: metaFormOfLexer(valueValue.form) } }
+          : {}),
+      });
+    }
+  }
+  const discriminatorsValue = wireField(record, DISCRIMINATORS);
+  const discriminators: string[] = [];
+  if (discriminatorsValue?.kind === 'array') {
+    for (const element of discriminatorsValue.elements) {
+      const token = element.value.coreValue;
+      if (token.kind === 'token') discriminators.push(token.text);
+    }
+  }
+  return { fields, discriminators };
 }
 
 /** §5.10's two declaration-time questions about a held binding record. */
@@ -462,7 +827,8 @@ function checkTemplateBindings(
     bound.add(binding.name);
   }
   for (const field of vocabulary.fields) {
-    if (field.state === 'REQUIRED' && field.value === undefined && !bound.has(field.name)) {
+    const memberOfGroup = isGroupMember(vocabulary.groups, field.name);
+    if (fieldOmission(field, memberOfGroup) === 'MISSING' && !bound.has(field.name)) {
       throw new TsonSchemaValidationError(
         `'${name}': '${target}' requires a '${field.name}', and nothing binds it (§7.2), so no application of ` +
           'this template could build one',
@@ -764,7 +1130,19 @@ function resolveTemplateApplication(
       throw e;
     }
   }
-  return referenceDefinition({ name: generic.name, arguments: args, annotations: [] }, parameters);
+  const application: TypeRef = { name: generic.name, arguments: args, annotations: [] };
+  // §5.10, §8.2: a declaration whose own body is a *fully-bound* application (this declaration
+  // itself takes no parameters) IS that application's entry -- no minted twin, no `!reference`
+  // hop. `declaredApplicationCloser` returns `undefined` for every case it does not own (the head
+  // is not a template, the arity disagrees, or the template is reference-headed and composes away
+  // instead of minting anything), and the ordinary, lazy alias path below still covers those.
+  if (parameters.length === 0 && deps.declaredApplicationCloser !== undefined) {
+    const closed = deps.declaredApplicationCloser(name, application);
+    if (closed !== undefined) {
+      return closed;
+    }
+  }
+  return referenceDefinition(application, parameters);
 }
 
 /** One argument of an application as the `type_argument` it denotes — a literal keeps its own token form, a reference resolves through {@link resolveTypeRef} (so an argument may itself be an application). */
@@ -823,29 +1201,55 @@ function resolveComposition(
   construction: ConstructionDef,
   parameters: readonly string[],
 ): Draft {
-  const directSupertypes: string[] = [];
+  const directSupertypes: TypeRef[] = [];
   const transitiveSupertypes: string[] = [];
   const seenTransitive = new Set<string>();
   const fields: RecordField[] = [];
   const groups: FieldGroup[] = [];
+  const discriminators: string[] = [];
   const seenFieldNames = new Set<string>();
   const inheritedFieldIndex = new Map<string, number>();
 
   for (const rawSupertypeRef of construction.supertypes) {
-    if (rawSupertypeRef.kind === 'genericRef' && namesOwnParameter(rawSupertypeRef, parameters)) {
+    if (rawSupertypeRef.kind === 'genericRef') {
+      const head = rawSupertypeRef.name;
       const operand = openOperand(deps, name, rawSupertypeRef, parameters, 'supertype');
+      if (operand.body.extension === 'FINAL' && construction.removal === undefined) {
+        throw new TsonSchemaValidationError(
+          `'${name}': supertype '${head}<...>' is FINAL -- it admits no subtype, and composition ` +
+            "('&') mints one, in the declaring schema and in any importing schema (§5.2)",
+        );
+      }
+      if (namesOwnParameter(rawSupertypeRef, parameters)) {
+        // §5.8, §5.9: `record.supertypes` holds `type_ref`, not a bare name, precisely so a parent
+        // still open inside this held template body (`ok => <T> result<T> & { ... }`) is carried
+        // through with its own arguments -- on the reference channel it is substituted and closed
+        // with the rest of the held body once this template applies (§5.10, `templates.ts`'s own
+        // `closeHeld`/`closeApplications`), reaching an IS-A edge to the instantiation its own
+        // arguments name rather than to a head name that would hold of every instantiation at once.
+        // §5.9 rule 10: a removal drops the open application from the lineage it keeps for names,
+        // rather than carrying it forward to close into a live edge one pass later.
+        if (construction.removal === undefined) {
+          directSupertypes.push({
+            name: head,
+            arguments: rawSupertypeRef.args.map((a) => typeArgument(deps, a)),
+            annotations: [],
+          });
+        }
+      } else {
+        // §5.8's last sentence: a fully-bound application standing at a composition operand is
+        // "subsumed where it stands" -- its arguments are the member's own contribution, exactly
+        // as if the author had written the template's name and the substituted fields by hand --
+        // one IS-A edge to the template itself, and it mints no instantiation entry.
+        directSupertypes.push({ name: head, arguments: [], annotations: [] });
+        addIfAbsent(transitiveSupertypes, seenTransitive, head);
+      }
       for (const ancestor of operand.ancestors)
         addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
       absorb(name, operand.body, fields, groups, seenFieldNames, inheritedFieldIndex);
       continue;
     }
-    let supertypeRef: AstTypeRef = rawSupertypeRef;
-    if (supertypeRef.kind === 'genericRef') {
-      supertypeRef = {
-        kind: 'simpleRef',
-        name: closedApplication(deps, name, supertypeRef, 'supertype'),
-      };
-    }
+    const supertypeRef: AstTypeRef = rawSupertypeRef;
     if (supertypeRef.kind !== 'simpleRef') {
       throw new TsonSchemaValidationError(
         `'${name}': a ${supertypeRef.kind === 'choiceRef' ? 'choice' : 'bracketed array/tuple'} cannot be a ` +
@@ -871,7 +1275,19 @@ function resolveComposition(
           'rule read across). Compose with the head it derives from',
       );
     }
-    directSupertypes.push(supertypeName);
+    // §5.2, §5.9 rule 9: composition mints an IS-A edge, which FINAL refuses outright -- in the
+    // declaring schema and in any schema that imports it, since this check runs identically
+    // wherever `&` is resolved. Subtraction is exempt (`construction.removal !== undefined`):
+    // §5.9 empties `supertypes` for the WHOLE result when a removal clause is present, so no
+    // edge to ANY supertype survives, FINAL's one constraint, and there is nothing left to refuse.
+    if (supertypeVocabulary.body.extension === 'FINAL' && construction.removal === undefined) {
+      throw new TsonSchemaValidationError(
+        `'${name}': supertype '${supertypeName}' is FINAL -- it admits no subtype, and composition ` +
+          "('&') mints one, in the declaring schema and in any importing schema (§5.2). Subtraction " +
+          `stays admissible ('${supertypeName} - { ... }'), since it mints no IS-A edge (§5.9)`,
+      );
+    }
+    directSupertypes.push({ name: supertypeName, arguments: [], annotations: [] });
     addIfAbsent(transitiveSupertypes, seenTransitive, supertypeName);
     for (const ancestor of supertypeVocabulary.supertypes)
       addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
@@ -886,6 +1302,7 @@ function resolveComposition(
         entry,
         fields,
         groups,
+        discriminators,
         seenFieldNames,
         inheritedFieldIndex,
         parameters,
@@ -895,14 +1312,20 @@ function resolveComposition(
   if (construction.removal !== undefined) {
     applyRemovals(name, construction.removal, bodyNames(construction), fields, groups);
   }
-  checkGroupPresence(name, fields, groups);
   checkSupertypeChainLimit(name, transitiveSupertypes);
 
-  // §4.1: at most one base kind may be reachable through the supertype chain -- kept as a
-  // validation-only call (its own diagnostic is the point) now that kind is derived rather than
-  // stored; see `determineKind`'s own doc.
+  // §4.1: at most one base kind may be reachable through the supertype chain -- kind is derived
+  // rather than stored, so this call is validation-only (its own diagnostic is the point); see
+  // `determineKind`'s own doc.
   determineKind(name, transitiveSupertypes);
-  const body: RecordBody = { kind: 'record', supertypes: directSupertypes, fields, groups };
+  const body: RecordBody = {
+    kind: 'record',
+    supertypes: directSupertypes,
+    fields,
+    groups,
+    extension: 'OPEN',
+    discriminators,
+  };
   // §5.9: subtraction breaks IS-A. The contract index (supertypes) is emptied while the body
   // keeps `directSupertypes` as authorial lineage (record.supertypes) -- for EVERY supertype,
   // including one that contributed nothing to the removal (§5.9's own "the clause is head-level").
@@ -980,12 +1403,16 @@ function applyRemovals(
   }
 }
 
-/** §5.11: the last member of a dissolved group becomes a plain field carrying the group's own state. */
+/**
+ * §5.11: the last member of a dissolved group becomes a plain field carrying the group's own
+ * state -- REQUIRED an unmarked name, OPTIONAL the name's own `?`; the field's own voidability is
+ * unchanged.
+ */
 function dissolveInto(fields: RecordField[], member: string, groupState: ElementState): void {
-  const state: FieldState = groupState === 'OPTIONAL' ? 'OPTIONAL' : 'REQUIRED';
+  const optional = groupState === 'OPTIONAL';
   const index = fields.findIndex((f) => f.name === member);
   if (index >= 0) {
-    fields[index] = { ...at(fields, index, 'dissolveInto'), state };
+    fields[index] = { ...at(fields, index, 'dissolveInto'), optional };
   }
 }
 
@@ -1096,6 +1523,16 @@ function resolveRefinement(
         `or, for an atom instance, use atom refinement ('!${sourceName} ^ { ... }', §5.5)`,
     );
   }
+  // §5.2, §5.7: refinement always mints an IS-A edge (a refinement head admits no removal
+  // clause, §5.9), so FINAL refuses it unconditionally -- in the declaring schema and in any
+  // importing one, on the same terms as composition just above.
+  if (sourceVocabulary.body.extension === 'FINAL') {
+    throw new TsonSchemaValidationError(
+      `'${name}': refinement source '${sourceName}' is FINAL -- it admits no subtype, and ` +
+        "refinement ('^') mints one as surely as composition does, in the declaring schema and in " +
+        'any importing schema (§5.2, §5.7)',
+    );
+  }
   const transitiveSupertypes: string[] = [];
   const seenTransitive = new Set<string>();
   addIfAbsent(transitiveSupertypes, seenTransitive, sourceName);
@@ -1168,14 +1605,27 @@ function refineOnto(
       entry,
       at(fields, index, 'refineOnto'),
       parameters,
+      isGroupMember(groups, entry.name),
     );
   }
-  checkGroupPresence(name, fields, groups);
   checkSupertypeChainLimit(name, transitiveSupertypes);
 
   // Validation only -- see `resolveComposition`'s own identical call for why.
   determineKind(name, transitiveSupertypes);
-  const body: RecordBody = { kind: 'record', supertypes: [], fields, groups };
+  // §5.2: "the member is never inherited" -- `dog` is OPEN whether `pet` is ABSTRACT or OPEN, and
+  // the same holds refining as composing (the rule is stated over the whole record, not the `&`
+  // spelling alone). A refinement never introduces a fresh `=?` (`resolveTighteningField` refuses
+  // one outright), so `discriminators` is always empty here too; `applyDefinitionMark` (the
+  // caller's caller) applies this declaration's own mark, if any, on top of these OPEN defaults,
+  // exactly as it does for a composed body.
+  const body: RecordBody = {
+    kind: 'record',
+    supertypes: [],
+    fields,
+    groups,
+    extension: 'OPEN',
+    discriminators: [],
+  };
   return {
     ...(source === undefined ? {} : { source }),
     parameters,
@@ -1243,10 +1693,25 @@ interface OpenOperand {
 }
 
 /**
- * What an operand still open (applied to this declaration's own parameter) contributes to the
- * declaration absorbing it: a field set, and the operand's own ancestors. Not the operand
- * itself — a template is no type (§5.10), so nothing can be IS-A one; its ancestors are types,
- * and its fields arrive with them via {@link substitute}.
+ * What an operand — an application at a composition or refinement source, whether it still names
+ * this declaration's own parameter or is fully bound and "subsumed where it stands" (§5.8) —
+ * contributes to the declaration absorbing it: a field set, and the operand's own ancestors. Not
+ * the operand itself — a template is no type (§5.10), so nothing can be IS-A one; its ancestors
+ * are types, and its fields arrive with them via {@link substitute}.
+ *
+ * `held.parameters` (the *named template's own* parameters, `pet`'s `N`/`T`, never `name`'s) are
+ * bound the moment this runs, whether or not `name` itself stays open — but §5.7's "Open
+ * modifiers" ties fixation (the name mark, `optional: true`) to the *value* becoming concrete,
+ * not to this one substitution: with an outer parameter riding through in one of
+ * `application.args` (`<S> pet<S, text>`), the routed field's value substitutes to `S`, still a
+ * parameter, so it stays required and FREE here, exactly as the spec's own held form does, and
+ * {@link fixRoutedValues} is skipped. `namesOwnParameter` is what tells the two cases apart, and
+ * a later closing sees the deferred field for what it is: `parametricFieldNames` reads the still
+ * -unfixed `S` token straight off `name`'s own held wire once `name<...>` itself closes, so the
+ * fixation the open case defers here is the one the outer closing applies, never a lost one. Only
+ * a fully-bound operand fixates here, with the same {@link fixRoutedValues} a named type position
+ * closes an instantiation with (`templates.ts`'s own `closeHeldInstantiation`), never a second
+ * copy.
  */
 function openOperand(
   deps: DefinitionResolverDeps,
@@ -1292,7 +1757,22 @@ function openOperand(
         "vocabulary, so there is nothing to compose with (§5.8, and §5.7's vocabulary-body rule read across)",
     );
   }
-  return { ancestors: template.supertypes, body: absorbed };
+  if (namesOwnParameter(application, typeParams)) {
+    // `name` itself stays open through this operand (an outer parameter rides one of
+    // `application.args`): a routed field's substituted value is still a parameter, not a
+    // concrete one, so §5.7's fixation does not fire yet. Deferred to `name<...>`'s own closing,
+    // which rediscovers it via `parametricFieldNames` over `name`'s own held wire.
+    return { ancestors: template.supertypes, body: absorbed };
+  }
+  const parametricNames = parametricFieldNames(held.application.coreValue, held.parameters);
+  const fixed = fixRoutedValues(absorbed, parametricNames);
+  if (!isRecordBody(fixed)) {
+    throw new TsonInternalError(
+      `'${name}': ${position} '${head}<...>' stopped being a record body after fixation -- ` +
+        'fixRoutedValues only ever maps a record body’s own field list',
+    );
+  }
+  return { ancestors: template.supertypes, body: fixed };
 }
 
 /** A fully-bound application at one of the two field-absorbing positions, closed to the entry it denotes. */
@@ -1325,6 +1805,7 @@ function resolveRecordBody(
 ): RecordBody {
   const fields: RecordField[] = [];
   const groups: FieldGroup[] = [];
+  const discriminators: string[] = [];
   const seenFieldNames = new Set<string>();
   const inheritedFieldIndex = new Map<string, number>();
   for (const entry of entries) {
@@ -1334,12 +1815,13 @@ function resolveRecordBody(
       entry,
       fields,
       groups,
+      discriminators,
       seenFieldNames,
       inheritedFieldIndex,
       parameters,
     );
   }
-  return { kind: 'record', supertypes: [], fields, groups };
+  return { kind: 'record', supertypes: [], fields, groups, extension: 'OPEN', discriminators };
 }
 
 /**
@@ -1354,6 +1836,7 @@ function resolveEntry(
   entry: RecordEntry,
   fields: RecordField[],
   groups: FieldGroup[],
+  discriminators: string[],
   seenFieldNames: Set<string>,
   inheritedFieldIndex: Map<string, number>,
   parameters: readonly string[],
@@ -1367,12 +1850,19 @@ function resolveEntry(
         entry,
         at(fields, index, 'resolveEntry'),
         parameters,
+        isGroupMember(groups, entry.name),
       );
     } else {
       requireFieldNameNotSeen(declarationName, entry.name, seenFieldNames, 'BODY_FIELD');
-      const field = resolveField(deps, entry, parameters, undefined);
+      const { field, selector } = resolveField(deps, entry, parameters, undefined);
       seenFieldNames.add(field.name);
       fields.push(field);
+      // §5.2: `=?` lowers into `record.discriminators`, the base's own statement of which fields
+      // its members are selected by, in declaration order -- the marked field itself stays FREE,
+      // unmarked and unpinned (above). Only a *fresh* field can introduce a selector; a tightening
+      // entry narrows an inherited field and never mints a new discriminator --
+      // {@link resolveTighteningField} refuses `=?` outright, rather than silently discarding it.
+      if (selector) discriminators.push(field.name);
     }
     return;
   }
@@ -1389,39 +1879,159 @@ function resolveEntry(
   groups.push({ members, state: entry.optional ? 'OPTIONAL' : 'REQUIRED' });
 }
 
-/** §5.7's refinement/tightening rules, applied to one composition-body field that names an already-inherited field. */
+/**
+ * §5.7's refinement/tightening rules, applied to one composition- or refinement-body field that
+ * names an already-inherited field. `isGroupMember` says whether that inherited field is a
+ * field-group member (`groups` already lists it) -- §5.11's own two rules over a restated member,
+ * both refused here rather than left to {@link checkFieldRefinementOrder}'s general three orders:
+ * **it takes no name mark**, since its omission answer is the group's and a mark would state a
+ * second one to disagree with; and **`~ v` stays refused**, a default being a value only omission
+ * reaches and omission being the group's. A member's `=` pin is admitted (checked when written,
+ * never injected, §5.11) and its type slot may still narrow or tighten voidable true → false, "as
+ * at any field" -- both flow through {@link resolveField} exactly as a non-member's do. `=?` is
+ * refused for every tightening entry alike, member or not: a discriminator is declared once, at
+ * the base (§5.2), and a restatement narrows an inherited field rather than minting a new one.
+ */
 function resolveTighteningField(
   deps: DefinitionResolverDeps,
   declarationName: string | undefined,
   fieldDef: FieldDef,
   inherited: RecordField,
   parameters: readonly string[],
+  isGroupMember: boolean,
 ): RecordField {
-  const tightened = resolveField(deps, fieldDef, parameters, inherited);
-  if (!isValidTighteningTransition(inherited.state, tightened.state)) {
+  const prefix = declarationName === undefined ? '' : `'${declarationName}': `;
+  if (fieldDef.modifier?.kind === 'selector') {
     throw new TsonSchemaValidationError(
-      `${declarationName === undefined ? '' : `'${declarationName}': `}tightening '${fieldDef.name}' from ` +
-        `${inherited.state} to ${tightened.state} is not a permitted state transition -- a refinement can ` +
-        'only restrict, never expand (§5.7)',
+      `${prefix}'${fieldDef.name}' acquires the selector '=?' by refinement -- a discriminator is ` +
+        'declared once, at the base, and every subtype instead restates it pinned FIXED (§5.2, ' +
+        `§5.7)${isGroupMember ? '; a member reachable by refinement may not acquire a selector (§5.11)' : ''}`,
     );
   }
+  if (isGroupMember) {
+    if (fieldDef.optional) {
+      throw new TsonSchemaValidationError(
+        `${prefix}the restated group member '${fieldDef.name}' carries a name mark -- a member ` +
+          "takes none, since its omission answer is the group's (§5.11)",
+      );
+    }
+    if (fieldDef.modifier?.kind === 'default') {
+      throw new TsonSchemaValidationError(
+        `${prefix}the restated group member '${fieldDef.name}' takes a default ('~') -- a default ` +
+          "is a value only omission reaches, and omission is the group's, not one member's (§5.11)",
+      );
+    }
+  }
+  const { field } = resolveField(deps, fieldDef, parameters, inherited);
+  // §5.11: a member is never anything but optional -- its own omission question is the group's,
+  // whatever this restatement's modifier resolved `optional` to (always `false`, `fieldDef.optional`
+  // being refused above).
+  const tightened: RecordField = isGroupMember ? { ...field, optional: true } : field;
+  checkFieldRefinementOrder(declarationName, fieldDef.name, inherited, tightened, isGroupMember);
   return tightened;
 }
 
-/** §5.7's refinement state-transition table: FIXED states are terminal, OPTIONAL→REQUIRED is the only direction, never back. */
-function isValidTighteningTransition(from: FieldState, to: FieldState): boolean {
-  switch (from) {
-    case 'REQUIRED':
-      return to === 'REQUIRED' || to === 'REQUIRED_DEFAULT' || to === 'REQUIRED_FIXED';
-    case 'OPTIONAL':
-      return true;
-    case 'REQUIRED_DEFAULT':
-      return to === 'REQUIRED_DEFAULT' || to === 'REQUIRED_FIXED';
-    case 'REQUIRED_FIXED':
-      return to === 'REQUIRED_FIXED';
-    case 'OPTIONAL_FIXED':
-      return to === 'OPTIONAL_FIXED';
+/**
+ * §5.7's refinement as three independent orders, none of which may move backwards: **omission**
+ * (absent → required → injected), **voidable** (true → false), **role** (`FREE` → `DEFAULT` →
+ * `FIXED`). Checking the three separately is what lets `a?: T?` tighten to `a: T = v` in one
+ * restatement (voidable true→false and role FREE→FIXED both moving forward at once) while still
+ * refusing either one alone moving back. `isGroupMember` routes the omission rank through
+ * {@link fieldOmission}'s own group carve-out (§5.11): a member's omission is always `'ABSENT'`
+ * on both sides, so the axis never fires for one, whatever its role restates to.
+ *
+ * **Identity.** A restatement may change a **default** value freely but MUST NOT change a
+ * **pin** -- the one thing "restated as itself" polices beyond the three orders. Two pins compare
+ * as the *values* they denote (§5.5, §5.7: `= 255` and `= 0xFF` collide), not as spelled text.
+ */
+function checkFieldRefinementOrder(
+  declarationName: string | undefined,
+  fieldName: string,
+  inherited: RecordField,
+  tightened: RecordField,
+  isGroupMember: boolean,
+): void {
+  const prefix = declarationName === undefined ? '' : `'${declarationName}': `;
+  const OMISSION_RANK: Record<FieldOmission, number> = { ABSENT: 0, MISSING: 1, INJECTED: 2 };
+  const omissionRank = (f: RecordField): number => OMISSION_RANK[fieldOmission(f, isGroupMember)];
+  if (omissionRank(tightened) < omissionRank(inherited)) {
+    throw new TsonSchemaValidationError(
+      `${prefix}tightening '${fieldName}' moves its omission question backwards -- a refinement ` +
+        'may only move forward through absent, required, injected, never back (§5.7)',
+    );
   }
+  const voidableRank = (f: RecordField): number => (f.voidable ? 0 : 1);
+  if (voidableRank(tightened) < voidableRank(inherited)) {
+    throw new TsonSchemaValidationError(
+      `${prefix}tightening '${fieldName}' makes a non-voidable field voidable -- voidable may only ` +
+        'move true → false under refinement, never back (§5.7)',
+    );
+  }
+  const roleRank = (f: RecordField): number =>
+    f.role === 'FREE' ? 0 : f.role === 'DEFAULT' ? 1 : 2;
+  if (roleRank(tightened) < roleRank(inherited)) {
+    throw new TsonSchemaValidationError(
+      `${prefix}tightening '${fieldName}' moves its role backwards -- a refinement may only move ` +
+        'forward through FREE, DEFAULT, FIXED, never back (§5.7)',
+    );
+  }
+  if (inherited.role === 'FIXED' && tightened.role === 'FIXED') {
+    const before = inherited.value;
+    const after = tightened.value;
+    if (before !== undefined && after !== undefined && !pinTokensEqual(before, after)) {
+      throw new TsonSchemaValidationError(
+        `${prefix}restates the pinned field '${fieldName}' with a different value -- a restatement ` +
+          'may change a default but MUST NOT change a pin (§5.7)',
+      );
+    }
+  }
+}
+
+/**
+ * Two `TsonDecimal`s (`unscaled * 10^exponent`) denoting the same magnitude regardless of scale
+ * (§5.7: `= 1` and `= 1.0` collide) -- normalises the one with the coarser exponent up to the
+ * other's before comparing the unscaled magnitudes.
+ */
+function decimalEquals(a: TsonDecimal, b: TsonDecimal): boolean {
+  if (a.exponent === b.exponent) return a.unscaled === b.unscaled;
+  const [lo, hi] = a.exponent < b.exponent ? [a, b] : [b, a];
+  return hi.unscaled * 10n ** BigInt(hi.exponent - lo.exponent) === lo.unscaled;
+}
+
+/** `text` as the exact numeric value it denotes, when it matches the `number` production at all (§4.3) -- `undefined` for every other token, numeric or not (a special value like `nan`, or an ordinary identifier/boolean spelling). */
+function numericTokenValue(text: string): TsonDecimal | undefined {
+  const form = tryParseNumber(text);
+  if (form === undefined) return undefined;
+  if (form.kind === 'integer' || form.kind === 'based-integer') {
+    return { unscaled: toExactInteger(form), exponent: 0 };
+  }
+  if (form.kind === 'float') {
+    return toExactDecimal(form);
+  }
+  return undefined;
+}
+
+/**
+ * Whether two FIXED-field tokens denote the same value (§5.7: "`= 255` and `= 0xFF` collide, `= 1`
+ * and `= 1.0` collide, text pins compare NFC-normalised") -- the two cases this resolver can
+ * decide without a type-directed read of the field's own declared type: two unquoted numeric
+ * literals compare by exact magnitude regardless of base, digit grouping or scale, and two quoted
+ * text tokens (already escape-decoded, §7.2.2–§7.2.3) compare NFC-normalised ([TSON-DATA] §7.1).
+ * Everything else -- an identifier spelling, a boolean, an enum member, or either token failing to
+ * parse as a number -- falls back to exact text, which is the right answer for every atom family
+ * whose value identity is its own spelling.
+ */
+export function pinTokensEqual(before: Token, after: Token): boolean {
+  if (before.form === after.form && before.text === after.text) return true;
+  if (before.form === 'UNQUOTED' && after.form === 'UNQUOTED') {
+    const a = numericTokenValue(before.text);
+    const b = numericTokenValue(after.text);
+    return a !== undefined && b !== undefined && decimalEquals(a, b);
+  }
+  if (before.form !== 'UNQUOTED' && after.form !== 'UNQUOTED') {
+    return toNfc(before.text) === toNfc(after.text);
+  }
+  return false;
 }
 
 type FieldOrigin = 'SUPERTYPE' | 'BODY_FIELD' | 'GROUP_MEMBER';
@@ -1451,6 +2061,17 @@ function requireFieldNameNotSeen(
 }
 
 /**
+ * A resolved field, plus whether its own modifier was the selector `=?` (§5.2) -- only a fresh
+ * field's own answer is ever consulted (`resolveEntry`, collecting it into `discriminators`); a
+ * tightening entry's is never even reached, {@link resolveTighteningField} refusing `=?` outright
+ * before it calls this function.
+ */
+interface ResolvedField {
+  readonly field: RecordField;
+  readonly selector: boolean;
+}
+
+/**
  * §5.8's restated-field annotation merge, which a plain new field also passes through vacuously
  * (`inherited` `undefined` -- own annotations only): the restatement's own annotations, in source
  * order, followed by the inherited field's own (already-merged, so a chain accumulates leader
@@ -1463,11 +2084,11 @@ function resolveField(
   field: FieldDef,
   parameters: readonly string[],
   inherited: RecordField | undefined,
-): RecordField {
+): ResolvedField {
   const base = resolveFieldEntry(deps, field, parameters, inherited);
   const own = annotationsOf(deps, field.name, field.annotations);
   const annotations = inherited === undefined ? own : [...own, ...inherited.annotations];
-  return { ...base, annotations };
+  return { field: { ...base.field, annotations }, selector: base.selector };
 }
 
 function resolveFieldEntry(
@@ -1475,7 +2096,7 @@ function resolveFieldEntry(
   field: FieldDef,
   parameters: readonly string[],
   inherited: RecordField | undefined,
-): RecordField {
+): ResolvedField {
   let type: TypeRef;
   if (field.type !== undefined) {
     type = resolveTypeRef(deps, field.type.typeRef);
@@ -1488,68 +2109,29 @@ function resolveFieldEntry(
         'or composition body, against a field the source declares (§5.7)',
     );
   }
-  const optional =
-    field.type !== undefined
-      ? field.type.optional
-      : inherited !== undefined
-        ? isOptionalState(inherited.state)
-        : false;
+  const voidable = field.type !== undefined ? field.type.voidable : (inherited?.voidable ?? false);
 
-  const resolved = resolveFieldModifiers(field.name, optional, field.modifier, parameters);
+  const resolved = resolveFieldMarks(
+    field.name,
+    field.optional,
+    voidable,
+    field.modifier,
+    parameters,
+  );
   return {
-    name: field.name,
-    type,
-    state: resolved.state,
-    ...(resolved.value === undefined
-      ? {}
-      : { value: { text: resolved.value.text, form: metaFormOfLexer(resolved.value.form) } }),
-    annotations: [],
+    field: {
+      name: field.name,
+      type,
+      optional: resolved.optional,
+      voidable: resolved.voidable,
+      role: resolved.role,
+      ...(resolved.value === undefined
+        ? {}
+        : { value: { text: resolved.value.text, form: metaFormOfLexer(resolved.value.form) } }),
+      annotations: [],
+    },
+    selector: resolved.selector,
   };
-}
-
-/** §5.2's presence axis: the two states under which a conforming value may leave the field out. */
-function isOptionalState(state: FieldState): boolean {
-  return state === 'OPTIONAL' || state === 'OPTIONAL_FIXED';
-}
-
-/**
- * §5.11's presence rule: a group under which two members are always present (both in a
- * REQUIRED-family state) is a resolver error -- a group means at most one member is present, so
- * two that must always be there is a contract nothing can satisfy. Run for composition bodies
- * too, not only refinement (§5.7's tightening rules govern both).
- */
-function checkGroupPresence(
-  declarationName: string | undefined,
-  fields: readonly RecordField[],
-  groups: readonly FieldGroup[],
-): void {
-  for (const group of groups) {
-    const alwaysPresent = group.members.filter((member) =>
-      isAlwaysPresent(stateOf(fields, member)),
-    );
-    if (alwaysPresent.length > 1) {
-      throw new TsonSchemaValidationError(
-        `${declarationName === undefined ? '' : `'${declarationName}': `}members ${alwaysPresent.join(' and ')} ` +
-          `of the group (${group.members.join(' | ')}) are both always present, but at most one member of a ` +
-          'group may be (§5.11) -- no value could satisfy this type. Leave all but one in an OPTIONAL state, ' +
-          "or fix the others to absent ('= _')",
-      );
-    }
-  }
-}
-
-function isAlwaysPresent(state: FieldState): boolean {
-  return state === 'REQUIRED' || state === 'REQUIRED_DEFAULT' || state === 'REQUIRED_FIXED';
-}
-
-function stateOf(fields: readonly RecordField[], name: string): FieldState {
-  const field = fields.find((f) => f.name === name);
-  if (field === undefined) {
-    throw new TsonInternalError(
-      `group member '${name}' has no field -- a group's members are flattened into the field list as they are resolved`,
-    );
-  }
-  return field.state;
 }
 
 function memberNames(groupDef: GroupDef): string[] {
@@ -1636,7 +2218,9 @@ function resolveGroupMember(deps: DefinitionResolverDeps, member: GroupMember): 
   return {
     name: member.name,
     type: resolveTypeRef(deps, member.typeRef),
-    state: 'OPTIONAL',
+    optional: true,
+    voidable: member.voidable,
+    role: 'FREE',
     annotations: annotationsOf(deps, member.name, member.annotations),
   };
 }

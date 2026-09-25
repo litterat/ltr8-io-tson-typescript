@@ -52,7 +52,7 @@ function sha256(path: string): string {
 describe.skipIf(!referenceAvailable())('vendored spec files', () => {
   const files = vendoredFiles();
 
-  it('vendors the two spec parts and all six bundled schemas', () => {
+  it('vendors the three spec parts, the revision change log and all six bundled schemas', () => {
     expect(files).toEqual([
       'm/core-resolved.tn',
       'm/core.tn',
@@ -62,6 +62,8 @@ describe.skipIf(!referenceAvailable())('vendored spec files', () => {
       'm/meta.tn',
       'tson-part1-data.md',
       'tson-part2-schema.md',
+      'tson-part3-json.md',
+      'tson-rev36-changelog.md',
     ]);
   });
 
@@ -84,7 +86,7 @@ describe('vendored spec files, without the reference checkout', () => {
   it('record the spec revision the port is written against', () => {
     const part1 = readFileSync(join(VENDORED_ROOT, 'tson-part1-data.md'), 'utf8');
     const part2 = readFileSync(join(VENDORED_ROOT, 'tson-part2-schema.md'), 'utf8');
-    expect(part1).toContain('2026 Revision 35');
-    expect(part2).toContain('2026 Revision 35');
+    expect(part1).toContain('2026 Revision 36');
+    expect(part2).toContain('2026 Revision 36');
   });
 });

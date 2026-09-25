@@ -19,13 +19,26 @@
  * `regex/disjoint.ts`'s `isDisjointFrom` is real and tested (Wave 1), but this is the one place in
  * the linker it is deliberately *not* wired in — see this package's own report on this work
  * package for the citation.
+ *
+ * **§5.4's no-class list includes two straddling kinds: an approximate atom
+ * (`float_type`) still admitting `allow_nan` or `allow_infinity`, and a map whose key type, after
+ * following its reference chain, is not an atom-family instance or an enum.** Both make `disjoint`
+ * class-stable: a choice's untagged values are the same set in every encoding ([TSON-JSON] §8.3),
+ * at the price that `( float64 | text )` needs a tag in text too unless the float narrows
+ * `allow_nan`/`allow_infinity` to `false` -- a language change on the text side, not only the
+ * JSON one. This module follows §5.4's own text over the pinned Java reference's text-side
+ * `DiscriminationClass` (`tson-compiler/.../reader/DiscriminationClass.java`), whose class
+ * stability question is folded into a *separate* `stable()` predicate on the JSON side
+ * (`tson-json/.../reader/DiscriminationClass.java`) rather than into `classify()` itself.
  */
 import { resolveBaseType } from '../base/baseTypeResolver.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isDataBody } from './bodyKind.js';
-import { terminalDefinition } from '../compiler/referenceChain.js';
+import { isAtom } from '../compiler/atomChecks.js';
+import { terminal, terminalDefinition } from './referenceChain.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
+import type { FloatType } from '../schema/meta/atoms-numeric.js';
 import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
 import { choiceDisjoint } from '../schema/meta/typedef.js';
 
@@ -38,8 +51,17 @@ import { choiceDisjoint } from '../schema/meta/typedef.js';
  */
 export type DiscriminationClass = 'BOOLEAN' | 'NUMBER' | 'STRING' | 'BRACE' | 'BRACKET';
 
-/** An enum's class is its members' shared base-type class (e.g. `[true false]` is BOOLEAN); mixed → `undefined`. */
+/**
+ * An enum's class depends on its profile (§7.4, §5.4, #21). Under `TEXT` the enum is string-class
+ * whatever its members' spellings — `!enum [80 443]` under `TEXT` admits the *texts* `80` and
+ * `443`, not the numbers, so classifying by token would misclassify it; the members are read as
+ * data, never as base-resolved tokens, and a `TEXT` enum is therefore always `STRING`. Under
+ * `IDENTIFIER` (the default) the class is the members' shared base-type class read off each
+ * member's own token (`[true false]` is `BOOLEAN`; an identifier never begins with a digit, so no
+ * member is number-class); mixed members yield `undefined`.
+ */
 function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
+  if (body.profile === 'TEXT') return 'STRING';
   let common: DiscriminationClass | undefined;
   for (const member of body.members) {
     const base = resolveBaseType({ text: member, form: 'unquoted' });
@@ -54,7 +76,42 @@ function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
   return common;
 }
 
-function classify(def: TypeDefinition): DiscriminationClass | undefined {
+/**
+ * Whether `keyType`'s reference chain terminates at a type "a single scalar token denotes by its
+ * content" (§5.4, #17) — an atom-family instance or an enum, **the `unit` instances `value` and
+ * `void` excepted**: `value` is read by kind rather than content and `void` has no key at all, so
+ * neither is a type a token's own content picks out, even though both are structurally `Unit`
+ * atoms like every other unnamed `unit_type` instance (which *is* read by content, the same
+ * fallback `compiler/atomBuilder.ts`'s own `buildUnitReader` gives any `unit`-kind type besides
+ * those two kernel names). The two are told apart by the terminal entry's own **name**, since
+ * their resolved bodies are identical (`{ kind: 'unit' }`) and carry no field to distinguish them.
+ */
+function isScalarContentKeyType(
+  keyName: string,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+): boolean {
+  const terminalName = terminal(keyName, (n) => namespace.get(n));
+  if (terminalName === 'value' || terminalName === 'void') return false;
+  const def = namespace.get(terminalName);
+  if (def === undefined) return false; // unresolved or cyclic: no class either
+  const body = def.body;
+  return 'kind' in body && !isDataBody(body) && isAtom(body);
+}
+
+/**
+ * `float_type`'s own class-stability question (§5.4, #17): an approximate atom still admitting
+ * `allow_nan` or `allow_infinity` has values that straddle classes exactly as `rational`/`complex`
+ * do — a NaN or an infinity has no number spelling in some encodings and a string one — so it gets
+ * no class at all until both are narrowed to `false`.
+ */
+function isClassStableFloat(body: FloatType): boolean {
+  return !body.allowNan && !body.allowInfinity;
+}
+
+function classify(
+  def: TypeDefinition,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+): DiscriminationClass | undefined {
   const body = def.body;
   if (!('kind' in body)) {
     return undefined; // a held TemplateBody: no class until an application closes it
@@ -65,8 +122,9 @@ function classify(def: TypeDefinition): DiscriminationClass | undefined {
   switch (body.kind) {
     case 'integer_type':
     case 'decimal_type':
-    case 'float_type':
       return 'NUMBER';
+    case 'float_type':
+      return isClassStableFloat(body) ? 'NUMBER' : undefined;
     case 'text_type':
     case 'uri_type':
     case 'regex_type':
@@ -87,8 +145,13 @@ function classify(def: TypeDefinition): DiscriminationClass | undefined {
     case 'enum':
       return classifyEnum(body);
     case 'record':
-    case 'map':
       return 'BRACE';
+    case 'map':
+      // §5.4, #17: a map whose key type has no class of its own -- after following its own
+      // reference chain -- straddles classes the same way a NaN-admitting float does, since an
+      // encoding with no delimiter pair for a compound key spells such a map in the bracket class
+      // instead ([TSON-JSON] §6.4).
+      return isScalarContentKeyType(body.keyType.name, namespace) ? 'BRACE' : undefined;
     case 'array':
     case 'tuple':
       return 'BRACKET';
@@ -111,7 +174,7 @@ export function discriminationClassOf(
   namespace: ReadonlyMap<string, TypeDefinition>,
 ): DiscriminationClass | undefined {
   const def = terminalDefinition(name, (n) => namespace.get(n));
-  return def === undefined ? undefined : classify(def);
+  return def === undefined ? undefined : classify(def, namespace);
 }
 
 /** `true` exactly when every variant has a class and no class repeats (§5.4). */

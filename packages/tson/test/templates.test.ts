@@ -50,8 +50,19 @@ function recordTemplate(parameters: readonly string[], body: RecordBody): TypeDe
   };
 }
 
-function field(name: string, type: TypeRef, state: RecordField['state'] = 'REQUIRED'): RecordField {
-  return { name, type, annotations: [], state };
+function field(
+  name: string,
+  type: TypeRef,
+  marks: { optional?: boolean; voidable?: boolean; role?: RecordField['role'] } = {},
+): RecordField {
+  return {
+    name,
+    type,
+    annotations: [],
+    optional: marks.optional ?? false,
+    voidable: marks.voidable ?? false,
+    role: marks.role ?? 'FREE',
+  };
 }
 
 /**
@@ -85,6 +96,12 @@ function readTypeRefField(record: RecordValue, name: string): TypeRef {
   return { name: head, arguments: args, annotations: [] };
 }
 
+/** Reads one wire boolean member (`optional`/`voidable`), `false` when absent -- §8.1's own default. */
+function readBooleanField(record: RecordValue, name: string): boolean {
+  const wire = record.fields.find((f) => f.name === name)?.value.value.coreValue;
+  return wire?.kind === 'token' && wire.text === 'true';
+}
+
 function testMetaReader(type: string, value: DataValue): Top {
   const record = value.coreValue as RecordValue;
   if (type === 'record') {
@@ -97,10 +114,35 @@ function testMetaReader(type: string, value: DataValue): Top {
           fieldRecord.fields.find((f) => f.name === 'name')?.value.value.coreValue as TokenValue
         ).text;
         const ftype = readTypeRefField(fieldRecord, 'type');
-        fields.push({ name: fname, type: ftype, state: 'REQUIRED', annotations: [] });
+        const roleWire = fieldRecord.fields.find((f) => f.name === 'role')?.value.value.coreValue;
+        const role: RecordField['role'] =
+          roleWire?.kind === 'token' && (roleWire.text === 'DEFAULT' || roleWire.text === 'FIXED')
+            ? roleWire.text
+            : 'FREE';
+        const valueWire = fieldRecord.fields.find((f) => f.name === 'value')?.value.value.coreValue;
+        const fieldValue =
+          valueWire?.kind === 'token'
+            ? { text: valueWire.text, form: metaFormOfLexer(valueWire.form) }
+            : undefined;
+        fields.push({
+          name: fname,
+          type: ftype,
+          optional: readBooleanField(fieldRecord, 'optional'),
+          voidable: readBooleanField(fieldRecord, 'voidable'),
+          role,
+          ...(fieldValue === undefined ? {} : { value: fieldValue }),
+          annotations: [],
+        });
       }
     }
-    const body: RecordBody = { kind: 'record', supertypes: [], fields, groups: [] };
+    const body: RecordBody = {
+      kind: 'record',
+      supertypes: [],
+      fields,
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    };
     return body;
   }
   if (type === 'array') {
@@ -186,7 +228,14 @@ function stubConstructor(name: string): TypeDefinition | undefined {
   return {
     supertypes,
     subtypes: [],
-    body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+    body: {
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    },
     annotations: [],
   };
 }
@@ -214,6 +263,8 @@ describe('a record template closes to the instantiation entry itself', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -240,6 +291,8 @@ describe('a record template closes to the instantiation entry itself', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -268,6 +321,8 @@ describe('a record template closes to the instantiation entry itself', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('n', { name: 'integer', arguments: [], annotations: [] })],
       }),
     );
@@ -296,7 +351,14 @@ describe('a record template closes to the instantiation entry itself', () => {
     namespace.set('uuid', {
       supertypes: ['atom', 'top'],
       subtypes: [],
-      body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+      body: {
+        kind: 'record',
+        supertypes: [],
+        fields: [],
+        groups: [],
+        extension: 'OPEN',
+        discriminators: [],
+      },
       annotations: [],
     });
     namespace.set('user_id', {
@@ -311,6 +373,8 @@ describe('a record template closes to the instantiation entry itself', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -337,7 +401,14 @@ describe('a record template closes to the instantiation entry itself', () => {
     // Two distinct entries with the same shape, standing in for `!uuid ^ {}` and `!uuid_type {}`
     // already lifted by desugaring -- neither is a `Reference` body, so `terminal` stops on each
     // immediately rather than following anywhere.
-    const atomBody: Top = { kind: 'record', supertypes: [], fields: [], groups: [] };
+    const atomBody: Top = {
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    };
     namespace.set('uuid_refined', {
       supertypes: ['uuid', 'atom', 'top'],
       subtypes: [],
@@ -356,6 +427,8 @@ describe('a record template closes to the instantiation entry itself', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -380,6 +453,8 @@ describe('a record template closes to the instantiation entry itself', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -540,6 +615,8 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [
           field('first', { name: 'A', arguments: [], annotations: [] }),
           field('second', { name: 'B', arguments: [], annotations: [] }),
@@ -757,6 +834,8 @@ describe('recursion (§5.10)', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [
           field('value', { name: 'T', arguments: [], annotations: [] }),
           field('child', {
@@ -788,6 +867,8 @@ describe('recursion (§5.10)', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'X', arguments: [], annotations: [] })],
       }),
     );
@@ -797,6 +878,8 @@ describe('recursion (§5.10)', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [
           field('next', {
             name: 'grow',
@@ -836,7 +919,14 @@ describe('declaration-time checks (§5.10)', () => {
     namespace.set('plain', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'record', supertypes: [], fields: [], groups: [] },
+      body: {
+        kind: 'record',
+        supertypes: [],
+        fields: [],
+        groups: [],
+        extension: 'OPEN',
+        discriminators: [],
+      },
       annotations: [],
     });
     const error = thrownBy(() =>
@@ -854,6 +944,8 @@ describe('declaration-time checks (§5.10)', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [
           field('first', { name: 'A', arguments: [], annotations: [] }),
           field('second', { name: 'B', arguments: [], annotations: [] }),
@@ -997,6 +1089,8 @@ describe('materialise (the whole-schema batch pass)', () => {
       kind: 'record',
       supertypes: [],
       groups: [],
+      extension: 'OPEN',
+      discriminators: [],
       fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
     });
   }
@@ -1177,7 +1271,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         members.push((element.value.coreValue as TokenValue).text);
       }
     }
-    return { kind: 'enum', members } satisfies EnumBody;
+    return { kind: 'enum', members, profile: 'IDENTIFIER' } satisfies EnumBody;
   }
 
   /** Just enough of the governing meta's own vocabulary for `enum.members` to resolve to a set of `identifier`. */
@@ -1190,6 +1284,8 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: fields.map((f) => field(f.name, { name: f.type, arguments: [], annotations: [] })),
       },
       annotations: [],
@@ -1302,7 +1398,9 @@ describe('closedFormName', () => {
       {
         name: 'element_type',
         type: { name: 'text', arguments: [], annotations: [] },
-        state: 'REQUIRED',
+        optional: false,
+        voidable: false,
+        role: 'FREE',
         annotations: [],
       },
     ];
@@ -1325,6 +1423,8 @@ describe('closedFormName', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );

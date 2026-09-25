@@ -235,6 +235,33 @@ export function checkOnlyWithdraws(
 }
 
 /**
+ * A **settable-once** facet (§5.7): a refinement may set it where the source left it unset,
+ * restate the source's own value verbatim, or leave it alone — never change it. `text_type.pattern`
+ * and `text_type.members` (and its composers `regex_type`/`uri_type`/`email_type`) are the pair
+ * this exists for: both occupy the position "what does this text admit", `pattern` cannot be
+ * narrowed without a regular-language containment oracle the series decides nowhere, and giving
+ * the pair two rules by spelling would make the narrowing relation an artifact of which one an
+ * author reached for. `equals` defaults to `===`, which is exactly right for `pattern` (a string)
+ * and wrong for `members` (an array, where a caller supplies element-wise equality — see
+ * `atomChecks.ts`'s own call).
+ */
+export function checkSettableOnce<T>(
+  out: string[],
+  facet: string,
+  source: T | undefined,
+  refined: T | undefined,
+  equals: (a: T, b: T) => boolean = (a, b) => a === b,
+  because = 'whether one narrows the other is not decided here',
+): void {
+  if (source !== undefined && refined !== undefined && !equals(source, refined)) {
+    out.push(
+      `${facet} ${renderBoundValue(refined)} replaces the source's own ${renderBoundValue(source)} -- ` +
+        `${because}, so a set ${facet} may be restated but not changed`,
+    );
+  }
+}
+
+/**
  * A member/value set may only shrink — an enum's own `members`, a network family's `within`.
  * `source` empty is unconstrained and admits any `refined` (the same "absent-equals-empty"
  * convention `checkMemberSubset` states for its own typed twin). `refined` empty while `source`

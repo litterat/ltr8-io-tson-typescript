@@ -49,14 +49,14 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     expect(schema.bootstrap).toBe(true);
   });
 
-  // Revision 35's meta-kernel gains `non_negative_integer`, `integer_member_set`, and
-  // `set_type` (renamed from the bare `set`, now that `set` itself is a template one level up,
-  // in meta.tn) over Revision 34's declaration count, so the resolved total moves with it --
-  // measured against the real bundled file below rather than hand-counted, since a count this
-  // package cites but does not derive is the one place a future kernel edit could silently
-  // drift out of sync with what this test actually asserts.
+  // meta-kernel's declaration count moves with every spec revision that adds or removes a
+  // kernel-level type -- Revision 36 adds `text_member_set`, `record_extension_type` and
+  // `enum_profile` over Revision 35's count -- so the resolved total is measured against the
+  // real bundled file below rather than hand-counted, since a count this package cites but does
+  // not derive is the one place a future kernel edit could silently drift out of sync with what
+  // this test actually asserts.
   it('resolves to exactly as many entries as the bundled meta-kernel.tn declares plus its desugar-lifted synthetics', () => {
-    expect(schema.entries.size).toBe(58);
+    expect(schema.entries.size).toBe(61);
   });
 
   it("attaches no @synthetic marker -- the bootstrap route is deliberately unmarked (see this module's own doc)", () => {
@@ -75,7 +75,14 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     const top = entryOf(schema, 'top');
     expect(kindOf(schema, 'top')).toBe('PRODUCT');
     expect(top.supertypes).toEqual([]);
-    expect(top.body).toEqual({ kind: 'record', supertypes: [], fields: [], groups: [] });
+    expect(top.body).toEqual({
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    });
   });
 
   it('resolves unit as a constructor composing with atom', () => {
@@ -100,7 +107,11 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     const boolean = entryOf(schema, 'boolean');
     expect(kindOf(schema, 'boolean')).toBe('ATOM');
     expect(boolean.source).toEqual({ name: 'enum', arguments: [], annotations: [] });
-    expect(boolean.body).toEqual({ kind: 'enum', members: ['true', 'false'] } satisfies EnumBody);
+    expect(boolean.body).toEqual({
+      kind: 'enum',
+      members: ['true', 'false'],
+      profile: 'IDENTIFIER',
+    } satisfies EnumBody);
   });
 
   it('resolves integer as an unconstrained instance of integer_type', () => {

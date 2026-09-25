@@ -22,7 +22,7 @@ import {
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
-import type { TreeTypeResolver } from './support.js';
+import { abandonedValue, type TreeTypeResolver } from './support.js';
 
 type Shape = 'entries' | 'empty' | 'mismatch';
 
@@ -159,15 +159,20 @@ export function mapTreeReader(
     *read(ctx: ReadContext): Task<Value> {
       const mapCtx = ctx.underDeclaration(schemaLocation);
       const annotations = yield* captureAnnotations(mapCtx);
+      // The construction-guard checkpoint -- see `record.ts`'s own note on where the mark goes.
+      const mark = mapCtx.reported();
       const shape = yield* expectMapShape(mapCtx);
       if (shape === 'mismatch') {
-        return absentNode(undefined, annotations);
+        return abandonedValue();
       }
       const entries: MapEntry[] = [];
       if (shape === 'entries') {
         yield* readInto(mapCtx, (key, value) => {
           entries.push({ key, value });
         });
+      }
+      if (mapCtx.reported() > mark) {
+        return abandonedValue();
       }
       return mapNode(entries, name, annotations);
     },

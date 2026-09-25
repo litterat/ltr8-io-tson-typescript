@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../src/cli.js';
 import { EXIT } from '../src/exit.js';
@@ -166,8 +167,9 @@ describe('init-example + schema-governed validate, end to end', () => {
     expect(validateCode).toBe(EXIT.OK);
   });
 
-  it('the same pair fails when the root name is wrong', async () => {
+  it('the same pair fails when the root name is wrong: usage error, exit 2, before any file opens', async () => {
     await runInitExample(dir);
+    const io = captureOutput();
     const code = await main([
       'validate',
       '--schema',
@@ -176,7 +178,8 @@ describe('init-example + schema-governed validate, end to end', () => {
       'no_such_type',
       join(dir, 'person-data.tn'),
     ]);
-    expect(code).toBe(EXIT.FAULT); // TsonInternalError: no such entry in the linked namespace
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('no_such_type');
   });
 });
 
@@ -277,6 +280,12 @@ describe('two-level help', () => {
     expect(code).toBe(EXIT.OK);
     expect(io.stdout()).toMatch(detail);
     expect(io.stderr()).toBe('');
+  });
+
+  it('validate --help documents --input', async () => {
+    const io = captureOutput();
+    await main(['validate', '--help']);
+    expect(io.stdout()).toContain('--input tson|json');
   });
 
   it.each(['validate', 'compile', 'policy'])(
@@ -521,5 +530,261 @@ describe('policy flags reach validate/compile', () => {
     };
     expect(parsed.outcome).toBe('VALID');
     expect(parsed.policy.token_policy.level).toBe('UNRESTRICTED');
+  });
+});
+
+describe('validate: .json inputs ([TSON-JSON])', () => {
+  async function withStdin<T>(text: string, run: () => Promise<T>): Promise<T> {
+    const original = process.stdin;
+    Object.defineProperty(process, 'stdin', {
+      value: Readable.from([Buffer.from(text, 'utf8')]),
+      configurable: true,
+    });
+    try {
+      return await run();
+    } finally {
+      Object.defineProperty(process, 'stdin', { value: original, configurable: true });
+    }
+  }
+
+  it('a conforming .json file validates against --schema/--root, exit 0', async () => {
+    await runInitExample(dir);
+    const jsonFile = join(dir, 'person-data.json');
+    await writeFile(
+      jsonFile,
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      'utf8',
+    );
+    const io = captureOutput();
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      jsonFile,
+    ]);
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('.JSON (any case) is classified the same way', async () => {
+    await runInitExample(dir);
+    const jsonFile = join(dir, 'person-data.JSON');
+    await writeFile(
+      jsonFile,
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      'utf8',
+    );
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      jsonFile,
+    ]);
+    expect(code).toBe(EXIT.OK);
+  });
+
+  it('a non-conforming .json file is reported rejected, exit 1', async () => {
+    await runInitExample(dir);
+    const jsonFile = join(dir, 'person-data.json');
+    await writeFile(jsonFile, JSON.stringify({ age: 36, active: true }), 'utf8');
+    const io = captureOutput();
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      jsonFile,
+    ]);
+    expect(code).toBe(EXIT.INVALID);
+    expect(io.stdout()).toContain('FIELD_REQUIRED');
+  });
+
+  it('a .json input with no binding is a usage error, exit 2, before any file opens', async () => {
+    const jsonFile = join(dir, 'orphan.json');
+    await writeFile(jsonFile, '{}', 'utf8');
+    const io = captureOutput();
+    const code = await main(['validate', jsonFile]);
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('.json');
+  });
+
+  it('a binding with only .tn inputs is unaffected -- --schema/--root already govern schema-checked .tn data', async () => {
+    // init-example's own schema+data pair, no .json input in sight -- the same invocation the
+    // 'init-example + schema-governed validate, end to end' describe block above already covers,
+    // restated here as the guard for this module's own "not a usage error" note.
+    await runInitExample(dir);
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      join(dir, 'person-data.tn'),
+    ]);
+    expect(code).toBe(EXIT.OK);
+  });
+
+  // WP4E: standard input is TSON text by default, whatever binding is given -- a deliberate
+  // divergence from the reference CLI (`commands/validate.ts`'s own top note, `STATUS.md`). An
+  // earlier revision of this CLI inferred JSON for stdin from a binding alone, which would
+  // silently break `cat data.tn | tson validate --schema s.tn --root person -` for anyone
+  // already running that invocation. `--input json` makes the JSON reading explicit instead.
+  it('standard input is TSON text by default, even with a binding given', async () => {
+    await runInitExample(dir);
+    const io = captureOutput();
+    const code = await withStdin('{ name: "Ada Lovelace"  age: 36  active: true }\n', () =>
+      main(['validate', '--schema', join(dir, 'person.tn'), '--root', 'person', '-']),
+    );
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('standard input is TSON text with no binding either', async () => {
+    const io = captureOutput();
+    const code = await withStdin('{ a: 1 }\n', () => main(['validate', '-']));
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('--input json forces standard input to be read as JSON', async () => {
+    await runInitExample(dir);
+    const io = captureOutput();
+    const code = await withStdin(
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      () =>
+        main([
+          'validate',
+          '--schema',
+          join(dir, 'person.tn'),
+          '--root',
+          'person',
+          '--input',
+          'json',
+          '-',
+        ]),
+    );
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('--input json on unbound standard input is a usage error, exit 2, before any file opens', async () => {
+    const io = captureOutput();
+    const code = await withStdin('{}', () => main(['validate', '--input', 'json', '-']));
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('JSON');
+  });
+
+  it('--input tson forces a .json-named file to be read as TSON text, ignoring its extension', async () => {
+    const jsonNamedTson = join(dir, 'looks-like-json.json');
+    await writeFile(jsonNamedTson, '{ a: 1 }\n', 'utf8');
+    const io = captureOutput();
+    const code = await main(['validate', '--input', 'tson', jsonNamedTson]);
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('--input json forces a non-.json file to be read as JSON, ignoring its extension', async () => {
+    await runInitExample(dir);
+    const jsonInDisguise = join(dir, 'person-data.tn');
+    await writeFile(
+      jsonInDisguise,
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      'utf8',
+    );
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      '--input',
+      'json',
+      jsonInDisguise,
+    ]);
+    expect(code).toBe(EXIT.OK);
+  });
+
+  it('an unrecognized --input value is a usage error, exit 2', async () => {
+    const io = captureOutput();
+    const code = await main(['validate', '--input', 'yaml', join(dir, 'x.tn')]);
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('--input');
+  });
+
+  it('a schema and a mixed .tn/.json run share one compiled schema per encoding', async () => {
+    await runInitExample(dir);
+    const jsonFile = join(dir, 'person-data.json');
+    await writeFile(
+      jsonFile,
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      'utf8',
+    );
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      join(dir, 'person-data.tn'),
+      jsonFile,
+    ]);
+    expect(code).toBe(EXIT.OK);
+  });
+
+  // [TSON-JSON] §9.4: the identifier policy reaches a JSON member name matching no declared field
+  // -- unlike the text encoding's own schema-governed read, which consults no per-call policy at
+  // all (this module's own top note).
+  describe('--identifier-policy reaches a .json input too ([TSON-JSON] §9.4)', () => {
+    // U+0430 CYRILLIC SMALL LETTER A in place of the ASCII 'a' in 'age' -- a look-alike for a
+    // declared field of person.tn, matching none of its declared fields.
+    async function lookAlikeJsonFile(): Promise<string> {
+      await runInitExample(dir);
+      const jsonFile = join(dir, 'person-data.json');
+      await writeFile(
+        jsonFile,
+        JSON.stringify({ name: 'Ada Lovelace', аge: 36, active: true }),
+        'utf8',
+      );
+      return jsonFile;
+    }
+
+    it('the default policy (Highly Restrictive) refuses the look-alike name, RESTRICTED_SCRIPT', async () => {
+      const jsonFile = await lookAlikeJsonFile();
+      const io = captureOutput();
+      const code = await main([
+        'validate',
+        '--schema',
+        join(dir, 'person.tn'),
+        '--root',
+        'person',
+        jsonFile,
+      ]);
+      expect(code).toBe(EXIT.INVALID);
+      expect(io.stdout()).toContain('RESTRICTED_SCRIPT');
+      expect(io.stdout()).not.toContain('UNRECOGNIZED_FIELD');
+    });
+
+    it('--identifier-policy unrestricted admits the name, which then reports UNRECOGNIZED_FIELD instead', async () => {
+      const jsonFile = await lookAlikeJsonFile();
+      const io = captureOutput();
+      const code = await main([
+        'validate',
+        '--schema',
+        join(dir, 'person.tn'),
+        '--root',
+        'person',
+        '--identifier-policy',
+        'unrestricted',
+        jsonFile,
+      ]);
+      expect(code).toBe(EXIT.INVALID);
+      expect(io.stdout()).not.toContain('RESTRICTED_SCRIPT');
+      expect(io.stdout()).toContain('UNRECOGNIZED_FIELD');
+    });
   });
 });

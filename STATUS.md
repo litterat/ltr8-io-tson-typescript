@@ -3,17 +3,18 @@
 ← back to the [README](README.md)
 
 Built against TSON Part 1 (lexer + data format), a working draft:
-https://tson.io/raw/2026/35/tson-part1-data.md, and Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/35/tson-part2-schema.md
+https://tson.io/raw/2026/36/tson-part1-data.md, Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/36/tson-part2-schema.md, and Part 3 (the JSON encoding,
+`./json`, new in Revision 36): https://tson.io/raw/2026/36/tson-part3-json.md.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 277 subjects
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 328 subjects
 over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: 277 / 277 subjects passing at the pinned suite commit, Class 1 and Class 2.**
+**Conformance: 328 / 328 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
-Class 1: 31 lexer, 39 parser, 26 reader, 14 resolver, 89 vocabulary. Class 2: 17 schema, 10 link,
-7 validate.
+Class 1: 35 lexer, 42 parser, 27 reader, 14 resolver, 103 vocabulary. Class 2: 36 schema, 22 link,
+49 validate.
 
 `RUNNER.md` in the corpus is normative for runners, and every rule it states is implemented.
 Sidecars are parsed with this implementation's own parser. Subjects are fed as raw bytes —
@@ -58,8 +59,15 @@ day it does not match is the day it matters.
       environment
 - [x] Event stream — the Tier 2 pull source
 - [x] Data parser — the Tier 3 AST
-- [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer)
+- [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer),
+      `!boolean` included in the schemaless vocabulary (§5.5)
 - [x] Number grammar — hand-written, one function per ABNF rule
+- [x] `ATOM_FORM_INVALID` — a token the atom grammar itself rejects is a resolver error distinct
+      from `ATOM_CONSTRAINT_VIOLATION` (a parsed value out of range), riding the existing
+      `TsonAtomParseError`/`TsonAtomValidationError` split (`core/diagnostic.ts`)
+- [x] Value identity — scale is a spelling (`1` and `1.0` are one `number` for set members, map
+      keys and FIXED comparison); `time` and `datetime` compare as instants, not by lexeme
+      (`value/equality.ts`)
 - [x] Integer types — `int8`–`int256`, `uint8`–`uint256`, `positive_integer` and siblings
 - [x] Decimal/float types — `number`, `float32`, `float64`, `rational`, `complex`
 - [x] Identifier/network types — `uuid`, `uri`, `email`, `ipv4`, `ipv6`, `cidr4`, `cidr6`, `mac`
@@ -72,7 +80,39 @@ day it does not match is the day it matters.
 
 ## Part 2 — type system and schema (Class 2)
 
-- [x] Schema grammar — schema documents parsed into a faithful AST
+- [x] Schema grammar — schema documents parsed into a faithful AST, including the three-slot field
+      grammar (`field-name ["?"]`, `field-modifier = ("~" / "=") token / "=" "?"`) and
+      `[definition-mark ws]` in a schema-map entry
+- [x] `record_field` as four facts — `optional`, `voidable`, `role` (`FREE`/`DEFAULT`/`FIXED`),
+      `value?` — with omission's meaning always derived, never stored. Refinement moves through
+      three independent orders (omission absent → required → injected; voidable true → false;
+      role FREE → DEFAULT → FIXED) and never backwards on any of them
+- [x] Record extension and the discriminated family (§5.2, §7.2) — `extension`
+      (`ABSTRACT`/`FINAL`/`OPEN`, default `OPEN`) and `=?` selectors (`discriminators`); an
+      ABSTRACT position requires the tag and admits exactly its subtypes; nothing composes or
+      refines onto a FINAL record; every subtype pins each selector FIXED, pairwise distinct as
+      values (`1` and `0x1` collide); a member-dispatched position looks ahead within one record
+      since the selector may arrive after the fields it selects
+- [x] `record.supertypes` as `[type_ref]` — a parameterised parent substitutes and closes with the
+      held body, so `ok<text>` IS-A `result<text>`
+- [x] A record-bodied template as a family base — ABSTRACT by derivation, `discriminators`
+      whatever survives parameter erasure, nameable bare at a type position; the template itself
+      is never credited as a subtype of its own base, only its instantiations
+- [x] Declared applications as entries — a declaration naming a fully-bound application
+      (`bx => box<text>`) resolves to the closed record itself with no minted twin and no
+      `!reference` hop; a use-site application still resolves to the owning declaration
+- [x] Enum profile (§5.4) — `IDENTIFIER` (default, sees name hygiene) and `TEXT` (string-class,
+      any text, hygiene does not reach the members); `enum_set`'s element type is `text`
+- [x] `text_type.members`, settable once beside `pattern` (also settable once); every member
+      checked against the facets beside it
+- [x] `disjoint` class stability — an approximate atom still admitting NaN or infinity, and a map
+      keyed by a compound type, are never disjoint in any encoding
+- [x] Not judged (§8.1, §10.1) — an unobtainable schema is reported as unavailable, a fifth state
+      beside the four error categories and a §8.2 refusal, located at the reference; a pin
+      mismatch stays a resolver error
+- [x] All-or-nothing reads — a document that reported anything yields no value, in tree mode and
+      bind mode alike; there is no tree placeholder for a refused value, so an absent node always
+      means a written `_`
 - [x] Name hygiene at the schema layer (§11.4) — the four scopes §11.4 names: one enum's members,
       one record's field names including group labels, one schema's declared names, and the merged
       namespace at `!!import`, where two schemas each clean alone collide on import; plus a fifth
@@ -90,10 +130,53 @@ day it does not match is the day it matters.
 - [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
       reverse-index population, choice disjointness and `@disjoint` assertion checking
 - [x] Identity and hashing — canonical `!!id` (`link/identity.ts`), `?sha256=` pinning and content
-      hashing via `crypto.subtle` (`link/contentHash.ts`, async — the one async surface in `link/`)
+      hashing via a hand-written, zero-dependency SHA-256 (`link/contentHash.ts`'s own
+      `sha256HexSync`; `sha256Hex` is the same computation wrapped `async` for existing callers).
+      Registering a schema (`config.ts`'s `resolveSchema`/`preload`) pin-checks it like a fetched
+      one either way — its own `!!id` pin against its own content, and a later pinned reference to
+      its identity against the recorded hash
 - [x] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end
 - [x] Compilation — a compiled, schema-validating reader
 - [x] Diagnostics — the data- and schema-side problem model
+
+## Part 3 — JSON encoding (Class 3)
+
+A second, parallel stack under `@ltr8/tson/json`, with no dependency on the text encoding's lexer,
+stream, reader, compiler, tree or facade modules (`eslint.config.js`'s own zone for `src/json/**`;
+`IDIOM-DEBT.md` records why it is a stack of its own rather than a mode of the text one). Built
+against [TSON-JSON] (`spec/tson-part3-json.md`).
+
+- [x] Lexer and event stream (§3.1) — RFC 8259 over bytes this package decodes itself, code-point
+      addressed; one leading BOM discarded; a lone surrogate is a lexer error, a surrogate pair one
+      character; numbers kept as lexemes, never rounded through a host float
+- [x] `JsonValue` tree and schemaless read/write — duplicate member names refused after NFC;
+      `parseJson`/`parseJsonAsync`/`parseJsonCollecting` (`json/index.ts`)
+- [x] Schema-directed read (§5–§8), compiled once from a `LinkedSchema` (`compileJsonSchema`) —
+      atoms by their own parsing contracts, enums matched on content; records closed, NFC names,
+      the three field slots, injection, FIXED by value, groups; arrays, sets, tuples; object-form
+      and pairs-form maps; the annotation object (§3.3) and its leading-member rule; tag dispatch
+      at OPEN/ABSTRACT positions and member dispatch at a sealed family (§6.1.5); the choice kind
+      table (§8) over the resolver's `disjoint` fact; all-or-nothing reads (§9.1)
+- [x] Front door (`json/facade.ts`) — `readJsonTree`/`readJsonTreeAsync`,
+      `validateJson`/`validateJsonAsync`, sync over bytes and async over a chunked `Task<T>` source
+      exactly as the text stack's `readTree`/`validate`; a caller supplies an already-compiled
+      `JsonCompiledSchema` and a root name, mirroring how `readTree`/`validate` take a
+      `CompiledSchema` (§3.4's out-of-band binding route — the only route this port implements,
+      see Known gaps)
+- [x] CLI (`tson validate`) — a `.json` input (case-insensitive) is bound by `--schema`/`--root`;
+      a `--root` naming no entry is a usage error (exit 2) checked before any file opens.
+      `--identifier-policy` reaches a `.json` input's schema-directed read too (§9.4), not only
+      `.tn`'s. **Standard input is TSON text by default, whatever binding is given** —
+      `--input tson|json` forces every input this run reads, `-` included, to one encoding,
+      overriding the by-extension/TSON-for-stdin default; an unbound input this run reads as JSON (by extension or
+      by `--input`) is a usage error (§3.4 has no schemaless JSON reading). **Deliberate divergence
+      from the reference CLI**: the reference's own `ValidateCommand.isJson` reads bound standard
+      input as JSON unconditionally, with no escape hatch, so `cat data.tn | tson validate --schema
+s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port keeps stdin
+      as TSON text unconditionally instead, so that invocation reads `data.tn` correctly; `--input`
+      makes the JSON reading available too, explicitly rather than inferred from the binding.
+- [x] Package surface — `./json` subpath (ESM + CJS + types), `check:package` (publint,
+      are-the-types-wrong), the browser bundle test, `smoke-cli.sh`'s `.json` case
 
 ## Beyond the reference implementation's shape
 
@@ -119,9 +202,10 @@ day it does not match is the day it matters.
       assumed. No I/O on any platform: nothing is read from disk and no `SchemaSource` is
       consulted, so registering the standard library never reaches the network even when one is
       configured. The CLI now consumes this instead of embedding its own copy
-- [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`,
-      `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin` (pinning, the
-      inverse of `declaredSha256`) beside `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
+- [x] Identity and content hashing, publicly — `@ltr8/tson/identity`: §2.2.1's `sha256Hex`/
+      `sha256HexSync`, `contentStart`, `declaredSha256`, `verifyContentHash` and `withSha256Pin`
+      (pinning, the inverse of `declaredSha256`) beside
+      `canonicalizeIdentity`/`sameIdentity`/`validateIdentity`.
       Its own subpath rather than part of the default entry: nothing in it reaches the compiler,
       the lexer or the event stream, so a consumer who wants only a document's content hash takes
       only that. The CLI's `hash` command consumes it rather than reimplementing §2.2.1, which is
@@ -159,11 +243,100 @@ day it does not match is the day it matters.
 
 ## Known gaps
 
-- **No JSON reader (§6).** Revision 35 deletes the JSON-superset claim, states that a JSON document
-  is not a TSON document, and replaces the claim with a distinct JSON reader: a second encoding of
-  the same model, mapping JSON `null` to absence and a non-identifier-keyed object to a map rather
-  than a record. Neither this port nor the reference has one. `README.md` and `skills/tson-ts/` no
-  longer assert the superset; the reader itself is unbuilt.
+- **The JSON encoding's ([TSON-JSON]) scope is narrower than the full spec's, and in one respect
+  narrower than the reference implementation's own** (`REVISION-36-PLAN.md`'s own "Scope
+  decisions"; the reference records most of these as deferrals, not conclusions). Everything below
+  except the object-binding gap matches a deferral the reference records too:
+  - **§3.4's in-band root binding is not read.** A document naming its own `$schema`/`$type` at
+    the root, with no schema supplied out of band, is not a route this package implements — every
+    call to `readJsonTree`/`validateJson` requires `schema`/`root`. `$type` tag dispatch _inside_
+    a document already bound out of band (subsumption, record families, choices) is implemented in
+    full; what is missing is starting a read with no binding at all.
+  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`)
+    compile to a `NOT_IMPLEMENTED` reader (`json/schema/compile.ts`'s own top note) — the plan
+    stays total (every entry still compiles), but reading such a position reports the gap rather
+    than a value. A template naming no `extension` — a genuine open template used bare, never
+    applied — takes the same `NOT_IMPLEMENTED` reader.
+  - **The §3.5 `TSON-Schema`/`TSON-Accept-Schema` header fields are not implemented.** They are an
+    HTTP-transport convention over §3.4's out-of-band route; nothing in this package or the CLI
+    reads or writes them. A caller wiring an HTTP layer implements them itself, on top of the
+    out-of-band binding this package already takes as a plain argument.
+  - **There is no schema-directed JSON encoder.** §9.2's encoder MUSTs (refuse the uncarryable,
+    lead an annotation object with its reserved members, tag wherever §8.2 requires, emit
+    canonical key content in object-form maps, preserve exact-tier digits and scale, ...) are
+    unimplemented; `json/write.ts` only writes a schemaless `JsonValue` tree back to text
+    (§9.3's round-trip latitude), never a schema-governed value the way the text stack's own
+    `write()` does for `tree/nodes.ts`'s `Value`.
+  - **§10.1's resource bounds beyond nesting depth are not enforced by this package specifically**
+    — member/element counts, string and number lengths, and decoded-binary sizes are the same gap
+    the text encoding already has (`Config`'s own `maxNestingDepth` is the one limit either stack
+    checks); default-injection amplification (§10.1's own note) is not tracked either.
+  - **There is no JSON counterpart of `readBind`/object binding, unlike the reference.** `json/`
+    reads a JSON document into a `JsonValue` tree only (`json/index.ts`'s own top note explains
+    why, at length, citing [TSON-JSON] §3.4's "no schemaless reading" and the reference's own
+    `JsonValue`-only design note for the _tree_ read); the reference's own `Json` additionally
+    exposes an `objectReader()`, and this port has no `objectReader`-shaped function binding a
+    JSON document straight into a host object the way `@ltr8/tson/bind`'s `readBind` does for TSON
+    text. `src/bind/**` is importable from `src/json/**` (`eslint.config.js`'s own zone comment),
+    so nothing structural blocks adding one; it is simply unbuilt.
+  - **§7.7 rule 2's contextual carve-out for a joining control does not reach JSON member names.**
+    For TSON text, `isIdentifierText` (`unicode/identifier-profile.ts`) enforces the rule ahead of
+    name hygiene as a matter of form, so a joiner (ZWNJ/ZWJ) reaching hygiene has already been
+    proven to sit in a permitted shaping context (a Persian compound, an Indic conjunct). A JSON
+    member name has no such lexer to enforce it first, and `unicode/policy.ts`'s own hygiene scan
+    (`firstDisallowedIdentifierStatusCharacter`) excludes every joiner from its check unconditionally
+    rather than applying §7.7 rule 2's context test itself — conservative (a joiner with no shaping
+    effect is admitted rather than wrongly refused), but not a full implementation of the rule at
+    the JSON layer.
+  - **§9.4's token policy reaches the schema-directed JSON read** (`ReadJsonOptions.tokenPolicy`,
+    `json/schema/tokenHygiene.ts`), at exactly the two positions §9.4 names: a map key
+    (`json/schema/map.ts`'s object-form key loop; a pairs-form key reads through an ordinary
+    `AtomReader` and is covered by the atom case below) and a string-shaped atom value
+    (`json/schema/atoms.ts`'s `makeAtomReader`, checked whenever the arriving event is a JSON
+    `'string'`, whatever atom family it is faced to). Checked exactly once per token even where a
+    dispatcher (`withAnnotationObject`'s own peek) crosses it first — from the call site rather
+    than a stream-level hook, since the two call sites are exactly §9.4's own reach; see
+    `tokenHygiene.ts`'s own top note on why a blind stream hook would over-reach into record field
+    names, which §9.4 gives to the identifier policy instead. `identifierPolicy` **is** implemented
+    for the schema-directed read (`ReadJsonOptions`, `json/schema/nameHygiene.ts`) and the CLI
+    passes `--identifier-policy` through to it for a `.json` input exactly as it does for a `.tn`
+    one; **`--token-policy`/`--token-scripts` do not yet reach a `.json` input** — the CLI
+    (`packages/cli/src/commands/validate.ts`) still only threads `tokenPolicy` to the schemaless
+    _text_ path, a remaining piece of wiring rather than a library gap. The schemaless JSON door
+    (`parseJson`/`parseJsonAsync`/`parseJsonCollecting`) takes no token or identifier policy
+    either, deliberately: §9.4's policies have nothing to reach there in the first place
+    ([TSON-JSON] §3.4: no field names, no `$type`, no schema-typed position at all).
+  - **A reserved-member violation (§3.2/§3.3) has no code of its own and reports `UNKNOWN_TYPE_REF`
+    instead, a stretched second use of a code whose primary meaning is "the name denotes nothing".**
+    `json/schema/reservedMembers.ts`'s own top note lays out the reasoning at length: an unknown
+    `$foo`, a `$schema`/`$type` out of lead position, a `$value` with no leading `$type`, and extra
+    members beside `$value` in wrapper form are all [TSON-JSON] §9.4's `resolver` category, and
+    `UNKNOWN_TYPE_REF` is the closest of `core/diagnostic.ts`'s closed code set that fits both the
+    category and (loosely) the meaning — no code here means "a reserved member sits where the
+    grammar does not admit one". The reference implementation reports these as
+    `Diagnostic.Code.UNRECOGNIZED_FIELD`, which its own `Class2ConformanceSuiteTest.categoryOf`
+    files under `validation`, not `resolver` — so this is a divergence in both the code and the
+    category from the reference, taken deliberately because §9.4's own table is explicit about the
+    category these violations belong to. Whether a dedicated code (a new `RESERVED_MEMBER_MISPLACED`
+    or similar) is worth adding to the closed set, over continuing to overload `UNKNOWN_TYPE_REF`,
+    is an open question rather than a settled one; recorded here so it is not lost between reviews.
+  - **A choice variant that is itself a sealed or abstract-with-no-discriminators record family is
+    tagged by its own name, never by a subtype's.** [TSON-JSON] §7.2 (schema series) carves choice
+    positions out of the subtype-inclusive subsumption rule it states for "every other typed
+    position", giving them §5.4's own variant-membership relation instead
+    (`json/schema/dispatchChoice.ts`'s and `compiler/choiceReader.ts`'s own top notes have the
+    full citation); the reference implementation's own `DispatchChoiceReader` flattens subtypes in
+    too ("a variant, an alias of one, or a subtype of one by its tag"), and this port follows it
+    for the alias half only, deliberately. Where the variant's own name has no direct instances
+    (an ABSTRACT-with-discriminators/SEALED family, or an ABSTRACT-with-subtypes family reached
+    inline), `json/schema/route.ts`'s own `ChoiceSelfTagReadable`/`compiler/subsumption.ts`'s own
+    `ChoiceSelfTagReader` let the variant's own name still place a value — reading its
+    discriminators exactly as the untagged route would — since it is the only spelling admissible
+    at the choice's own tag and the shape would otherwise be unwritable inline in the text
+    encoding (JSON alone has a second route via the wrapper form's fresh `$value` object). A
+    subtype's own name stays refused at the choice's tag either way; reaching one still means
+    typing the position by the record family instead (Part 3 §8.4's own closing paragraph), or,
+    in JSON only, wrapping (`{"$type": "<family>", "$value": {"$type": "<subtype>", ...}}`).
 
 - **`type_argument` is bound as a variant where the kernel declares a field group.** The kernel has
   `type_argument => { ( name: type_ref | value: value ) }` — one record whose two members form a
@@ -338,8 +511,8 @@ record for 'base', found an array`) names the terminal regardless of how many al
   already registered and never itself needs to suspend. A reference list preloaded out of
   dependency order fails with a clear `TsonSchemaValidationError` naming what wasn't registered
   yet, rather than silently trying to fetch mid-resolution.
-- **All three bundled schemas resolve, link, and match their fixtures up to two deferrals.**
-  `subtypes` is exact against `meta-kernel-resolved.tn` (top 17, atom 6, product 5, sum 1,
+- **All three bundled schemas resolve, link, and match their fixtures up to documented deferrals.**
+  `subtypes` is exact against `meta-kernel-resolved.tn` (top 18, atom 6, product 5, sum 1,
   text_type 2, atom_specification 2, array 1), and every key annotation (§6) now resolves with its
   value: `schema/annotationReader.ts` reads one through the governing meta's own compiled reader
   for the annotation's name, over `compiler/dataValueEvents.ts`'s replay of the written value.
@@ -349,24 +522,45 @@ record for 'base', found an array`) names the terminal regardless of how many al
   the oracle for their text, and the source is a stronger one.
   `packages/tson/test/bundled-schemas-resolve.test.ts` holds each remaining difference as an
   assertion rather than a skip, so the list can only shrink:
-  - A REQUIRED_WITH_DEFAULT atom-specification field (`spec`, `component`, the `allow_*` flags)
-    is written where the fixture omits it at its default.
-  - `token_set`'s body is written `!array { … unordered: true unique_items: true }` where the
-    fixture writes `!set { element_type: token }` — the constructor the author actually applied,
-    which §8.1 asks for ("a binding record headed by the applied constructor"). `topBinding`
-    discriminates on the host value's own `kind`, and `set` is a refinement of `array` sharing its
-    shape, so the applied name is not recoverable from the value being written. It _is_ recorded,
-    one level up, in the same entry's `source`.
+  - An atom-specification field optional with role FIXED (`spec`, `component`, the `allow_*`
+    flags) is written where the fixture omits it at its default.
+  - `enum_set`, `integer_member_set`, `text_member_set` and the `set_type_*` entries meta mints
+    for `set<T>` are each written `!array { … unordered: true unique_items: true }`, dropping
+    `min_items`, where the fixture writes `!set_type { element_type: … min_items: 1 }` — the
+    constructor the author actually applied, which §8.1 asks for ("a binding record headed by the
+    applied constructor"). `topBinding` discriminates on the host value's own `kind`, and
+    `set_type` is a refinement of `array` sharing its shape, so the applied name is not
+    recoverable from the value being written. It _is_ recorded, one level up, in the same entry's
+    `source`. `scoped.body.v.fields[1].type` and the minted `map_uri_array_type_name_*` name are
+    a consequence of this same gap, not an independent one — the array a map's own key type is
+    minted over carries the `min_items` this drops, so it hashes differently.
+  - `extern_of`/`extern_type`'s held `template` text is re-serialised from the parsed form
+    (`compiler/heldBody.ts`'s `writeDataValue(application)`) rather than carried through as
+    written, so `[ EXTERN ]` loses its author's spacing. §5.10 and §8.2 make whitespace free for
+    identity, so nothing compares wrongly; the resolved output just does not round-trip byte for
+    byte. Closing it means carrying the source span through the schema parser to the held body.
+  - `bytes`, `period`, `extern`, `dynamic`, `time`, `datetime` and `duration`'s key annotations
+    disagree between `core.tn` and `core-resolved.tn` in the vendored copy itself, not because of
+    anything this port does: `core.tn` declares `@ordered:NONE @bounded:false` on `bytes`,
+    `extern` and `dynamic` and `@ordered:TOTAL @bounded:false` on `period`, where the fixture
+    gives each no key annotations at all; and `core.tn` declares `@ordered:TOTAL` on `time`,
+    `datetime` and `duration` where the fixture still says `PARTIAL`. §5.5 settles the temporal
+    one against the fixture ("Both families are totally ordered — the mandatory offset is what
+    makes them so"); the resolved fixture was evidently not regenerated for either change.
+    Reported upstream.
+  - `type_argument`'s two-member field group (`{ ( name: type_ref | value: value ) }`) is bound
+    as a variant of two wire names, `ref` and `value`, so writing emits `!ref scope_kind` where
+    the fixture has `{ name: scope_kind }` — see the field-group gap above.
 
-  **Both are writer-side, and both are shared with the reference implementation** — read there
+  **The `set_type` gap is writer-side, and shared with the reference implementation** — read there
   rather than assumed: its `ArrayBody` carries `@Typename(name = "array")` and its own Javadoc says
   "`state`/`unordered`/`uniqueItems` always appear in written output even at their nominal default
   — unlike a hand-written writer, generic record binding has no notion of 'this value is the
   default, omit it'". Its `ResolvedFixtureTest` tolerates no difference at all, and does not have
   to: it binds the fixture _into the value model_ and compares `TypeDefinition` objects, where both
-  `!set` and `!array` arrive as one `ArrayBody` and a field written at its default is
+  `!set_type` and `!array` arrive as one `ArrayBody` and a field written at its default is
   indistinguishable from one omitted. This port compares **written form**, which is the stricter
-  comparison and the reason these two are visible here at all. Worth reporting upstream: a
+  comparison and the reason this is visible here at all. Worth reporting upstream: a
   resolved-output writer that cannot name the applied constructor is a §8.1 conformance gap in
   both implementations, and the reference's own fixture test is structurally unable to see it.
 

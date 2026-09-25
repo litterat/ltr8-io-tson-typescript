@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { terminal, terminalDefinition } from '../src/compiler/referenceChain.js';
+import { terminal, terminalDefinition } from '../src/link/referenceChain.js';
 import { TsonLimitRefusedError } from '../src/core/errors.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { Reference, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
@@ -17,7 +17,14 @@ function ref(name: string, args: readonly TypeRef[] = []): TypeRef {
 
 /** A plain, non-reference PRODUCT entry -- the terminal every alias chain below walks to. */
 function recordEntry(): TypeDefinition {
-  const body: RecordBody = { kind: 'record', supertypes: [], fields: [], groups: [] };
+  const body: RecordBody = {
+    kind: 'record',
+    supertypes: [],
+    fields: [],
+    groups: [],
+    extension: 'OPEN',
+    discriminators: [],
+  };
   return { supertypes: [], subtypes: [], body, annotations: [] };
 }
 

@@ -21,7 +21,9 @@ import {
   enumBodyBinding,
   scopedBinding,
   fieldGroupBinding,
-  fieldStateBinding,
+  fieldRoleBinding,
+  recordExtensionTypeBinding,
+  enumProfileBinding,
   floatTypeBinding,
   identifierBinding,
   integerSizeBinding,
@@ -77,7 +79,9 @@ import type {
   ElementState,
   EnumBody,
   FieldGroup,
-  FieldState,
+  FieldRole,
+  RecordExtensionType,
+  EnumProfile,
   MapBody,
   RecordBody,
   RecordField,
@@ -147,7 +151,9 @@ const _check6: AssertExact<Infer<typeof identifierBinding>, string> = true;
 const _check7: AssertExact<Infer<typeof textBinding>, string> = true;
 const _check8: AssertExact<Infer<typeof booleanBinding>, boolean> = true;
 const _check9: AssertExact<Infer<typeof bigintBinding>, bigint> = true;
-const _check12: AssertExact<Infer<typeof fieldStateBinding>, FieldState> = true;
+const _check12: AssertExact<Infer<typeof fieldRoleBinding>, FieldRole> = true;
+const _check12b: AssertExact<Infer<typeof recordExtensionTypeBinding>, RecordExtensionType> = true;
+const _check12c: AssertExact<Infer<typeof enumProfileBinding>, EnumProfile> = true;
 const _check13: AssertExact<Infer<typeof elementStateBinding>, ElementState> = true;
 const _check14: AssertExact<Infer<typeof sourcePositionBinding>, SourcePosition> = true;
 const _check15: AssertExact<Infer<typeof annotationBinding>, Annotation> = true;
@@ -385,7 +391,9 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     expect(recordFieldBinding.fields.map((f) => f.wireName)).toEqual([
       'name',
       'type',
-      'state',
+      'optional',
+      'voidable',
+      'role',
       'value',
       'annotations',
     ]);
@@ -393,12 +401,22 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
 
   it('recordFieldBinding.construct omits an absent optional "value" rather than writing undefined (exactOptionalPropertyTypes)', () => {
     const type: TypeRef = { name: 'text', arguments: [], annotations: [] };
-    const withoutValue = recordFieldBinding.construct(['x', type, 'REQUIRED', undefined, []]);
+    const withoutValue = recordFieldBinding.construct([
+      'x',
+      type,
+      false,
+      false,
+      'FREE',
+      undefined,
+      [],
+    ]);
     expect('value' in withoutValue).toBe(false);
     const withValue = recordFieldBinding.construct([
       'x',
       type,
-      'REQUIRED_DEFAULT',
+      true,
+      false,
+      'DEFAULT',
       { text: '3', form: 'UNQUOTED' },
       [],
     ]);

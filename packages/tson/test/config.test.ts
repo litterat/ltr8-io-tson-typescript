@@ -23,11 +23,13 @@ import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
 import type { Annotations, TypeDefinition } from '../src/schema/meta/typedef.js';
 import {
+  TsonContentHashMismatchError,
   TsonInternalError,
   TsonLimitRefusedError,
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
+import { requireValue } from './reader-tree-helpers.js';
 
 const SPEC = fileURLToPath(new URL('../../../spec/m/', import.meta.url));
 
@@ -52,6 +54,8 @@ const CORE_BYTES = bundledSource('core.tn');
 const KERNEL_ID = ownId(KERNEL_BYTES);
 const META_ID = ownId(META_BYTES);
 const CORE_ID = ownId(CORE_BYTES);
+
+const META_TEXT = new TextDecoder().decode(META_BYTES);
 
 const CATALOG_SCHEMA = `
 !!id:"test://catalog.tn"
@@ -102,7 +106,7 @@ describe('createTson: registry primitives', () => {
     const kernel = linkSchema(bootstrapMetaKernel(KERNEL_BYTES));
     expect(kernel.id).toBe(KERNEL_ID);
     tson.register(kernel);
-    expect(tson.schemas.get('tson.io/2026/35/m/meta-kernel.tn')).toBe(kernel);
+    expect(tson.schemas.get('tson.io/2026/36/m/meta-kernel.tn')).toBe(kernel);
   });
 
   it('resolveSchema refuses a schema whose governing !!meta is not registered', () => {
@@ -115,7 +119,7 @@ describe('createTson: registry primitives', () => {
     tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
     const meta = tson.resolveSchema(META_BYTES);
     expect(meta.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/35/m/meta.tn')).toBe(meta);
+    expect(tson.schemas.get('tson.io/2026/36/m/meta.tn')).toBe(meta);
 
     const core = tson.resolveSchema(CORE_BYTES);
     expect(core.id).toBe(CORE_ID);
@@ -137,10 +141,11 @@ describe('createTson: registry primitives', () => {
     const document = bytesOf('{ id: "f81d4fae-7dec-11d0-a765-00a0c91e6bf6" label: "north ridge" }');
     const result = tson.validate(document, { schema: compiled, root: 'reading' });
     expect(result.diagnostics).toEqual([]);
-    expect(result.value.kind).toBe('record');
+    const resultValue = requireValue(result);
+    expect(resultValue.kind).toBe('record');
 
     const value = tson.readTree(document, { schema: compiled, root: 'reading' });
-    expect(value).toEqual(result.value);
+    expect(value).toEqual(resultValue);
   });
 
   it('parse/write are the same flat functions, reachable off one instance', () => {
@@ -177,8 +182,8 @@ describe('createTson: preload against a configured schemaSource', () => {
 
     await tson.preload([META_ID, CORE_ID]);
 
-    expect(tson.schemas.get('tson.io/2026/35/m/meta.tn')?.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/35/m/core.tn')?.id).toBe(CORE_ID);
+    expect(tson.schemas.get('tson.io/2026/36/m/meta.tn')?.id).toBe(META_ID);
+    expect(tson.schemas.get('tson.io/2026/36/m/core.tn')?.id).toBe(CORE_ID);
 
     // Idempotent: a second preload of the same references touches the source again but adds
     // nothing new and does not throw (already registered, so resolution is skipped entirely).
@@ -192,6 +197,116 @@ describe('createTson: preload against a configured schemaSource', () => {
     };
     const tson = createTson({ schemaSource: source });
     await expect(tson.preload([tamperedId])).rejects.toThrow();
+  });
+
+  it('records each preloaded identity its own content hash, verified against a later pinned !!import to it ([TSON-SCHEMA] §10.2, WP3B)', async () => {
+    const tson = createTson({ schemaSource: bundledOnlySource() });
+    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    await tson.preload([META_ID, CORE_ID]); // records core.tn's real hash, not only meta.tn's own pin on it
+
+    // CATALOG_SCHEMA's own `!!import:"${CORE_ID}"` already carries core.tn's correct pin -- this
+    // now actually verifies it against the recorded hash, rather than silently trusting it.
+    expect(() => tson.resolveSchema(CATALOG_SCHEMA)).not.toThrow();
+
+    const wrongHash = '0'.repeat(64);
+    const badPin = CORE_ID.replace(/sha256=[0-9a-f]{64}/u, `sha256=${wrongHash}`);
+    const badImport = `
+!!id:"test://catalog-bad.tn"
+!!meta:"${META_ID}"
+!!import:"${badPin}"
+{
+  reading => { id: uuid }
+}
+`;
+    expect(() => tson.resolveSchema(badImport)).toThrow(TsonContentHashMismatchError);
+  });
+
+  it('never verifies a pin against an identity registered directly as a LinkedSchema, with no source text to hash ([TSON-SCHEMA] §10.2)', () => {
+    // meta-kernel here is `register`ed directly (a LinkedSchema built by `bootstrapMetaKernel`,
+    // never resolved from bytes through this instance), so it is never hashed -- meta.tn's own
+    // `!!meta` line pins it, and that pin goes unverified, exactly as `verifyPin`'s own doc
+    // states. This is the one route `recordContentHash` cannot reach: `register`'s whole point is
+    // accepting a schema this instance did not resolve for itself, and there is no source text
+    // to hash. `registerStandardLibrary` (`stdlib/index.ts`) avoids the gap for its own bootstrap
+    // by re-resolving meta-kernel's own source a second time right after -- the next test.
+    const tson = createTson();
+    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    expect(() => tson.resolveSchema(META_BYTES)).not.toThrow();
+  });
+
+  it('a schema resolved from source text (not only a preloaded one) has its own content hash recorded and verified against its own !!id pin ([TSON-SCHEMA] §10.2, WP3B)', () => {
+    // The gap above closes once meta-kernel is *resolved* rather than merely registered --
+    // exactly what `registerStandardLibrary` does for its own bootstrap (`stdlib/index.ts`'s own
+    // doc: "meta-kernel again, ordinarily, governed by the bootstrap output just registered").
+    const tson = createTson();
+    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    tson.resolveSchema(KERNEL_BYTES); // records meta-kernel's own real hash this time
+    expect(() => tson.resolveSchema(META_BYTES)).not.toThrow(); // meta.tn's real pin on it verifies clean
+
+    const wrongPin = KERNEL_ID.replace(/sha256=[0-9a-f]{64}/u, `sha256=${'0'.repeat(64)}`);
+    const tamperedMeta = META_TEXT.replace(/!!meta:"[^"]+"/u, `!!meta:"${wrongPin}"`);
+    const badTson = createTson();
+    badTson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    badTson.resolveSchema(KERNEL_BYTES);
+    expect(() => badTson.resolveSchema(tamperedMeta)).toThrow(TsonContentHashMismatchError);
+  });
+
+  it('refuses to register a schema whose own !!id declares a ?sha256= pin that does not match its own content ([TSON-SCHEMA] §10.2)', () => {
+    const tson = createTson();
+    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    tson.resolveSchema(KERNEL_BYTES);
+    tson.resolveSchema(META_BYTES);
+    tson.resolveSchema(CORE_BYTES);
+
+    const selfMispinned = `
+!!id:"test://self-mispinned.tn?sha256=${'f'.repeat(64)}"
+!!meta:"${META_ID}"
+!!import:"${CORE_ID}"
+{ thing => {} }
+`;
+    expect(() => tson.resolveSchema(selfMispinned)).toThrow(TsonContentHashMismatchError);
+  });
+});
+
+describe('createTson: a schema registered from source text is pin-checked like a fetched one ([TSON-SCHEMA] §10.2, WP3B)', () => {
+  function tsonWithStdlib(): ReturnType<typeof createTson> {
+    const tson = createTson();
+    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    tson.resolveSchema(META_BYTES);
+    tson.resolveSchema(CORE_BYTES);
+    return tson;
+  }
+
+  it('a single-line schema (no !!id-line terminator) loads', () => {
+    const tson = tsonWithStdlib();
+    const oneLiner = `!!id:"test://oneliner.tn" !!meta:"${META_ID}" !!import:"${CORE_ID}" { thing => { label: text } }`;
+    expect(() => tson.resolveSchema(oneLiner)).not.toThrow();
+  });
+
+  it('but no reference may pin a single-line schema -- a pinned !!import to it is refused, an unpinned one still resolves', () => {
+    const tson = tsonWithStdlib();
+    const oneLiner = `!!id:"test://oneliner.tn" !!meta:"${META_ID}" !!import:"${CORE_ID}" { thing => { label: text } }`;
+    tson.resolveSchema(oneLiner);
+
+    const pinned = `
+!!id:"test://pins-oneliner.tn"
+!!meta:"${META_ID}"
+!!import:"test://oneliner.tn?sha256=${'a'.repeat(64)}"
+{
+  holder => { t: thing }
+}
+`;
+    expect(() => tson.resolveSchema(pinned)).toThrow(TsonContentHashMismatchError);
+
+    const unpinned = `
+!!id:"test://uses-oneliner.tn"
+!!meta:"${META_ID}"
+!!import:"test://oneliner.tn"
+{
+  holder => { t: thing }
+}
+`;
+    expect(() => tson.resolveSchema(unpinned)).not.toThrow();
   });
 });
 

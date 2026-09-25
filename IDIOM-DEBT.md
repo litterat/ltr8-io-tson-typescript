@@ -243,18 +243,203 @@ only.
 **Trigger.** Before the first npm publish, since after it every accidental export is a
 compatibility obligation. This is the one item with a deadline that is not the reference's.
 
+## 9. `src/json/` is a parallel stack, deliberately duplicating the read-plan shape
+
+`json/lexer.ts`, `json/stream.ts` and `json/readContext.ts` are close structural mirrors of
+`lexer/lexer.ts`, `stream/dataStream.ts` and `reader/context.ts` — a code-point-addressed
+`Task`-suspending scanner, a frame-stack event source, a linked-`PathStep` read context reporting
+through a `DiagnosticsReceiver` — spelled a second time for RFC 8259's grammar instead of shared.
+This is the port's own version of the reference's own held decision
+(`.references/ltr8-io-tson-java/design/json-encoding.md`, "A stack of its own, and the seam is
+deferred rather than chosen"): `tson-json` builds no dependency on `tson-compiler`, for two
+reasons that hold here identically —
+
+- **A brace does not say what it is.** [TSON-DATA] text tells a record from a map syntactically;
+  JSON's `{"a": 1}` is one syntax for both, and [TSON-JSON] §4.1 makes the _position_ decide,
+  never inspection of the value. A pull-only event source has no channel for the position to say
+  so, and giving it one would put the JSON encoding's problem inside the TSON reader stack.
+- **`null` is two things.** In a plain `JsonValue` tree it is a real value (`json/tree.ts`'s
+  `JsonNull`); under a schema it is the absent sentinel and nothing else (§7). Settling that in a
+  shared event vocabulary would answer a schema's question one layer too early.
+
+Both arguments are about the _event_ layer specifically, and — per the reference's own note — do
+not reach a schema-directed reader built above a linked schema, where the position _is_ the
+reader. **WP4B is that later work package, and it has now landed** (`json/schema/**`): a
+compiled-per-entry reader table (`json/schema/compile.ts`'s `compileJsonSchema`) and one reader
+per constructor (`json/schema/atoms.ts`, `record.ts`, `array.ts`, `tuple.ts`, `map.ts`) mirroring
+`compiler/compile.ts`, `atom/forType.ts` and `reader/tree/*` respectively — the predicted second
+copy, confirmed rather than avoided, for the identical two reasons this item already gave (the
+JSON reader stack still owns no dependency on `compiler/`, `reader/`, `tree/` or `write/`, per the
+unchanged `src/json/**` ESLint zone). `json/readContext.ts` grew the exact capability this item
+predicted it would: `inRecord`/`underDeclaration`/`schemaField`/`schemaLocation`, ported line for
+line from `reader/context.ts`'s own identically-named methods (`SchemaAnchor`, `PathStep.schemaToo`
+included), because a schema-directed JSON reader needs the same "accumulate a `SchemaLocation`
+alongside the data path" capability the TSON reader already has, and `src/json/**` cannot import
+that implementation. Two further, smaller duplications the same trigger will absorb: `json/schema/
+eventSkip.ts` mirrors the shape of the skip-on-refusal helper every `reader/tree/*` file writes
+inline (`EventSkip` in the Java module made it a named type there; this port's text side never
+did, so there is no single TSON-side sibling to point at, only the pattern), and `json/schema/
+nameHygiene.ts` calls the _shared_ `unicode/policy.ts#nameHygieneRefusal` with a one-name scope
+rather than duplicating its logic — the one place in this item's list where reuse, not
+duplication, was possible, because that function already lived below both `reader/` and `json/`
+in the import graph.
+
+**What is _not_ duplicated, on purpose.** The `src/json/**` ESLint zone (`eslint.config.js`)
+forbids importing `lexer/`, `stream/`, `reader/`, `compiler/`, `tree/`, `write/` or `facade/` at
+all — so a schemaless JSON read returns `json/tree.ts`'s own `JsonValue`, never `tree/nodes.ts`'s
+`Value`, settling this work package's own open question about what a schemaless read should hand
+back (`json/index.ts`'s own top note has the full reasoning). `core/`, `io/` and `unicode/` are
+shared without a second copy: `json/lexer.ts` decodes UTF-8 through `io/utf8.ts`'s
+`decodeCodePoint`, `json/stream.ts`'s nesting bound is `core/limits.ts`'s own
+`LimitsPolicy`/`nestingLimitRefusal` (so raising the bound raises it for both encodings at once,
+matching [TSON-JSON] §10.1's own requirement), and every JSON-side failure this work package
+raises is `core/errors.ts`'s existing `TsonLexError`/`TsonParseError`/`TsonLimitRefusedError`
+rather than a second error hierarchy — a simplification beyond what the Java carries (its own
+`ParseException` is one class covering both eventual [TSON-JSON] §9.4 categories; this port's two
+existing TSON-text error classes already carry that split, so JSON reuses them instead of
+inventing a `JsonParseException`). WP4B added one more shared piece rather than a duplicate: the value-identity comparison
+`record.ts`'s FIXED check and `array.ts`/`map.ts`'s duplicate checks all need (§5.5 — two
+spellings of one value, `1`/`1.0`, comparing equal) used to live only in `reader/tree/equality.ts`,
+unreachable from `src/json/**`. It moved to `value/equality.ts` — a directory the zone already
+permits — with `reader/tree/equality.ts` reduced to a thin `Value`-typed wrapper (`valuesEqual`)
+re-exporting the rest, so both encodings compare by the _same_ function
+(`design/json-schema-directed-reading.md`'s own `ValueIdentity` note: "the peer of
+`tson-compiler`'s `ValueIdentity`, and one whose two copies must agree") rather than agreeing by
+coincidence.
+
+**WP4C finished that consolidation rather than adding a second copy beside it.** `json/schema/
+valueIdentity.ts` used to carry its own reduction of a decoded host value to one comparable string
+key (`identityOfHost`) — TypeScript's `Map`/`Set` have no `Object.equals`/`hashCode` pair to key
+duplicate-detection on the way the Java reference's own `ValueIdentity` does, so a _keying_
+function was still needed and `value/equality.ts`'s own `deepEqual` does not provide one (it
+compares two values pairwise, never reduces one to a string). Rather than let that keying function
+go on living only in `json/schema/valueIdentity.ts`, it moved to `value/equality.ts` itself as
+`identityKey` — the natural home the item above already established for this exact fact ("the
+peer of `tson-compiler`'s `ValueIdentity`") — and every one of its dedicated per-tier reductions
+moved with it (`gcdBigInt`-reduced lowest terms for `rational`, `decimalIdentityKey` over each
+component for `complex`, the generic `JSON.stringify` fallback for the network families that are
+already canonical in their own parsed fields). `json/schema/valueIdentity.ts`'s own
+`identityOfHost` is now a two-line re-export of `identityKey`, and the module keeps only what
+genuinely has no counterpart outside `src/json/**`: `identityOfNode`, the same reduction applied to
+a `JsonValue` tree rather than a decoded host value (§6.4's pairs-form compound key), which cannot
+move to `value/equality.ts` because a `JsonValue` is this encoding's own tree shape and `value/`
+has no dependency on either encoding's tree model. Pin comparison, set duplicates and map-key
+identity in both `json/schema/**` and (via `deepEqual`, extended in the repair pass below to share
+every one of `identityKey`'s own normalisations — scale is a spelling, `time`/`datetime` compare
+as instants, text folds to NFC, a `rational` reduces to lowest terms, every NaN is one value) the
+text encoding now go through one definition of what a value space's equality is, not two that
+happened to agree.
+
+**The repair pass's own reading, stated plainly.** [TSON-DATA] §7.2.1 says a decoded string value
+keeps its exact spelling ("two string values ... remain distinct strings"), which is true of what
+`deepEqual`/`identityKey` hand back but was, until this pass, also taken as the rule for what two
+spellings compare _as_ — `deepEqual` compared strings by `===` and left `rational` uncompared by
+value at all, so a set of `text` or `rational`, or a FIXED check on either, could accept in one
+encoding what the other refused on the identical document (probed directly: `set<text>` holding a
+precomposed and a decomposed spelling of one grapheme, and `set<rational>` holding `1/2` and
+`2/4`). The reference implementation's own `ValueIdentity` (`tson-compiler` and `tson-json` alike)
+resolves this by NFC-folding every string and reducing every rational for comparison regardless of
+family, with `meta.tn`'s own `rational_type` doc stating the reduction outright ("2/4 equals
+1/2"). This port now follows the reference on both counts and adds the matching IEEE 754-2019 NaN
+rule (every NaN one value), because the alternative — narrowing §7.2.1's own reading instead —
+would leave `deepEqual` and `identityKey` disagreeing with each other, which is the one outcome
+this item's whole consolidation exists to rule out. Reported upstream as worth a sentence in
+[TSON-DATA] §7.2.1 distinguishing "what a decoder returns" from "what two returned values compare
+equal as", since the two questions currently share one paragraph.
+
+**WP4C also landed the dispatch layer this item's own trigger asked to be measured against**:
+`json/schema/dispatchTag.ts`, `dispatchMember.ts` and `dispatchChoice.ts` are the JSON encoding's
+own `DispatchTagReader`/`DispatchMemberReader`/`DispatchChoiceReader`, each restating a rule
+`compiler/subsumption.ts` (record-family tag/member dispatch) or `compiler/choiceReader.ts`
+(choice discrimination) already carries for TSON text — a fourth and fifth deliberate duplication
+this item's own list did not yet name, for the identical reason every other one on it holds: the
+`src/json/**` zone forbids importing `compiler/` at all. Unlike the earlier entries, this pair
+reuses real machinery rather than restating it from scratch wherever the model already exposes the
+fact as data: `link/recordExtension.ts`'s `directMembers` (not a second walk of a family's direct
+members), `link/disjointness.ts`'s `discriminationClassOf`/`choiceDisjoint` (not a second
+class-stability derivation — Revision 36 already folded that question into the one class function
+both stacks share, unlike the Java reference's own JSON-side `DiscriminationClass.stable`, which
+duplicates a predicate the model itself now answers once), and `json/schema/record.ts`'s own
+`fieldValueOf`/`resolveFieldBody`/`fieldValueParser` (a discriminator's pin, decoded once, the same
+way a FIXED field's pin already was). §7.2's alias-flattened admissible-name set (`selfNames`/
+`admitting`) is not a sixth duplication: the repair pass moved it out of `compiler/subsumption.ts`'s
+own module-private copy and into `link/referenceChain.ts`, beside `terminal` (the walk it is built
+on), so both `compiler/subsumption.ts` and every dispatcher here import the one function rather
+than each holding a copy — the reuse this item's own trigger describes, reached a step early
+because `link/` was already the walk's home and nothing stopped the text side from importing it
+too.
+
+**`json/readContext.ts` grew the second capability this item predicted it would.** WP4B gave it
+`inRecord`/`underDeclaration`/`schemaField`/`schemaLocation`; WP4C's dispatchers need to _peek_ an
+object's leading members and then hand the whole, untouched object to whichever reader they select
+— `reader/context.ts`'s own `lookingAhead`/rewind mechanism, ported line for line as
+`json/readContext.ts`'s own `lookingAhead` (a `rewound` queue and a `recording` buffer on the
+shared `Cursor`, exactly mirroring the text encoding's `PathStep`-adjacent fields), because
+`src/json/**` cannot import the implementation it duplicates. The two `ReadContext`-shaped types
+are now closer in shape than the trigger below already argued they were.
+
+**One more narrowing this pair shares, and it is not idiom debt.** `json/schema/dispatchChoice.ts`'s
+`$type` at a choice position is flattened for alias (`link/referenceChain.ts`'s own `admitting`,
+over the declared variant list, each first walked to its own terminal so a variant that is itself
+an alias admits its target and every sibling alias too) but not for subtype, and
+`compiler/choiceReader.ts` reads identically — alias-flattened, not subtype-flattened — so this is
+the dispatch pair's own cross-encoding parity holding, not a JSON-only shortcut. This is the
+opposite of what this file records elsewhere: a deliberate _divergence_ from the reference's own
+`DispatchChoiceReader` (which flattens subtypes in too), not a place this port mirrors it, so the
+reasoning and its consequence for a sealed/abstract-with-no-discriminators variant's own name
+(`json/schema/route.ts`'s own `ChoiceSelfTagReadable`) live in `STATUS.md`'s "Known gaps" now,
+not here.
+
+**Trigger.** The reference's own: a shared `tson-encoding` module extracting "everything above
+the event level" once a second working stack exists to find the seam from
+(`.references/ltr8-io-tson-java/BACKLOG.md`, "Module structure" — "The encoding-neutral reader
+parts move into a module both stacks share… With two working stacks the seam is visible… today it
+exists twice, guarded by `CrossEncodingParityTest` rather than by being one thing"). Concretely
+for this port, now that WP4C's dispatchers exist beside this package's own `compiler/`-backed
+`subsumption.ts`/`choiceReader.ts`: the two `ReadContext`-shaped types (`reader/context.ts`'s
+`ReadContext` and this item's `json/readContext.ts`) are the first candidate to unify, since both
+now carry the identical `lookingAhead`/rewind capability on top of the identical
+`SchemaAnchor`/`PathStep` shape and differ only in how they pull an event; `json/schema/record.ts`
+and `reader/tree/record.ts` are the second, and `json/schema/dispatchTag.ts`/`dispatchMember.ts`
+and `compiler/subsumption.ts` are a third pair now provably close enough to name — both walk "the
+leading members/fields, decide, delegate", both derive the same `own`/alias set, and both report
+the identical `VALIDATION_ERROR`/`TYPE_MISMATCH`/`UNKNOWN_TYPE_REF` split
+(`json-dispatch.test.ts`'s own cross-encoding parity block, and now `json-cross-encoding-parity.test.ts`'s
+full port of the Java reference's own `CrossEncodingParityTest`, are what check that split has not
+drifted). WP4E's own pass over that port found the pair had already drifted twice — `dispatchTag.ts`
+and `json/schema/record.ts#admissibleTag` were reporting a record-family tag mismatch at `/$type`
+where `subsumption.ts` reports at the value (fixed, with the shared reasoning recorded at each
+call site), and `reader/tree/record.ts#valueForStatedAbsentField` was reporting one code
+(`ATOM_CONSTRAINT_VIOLATION`) for every non-voidable field written `_` where
+`json/schema/record.ts#statedNull` already split on `role` — proof this item's own risk is not
+theoretical. A repair pass over that same WP found the risk was not exhausted: fixing the split
+further exposed `compiler/subsumption.ts#buildMemberDispatchReader` falling back to the ABSTRACT
+base's own ordinary record reader wherever its lookahead could not place a value, which surfaced a
+_second_ diagnostic (an unrelated field's own closure violation) on top of a missing discriminator
+where `json/schema/dispatchMember.ts` reports exactly one — removed, so both sides now report the
+single `FIELD_REQUIRED`/`TYPE_MISMATCH` the reference's own `RecordMemberDispatchReader` does, per
+field, with nothing else inspected once it fires. The same pass found `json/schema/record.ts`'s
+own duplicate-member loop checking §3.1's repeated-name rule only for fields the schema declares,
+so a repeated _undeclared_ member reported two `UNRECOGNIZED_FIELD`s instead of a `DUPLICATE_FIELD`
+at the repeat — the identical gap existed in `reader/tree/record.ts`'s own loop, fixed in both
+together. `CrossEncodingParityTest`'s own guard is now real rather than a promise for a future
+work package: it is this port's ongoing defence against the two stacks drifting apart silently,
+not the trigger for unifying them — that trigger is still the shared module above, now with three
+named candidate pairs waiting for it rather than one.
+
 ## Summary
 
-| #   | Item                                          | Trigger                       | Size                     |
-| --- | --------------------------------------------- | ----------------------------- | ------------------------ |
-| 1   | `record()` shape inference                    | Additive; can land early      | Medium, one file + tests |
-| 2   | Single-method interfaces → function types     | Reference's `reader/` settles | Medium, mechanical       |
-| 3   | `ReadContext` accessors + symbol-keyed cursor | `TsonReadContext` settles     | Large, internal only     |
-| 4   | `setPrototypeOf` dead code                    | None                          | One line                 |
-| 5   | `defined()` helper for optional spreads       | None                          | Small, many files        |
-| 6   | `DiagnosticCode` casing                       | None — document, don't rename | One comment              |
-| 7   | Java-facing TSDoc                             | Reference's structure settles | Large, 65 files          |
-| 8   | `export *` barrel                             | Before first npm publish      | Small, one file          |
+| #   | Item                                          | Trigger                               | Size                      |
+| --- | --------------------------------------------- | ------------------------------------- | ------------------------- |
+| 1   | `record()` shape inference                    | Additive; can land early              | Medium, one file + tests  |
+| 2   | Single-method interfaces → function types     | Reference's `reader/` settles         | Medium, mechanical        |
+| 3   | `ReadContext` accessors + symbol-keyed cursor | `TsonReadContext` settles             | Large, internal only      |
+| 4   | `setPrototypeOf` dead code                    | None                                  | One line                  |
+| 5   | `defined()` helper for optional spreads       | None                                  | Small, many files         |
+| 6   | `DiagnosticCode` casing                       | None — document, don't rename         | One comment               |
+| 7   | Java-facing TSDoc                             | Reference's structure settles         | Large, 65 files           |
+| 8   | `export *` barrel                             | Before first npm publish              | Small, one file           |
+| 9   | `json/` mirrors the TSON-text read-plan shape | A shared `tson-encoding`-style module | Large, whole `json/` tree |
 
-Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3 and 7 are the hold — and 7 is
+Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7 and 9 are the hold — and 7 is
 where most of the "this library is its own thing now" actually lives.

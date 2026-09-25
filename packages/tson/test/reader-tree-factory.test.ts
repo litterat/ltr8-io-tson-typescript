@@ -24,11 +24,15 @@ describe('recordReaderFactory', () => {
         kind: 'record',
         supertypes: [],
         groups: [],
+        extension: 'OPEN',
+        discriminators: [],
         fields: [
           {
             name: 'name',
             type: { name: 'text', arguments: [], annotations: [] },
-            state: 'REQUIRED',
+            optional: false,
+            voidable: false,
+            role: 'FREE',
             annotations: [],
           },
         ],

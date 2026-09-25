@@ -23,7 +23,7 @@ proportional to nesting depth either way — nothing materialises a whole docume
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
-`0.34.x` is built against the 2026 Revision 34 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+`0.36.x` is built against the 2026 Revision 36 series. `@ltr8/tson` and `@ltr8/tson-cli` are
 released in lockstep at the same version.
 
 ## Entry points
@@ -41,6 +41,7 @@ Take only what you need; importing `parse` does not pull in the schema compiler.
 | `@ltr8/tson/identity` | content hashing and canonical identity                                                                      |
 | `@ltr8/tson/stdlib`   | the bundled `meta-kernel` / `meta` / `core` schemas, embedded                                               |
 | `@ltr8/tson/source`   | schema fetching over HTTPS and from disk — **Node only**, and deliberately unreachable from a browser build |
+| `@ltr8/tson/json`     | the [TSON-JSON] Part 3 encoding — schema-directed JSON reading, validation and writing                      |
 
 ## What a browser bundle costs
 
@@ -73,7 +74,7 @@ the `node` condition, so a bundler cannot resolve it even by accident.
 
 ## Conformance
 
-179 / 179 vectors of the shared, language-agnostic
+328 / 328 vectors of the shared, language-agnostic
 [TSON conformance suite](https://github.com/litterat/ltr8-io-tson-test-suite).
 
 ## Documentation

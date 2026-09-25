@@ -26,6 +26,7 @@ export interface TextType {
   readonly maxLength?: bigint;
   readonly length?: bigint;
   readonly pattern?: string;
+  readonly members?: readonly string[];
 }
 
 /**
@@ -51,6 +52,7 @@ export interface RegexType {
   readonly maxLength?: bigint;
   readonly length?: bigint;
   readonly pattern?: string;
+  readonly members?: readonly string[];
 }
 
 /**
@@ -72,6 +74,7 @@ export interface UriType {
   readonly maxLength?: bigint;
   readonly length?: bigint;
   readonly pattern?: string;
+  readonly members?: readonly string[];
   readonly scheme?: string;
 }
 
@@ -91,6 +94,7 @@ export interface EmailType {
   readonly maxLength?: bigint;
   readonly length?: bigint;
   readonly pattern?: string;
+  readonly members?: readonly string[];
 }
 
 /**

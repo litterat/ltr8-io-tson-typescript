@@ -117,26 +117,32 @@ describe('heldEmptyRecord', () => {
 });
 
 describe('heldRecord', () => {
-  it("writes fields with state/value only where they depart from the constructor's own default", () => {
+  it("writes fields with optional/voidable/role/value only where they depart from the constructor's own default", () => {
     const body: RecordBody = {
       kind: 'record',
-      supertypes: ['base'],
+      supertypes: [{ name: 'base', arguments: [], annotations: [] }],
       fields: [
         {
           name: 'plain',
           type: { name: 'token', arguments: [], annotations: [] },
-          state: 'REQUIRED',
+          optional: false,
+          voidable: false,
+          role: 'FREE',
           annotations: [],
         },
         {
           name: 'fixed',
           type: { name: 'token', arguments: [], annotations: [] },
-          state: 'REQUIRED_FIXED',
+          optional: false,
+          voidable: false,
+          role: 'FIXED',
           value: { text: 'INDEX', form: 'UNQUOTED' },
           annotations: [],
         },
       ],
       groups: [],
+      extension: 'OPEN',
+      discriminators: [],
     };
     const held = heldRecord(body);
     expect(held.typeRef).toBe('record');
@@ -155,15 +161,22 @@ describe('heldRecord', () => {
     const [plain, fixed] = fieldsField.value.value.coreValue.elements;
     const plainRecord = plain?.value.coreValue;
     if (plainRecord?.kind !== 'record') throw new Error('unreachable');
-    // `state` and `value` are omitted for a field at its nominal REQUIRED default.
+    // `optional`/`voidable`/`role`/`value` are omitted for a field at its nominal FREE default.
     expect(plainRecord.fields.map((f) => f.name)).toEqual(['name', 'type']);
     const fixedRecord = fixed?.value.coreValue;
     if (fixedRecord?.kind !== 'record') throw new Error('unreachable');
-    expect(fixedRecord.fields.map((f) => f.name)).toEqual(['name', 'type', 'state', 'value']);
+    expect(fixedRecord.fields.map((f) => f.name)).toEqual(['name', 'type', 'role', 'value']);
   });
 
   it('omits `groups` entirely when there are none', () => {
-    const body: RecordBody = { kind: 'record', supertypes: [], fields: [], groups: [] };
+    const body: RecordBody = {
+      kind: 'record',
+      supertypes: [],
+      fields: [],
+      groups: [],
+      extension: 'OPEN',
+      discriminators: [],
+    };
     const held = heldRecord(body);
     if (held.coreValue.kind !== 'record') throw new Error('unreachable');
     expect(held.coreValue.fields.some((f) => f.name === 'groups')).toBe(false);

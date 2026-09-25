@@ -26,11 +26,11 @@ describe('atomTypeReader -- the AtomType bridge (§5)', () => {
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('reports ATOM_CONSTRAINT_VIOLATION and returns undefined when the atom rejects the token (parse failure)', () => {
+  it('reports ATOM_FORM_INVALID and returns undefined when the atom rejects the token (parse failure)', () => {
     const { ctx, diagnostics } = collectingContextOver('"not-a-number"');
     const value = runSync(atomTypeReader(stubIntType(), 'int32').read(ctx));
     expect(value).toBeUndefined();
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 
   it('reports ATOM_CONSTRAINT_VIOLATION and returns undefined when the atom rejects the value (validation failure)', () => {
@@ -61,11 +61,12 @@ describe('atomTreeReader -- wraps a delegate into a Value (§5)', () => {
     expect(value.annotations.values[0]?.name).toBe('doc');
   });
 
-  it('a soft-failed delegate read yields AbsentNode -- the diagnostic carries the story, not the node', () => {
+  it('a soft-failed delegate read yields no node at all -- the diagnostic carries the story (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('"nope"');
     const value = runSync(intTreeReader.read(ctx));
-    expect(value.kind).toBe('absent');
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+    // A read is all-or-nothing: no AbsentNode placeholder stands in for a refused leaf either.
+    expect(value).toBeUndefined();
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 });
 
@@ -75,10 +76,10 @@ describe('absentTreeReader -- the void reader (§7.3)', () => {
     expect(value).toEqual({ kind: 'absent', annotations: { values: [] } });
   });
 
-  it('reports TYPE_MISMATCH for anything else, still yielding AbsentNode', () => {
+  it('reports TYPE_MISMATCH for anything else, and yields no node at all (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('42');
     const value = runSync(absentTreeReader('void').read(ctx));
-    expect(value.kind).toBe('absent');
+    expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 

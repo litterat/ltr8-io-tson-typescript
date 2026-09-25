@@ -310,13 +310,15 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
             kind: 'fieldDef',
             annotations: [],
             name: 'id',
-            type: { typeRef: { kind: 'simpleRef', name: 'uuid' }, optional: false },
+            optional: false,
+            type: { typeRef: { kind: 'simpleRef', name: 'uuid' }, voidable: false },
           },
           {
             kind: 'fieldDef',
             annotations: [],
             name: 'title',
-            type: { typeRef: { kind: 'simpleRef', name: 'text' }, optional: false },
+            optional: false,
+            type: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
           },
         ],
       },
@@ -352,7 +354,8 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
               kind: 'fieldDef',
               annotations: [],
               name: 'vip',
-              type: { typeRef: { kind: 'simpleRef', name: 'boolean' }, optional: false },
+              optional: false,
+              type: { typeRef: { kind: 'simpleRef', name: 'boolean' }, voidable: false },
             },
           ],
         },
@@ -387,7 +390,8 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
               kind: 'fieldDef',
               annotations: [],
               name: 'vip',
-              type: { typeRef: { kind: 'simpleRef', name: 'boolean' }, optional: false },
+              optional: false,
+              type: { typeRef: { kind: 'simpleRef', name: 'boolean' }, voidable: false },
             },
           ],
         },
@@ -440,7 +444,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
 
 // ── Fields and groups (§5.2, §5.11) ─────────────────────────────────────
 
-describe('field states (§5.2)', () => {
+describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)', () => {
   function fieldsOf(recordBody: string) {
     const def = typeDefOf(recordBody);
     if (def.kind !== 'structuralTypeDef' || def.body.kind !== 'recordDef') {
@@ -449,56 +453,82 @@ describe('field states (§5.2)', () => {
     return def.body.entries;
   }
 
-  it('REQUIRED: type only', () => {
+  it('unmarked name, plain type: optional false, no type/modifier marks', () => {
     expect(fieldsOf('{ f: integer }')).toEqual([
       {
         kind: 'fieldDef',
         annotations: [],
         name: 'f',
-        type: { typeRef: { kind: 'simpleRef', name: 'integer' }, optional: false },
+        optional: false,
+        type: { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: false },
       },
     ]);
   });
 
-  it('OPTIONAL: type with adjacent "?"', () => {
-    const [f] = fieldsOf('{ f: integer? }');
-    expect(f).toMatchObject({ type: { optional: true } });
+  it('the name\'s own "?" (adjacent to the name) sets FieldDef.optional, independent of the type', () => {
+    const [f] = fieldsOf('{ f?: integer }');
+    expect(f).toMatchObject({ optional: true, type: { voidable: false } });
   });
 
-  it("rejects '?' separated from the type by whitespace", () => {
+  it("rejects a name '?' separated from the name by whitespace", () => {
+    expect(thrownBy(`${META} { x => { f ?: integer } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it('the type\'s own "?" (adjacent to the type) sets FieldType.voidable, independent of the name', () => {
+    const [f] = fieldsOf('{ f: integer? }');
+    expect(f).toMatchObject({ optional: false, type: { voidable: true } });
+  });
+
+  it("rejects a type '?' separated from the type by whitespace", () => {
     expect(thrownBy(`${META} { x => { f: integer ? } }`)).toBeInstanceOf(TsonParseError);
   });
 
-  it('REQUIRED_DEFAULT: type then "~ value"', () => {
-    expect(fieldsOf('{ f: integer ~ 3 }')).toEqual([
+  it('both marks compose: "f?: integer?" is optional AND voidable', () => {
+    const [f] = fieldsOf('{ f?: integer? }');
+    expect(f).toMatchObject({ optional: true, type: { voidable: true } });
+  });
+
+  it('"~ value" is the default modifier, carrying the literal', () => {
+    expect(fieldsOf('{ f?: integer ~ 3 }')).toEqual([
       {
         kind: 'fieldDef',
         annotations: [],
         name: 'f',
-        type: { typeRef: { kind: 'simpleRef', name: 'integer' }, optional: false },
+        optional: true,
+        type: { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: false },
         modifier: {
           kind: 'default',
-          value: { kind: 'literal', token: { kind: 'token', text: '3', form: 'unquoted' } },
+          token: { kind: 'token', text: '3', form: 'unquoted' },
         },
       },
     ]);
   });
 
-  it('REQUIRED_FIXED: type then "= value"', () => {
+  it('"= value" is the fixed modifier', () => {
     const [f] = fieldsOf('{ f: status = OPEN }');
     expect(f).toMatchObject({ modifier: { kind: 'fixed' } });
   });
 
-  it('OPTIONAL_FIXED with an absent fixed value ("= _"), legal only on an optional field grammatically permitted here', () => {
-    expect(fieldsOf('{ f: text? = _ }')).toEqual([
+  it('"=?" is the selector modifier, carrying no value', () => {
+    expect(fieldsOf('{ f: text =? }')).toEqual([
       {
         kind: 'fieldDef',
         annotations: [],
         name: 'f',
-        type: { typeRef: { kind: 'simpleRef', name: 'text' }, optional: true },
-        modifier: { kind: 'fixed', value: { kind: 'absent' } },
+        optional: false,
+        type: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+        modifier: { kind: 'selector' },
       },
     ]);
+  });
+
+  it("rejects a value after '=?' -- the selector takes none", () => {
+    expect(thrownBy(`${META} { x => { f: text =? v } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it("the absent sentinel '_' is no longer a modifier value", () => {
+    expect(thrownBy(`${META} { x => { f: text? = _ } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`${META} { x => { f: text ~ _ } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('a modifier alone (elided type-ref) parses -- legality of eliding is a later, semantic-layer check', () => {
@@ -508,15 +538,16 @@ describe('field states (§5.2)', () => {
         kind: 'fieldDef',
         annotations: [],
         name: 'f',
+        optional: false,
         modifier: {
           kind: 'default',
-          value: { kind: 'literal', token: { kind: 'token', text: '3', form: 'unquoted' } },
+          token: { kind: 'token', text: '3', form: 'unquoted' },
         },
       },
     ]);
   });
 
-  it("rejects a field-modifier value that is a container, since field-modifier admits only a token or '_'", () => {
+  it("rejects a field-modifier value that is a container, since field-modifier admits only a token, '=?', or nothing", () => {
     expect(thrownBy(`${META} { x => { f: text = [1 2] } }`)).toBeInstanceOf(TsonParseError);
   });
 
@@ -540,8 +571,18 @@ describe('field groups (§5.11)', () => {
         kind: 'groupDef',
         annotations: [],
         members: [
-          { annotations: [], name: 'email_addr', typeRef: { kind: 'simpleRef', name: 'email' } },
-          { annotations: [], name: 'phone_num', typeRef: { kind: 'simpleRef', name: 'phone' } },
+          {
+            annotations: [],
+            name: 'email_addr',
+            typeRef: { kind: 'simpleRef', name: 'email' },
+            voidable: false,
+          },
+          {
+            annotations: [],
+            name: 'phone_num',
+            typeRef: { kind: 'simpleRef', name: 'phone' },
+            voidable: false,
+          },
         ],
         optional: false,
       },
@@ -558,6 +599,24 @@ describe('field groups (§5.11)', () => {
 
   it('rejects a group with only one member', () => {
     expect(thrownBy(`${META} { x => { (a: text) } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it("a member's own type may carry '?', making it voidable (§5.11) -- no '?' on the member's name and no modifier", () => {
+    const def = typeDefOf('{ (a: text? | b: text) }');
+    if (def.kind !== 'structuralTypeDef' || def.body.kind !== 'recordDef') {
+      throw new Error('expected a record body');
+    }
+    const [group] = def.body.entries;
+    if (group?.kind !== 'groupDef') throw new Error('expected a groupDef');
+    expect(group.members[0]).toMatchObject({ name: 'a', voidable: true });
+    expect(group.members[1]).toMatchObject({ name: 'b', voidable: false });
+  });
+
+  it("rejects '?' on a member's own name, and a modifier on a member (§5.11)", () => {
+    expect(thrownBy(`${META} { x => { (a?: text | b: text) } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`${META} { x => { (a: text ~ "x" | b: text) } }`)).toBeInstanceOf(
+      TsonParseError,
+    );
   });
 });
 
@@ -807,24 +866,27 @@ describe("the spec's own worked example (§1.6)", () => {
     // refinement with bare-value bindings, which this parser cannot yet build (see the
     // "does not yet parse a real atom refinement's bare-value bindings" test and this session's
     // report: `AtomRefinement.bindings`'s frozen `RecordDef` type cannot represent it). Every
-    // other line is exactly as written in §1.6.
+    // other line is exactly as written in §1.6 (re-spelled under #23, Revision 36: `priority?:
+    // priority ~ 3`, `status?: status ~ OPEN`, `due?: date`, `tags?: [text]`, `history?: […]`;
+    // `flagged`'s own `priority: priority ~ N` stays unmarked, a parametric modifier written on
+    // an unmarked name, §5.7).
     const doc = parse(`
 !!id:"https://example.com/task.tn"
 ${META}
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 @doc:"Task-tracking example schema."
 {
   priority => integer
   status   => !enum [OPEN ACTIVE DONE]
   flagged  => <T, N> { entry: T  priority: priority ~ N }
   task => {
-    id:       uuid
-    title:    non_empty_text
-    priority: priority ~ 3
-    status:   status ~ OPEN
-    due:      date?
-    tags:     [text]?
-    history:  [flagged<status, 2>]?
+    id:        uuid
+    title:     non_empty_text
+    priority?: priority ~ 3
+    status?:   status ~ OPEN
+    due?:      date
+    tags?:     [text]
+    history?:  [flagged<status, 2>]
   }
 }
 `);
@@ -839,19 +901,22 @@ ${META}
       (e): e is Extract<typeof e, { kind: 'fieldDef' }> =>
         e.kind === 'fieldDef' && e.name === 'history',
     );
-    expect(history?.type).toMatchObject({
+    expect(history).toMatchObject({
       optional: true,
-      typeRef: {
-        kind: 'arrayRef',
-        elementType: {
-          optional: false,
-          typeRef: {
-            kind: 'genericRef',
-            name: 'flagged',
-            args: [
-              { kind: 'ref', ref: { kind: 'simpleRef', name: 'status' } },
-              { kind: 'value', value: { kind: 'token', text: '2', form: 'unquoted' } },
-            ],
+      type: {
+        voidable: false,
+        typeRef: {
+          kind: 'arrayRef',
+          elementType: {
+            optional: false,
+            typeRef: {
+              kind: 'genericRef',
+              name: 'flagged',
+              args: [
+                { kind: 'ref', ref: { kind: 'simpleRef', name: 'status' } },
+                { kind: 'value', value: { kind: 'token', text: '2', form: 'unquoted' } },
+              ],
+            },
           },
         },
       },

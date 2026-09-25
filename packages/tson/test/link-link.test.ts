@@ -22,7 +22,14 @@ function def(
   };
 }
 
-const RECORD: Top = { kind: 'record', supertypes: [], fields: [], groups: [] };
+const RECORD: Top = {
+  kind: 'record',
+  supertypes: [],
+  fields: [],
+  groups: [],
+  extension: 'OPEN',
+  discriminators: [],
+};
 
 function schema(
   id: string,
@@ -31,7 +38,7 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/35/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/36/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),

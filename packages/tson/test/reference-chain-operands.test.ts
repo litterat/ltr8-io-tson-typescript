@@ -18,16 +18,16 @@ import { compile, validate } from '../src/compiler/compile.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `!!id:"test://chain.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 `;
 
 describe('§4.3/§5.5/§5.7: an operand is judged after following its reference chain (§8.3)', () => {
   it('a refinement source may be an alias to a record', () => {
     const linked = resolveUserSchema(`${HEAD}{
-  base => { a: text  b: text }
+  base => { a?: text  b: text }
   base_alias => base
-  derived => base_alias ^ { a: text ~ "x" }
+  derived => base_alias ^ { a?: text ~ "x" }
 }`);
     expect(linked.entries.get('derived')?.supertypes).toContain('base_alias');
   });

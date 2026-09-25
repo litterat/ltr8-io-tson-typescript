@@ -6,33 +6,53 @@
 import type { Annotations, Token, TypeRef } from './typedef.js';
 
 /**
- * The meta-kernel's `field_state` enum (§5.2, §8.1) — five members, used only by
- * {@link RecordField}. `REQUIRED` is the default, omitted from canonical resolver-output
- * text ("fields at their default values are omitted").
+ * The meta-kernel's `field_role` enum (§5.2, §8.1) — what a written value at a field may be:
+ * `FREE` (any value of the declared type), `DEFAULT` (the value omission injects, overridable by
+ * a written one), or `FIXED` (the one value a written token MUST equal). `FREE` is the default,
+ * omitted from canonical resolver-output text ("fields at their default values are omitted").
+ *
+ * One of {@link RecordField}'s three independent questions (§5.2) — see that type's own doc for
+ * how `role` combines with `optional` and `voidable`, and {@link fieldOmission} for what omission
+ * then yields.
  */
-export type FieldState =
-  'REQUIRED' | 'REQUIRED_DEFAULT' | 'REQUIRED_FIXED' | 'OPTIONAL' | 'OPTIONAL_FIXED';
+export type FieldRole = 'FREE' | 'DEFAULT' | 'FIXED';
 
 /**
- * The meta-kernel's `element_state` enum (§5.3, §8.1) — the two-member counterpart to
- * {@link FieldState}, shared by array elements, tuple positions, and field groups ("tuples
- * and arrays share the two-member `element_state` enumeration; records use the five-member
- * `field_state`"). `REQUIRED` is the default, omitted from output.
+ * The meta-kernel's `element_state` enum (§5.3, §8.1) — shared by array elements, tuple
+ * positions, and field groups: an element slot cannot be omitted, so it has only the voidable
+ * question to answer, where a {@link RecordField} has three (§5.2). `REQUIRED` is the default,
+ * omitted from output.
  */
 export type ElementState = 'REQUIRED' | 'OPTIONAL';
 
 /**
- * The meta-kernel's `record_field` record (§5.2, §8.1): `name`/`type` are REQUIRED; `state`
- * always appears in resolver output even at its nominal {@link FieldState.REQUIRED} default,
- * since this is a plain data field with no notion of "omit when at default".
+ * The meta-kernel's `record_field` record (§5.2, §8.1) — a field answers three independent
+ * questions, one fact each, plus the value a non-`FREE` role carries:
  *
- * **`value` is one slot, and carries a parameter as readily as a literal.** Inside a
- * template body a token there is a parameter exactly when its text resolves against the
- * enclosing entry's declared type parameters; a closed entry has no parameters for one
- * to resolve into, so the same slot is unambiguous at both ends and needs no separate label
- * (§8.1's shadowing rule). §5.7's fixation — a parametric `= P` sits at `REQUIRED` until its
- * value is concrete, then becomes `REQUIRED_FIXED` — is what this single channel costs, and
- * where it is paid.
+ * 1. **May the key be omitted?** `optional` — the name's own `?`. `false` (unmarked) says the
+ *    key MUST be written; `true` says it MAY be omitted.
+ * 2. **May a written value be `_`?** `voidable` — the type's own `?`. `true` admits the absent
+ *    sentinel at this position, exactly as it does at any other voidable position.
+ * 3. **What may a written value be?** `role` — `FREE` (any value of the declared type),
+ *    `DEFAULT` (`~`, overridable), or `FIXED` (`=`, a written value MUST equal it).
+ *
+ * `optional`/`voidable` default to `false` and `role` to `FREE`; all three always appear on this
+ * host shape (no notion of "omit when at default" applies to the TypeScript type itself — that is
+ * a resolved-output *writer*'s concern) and none is optional here for exactly that reason.
+ *
+ * **`value` is one slot, and carries a parameter as readily as a literal.** Inside a template
+ * body a token there is a parameter exactly when its text resolves against the enclosing entry's
+ * declared type parameters; a closed entry has no parameters for one to resolve into, so the same
+ * slot is unambiguous at both ends and needs no separate label (§8.1's shadowing rule). `value` is
+ * present exactly when `role` is not `FREE` (§8.1's own invariant over this shape).
+ *
+ * **What omission yields is derived, never stored** — see {@link fieldOmission}, the one function
+ * every consumer of this shape calls to answer it, rather than re-deriving the three-way branch
+ * by hand. A fresh field-group member always flattens to `optional: true, role: FREE` (§5.11), but
+ * a *restated* member may carry `role: 'FIXED'` with a value that is checked when written and
+ * never injected (§5.11: "the one pin that does not inject") — this shape alone cannot tell the
+ * two apart, which is why {@link fieldOmission} takes an explicit `isGroupMember` flag from a
+ * caller that knows the enclosing `RecordBody.groups` rather than guessing it from `role` alone.
  *
  * `annotations` is always an array, never optional — absent-equals-empty, the same
  * convention {@link TypeDefinition} states for its own fields; a builder with none to carry
@@ -41,9 +61,50 @@ export type ElementState = 'REQUIRED' | 'OPTIONAL';
 export interface RecordField {
   readonly name: string;
   readonly type: TypeRef;
-  readonly state: FieldState;
+  readonly optional: boolean;
+  readonly voidable: boolean;
+  readonly role: FieldRole;
   readonly value?: Token;
   readonly annotations: Annotations;
+}
+
+/**
+ * What omission yields at one field (§5.2): `'MISSING'` — the key MUST be written, and its
+ * absence is a validation error (`optional: false`, whatever `role` says: a pin on an unmarked
+ * name is a marker the document states itself, never injected, so it is `MISSING` exactly like a
+ * plain required field); `'ABSENT'` — the key may be omitted and omission yields nothing
+ * (`optional: true, role: 'FREE'`, or any field-group member whatever its own `role` says);
+ * `'INJECTED'` — the key may be omitted and omission yields `field.value` (`optional: true`,
+ * `role` `'DEFAULT'` or `'FIXED'`, and not a group member).
+ *
+ * The **one** derivation every consumer of {@link RecordField} calls — the tree reader deciding
+ * what a field left out of the data yields, `schema/metaReader.ts` deciding whether a governing
+ * meta's own field injects, `link/typeInhabitance.ts` deciding whether a field terminates
+ * recursion, `compiler/definitionResolver.ts` ranking a refinement's omission axis — rather than
+ * each re-deriving the three-way branch over `optional`/`role` by hand.
+ */
+export type FieldOmission = 'MISSING' | 'ABSENT' | 'INJECTED';
+
+/**
+ * See {@link FieldOmission}. `isGroupMember` answers §5.11's own carve-out: a field-group member
+ * "the group governs and never supplies" whatever its own `role` says, because a restated member
+ * may carry `role: 'FIXED'` (checked against a written value, §5.7) without ever being injected —
+ * presence is what selects the group's alternative, and an injected member would always be
+ * present. A caller iterating a whole {@link RecordBody} decides this from `body.groups`; every
+ * other caller leaves it at its default of `false`.
+ */
+export function fieldOmission(
+  field: Pick<RecordField, 'optional' | 'role'>,
+  isGroupMember = false,
+): FieldOmission {
+  if (isGroupMember) return 'ABSENT';
+  if (!field.optional) return 'MISSING';
+  return field.role === 'FREE' ? 'ABSENT' : 'INJECTED';
+}
+
+/** Whether `fieldName` names a member of one of `groups` -- what a caller iterating a whole {@link RecordBody} passes as {@link fieldOmission}'s own `isGroupMember` flag. */
+export function isGroupMember(groups: readonly FieldGroup[], fieldName: string): boolean {
+  return groups.some((g) => g.members.includes(fieldName));
 }
 
 /**
@@ -51,7 +112,7 @@ export interface RecordField {
  * defaults to {@link ElementState.REQUIRED} — a bare group requires exactly one member
  * present; `?` makes it {@link ElementState.OPTIONAL} (at most one MAY be present). These
  * are the only two group states, matching the kernel's own `state: element_state ~
- * REQUIRED` field type exactly (not {@link FieldState}'s five members).
+ * REQUIRED` field type exactly (not {@link RecordField}'s three independent facts).
  */
 export interface FieldGroup {
   readonly members: readonly string[];
@@ -59,16 +120,42 @@ export interface FieldGroup {
 }
 
 /**
+ * How a record may be realised (§5.2, §8.1) — the meta-kernel's `record_extension_type`, written
+ * at a declaration as the word between `=>` and the type definition (`pet => abstract { ... }`,
+ * `leaf => final { ... }`), never inherited. `OPEN` (the default, omitted from output): the record
+ * has direct instances and any schema in the closure may compose onto or refine it. `ABSTRACT`: no
+ * direct instances — a position typed by it admits exactly its subtypes, and the tag is REQUIRED
+ * there in every encoding unless the record names {@link RecordBody.discriminators}. `FINAL`:
+ * direct instances and no subtype — composition or refinement naming it as a source is a resolver
+ * error; subtraction stays admissible, since it never joins the IS-A set FINAL constrains.
+ */
+export type RecordExtensionType = 'ABSTRACT' | 'FINAL' | 'OPEN';
+
+/**
  * The kernel's `record` constructor's own vocabulary, resolved (§5.2, §8.1) —
  * `access_pattern`/`size_type` are fixed by the constructor (`NAMED`/`FIXED`) and never
  * appear in output, so this shape carries neither.
  *
- * **`supertypes` and `groups` are conceptually OPTIONAL** (`[type_name]?`, `[field_group]?`)
+ * **`supertypes` and `groups` are conceptually OPTIONAL** (`[type_ref]?`, `[field_group]?`)
  * but modelled as bare, always-present arrays: **absent and empty are the same list** here,
  * the convention {@link TypeDefinition}'s own note states in full — a resolver MUST supply
  * `[]` for either field rather than leaving it unset. `fields` is REQUIRED and carries no
  * such normalisation question: an absent `fields` is a violation a reader reports and
  * abandons the construction over, never a value that reaches this shape as `[]`.
+ *
+ * **`supertypes` holds `type_ref`, not a bare name** (§5.8, §8.1): a parent may still be an open
+ * application inside a held template body (`<T> result<T> & { ... }`), and a name cannot carry
+ * the arguments that say which instantiation is meant. A closed supertype carries no arguments and
+ * is written as a bare token, the same spelling a name had; the *derived* index,
+ * {@link TypeDefinition.supertypes}, stays plain names, since it is computed only once every
+ * parent is an actual type.
+ *
+ * **`extension` and `discriminators` are the two record-only facts §5.2's definition marks and
+ * `=?` selector lower into.** `extension` defaults to `OPEN` (see {@link RecordExtensionType});
+ * `discriminators` names the fields (in declaration order) this record's members are selected by
+ * — empty when the family, if any, is tag-dispatched rather than member-dispatched — and a
+ * non-empty list implies `extension: 'ABSTRACT'` (a record its members are selected from has no
+ * values of its own). Both are absent-equals-empty/default the same way `supertypes`/`groups` are.
  *
  * Named `RecordBody`, not `Record` — the kernel's own constructor is literally called
  * `record`, but `Record` is a built-in TypeScript utility type and importing that name here
@@ -76,9 +163,11 @@ export interface FieldGroup {
  */
 export interface RecordBody {
   readonly kind: 'record';
-  readonly supertypes: readonly string[];
+  readonly supertypes: readonly TypeRef[];
   readonly fields: readonly RecordField[];
   readonly groups: readonly FieldGroup[];
+  readonly extension: RecordExtensionType;
+  readonly discriminators: readonly string[];
 }
 
 /**
@@ -125,7 +214,7 @@ export interface MapBody {
 /**
  * The meta-kernel's `tuple_element` record (§5.3, §8.1): one position of a resolved
  * {@link TupleBody}. `state` shares the two-member {@link ElementState} enumeration with
- * array elements, not {@link FieldState}'s five members.
+ * array elements, not {@link RecordField}'s three independent facts.
  */
 export interface TupleElement {
   readonly elementType: TypeRef;
@@ -164,23 +253,38 @@ export interface ChoiceBody {
 }
 
 /**
+ * Which lexical profile an enum's members lie in (§5.4, §7.4, §8.1) — the meta-kernel's
+ * `enum_profile`. `IDENTIFIER` (the default) constrains every member to §7.7's identifier
+ * grammar and carries the name-hygiene rules that follow from it (§8.2, §11.4); `TEXT` admits any
+ * text as a member and carries none of them — the enum is string-class under `TEXT` whatever its
+ * members' spellings. `IDENTIFIER` narrows `TEXT`, the one direction a refinement may move it
+ * (§5.7's settable-once facets).
+ */
+export type EnumProfile = 'IDENTIFIER' | 'TEXT';
+
+/**
  * The kernel's `enum` constructor's own vocabulary, resolved (§4.1, §8.1): `members: enum_set`
- * — `!set_type { element_type: identifier }` (inheriting `set_type`'s own `min_items: 1`
+ * — `!set_type { element_type: text }` (inheriting `set_type`'s own `min_items: 1`
  * default) — backs `boolean` (`[true false]`), the kernel's own internal enumerations
- * (`product_access_type`, `field_state`, `scope_kind`, ...), and every user-declared
+ * (`product_access_type`, `field_role`, `scope_kind`, ...), and every user-declared
  * `!enum [...]` instance. Kept as an ordered array, matching how {@link
  * TypeDefinition.supertypes}/{@link TypeDefinition.subtypes} already represent conceptual
  * sets — member order is preserved for deterministic output, not semantically significant.
  *
+ * `profile` defaults to `'IDENTIFIER'` (see {@link EnumProfile}) and is always present on this
+ * host shape for the same reason `RecordField`'s own three facts are.
+ *
  * **Two constraints this type does not itself enforce**, both `enum_set`'s own vocabulary
  * (§4.2, §9): at least one member (`min_items: 1` — an empty `!enum []` is a schema-load
- * error), and every member individually well-formed against §7.7's identifier grammar (an
- * `!enum` member is no longer any whitespace-free lexeme — `!enum [1 2 3]` is now an error).
- * Enforcing either is a resolver/compiler concern, not this value model's.
+ * error), and, where `profile` is `'IDENTIFIER'`, every member individually well-formed against
+ * §7.7's identifier grammar (`!enum [1 2 3]` is a schema-load error under `IDENTIFIER`; under
+ * `TEXT` a member is any text and this grammar does not apply). Enforcing either is a
+ * resolver/compiler concern, not this value model's.
  */
 export interface EnumBody {
   readonly kind: 'enum';
   readonly members: readonly string[];
+  readonly profile: EnumProfile;
 }
 
 /**
@@ -224,7 +328,7 @@ export interface TemplateBody {
   /**
    * The parameter names this entry binds, in declaration order — the arity and order an
    * application binds against (§5.10, §8.1). Read this instead of a stored
-   * `TypeDefinition.parameters` field, which the kernel no longer carries.
+   * `TypeDefinition.parameters` field — the kernel has no such field.
    */
   readonly parameters: readonly string[];
 
@@ -234,4 +338,22 @@ export interface TemplateBody {
    * parse is a later work package's job, not this package's.
    */
   readonly template: string;
+
+  /**
+   * Present, and always `'ABSTRACT'`, exactly when a **record-bodied** template is a family base
+   * nameable at a type position (§5.10): absent means the template is no type at all, and the
+   * fact is optional with **no default** so a consumer never has to tell "omitted at its default"
+   * from "not a type" by parsing the held text — the same reasoning `RecordBody.extension`'s
+   * default does NOT apply here.
+   */
+  readonly extension?: RecordExtensionType;
+
+  /**
+   * Present and non-empty exactly where a record-bodied template base's members are selected by
+   * reading these fields rather than by tag — whatever selectors survive erasure of the
+   * template's own parameters, in the order their pins are compared as a tuple (§5.10). Optional
+   * with no default, mirroring {@link extension}: absence says nothing was derived, not "empty at
+   * its default".
+   */
+  readonly discriminators?: readonly string[];
 }

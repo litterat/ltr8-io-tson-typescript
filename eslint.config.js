@@ -107,6 +107,24 @@ export default defineConfig(
               message:
                 'compiler/ must not import bind/. bind/encode.ts exposes toCoreValue so the resolver can merge on the wire record without reaching for a writer; keep that direction.',
             },
+            {
+              target: './packages/tson/src/json/**',
+              from: [
+                './packages/tson/src/lexer/**',
+                './packages/tson/src/stream/**',
+                './packages/tson/src/reader/**',
+                './packages/tson/src/compiler/**',
+                './packages/tson/src/tree/**',
+                './packages/tson/src/write/**',
+                './packages/tson/src/facade/**',
+              ],
+              message:
+                'json/ is a stack of its own with no dependency on the TSON text encoding’s ' +
+                'lexer, stream, reader, compiler, tree, writer or facade modules -- the TypeScript ' +
+                'form of the reference’s "tson-json has no dependency on tson-compiler". It may ' +
+                'use core/, io/, unicode/, atom/, base/, value/, schema/, link/, annotations/ and ' +
+                'bind/.',
+            },
           ],
         },
       ],

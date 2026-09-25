@@ -69,9 +69,9 @@ describe('schemalessTreeReader -- built-in vocabulary leaves (§5, TypeRefCheck 
     expect((node.value as Uuid).bytes).toHaveLength(16);
   });
 
-  it('reports ATOM_CONSTRAINT_VIOLATION and reads as absent when the token violates the atom', () => {
+  it('reports ATOM_FORM_INVALID and reads as absent when the token is not shaped like the atom at all', () => {
     const { value, diagnostics } = readCollect('!uuid "not-a-uuid"');
-    expect(diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+    expect(diagnostics.map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
     expect(value).toEqual({ kind: 'absent', typeRef: 'uuid', annotations: { values: [] } });
   });
 
@@ -171,6 +171,30 @@ describe('schemalessTreeReader -- map (§2.6)', () => {
   it('two different keys never collide', () => {
     const { diagnostics } = readCollect('{ [1 2] => "x"  [1 3] => "y" }');
     expect(diagnostics).toEqual([]);
+  });
+
+  it('reports DUPLICATE_MAP_KEY for two decimal keys differing only in scale (§2.6, §5.6 -- 1.5 and 1.50 are one value)', () => {
+    const { diagnostics } = readCollect('{ 1.5 => "a"  1.50 => "b" }');
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
+  });
+
+  it('reports DUPLICATE_MAP_KEY for two decimal keys with a leading-zero-free and a padded spelling (.5 and 0.50)', () => {
+    const { diagnostics } = readCollect('{ .5 => "a"  0.50 => "b" }');
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
+  });
+
+  it('reports DUPLICATE_MAP_KEY for two !datetime keys naming one instant (§5.4 -- offset is a spelling)', () => {
+    const { diagnostics } = readCollect(
+      '{ !datetime "2026-01-01T10:00:00+01:00" => "a"  !datetime "2026-01-01T09:00:00Z" => "b" }',
+    );
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
+  });
+
+  it('reports DUPLICATE_MAP_KEY for two !time keys naming one time-of-day across a day boundary (§5.4)', () => {
+    const { diagnostics } = readCollect(
+      '{ !time "23:30:00-02:00" => "a"  !time "01:30:00Z" => "b" }',
+    );
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
   });
 });
 

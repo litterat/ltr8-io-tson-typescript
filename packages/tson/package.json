@@ -1,6 +1,6 @@
 {
   "name": "@ltr8/tson",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "type": "module",
   "sideEffects": false,
   "license": "Apache-2.0",
@@ -117,6 +117,17 @@
       "require": {
         "types": "./dist/write.d.cts",
         "default": "./dist/write.cjs"
+      }
+    },
+    "./json": {
+      "@ltr8/source": "./src/json/index.ts",
+      "import": {
+        "types": "./dist/json.d.ts",
+        "default": "./dist/json.js"
+      },
+      "require": {
+        "types": "./dist/json.d.cts",
+        "default": "./dist/json.cjs"
       }
     },
     "./source": {

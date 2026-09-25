@@ -44,6 +44,9 @@ function stubMaterialiser(
     closeApplication(): string {
       throw new Error('not exercised by this test');
     },
+    closeApplicationAs(): TypeDefinition | undefined {
+      throw new Error('not exercised by this test');
+    },
     materialise() {
       throw new Error('not exercised by this test');
     },
@@ -202,7 +205,18 @@ describe('rewrite', () => {
           kind: 'record',
           supertypes: [],
           groups: [],
-          fields: [{ name: 'v', type: refT('eager'), state: 'REQUIRED', annotations: [] }],
+          fields: [
+            {
+              name: 'v',
+              type: refT('eager'),
+              optional: false,
+              voidable: false,
+              role: 'FREE',
+              annotations: [],
+            },
+          ],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
       [
@@ -239,7 +253,18 @@ describe('rewrite', () => {
           kind: 'record',
           supertypes: [],
           groups: [],
-          fields: [{ name: 'v', type: refT('untouched'), state: 'REQUIRED', annotations: [] }],
+          fields: [
+            {
+              name: 'v',
+              type: refT('untouched'),
+              optional: false,
+              voidable: false,
+              role: 'FREE',
+              annotations: [],
+            },
+          ],
+          extension: 'OPEN',
+          discriminators: [],
         }),
       ],
     ]);

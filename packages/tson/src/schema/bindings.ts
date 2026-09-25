@@ -92,10 +92,12 @@ import type {
   ChoiceBody,
   ElementState,
   EnumBody,
+  EnumProfile,
   FieldGroup,
-  FieldState,
+  FieldRole,
   MapBody,
   RecordBody,
+  RecordExtensionType,
   RecordField,
   TemplateBody,
   TupleBody,
@@ -432,8 +434,11 @@ const valueBinding: Binding<unknown> = atom<unknown>('value');
 
 // The kernel declares no `type_kind` (§4.1, §8.1): a resolved entry's kind is derived
 // (`typeKind`, `schema/meta/typedef.ts`) rather than carried, so there is no such atom to bind.
-const fieldStateBinding: Binding<FieldState> = atom<FieldState>('field_state');
+const fieldRoleBinding: Binding<FieldRole> = atom<FieldRole>('field_role');
 const elementStateBinding: Binding<ElementState> = atom<ElementState>('element_state');
+const recordExtensionTypeBinding: Binding<RecordExtensionType> =
+  atom<RecordExtensionType>('record_extension_type');
+const enumProfileBinding: Binding<EnumProfile> = atom<EnumProfile>('enum_profile');
 const complexComponentBinding: Binding<ComplexComponent> =
   atom<ComplexComponent>('complex_component');
 const floatFormatBinding: Binding<FloatFormat> = atom<FloatFormat>('ieee_format');
@@ -731,19 +736,31 @@ const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   fields: [
     field<RecordField, 'name'>(0, 'name', 'name', identifierBinding),
     field<RecordField, 'type'>(1, 'type', 'type', typeRefAnnotatedBinding),
-    field<RecordField, 'state'>(2, 'state', 'state', fieldStateBinding),
-    optional<RecordField, 'value'>(3, 'value', 'value', tokenBinding),
-    field<RecordField, 'annotations'>(4, 'annotations', 'annotations', annotationsBinding),
+    field<RecordField, 'optional'>(2, 'optional', 'optional', booleanBinding),
+    field<RecordField, 'voidable'>(3, 'voidable', 'voidable', booleanBinding),
+    field<RecordField, 'role'>(4, 'role', 'role', fieldRoleBinding),
+    optional<RecordField, 'value'>(5, 'value', 'value', tokenBinding),
+    field<RecordField, 'annotations'>(6, 'annotations', 'annotations', annotationsBinding),
   ],
   construct: (slots) => {
-    const [name, type, state, value, annotations] = slots as [
+    const [name, type, optionalFlag, voidable, role, value, annotations] = slots as [
       string,
       TypeRef,
-      FieldState,
+      boolean,
+      boolean,
+      FieldRole,
       Token | undefined,
       Annotations,
     ];
-    return { name, type, state, ...opt('value', value), annotations };
+    return {
+      name,
+      type,
+      optional: optionalFlag,
+      voidable,
+      role,
+      ...opt('value', value),
+      annotations,
+    };
   },
 });
 
@@ -775,18 +792,27 @@ const recordBodyBinding: RecordBinding<RecordBody> = record<RecordBody>({
       0,
       'supertypes',
       'supertypes',
-      arrayOf<string>(identifierBinding),
+      arrayOf<TypeRef>(typeRefAnnotatedBinding),
     ),
     field<RecordBody, 'fields'>(1, 'fields', 'fields', arrayOf<RecordField>(recordFieldBinding)),
     field<RecordBody, 'groups'>(2, 'groups', 'groups', arrayOf<FieldGroup>(fieldGroupBinding)),
+    field<RecordBody, 'extension'>(3, 'extension', 'extension', recordExtensionTypeBinding),
+    field<RecordBody, 'discriminators'>(
+      4,
+      'discriminators',
+      'discriminators',
+      arrayOf<string>(identifierBinding),
+    ),
   ],
   construct: (slots) => {
-    const [supertypes, fields, groups] = slots as [
-      readonly string[],
+    const [supertypes, fields, groups, extension, discriminators] = slots as [
+      readonly TypeRef[],
       readonly RecordField[],
       readonly FieldGroup[],
+      RecordExtensionType,
+      readonly string[],
     ];
-    return { kind: 'record', supertypes, fields, groups };
+    return { kind: 'record', supertypes, fields, groups, extension, discriminators };
   },
 });
 
@@ -890,10 +916,15 @@ const choiceBodyBinding: RecordBinding<ChoiceBody> = record<ChoiceBody>({
 });
 
 const enumBodyBinding: RecordBinding<EnumBody> = record<EnumBody>({
-  fields: [field<EnumBody, 'members'>(0, 'members', 'members', arrayOf<string>(identifierBinding))],
+  fields: [
+    // `enum_set` is `!set_type { element_type: text }` (§7.4, #12): members are TEXT, not
+    // identifiers, so a `TEXT`-profile enum can admit any string.
+    field<EnumBody, 'members'>(0, 'members', 'members', arrayOf<string>(textBinding)),
+    field<EnumBody, 'profile'>(1, 'profile', 'profile', enumProfileBinding),
+  ],
   construct: (slots) => {
-    const [members] = slots as [readonly string[]];
-    return { kind: 'enum', members };
+    const [members, profile] = slots as [readonly string[], EnumProfile];
+    return { kind: 'enum', members, profile };
   },
 });
 
@@ -1070,13 +1101,17 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
     optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', bigintBinding),
     optional<TextType, 'length'>(2, 'length', 'length', bigintBinding),
     optional<TextType, 'pattern'>(3, 'pattern', 'pattern', textBinding),
+    // `text_member_set => !set_type { element_type: text }` (§7.4, #22): a value set on the text
+    // tier itself, reached the same way `integer_type.members`/`decimal_type.members` are.
+    optional<TextType, 'members'>(4, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [minLength, maxLength, length, pattern] = slots as [
+    const [minLength, maxLength, length, pattern, members] = slots as [
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'text_type',
@@ -1084,6 +1119,7 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
       ...opt('maxLength', maxLength),
       ...opt('length', length),
       ...opt('pattern', pattern),
+      ...opt('members', members),
     };
   },
 });
@@ -1116,14 +1152,16 @@ const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
     optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
     optional<RegexType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<RegexType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
+    optional<RegexType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern] = slots as [
+    const [spec, minLength, maxLength, length, pattern, members] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'regex_type',
@@ -1132,6 +1170,7 @@ const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
       ...opt('maxLength', maxLength),
       ...opt('length', length),
       ...opt('pattern', pattern),
+      ...opt('members', members),
     };
   },
 });
@@ -1144,15 +1183,17 @@ const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
     optional<UriType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<UriType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
     optional<UriType, 'scheme'>(5, 'scheme', 'scheme', textBinding),
+    optional<UriType, 'members'>(6, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern, scheme] = slots as [
+    const [spec, minLength, maxLength, length, pattern, scheme, members] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'uri_type',
@@ -1162,6 +1203,7 @@ const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
       ...opt('length', length),
       ...opt('pattern', pattern),
       ...opt('scheme', scheme),
+      ...opt('members', members),
     };
   },
 });
@@ -1173,14 +1215,16 @@ const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
     optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
     optional<EmailType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<EmailType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
+    optional<EmailType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern] = slots as [
+    const [spec, minLength, maxLength, length, pattern, members] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
+      readonly string[] | undefined,
     ];
     return {
       kind: 'email_type',
@@ -1189,6 +1233,7 @@ const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
       ...opt('maxLength', maxLength),
       ...opt('length', length),
       ...opt('pattern', pattern),
+      ...opt('members', members),
     };
   },
 });
@@ -1651,8 +1696,10 @@ export {
   textBinding,
   booleanBinding,
   bigintBinding,
-  fieldStateBinding,
+  fieldRoleBinding,
   elementStateBinding,
+  recordExtensionTypeBinding,
+  enumProfileBinding,
   complexComponentBinding,
   floatFormatBinding,
   bytesEncodingBinding,

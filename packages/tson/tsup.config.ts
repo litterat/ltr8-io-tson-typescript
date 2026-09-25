@@ -11,6 +11,7 @@ export default defineConfig([
       write: 'src/write/index.ts',
       identity: 'src/identity/index.ts',
       stdlib: 'src/stdlib/index.ts',
+      json: 'src/json/index.ts',
     },
     format: ['esm', 'cjs'],
     dts: true,

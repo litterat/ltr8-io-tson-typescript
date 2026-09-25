@@ -40,7 +40,7 @@ import { runCompile } from './commands/compile.js';
 import { runHash } from './commands/hash.js';
 import { runInitExample } from './commands/initExample.js';
 import { runPolicy } from './commands/policy.js';
-import { runValidate, type ValidateOptions } from './commands/validate.js';
+import { runValidate, type InputKind, type ValidateOptions } from './commands/validate.js';
 
 export { EXIT } from './exit.js';
 
@@ -54,8 +54,9 @@ Usage:
   tson init-example [<dir>]
 
 Commands:
-  validate       Validate data documents against a schema they name, or (with no --schema)
-                 base syntax and the built-in type vocabulary alone. See 'tson validate --help'.
+  validate       Validate data documents (.tn text, or .json under a schema) against a schema
+                 they name, or (with no --schema) base syntax and the built-in type vocabulary
+                 alone for .tn text. See 'tson validate --help'.
   compile        Resolve and link a schema document against the bundled standard library and
                  report whether it compiles. See 'tson compile --help'.
   policy         Print the [TSON-DATA] §8.2 Unicode policy this run would apply, with no
@@ -111,19 +112,32 @@ Reach for the unit or a named combination before dropping a level: both keep the
 everywhere else. 'tson policy' with the same flags prints exactly what they would apply.`;
 
 const VALIDATE_USAGE =
-  "usage: tson validate [--schema <file-or-url> --root <name>] [<policy options>] [--format text|json|tson] <file|->...   ('-' reads one data document from stdin)";
+  "usage: tson validate [--schema <file-or-url> --root <name>] [--input tson|json] [<policy options>] [--format text|json|tson] <file|->...   ('-' reads one data document from stdin)";
 
-const VALIDATE_HELP = `usage: tson validate [--schema <file-or-url> --root <name>] [<policy options>] [--format text|json|tson] <file|->...
+const VALIDATE_HELP = `usage: tson validate [--schema <file-or-url> --root <name>] [--input tson|json] [<policy options>] [--format text|json|tson] <file|->...
 
 Validates data documents. With no --schema: base syntax and the built-in type vocabulary
-only (Class 1). With --schema: also give --root, and every file's root value is read
-against that schema entry. '-' reads one data document from standard input, at most once,
-always as data. Never fetches or opens a schema a data file's own !!schema directive
-names -- only --schema/--root, given on the command line, is ever consulted.
+only (Class 1), for TSON text. With --schema: also give --root, and every file's root value
+is read against that schema entry. Never fetches or opens a schema a data file's own
+!!schema directive names -- only --schema/--root, given on the command line, is ever
+consulted.
+
+A file named *.json (case-insensitive) is a JSON encoding of TSON data ([TSON-JSON] §3.1)
+and is read against --schema/--root, which are then required -- this encoding has no
+schemaless reading ([TSON-JSON] §3.4). Every other file, and '-', is TSON text. '-' reads
+one data document from standard input, at most once.
+
+--input tson|json forces every file this run reads, '-' included, to that one encoding,
+overriding the by-extension default above -- 'cat data.tn | tson validate --schema s.tn
+--root person --input json -' reads stdin as JSON even though it carries no .json name, and
+'--input tson' reads a .json-named file as TSON text. Without --input, '-' is always TSON
+text, whatever --schema/--root say -- unlike the reference implementation's own CLI, which
+infers JSON for stdin from a binding alone (see STATUS.md's own note on the divergence).
 
 options:
   --schema <file-or-url>   schema to validate against (a local path or an https:// URL)
   --root <name>            the schema entry the root value reads against (with --schema)
+  --input tson|json        force every input's encoding instead of the by-extension default
   --format text|json|tson  output format (default: text)
 
 ${POLICY_OPTIONS_HELP}
@@ -239,6 +253,12 @@ function parseFormatArg(raw: string): Format {
   }
 }
 
+/** `--input`'s own value: `tson` or `json`, nothing else. */
+function parseInputArg(raw: string): InputKind {
+  if (raw === 'tson' || raw === 'json') return raw;
+  throw new UsageError(`--input must be 'tson' or 'json', not '${raw}'`);
+}
+
 // ── validate ─────────────────────────────────────────────────────────────────────────────────
 
 function parseValidateArgs(
@@ -248,6 +268,7 @@ function parseValidateArgs(
   let format: Format = 'text';
   let schemaLocation: string | undefined;
   let root: string | undefined;
+  let input: InputKind | undefined;
   const files: string[] = [];
   // `--` ends option parsing, so a file genuinely named like a flag stays reachable.
   let literal = false;
@@ -268,6 +289,9 @@ function parseValidateArgs(
       case '--root':
         root = requireValue(args, ++i, '--root');
         break;
+      case '--input':
+        input = parseInputArg(requireValue(args, ++i, '--input'));
+        break;
       case '--format':
         format = parseFormatArg(requireValue(args, ++i, '--format'));
         break;
@@ -282,6 +306,7 @@ function parseValidateArgs(
       policy,
       ...(schemaLocation === undefined ? {} : { schemaLocation }),
       ...(root === undefined ? {} : { root }),
+      ...(input === undefined ? {} : { input }),
     },
     format,
   };

@@ -245,10 +245,19 @@ export class TsonSchemaFetchError extends TsonError {
 }
 
 /**
- * A fetched schema's bytes do not hash to the `?sha256=` pin its reference carries (§2.2.1).
+ * A schema's bytes do not hash to the `?sha256=` pin some reference to it carries (§2.2.1) --
+ * whether that reference was fetched, or is a `!!import`/`!!meta` line inside another schema
+ * this process already holds registered (§10.2's "a later pinned reference is verified against
+ * the identity's own recorded hash").
  *
  * The id is identity and the hash is integrity; a mismatch means the document at that id is
  * not the one the reference was written against.
+ *
+ * **A §8.1 resolver error, per §10.2** -- the bytes *were* obtained, so this is a finding about
+ * them, distinct from `TsonSchemaFetchError`'s five never-obtained reasons; `core/diagnostic.ts`'s
+ * own `SCHEMA_ERROR` TSDoc has the same rule for a `Diagnostic`-bearing caller. This class is
+ * thrown directly, uncaught by any diagnostic classifier, so the category lives on this class's
+ * own contract rather than on a `Diagnostic.code` today.
  */
 export class TsonContentHashMismatchError extends TsonError {
   override readonly name = 'TsonContentHashMismatchError';

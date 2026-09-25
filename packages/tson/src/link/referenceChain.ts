@@ -131,3 +131,37 @@ export function resolvesToScoped(name: string, entries: EntryLookup): boolean {
   const definition = terminalDefinition(name, entries);
   return definition !== undefined && isScopedBody(definition.body);
 }
+
+// ── §7.2's alias flattening: the written names that mean one declared type ─────────────────────
+//
+// Both encodings' `$type`/`!type-ref` admission tests need "every name that means this one" --
+// [TSON-SCHEMA] §7.2's own "after following the reference chain of both to its terminal" -- so
+// this is the one definition, shared rather than restated per encoding (`compiler/subsumption.ts`
+// imports it for the text reader's own admission test, `json/schema/dispatchTag.ts`/
+// `dispatchMember.ts`/`json/schema/record.ts`/`atoms.ts` for the JSON one, none of which may
+// depend on the others -- `link/` is the one zone both sides already reach).
+
+/** The written names that mean `name`: itself, plus every entry whose own reference chain (§8.3) terminates at it. */
+export function selfNames(
+  name: string,
+  entries: ReadonlyMap<string, TypeDefinition>,
+): ReadonlySet<string> {
+  const lookup: EntryLookup = (n) => entries.get(n);
+  const names = new Set<string>([name]);
+  for (const alias of entries.keys()) {
+    if (terminal(alias, lookup) === name) names.add(alias);
+  }
+  return names;
+}
+
+/** {@link selfNames}, unioned over every name in `names` -- a family base's own aliases plus every subtype's. */
+export function admitting(
+  names: readonly string[],
+  entries: ReadonlyMap<string, TypeDefinition>,
+): ReadonlySet<string> {
+  const all = new Set<string>();
+  for (const name of names) {
+    for (const alias of selfNames(name, entries)) all.add(alias);
+  }
+  return all;
+}

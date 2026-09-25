@@ -47,17 +47,23 @@ const CYCLIC_SCHEMA = linkedSchema(
           kind: 'record',
           supertypes: [],
           groups: [],
+          extension: 'OPEN',
+          discriminators: [],
           fields: [
             {
               name: 'value',
               type: { name: 'text', arguments: [], annotations: [] },
-              state: 'REQUIRED',
+              optional: false,
+              voidable: false,
+              role: 'FREE',
               annotations: [],
             },
             {
               name: 'next',
               type: { name: 'node', arguments: [], annotations: [] },
-              state: 'OPTIONAL',
+              optional: true,
+              voidable: true,
+              role: 'FREE',
               annotations: [],
             },
           ],
@@ -132,8 +138,8 @@ describe('validate -- collects diagnostics rather than throwing', () => {
 
 const USER_SCHEMA = `
 !!id:"test://person.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 {
   person => {
     name: text

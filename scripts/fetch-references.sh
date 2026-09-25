@@ -18,12 +18,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REF_DIR="$REPO_ROOT/.references"
 
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
-JAVA_PIN="6655418d666e26e333e8f3a17f3374c2e603951d"
+JAVA_PIN="0c1512c766a70792b409db3e5f6a717ae68ebd15"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-# 277 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
-# 2026 Revision 35 baseline: the reshaped type_definition, duration split from period, !bytes as
-# the one binary tag, value-space equality, and the scoped-value vectors under class2/validate/.
-SUITE_PIN="96f4f7870d23c3bb0b4f0061c6945e8c2e3d2ed6"
+# 328 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
+# 2026 Revision 36 baseline: three-slot fields, record extension and the =? selector, type_ref
+# supertypes, the record-bodied template as a family base, declared applications as entries,
+# and enum profiles.
+SUITE_PIN="f9fa96f09f5e74dc45b40ceca48fa6dd8115464d"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"

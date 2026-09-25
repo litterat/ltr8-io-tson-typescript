@@ -21,29 +21,32 @@
  * `atom/numeric/binary.ts`/`base32.ts`/`base64.ts`, reachable by an explicit `encoding` selector,
  * for the schema layer's `bytes_type.encoding` facet to hand to.
  *
- * **Deliberately incomplete, matching the Java reference's own table exactly, gap for gap.**
- * `BuiltinTypeVocabulary.java`'s own Javadoc lists what it seeds and stops there; three `core.tn`
- * names are *not* built-in-vocabulary entries in the reference and are not here either:
+ * **`boolean` is registered, reading a host `boolean` rather than an enum member's text** (§5.5)
+ * -- `atom/boolean.ts`'s `createBooleanParser`, matching `BuiltinTypeVocabulary.java`'s own
+ * `BooleanParser`. `core.tn`'s `boolean => !enum [true false]` is schema-shape-identical to any
+ * other two-member enum, so this is the schemaless vocabulary's own line between "an enum
+ * instance" and "the family whose members happen to spell a host boolean" -- the same line
+ * `compiler/atomBuilder.ts`'s own `{true, false}` special case draws on the schema-compiled side.
+ * `!boolean` accepts exactly the tokens `true` and `false`, case-sensitive, whatever form wrote
+ * them: a typed position never consults the form, so `!boolean "true"` and `!boolean true` are one
+ * value, and any other token is the enum-member violation every enum's member set gives -- a
+ * validation error, not a parse failure.
  *
- * - `boolean` (`!enum [true false]`) -- an enum instance, not an atom; `EnumParser` exists in
- *   Java but is never registered in `BuiltinTypeVocabulary`, so `!boolean` schemaless is
- *   `UNKNOWN_TYPE_REF` in both implementations. An untyped `true`/`false` token still resolves
- *   via base type resolution (§4.2) regardless -- this only affects the explicit `!boolean`
- *   annotation.
- * - `regex` (`!regex_type {}`) -- `RegexParser.java` exists but is never registered either, so
- *   `!regex` schemaless is likewise `UNKNOWN_TYPE_REF` in both. (An explicitly schema-typed
- *   `regex` field still works once a schema is in scope -- that path doesn't go through this
- *   table at all.)
+ * **Deliberately incomplete otherwise, matching the Java reference's own table exactly, gap for
+ * gap.** `BuiltinTypeVocabulary.java`'s own Javadoc lists what it seeds and stops there; two more
+ * `core.tn` names are *not* built-in-vocabulary entries in the reference and are not here either:
+ *
+ * - `regex` (`!regex_type {}`) -- not a Part 1 built-in at all (§5.5's table has no `regex` row;
+ *   it is a `core.tn` name reachable only through a schema's own import), so `!regex` schemaless
+ *   is `UNKNOWN_TYPE_REF` here exactly as an undeclared name anywhere else would be
+ *   (`typeRefCheck.ts`). An explicitly schema-typed `regex` field still works once a schema is in
+ *   scope -- that path doesn't go through this table at all.
  * - `unknown` (`!unknown_type {}`) -- "the universe of types, not a token shape" (§4.1's `data`
  *   kind's own doc); there is no atom contract that could accept-and-narrow every value, so no
  *   parser exists for it in either implementation.
- *
- * This is a real, if narrow, spec-feedback finding worth filing upstream (§5.1's vocabulary table
- * lists `boolean`/`regex` alongside every other built-in with no marked exception for schemaless
- * use), not silently "fixed" here: matching the reference's actual behaviour, gap for gap, is what
- * the conformance suite and any cross-implementation comparison depend on.
  */
 
+import { createBooleanParser } from '../../atom/boolean.js';
 import { createIntegerParser } from '../../atom/numeric/integer.js';
 import { createDecimalParser } from '../../atom/numeric/decimal.js';
 import { createFloatParser } from '../../atom/numeric/float.js';
@@ -82,6 +85,8 @@ const INTEGER_WIDTHS = [8, 16, 32, 64, 128, 256] as const;
 
 function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
   const types = new Map<string, AtomType<unknown>>();
+
+  types.set('boolean', createBooleanParser());
 
   for (const bits of INTEGER_WIDTHS) {
     types.set(
