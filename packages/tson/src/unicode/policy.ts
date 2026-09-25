@@ -9,7 +9,6 @@ import {
   type ScriptCombination,
 } from './restriction-level.js';
 import { identifierStatusAllowed, UTS39_VERSION, type ScriptId } from './uts39.js';
-import { isXidContinue } from './xid.js';
 
 /**
  * [TSON-DATA] §8.2's name-hygiene policy, as one immutable value a caller holds and a reader
@@ -253,23 +252,42 @@ export interface NameHygieneRefusal {
 const ZWNJ = 0x200c;
 const ZWJ = 0x200d;
 
+/** U+002D HYPHEN-MINUS -- this profile's own token-form extension, excluded below on the same terms as ZWNJ/ZWJ. */
+const HYPHEN = 0x2d;
+
 /**
- * The first character of `name` that is `XID_Continue` but not `Identifier_Status=Allowed`, or
- * `undefined` when every such character is allowed.
+ * The first character of `name` that is not `Identifier_Status=Allowed`, or `undefined` when
+ * every character is allowed.
  *
- * **ZWNJ and ZWJ are excluded from this scan, matching the pinned Java reference's own
- * `IdentifierParser.hygiene`** (`tson-compiler/.../atom/IdentifierParser.java`). Both are
- * `Identifier_Status=Restricted`, so a naive scan would refuse them everywhere, but §7.7 rule 2
- * already carves the exception UTS #39 §3.1.1.1 defines: a joiner is admitted only where it has a
- * shaping effect (a Persian compound, an Indic conjunct) and refused everywhere else --
- * `unicode/identifier-profile.ts`'s `isIdentifierText` enforces exactly that as a matter of
- * **form**, ahead of this mechanism, for every name this function is ever handed (a type-ref,
- * annotation, or schema-layer name all pass through `isIdentifierText` first). So by the time a
- * joiner reaches this scan it has already been proven to sit in a permitted context, and
- * mechanism 2 has nothing further to say about it -- treating it as a restricted character here
- * would refuse the very names §7.7 rule 2 exists to admit (`کتاب‌ها`, `ക്‍ക`). `-` is excluded for
- * the same reason as ever: it is this profile's own extension, not an identifier character
- * Unicode assigns a status to, and {@link isXidContinue} already excludes it.
+ * **Checks every character, not only ones that are already `XID_Continue`.** A TSON text name
+ * reaching this function was already proven `XID_Start`/`XID_Continue`-shaped by the lexer before
+ * hygiene ever runs (`unicode/identifier-profile.ts`'s `isIdentifierText`), so for that caller the
+ * two conditions coincide. **A JSON member name is not so constrained** ([TSON-JSON] §9.4 reaches
+ * "every member name... that matches no declared field") -- it is an arbitrary JSON string, and a
+ * character like U+0020 SPACE is outside the identifier profile entirely rather than merely
+ * `Identifier_Status=Restricted` within it, so this scan must check it directly rather than gating
+ * on `XID_Continue` first, which would let such a character through every one of §8.2's three
+ * mechanisms at a JSON position and leave it reported as an ordinary closure error instead of the
+ * refusal mechanism 2 exists for. The pinned Java reference's own `IdentifierProfile.hygiene`
+ * (`tson-compiler/.../atom/IdentifierParser.java`) checks unconditionally for the same reason
+ * (`json-name-hygiene.test.ts`'s own port of the reference's `JsonNameHygieneTest` pins the case:
+ * a field name `"no te"` at a position with no field of that name is `RESTRICTED_CHARACTER`, not
+ * `UNRECOGNIZED_FIELD`).
+ *
+ * **ZWNJ, ZWJ and `-` are excluded from this scan, matching the pinned Java reference.** ZWNJ/ZWJ
+ * are `Identifier_Status=Restricted`, so a naive scan would refuse them everywhere, but §7.7 rule
+ * 2 already carves the exception UTS #39 §3.1.1.1 defines: a joiner is admitted only where it has
+ * a shaping effect (a Persian compound, an Indic conjunct) and refused everywhere else --
+ * `isIdentifierText` enforces exactly that as a matter of **form**, ahead of this mechanism, for
+ * every *text*-side name this function is ever handed. So by the time a joiner reaches this scan
+ * by that route it has already been proven to sit in a permitted context, and mechanism 2 has
+ * nothing further to say about it -- treating it as a restricted character here would refuse the
+ * very names §7.7 rule 2 exists to admit (`کتاب‌ها`, `ക്‍ക`). A JSON member name carrying a joiner
+ * with no shaping context reaches this same exclusion and so is not refused by this mechanism
+ * either -- conservative (admits rather than wrongly refuses) but not a full implementation of
+ * §7.7 rule 2's contextual test at the JSON layer, a recorded gap (`STATUS.md`'s own "Known
+ * gaps"). `-` is excluded because it is this profile's own token-form extension, not an
+ * identifier character Unicode assigns a status to.
  */
 function firstDisallowedIdentifierStatusCharacter(name: string): string | undefined {
   for (const character of name) {
@@ -277,8 +295,8 @@ function firstDisallowedIdentifierStatusCharacter(name: string): string | undefi
     // `character` iterates `name` code point by code point (see `skeleton.ts`'s own identical
     // note), so this is always defined; kept total rather than asserted.
     if (codePoint === undefined) continue;
-    if (codePoint === ZWNJ || codePoint === ZWJ) continue;
-    if (isXidContinue(codePoint) && !identifierStatusAllowed(codePoint)) {
+    if (codePoint === ZWNJ || codePoint === ZWJ || codePoint === HYPHEN) continue;
+    if (!identifierStatusAllowed(codePoint)) {
       return character;
     }
   }

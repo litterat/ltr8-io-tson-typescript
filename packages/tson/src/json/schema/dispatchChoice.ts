@@ -143,10 +143,12 @@ function* tagged(
 ): Task<unknown> {
   const { schema, type } = lead;
   if (schema) {
+    // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s top
+    // note.
     ctx
       .field(SCHEMA)
       .report(
-        'UNRECOGNIZED_FIELD',
+        'UNKNOWN_TYPE_REF',
         `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
           `position -- '${displayName}' is a choice, whose variants its own schema declares`,
         'no $schema at this position',
@@ -156,8 +158,12 @@ function* tagged(
     return undefined;
   }
   if (type === undefined) {
+    // `tagged` is reached only when `leadPresent(lead)` held and `schema` has already been ruled
+    // out above, so this is always a bare `$value` with no leading `$type` (`lead.wrapper`) --
+    // §9.4's table: "a `$value` in an object not led by `$type`" is resolver category, not
+    // `TYPE_MISMATCH`'s validation one.
     ctx.report(
-      'TYPE_MISMATCH',
+      'UNKNOWN_TYPE_REF',
       `this object leads with this encoding's reserved members but no '$type' naming a variant ` +
         `of '${displayName}' (§3.3)`,
       `a '$type' member holding a variant name`,

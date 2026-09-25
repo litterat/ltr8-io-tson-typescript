@@ -47,20 +47,20 @@
  *   Every discriminator token the lookahead finds is captured raw, then decoded, outside the
  *   lookahead, through the BASE's own declared type for that field -- "the pin and the member's
  *   value are decoded by the same parser before either is compared" (§4.3), which is what lets
- *   `= 0xFF` and a document's `255` collide correctly rather than by spelling. **Decoding never
- *   happens inside the lookahead itself**, only after it returns: a `TypeReader` invoked mid-
- *   lookahead could report a diagnostic that the real read then reported again once it reached
- *   the same token for real, and {@link readSchemaLiteral}'s own isolated, throwing context (the
- *   same one that decodes a member's own pin at construction, {@link candidatePins}) reads a
- *   token against a type with no such side effect either way -- a token that fails to parse there
- *   is treated exactly like one this dispatch could not read at all (run the ordinary record
- *   reader, whose own read reports the real problem through the real context). **That reader's
- *   own clean success is not this dispatch's to accept, though**: `name` is ABSTRACT, so a value
- *   this dispatch could not place among the family is refused even where the ordinary reader
- *   would have parsed it outright -- {@link buildMemberDispatchReader}'s own note has the
- *   checkpoint. The lookahead itself skips a discriminator's own leading annotations/`!type-ref`
- *   before checking for its plain token, so a self-annotated or redundantly self-tagged selector
- *   still dispatches; only a genuinely non-scalar shape falls through to the ordinary reader.
+ *   `= 0xFF` and a document's `255` collide correctly rather than by spelling.
+ *
+ *   **A discriminator this dispatch cannot read is refused directly, at that field, and nothing
+ *   else about the record is inspected** -- matching the reference's own
+ *   `RecordMemberDispatchReader.read` exactly (`tson-compiler/.../reader/`) and this port's own
+ *   JSON stack (`json/schema/dispatchMember.ts`): a selector missing from what the lookahead found
+ *   (omitted, written `_`, a nested shape, or the positional form of §5.6, which never reaches the
+ *   record-shape check at all) is `FIELD_REQUIRED` at that field, and one found but not parseable
+ *   as its declared type is `TYPE_MISMATCH` there, each reported the moment it is discovered and
+ *   the value abandoned on the spot -- one diagnostic per document, never a second one manufactured
+ *   by handing the record to a second reader for a whole-record opinion. The lookahead itself skips
+ *   a discriminator's own leading annotations/`!type-ref` before checking for its plain token, so a
+ *   self-annotated or redundantly self-tagged selector still dispatches; only a genuinely
+ *   non-scalar shape counts as missing.
  */
 import type { Task } from '../io/bytes.js';
 import { TsonInternalError } from '../core/errors.js';
@@ -172,7 +172,6 @@ export function guardSubsumption(
       name,
       discriminators,
       recordBody?.fields,
-      recordBody !== undefined ? reader : undefined,
       entries,
       own,
       resolve,
@@ -321,56 +320,28 @@ function at<T>(array: readonly T[], index: number): T {
   return value;
 }
 
-/**
- * The document's own raw token at `fieldName`, decoded through the same reader
- * {@link candidatePins} used for the member pins -- or `undefined` where it fails to parse (a
- * malformed value, which the fallback to the ordinary record reader reports properly, through the
- * real `ReadContext`, once this dispatch gives up on it rather than reporting it twice).
- */
-function decodeDocumentToken(
-  tokens: ReadonlyMap<string, Token>,
-  fieldName: string,
-  fieldReaders: ReadonlyMap<string, TypeReader<Value>>,
-): Value | undefined {
-  const token = tokens.get(fieldName);
-  const parser = fieldReaders.get(fieldName);
-  if (token === undefined || parser === undefined) return undefined;
-  try {
-    return readSchemaLiteral(token, parser);
-  } catch {
-    return undefined;
-  }
-}
-
-/** One lookahead pass's own verdict: the value's own tag (if any), and every discriminator token the record stated as a plain value -- `undefined` for one this pass could not read as a plain token (omitted, written `_`, a nested shape, or the positional form of §5.6, which never reaches the record-shape check at all), which the caller reads as "run the ordinary record reader for its diagnostics, but its own success does not settle this dispatch". */
+/** One lookahead pass's own verdict: the value's own tag (if any), and every discriminator token the record stated as a plain value, keyed by field name -- a discriminator absent from the map was not found as a plain token (omitted, written `_`, a nested shape, or the positional form of §5.6, which never reaches the record-shape check at all), and the caller reports `FIELD_REQUIRED` for it directly. */
 interface Lookahead {
   readonly tag: string | undefined;
-  readonly tokens: ReadonlyMap<string, Token> | undefined;
+  readonly tokens: ReadonlyMap<string, Token>;
 }
+
+const EMPTY_TOKENS: ReadonlyMap<string, Token> = new Map();
 
 /**
  * Builds the member-dispatch reader for `name`, an ABSTRACT base with a non-empty
  * `discriminators` (§5.2) -- a record base's own, or a record-bodied template family base's own
- * (§5.10), whose selector fields live only on its instantiations, never on the base itself.
- * `reader` is the base's own ordinary record reader where it has one, run whenever this dispatch
- * cannot determine a member on its own (see this file's own top note) so that a genuine defect --
- * a required field left out, `_` at a non-voidable field, a shape mismatch, a malformed atom -- is
- * reported through its own diagnostics (`FIELD_REQUIRED`, `ATOM_CONSTRAINT_VIOLATION`), the
- * library's one existing source of truth for those, rather than a second copy here. `undefined`
- * for a template family base, which has no record of its own to fall back to -- there is nothing
- * for `name` itself ever to have been (§5.10 never reads the held body), so a value this dispatch
- * cannot place goes straight to this function's own generic diagnostic. **A clean fallback success
- * is never handed back either way**: `name` is ABSTRACT, so no value's effective type is ever
- * `name` itself (§5.2, §7.2) -- a value this dispatch could not place among the family, but that
- * `reader` would otherwise accept outright (an annotated or otherwise decorated selector this
- * dispatch's own lookahead does not unwrap, the positional form, or simply no member at all in
- * this closure), is still refused, via the checkpoint at its one call site below.
+ * (§5.10), whose selector fields live only on its instantiations, never on the base itself. Reads
+ * each discriminator in declaration order and refuses at the first one this dispatch cannot place
+ * (this file's own top note has the rationale and the reference this mirrors); a family base has
+ * no reader of its own for a value this dispatch places to be validated against besides the
+ * selected member's, since `name` is ABSTRACT and no value's effective type is ever the base
+ * itself (§5.2, §7.2).
  */
 function buildMemberDispatchReader(
   name: string,
   discriminators: readonly string[],
   baseFields: readonly RecordField[] | undefined,
-  reader: TypeReader<Value> | undefined,
   entries: ReadonlyMap<string, TypeDefinition>,
   own: ReadonlySet<string>,
   resolve: (name: string) => TypeReader<Value>,
@@ -425,7 +396,7 @@ function buildMemberDispatchReader(
         }
         const shapePeek = yield* aheadCtx.peek();
         if (shapePeek.kind !== 'record-start') {
-          return { tag, tokens: undefined };
+          return { tag, tokens: EMPTY_TOKENS };
         }
         yield* aheadCtx.next();
         const tokens = new Map<string, Token>();
@@ -485,44 +456,54 @@ function buildMemberDispatchReader(
         }
       }
 
+      // Each discriminator is read and reported on its own, in declaration order, the first
+      // failure ending the read -- this file's own top note has the rationale and the reference
+      // this mirrors (`RecordMemberDispatchReader.read`).
       const tokens = lookahead.tokens;
-      const documentPins =
-        tokens === undefined ? undefined : decodeAll(discriminators, tokens, fieldReaders);
-      if (documentPins === undefined) {
-        // Missing, written '_', not a plain token, or one that failed to parse. The ordinary
-        // record reader is run for its own diagnostics (a required field left out, '_' at a
-        // non-voidable field, a shape mismatch, a malformed atom) -- but its own success is not
-        // this dispatch's to accept: `name` is ABSTRACT (every reader reaching this branch was
-        // built for one, §5.2), so no value's effective type is ever `name` itself (§7.2's
-        // "three readings"). A clean parse that this dispatch could not place among the family's
-        // members -- including the positional-form spelling of a single-selector base (§5.6),
-        // which never reaches the record-shape check above at all -- is therefore still refused,
-        // not silently admitted as the base. `ctx.reported()` is the checkpoint: it is monotonic
-        // and receiver-agnostic (`reader/contracts.ts`'s own note), so it tells the two cases
-        // apart without this reader knowing whether `reader` collects, streams, or throws.
-        if (reader !== undefined) {
-          const before = ctx.reported();
-          const result = yield* reader.read(ctx);
-          if (ctx.reported() > before) {
-            return result;
-          }
-        } else {
-          // A template family base has no reader of its own to fall back to (§5.10 never reads
-          // the held body) -- nothing has consumed the value yet, so this dispatch does, the way
-          // every other refusal in this function does.
+      const documentPins: Value[] = [];
+      for (const fieldName of discriminators) {
+        const token = tokens.get(fieldName);
+        if (token === undefined) {
+          ctx
+            .field(fieldName)
+            .report(
+              'FIELD_REQUIRED',
+              `missing discriminator '${fieldName}' for '${name}' -- a sealed family selects its ` +
+                `member by reading it, so a value that leaves it out (omitted, written '_', or not ` +
+                `a plain token) selects nothing`,
+              `a value for '${fieldName}'`,
+              '(absent)',
+            );
           yield* skipDataValue(ctx);
+          return abandonedValue();
         }
-        ctx.report(
-          'VALIDATION_ERROR',
-          `'${name}' is abstract and has no direct instances (§5.2) -- its ${tuple} was not ` +
-            'written plainly enough to place this value among its members (omitted, `_`, or not ' +
-            `a plain token) -- expected ${
-              candidates.length === 0 ? `a member of '${name}'` : `one of (${memberList})`
-            }`,
-          candidates.length === 0 ? `a member of '${name}'` : `one of (${memberList})`,
-          '(unreadable)',
-        );
-        return abandonedValue();
+        const parser = fieldReaders.get(fieldName);
+        if (parser === undefined) {
+          throw new TsonInternalError(
+            `internal error: '${name}' names '${fieldName}' in 'discriminators' with no reader ` +
+              'built for it',
+          );
+        }
+        let decoded: Value | undefined;
+        try {
+          decoded = readSchemaLiteral(token, parser);
+        } catch {
+          decoded = undefined;
+        }
+        if (decoded === undefined) {
+          ctx
+            .field(fieldName)
+            .report(
+              'TYPE_MISMATCH',
+              `no member of '${name}' pins '${fieldName}' to '${token.text}' -- this value ` +
+                `matches none of (${candidates.length === 0 ? 'nothing' : memberList})`,
+              candidates.length === 0 ? `a member of '${name}'` : `one of (${memberList})`,
+              token.text,
+            );
+          yield* skipDataValue(ctx);
+          return abandonedValue();
+        }
+        documentPins.push(decoded);
       }
       const matched = candidates.find((candidate) => tuplesEqual(documentPins, candidate.pins));
       if (matched === undefined) {
@@ -563,19 +544,4 @@ function buildMemberDispatchReader(
       return yield* resolve(matched.name).read(ctx);
     },
   };
-}
-
-/** Every one of `discriminators`, decoded from `tokens` -- `undefined` the moment any one of them is missing or fails to parse, since a partial tuple decides nothing (§5.2's tuple case: all of them or none). */
-function decodeAll(
-  discriminators: readonly string[],
-  tokens: ReadonlyMap<string, Token>,
-  fieldReaders: ReadonlyMap<string, TypeReader<Value>>,
-): readonly Value[] | undefined {
-  const values: Value[] = [];
-  for (const fieldName of discriminators) {
-    const decoded = decodeDocumentToken(tokens, fieldName, fieldReaders);
-    if (decoded === undefined) return undefined;
-    values.push(decoded);
-  }
-  return values;
 }

@@ -19,19 +19,27 @@
  * captured only when it is a scalar (string/number/boolean/null) — one that is not stops the peek,
  * matching the Java reference's own `isScalar` gate.
  *
- * **Every refusal this module reports is `UNRECOGNIZED_FIELD`.** §3.2/§3.3's own prose calls a
- * misplaced or unknown reserved member "a resolver error" (as it calls every rule that stops a
- * schema-governed value from being read at all), but that prose category and this codebase's own
- * `DiagnosticCode` taxonomy are two different things: `UNRECOGNIZED_FIELD` files under
- * `test/conformance/validate.ts`'s `VALIDATION_CODES`, and so does the reference implementation's
- * own `categoryOf` (`Class2ConformanceSuiteTest.java`) — the Java reference reports the identical
- * case with the identical code, `ReservedMembers.refuseUnknown`/`refuseMisplaced`. A `DiagnosticCode`
- * names *which rule fired*, not a commitment to §8.1's four-category framework, and that framework
- * is RUNNER.md's own contract for the Class 2 schema/link layer specifically — a governing schema
- * failing to load — which a namespace violation inside an already-loaded document's own value is
- * not. `UNRECOGNIZED_FIELD` is the accurate code either way: the name has no home in the object,
- * exactly what that code's own doc (`core/diagnostic.ts`) says, whether the reason is §6.1.1's
- * ordinary closure test or §3.2's reserved-namespace test running first and instead of it.
+ * **Every refusal this module reports is `UNKNOWN_TYPE_REF`, a resolver-category code.** §9.4's
+ * own table is explicit and unambiguous here: "unknown reserved members (§3.2); a `$schema` or
+ * `$type` that does not lead its object, and a `$value` in an object not led by `$type` (§3.3);
+ * wrapper-form objects with extra members (§3.3)" are listed beside duplicate members and an
+ * unresolvable `$type` under the **resolver** row, not the validation row two lines below it where
+ * closure violations live. `UNKNOWN_TYPE_REF` is the closest of this codebase's existing
+ * resolver-category codes (`core/diagnostic.ts`, whose own TSDoc on this code states the second,
+ * narrower use directly): what denotes nothing admissible is the reserved **member name itself**
+ * at the position it was written — `$schema`/`$type` out of lead position, a `$`-initial name
+ * outside the closed set, a non-reserved member beside `$value` — never a question about whether a
+ * `$type`'s own *value* resolves to a declared type. A misplaced `$type: "dog"` reports this way
+ * even where `dog` is a perfectly good type name elsewhere in the schema: the violation is that
+ * `$type` was written in this slot at all, a resolver-phase question about the reserved namespace,
+ * not a `TYPE_MISMATCH`-shaped question about `dog`'s own admissibility.
+ *
+ * **This is a deliberate divergence from the Java reference, not an oversight.** The reference's
+ * own `ReservedMembers.refuseUnknown`/`refuseMisplaced` (`tson-json/.../reader/ReservedMembers.java`)
+ * report `Diagnostic.Code.UNRECOGNIZED_FIELD`, which that codebase's own
+ * `Class2ConformanceSuiteTest.categoryOf` files under `validation` — the same wrong category §9.4
+ * puts these under here. Reported upstream as a §9.4 conformance gap in the reference; this port
+ * follows Part 3's table instead of the Java it otherwise mirrors structurally.
  */
 import type { Task } from '../../io/bytes.js';
 import { toNfc } from '../../unicode/nfc.js';
@@ -246,10 +254,13 @@ function* walkWrapper(
     } else if (isReservedName(name)) {
       refuseUnknown(ctx, name);
     } else {
+      // §9.4: "wrapper-form objects with extra members" is a resolver error, not the ordinary
+      // closure violation `record.ts`'s own `unmatched` reports for a record -- the wrapper is
+      // apparatus, not a record, and admits nothing outside the three reserved names.
       ctx
         .field(name)
         .report(
-          'UNRECOGNIZED_FIELD',
+          'UNKNOWN_TYPE_REF',
           `'${name}' stands beside '$value' in an annotation object, which is apparatus and not ` +
             `a record (§3.3) -- it admits the reserved members and nothing else`,
           RESERVED.join(' | '),
@@ -261,7 +272,7 @@ function* walkWrapper(
 }
 
 /**
- * Reports a `$schema` or `$type` that does not lead its object (§3.3, `UNRECOGNIZED_FIELD` — this
+ * Reports a `$schema` or `$type` that does not lead its object (§3.3, `UNKNOWN_TYPE_REF` — this
  * module's own top note on the code): the selectors have a fixed place so that no decoder holds
  * more than the schema bounds before dispatch.
  */
@@ -269,7 +280,7 @@ export function refuseMisplaced(ctx: JsonReadContext, name: string): void {
   ctx
     .field(name)
     .report(
-      'UNRECOGNIZED_FIELD',
+      'UNKNOWN_TYPE_REF',
       `'${name}' must lead its object -- '$schema' first where present, then '$type' (§3.3) -- ` +
         'and here it follows another member',
       `'${name}' as a leading member`,
@@ -278,7 +289,7 @@ export function refuseMisplaced(ctx: JsonReadContext, name: string): void {
 }
 
 /**
- * Reports a `$`-initial member outside §3.2's closed set (`UNRECOGNIZED_FIELD` — this module's own
+ * Reports a `$`-initial member outside §3.2's closed set (`UNKNOWN_TYPE_REF` — this module's own
  * top note on the code): the name is not a declared field (no identifier begins with `$`, §3.2)
  * and not one of the three reserved names either, so §6.1.1's ordinary closure test never gets to
  * run on it at all — §3.2's reserved-namespace test runs first and in its place.
@@ -287,7 +298,7 @@ export function refuseUnknown(ctx: JsonReadContext, name: string): void {
   ctx
     .field(name)
     .report(
-      'UNRECOGNIZED_FIELD',
+      'UNKNOWN_TYPE_REF',
       `'${name}' begins with '$', which this encoding reserves (§3.2), and the reserved set is closed`,
       RESERVED.join(' | '),
       name,

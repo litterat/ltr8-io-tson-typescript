@@ -191,10 +191,15 @@ export function recordTreeReader(
    * function's own `role` is always `'FREE'` or `'DEFAULT'`.
    *
    * Admitted exactly when `voidable` (§2.9: present with an absent value, distinct from never
-   * written); refused everywhere else, recovering to whatever the key's own omission would have
-   * yielded (§5.2: "a written `_` at a field that is not voidable is a validation error whatever
-   * the modifier; at `a?: T ~ v` the fix is to omit the field, and omission remains the injection
-   * route").
+   * written); refused everywhere else, split by `role` on the same terms the JSON encoding's own
+   * `json/schema/record.ts#statedNull` already does, both ports of the reference's one shared
+   * `RecordDiagnostics.absenceAtRequiredField`/`absenceAtDefaultedField` ([TSON-JSON] §9.4: one
+   * diagnostic vocabulary, no category of its own): `role: 'DEFAULT'` (`a?: T ~ v`) is
+   * `ATOM_CONSTRAINT_VIOLATION`, since §5.2 makes omission the injection route and the fix is to
+   * omit the field rather than disclaim its value; `role: 'FREE'` -- required or merely optional,
+   * §5.2's other non-voidable case -- is `FIELD_REQUIRED`, "admits no absence", matching what an
+   * *omitted* FREE field already reports ({@link readFields}'s own `FIELD_REQUIRED` for a missing
+   * required field) rather than the DEFAULT field's own constraint-violation reading.
    */
   function valueForStatedAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
@@ -202,21 +207,30 @@ export function recordTreeReader(
       return absentNode();
     }
     const omission = fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'));
-    const expected =
-      omission === 'INJECTED'
-        ? `the field omitted (its default value), or a value for '${schema.name}'`
-        : omission === 'ABSENT'
-          ? `the field omitted, or a value for '${schema.name}'`
-          : `a value for '${schema.name}'`;
+    if (schema.role === 'DEFAULT') {
+      ctx
+        .schemaField(schema.name)
+        .report(
+          'ATOM_CONSTRAINT_VIOLATION',
+          `'${schema.name}' on '${displayName}' is always filled from the schema and cannot be ` +
+            `written as absent -- omit the field to take its default (§5.2)`,
+          `the field omitted, or a value for '${schema.name}'`,
+          '_',
+        );
+      return omission === 'INJECTED' ? precomputedValue[schemaIndex] : undefined;
+    }
+    // `role: 'FREE'` never carries a default, so `omission` here is always `'MISSING'` (required)
+    // or `'ABSENT'` (optional) -- never `'INJECTED'`, which is `fieldOmission`'s own DEFAULT-role
+    // case handled in the branch above.
     ctx
       .schemaField(schema.name)
       .report(
-        'ATOM_CONSTRAINT_VIOLATION',
-        `'${schema.name}' on '${displayName}' is not voidable and refuses '_' (§5.2)`,
-        expected,
+        'FIELD_REQUIRED',
+        `'${schema.name}' on '${displayName}' admits no absence (§5.2)`,
+        `a value for '${schema.name}'`,
         '_',
       );
-    return omission === 'INJECTED' ? precomputedValue[schemaIndex] : undefined;
+    return undefined;
   }
 
   /**
@@ -272,6 +286,12 @@ export function recordTreeReader(
     sink: (schemaIndex: number, decoded: Value | undefined) => void,
   ): Task<boolean[]> {
     const seen: boolean[] = new Array(fields.length).fill(false) as boolean[];
+    // Every undeclared field name met so far -- tracked so a *repeated* undeclared name reports
+    // `DUPLICATE_FIELD` at its second occurrence rather than a second `UNRECOGNIZED_FIELD`.
+    // [TSON-DATA] §2.5's duplicate-field rule is name identity, not "identity among declared
+    // fields": `seen` (below) already gives declared fields this; an undeclared name needs its
+    // own set since it has no `schemaIndex` to key `seen` by.
+    const seenUnmatched = new Set<string>();
     for (;;) {
       const peeked = yield* ctx.peek();
       if (peeked.kind === 'record-end') break;
@@ -281,6 +301,19 @@ export function recordTreeReader(
       }
       const schemaIndex = fieldIndex.get(fieldNameEvent.name);
       if (schemaIndex === undefined) {
+        if (seenUnmatched.has(fieldNameEvent.name)) {
+          ctx
+            .field(fieldNameEvent.name)
+            .report(
+              'DUPLICATE_FIELD',
+              `duplicate field '${fieldNameEvent.name}' on '${displayName}' -- a record states each field at most once (§2.5), and the repeat states a value for nothing`,
+              'each field stated once',
+              `'${fieldNameEvent.name}' stated again`,
+            );
+          yield* skipScopedValue(ctx);
+          continue;
+        }
+        seenUnmatched.add(fieldNameEvent.name);
         ctx
           .field(fieldNameEvent.name)
           .report(

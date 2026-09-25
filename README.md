@@ -277,10 +277,12 @@ npx @ltr8/tson-cli policy                # the [TSON-DATA] §8.2 policy this run
 npx @ltr8/tson-cli hash person.tn        # prints the canonical content hash (§2.2.1)
 
 # .json (case-insensitive) is a JSON encoding of TSON data (TSON-JSON §3.1) and is bound the
-# same way: --schema/--root, required for a .json input. Standard input is read as JSON when
-# a binding is given, TSON text otherwise.
+# same way: --schema/--root, required for a .json input. Standard input is TSON text by
+# default, whatever binding is given -- --input tson|json forces either encoding for every
+# input this run reads, '-' included, overriding the by-extension default.
 npx @ltr8/tson-cli validate person-data.json --schema person.tn --root person
-cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root person -
+cat person-data.tn | npx @ltr8/tson-cli validate --schema person.tn --root person -
+cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root person --input json -
 ```
 
 Five commands: `validate`, `compile`, `policy`, `hash`, `init-example`. `validate`/`compile`/`hash`

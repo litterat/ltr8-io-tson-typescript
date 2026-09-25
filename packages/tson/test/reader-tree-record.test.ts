@@ -148,17 +148,38 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     expect(omitted.fields.has('age')).toBe(false);
   });
 
-  it('a non-voidable optional field written `_` is refused (§5.2: "a written `_` at a field that is not voidable is a validation error"), and abandons the record (WP3B)', () => {
+  /**
+   * §5.2: "a written `_` at a field that is not voidable is a validation error whatever the
+   * modifier" -- but *which* validation error splits on `role`, matching the JSON encoding's own
+   * `json/schema/record.ts#statedNull` and the Java reference's one shared
+   * `RecordDiagnostics.absenceAtRequiredField`/`absenceAtDefaultedField` ([TSON-JSON] §9.4: one
+   * vocabulary for both encodings). A `role: 'FREE'` field -- optional or required, this port's
+   * own two non-DEFAULT, non-FIXED cases -- reports `FIELD_REQUIRED`, the same code an *omitted*
+   * required field already gets: `_` states nothing this position accepts, and the fix is the
+   * same "write a value" either way. `json-cross-encoding-parity.test.ts`'s own `sameRule` cases
+   * pin this against the JSON encoding directly.
+   */
+  it('a non-voidable optional (role: FREE) field written `_` is FIELD_REQUIRED, and abandons the record (WP3B)', () => {
     const r = reader([field('name', 'text'), field('nickname', 'text', { optional: true })]);
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" nickname: _ }');
     const value = runSync(r.read(ctx));
     expect(value).toBeUndefined();
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
-  it('a non-voidable required field written `_` is refused, distinctly from the missing-field error', () => {
+  it('a non-voidable required (role: FREE) field written `_` is FIELD_REQUIRED, the same code an omission gets', () => {
     const r = reader([field('name', 'text'), field('age', 'int32')]);
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" age: _ }');
+    runSync(r.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+  });
+
+  it('a non-voidable DEFAULT field written `_` is ATOM_CONSTRAINT_VIOLATION -- omission is the injection route (§5.2), not a value the document may disclaim', () => {
+    const r = reader([
+      field('name', 'text'),
+      field('role', 'text', { optional: true, role: 'DEFAULT' }, 'guest'),
+    ]);
+    const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" role: _ }');
     runSync(r.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });

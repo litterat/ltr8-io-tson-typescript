@@ -101,10 +101,13 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
         : yield* untagged.read(ctx);
     }
     if (lead.schema) {
+      // §3.3, §9.4: `$schema` at a position whose effective type is not scoped is a resolver
+      // error, not `UNRECOGNIZED_FIELD`'s validation category -- see `reservedMembers.ts`'s top
+      // note for the full citation and the divergence from the Java reference this pins.
       ctx
         .field(SCHEMA)
         .report(
-          'UNRECOGNIZED_FIELD',
+          'UNKNOWN_TYPE_REF',
           `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
             `position -- '${displayName}' is a record`,
           'no $schema at this position',
@@ -114,6 +117,19 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
       return undefined;
     }
     if (lead.type === undefined) {
+      if (lead.wrapper) {
+        // A bare `$value` with no leading `$type` (§9.4's table: resolver category, not this
+        // branch's ordinary "missing tag at an abstract position" validation error below).
+        ctx.report(
+          'UNKNOWN_TYPE_REF',
+          `an annotation object at '${displayName}' needs a leading '$type' before '$value' ` +
+            `(§3.3) -- a bare '$value' names nothing to read it as`,
+          `'$type' naming one of (${admissible || 'nothing'})`,
+          '(no $type)',
+        );
+        yield* skipNextValue(ctx);
+        return undefined;
+      }
       // §6.1.5: nothing about the object's shape is consulted before this -- an abstract position
       // with no tag fails whatever it holds, the same refusal TSON text gives a missing type-ref.
       return yield* refuse(
@@ -131,32 +147,40 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
         // base's own redundant-tag case, refused on the same terms as an absent tag (both are
         // "nothing to place an untagged value as"), never `TYPE_MISMATCH`'s admissibility
         // question: the name resolves, and resolves to exactly the position's own type.
-        ctx
-          .field(TYPE)
-          .report(
-            'VALIDATION_ERROR',
-            `'$type' names '${displayName}' itself, but it is abstract and has no direct ` +
-              `instances (§6.1.5) -- no value satisfies it; expected one of (${admissible})`,
-            `one of (${admissible})`,
-            lead.type,
-          );
+        //
+        // Located at the value and not at `/$type`, though the member is right there: [TSON-JSON]
+        // §9.4 holds both encodings to one pointer for a rule, and TSON text's tag is an
+        // annotation with no pointer step of its own, so a rule the two stacks share can only be
+        // located where they both have a location (the Java reference's own `DispatchTagReader`
+        // states this exact reasoning; `json-cross-encoding-parity.test.ts` pins it).
+        // `dispatchMember.ts`'s own sealed-base self-tag case follows the same convention, at the
+        // record's own position; its `notAMember` case (a tag naming something outside the
+        // family) and every `dispatchChoice.ts` tag-mismatch case stay at `/$type`, since there
+        // the name genuinely resolves nowhere this position admits and no shared-with-text rule
+        // is in play.
+        ctx.report(
+          'VALIDATION_ERROR',
+          `'$type' names '${displayName}' itself, but it is abstract and has no direct ` +
+            `instances (§6.1.5) -- no value satisfies it; expected one of (${admissible})`,
+          `one of (${admissible})`,
+          lead.type,
+        );
         yield* skipNextValue(ctx);
         return undefined;
       }
       if (!nameHygieneRefuses(ctx.field(TYPE), lead.type)) {
         const resolves = entries.has(lead.type);
-        ctx
-          .field(TYPE)
-          .report(
-            resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
-            resolves
-              ? `'$type' names '${lead.type}', which is not a known subtype of '${displayName}' ` +
-                  `(§7.2) -- expected one of (${admissible})`
-              : `'$type' names '${lead.type}', which does not resolve in the governing schema's ` +
-                  `namespace (§7.2) -- expected one of (${admissible})`,
-            `one of (${admissible})`,
-            lead.type,
-          );
+        // Located at the value, not at `/$type` -- see this function's own note above.
+        ctx.report(
+          resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+          resolves
+            ? `'$type' names '${lead.type}', which is not a known subtype of '${displayName}' ` +
+                `(§7.2) -- expected one of (${admissible})`
+            : `'$type' names '${lead.type}', which does not resolve in the governing schema's ` +
+                `namespace (§7.2) -- expected one of (${admissible})`,
+          `one of (${admissible})`,
+          lead.type,
+        );
       }
       yield* skipNextValue(ctx);
       return undefined;

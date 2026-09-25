@@ -398,7 +398,8 @@ including the shared policy-flag block below for `validate`/`compile`/`policy`.
 | `--schema <file-or-url>` | validate only; a local path or an `https://` URL. **Never** a data file's own `!!schema` — honouring that would fetch whatever untrusted content named.         |
 | `--root <name>`          | required whenever `--schema` is given; not auto-detected                                                                                                        |
 | `--format`               | `text` (default), `json`, `tson`, on every command                                                                                                              |
-| `-`                      | reads one data document from stdin (validate, at most once) — JSON when `--schema`/`--root` are given, TSON text otherwise                                      |
+| `-`                      | reads one data document from stdin (validate, at most once) — TSON text by default, whatever binding is given; `--input json` forces JSON                       |
+| `--input tson\|json`     | validate only; forces every input's encoding, `-` included, overriding the by-extension/TSON-for-stdin default                                                  |
 | `.json` input            | validate only; a JSON encoding of TSON data ([TSON-JSON] §3.1), case-insensitive by extension, and it requires `--schema`/`--root` (a usage error without them) |
 | Exit codes               | see below, ranked `70 > 78 > 69 > 75 > 1` by who must act first                                                                                                 |
 

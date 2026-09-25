@@ -282,6 +282,12 @@ describe('two-level help', () => {
     expect(io.stderr()).toBe('');
   });
 
+  it('validate --help documents --input', async () => {
+    const io = captureOutput();
+    await main(['validate', '--help']);
+    expect(io.stdout()).toContain('--input tson|json');
+  });
+
   it.each(['validate', 'compile', 'policy'])(
     '%s --help documents the shared policy-options block',
     async (command) => {
@@ -623,22 +629,91 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
     expect(code).toBe(EXIT.OK);
   });
 
-  it('standard input is read as JSON when a binding is given', async () => {
+  // WP4E: standard input is TSON text by default, whatever binding is given -- a deliberate
+  // divergence from the reference CLI (`commands/validate.ts`'s own top note, `STATUS.md`). An
+  // earlier revision of this CLI inferred JSON for stdin from a binding alone, which would
+  // silently break `cat data.tn | tson validate --schema s.tn --root person -` for anyone
+  // already running that invocation. `--input json` makes the JSON reading explicit instead.
+  it('standard input is TSON text by default, even with a binding given', async () => {
     await runInitExample(dir);
     const io = captureOutput();
-    const code = await withStdin(
-      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
-      () => main(['validate', '--schema', join(dir, 'person.tn'), '--root', 'person', '-']),
+    const code = await withStdin('{ name: "Ada Lovelace"  age: 36  active: true }\n', () =>
+      main(['validate', '--schema', join(dir, 'person.tn'), '--root', 'person', '-']),
     );
     expect(code).toBe(EXIT.OK);
     expect(io.stdout()).toContain('valid');
   });
 
-  it('standard input is still read as TSON text with no binding', async () => {
+  it('standard input is TSON text with no binding either', async () => {
     const io = captureOutput();
     const code = await withStdin('{ a: 1 }\n', () => main(['validate', '-']));
     expect(code).toBe(EXIT.OK);
     expect(io.stdout()).toContain('valid');
+  });
+
+  it('--input json forces standard input to be read as JSON', async () => {
+    await runInitExample(dir);
+    const io = captureOutput();
+    const code = await withStdin(
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      () =>
+        main([
+          'validate',
+          '--schema',
+          join(dir, 'person.tn'),
+          '--root',
+          'person',
+          '--input',
+          'json',
+          '-',
+        ]),
+    );
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('--input json on unbound standard input is a usage error, exit 2, before any file opens', async () => {
+    const io = captureOutput();
+    const code = await withStdin('{}', () => main(['validate', '--input', 'json', '-']));
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('JSON');
+  });
+
+  it('--input tson forces a .json-named file to be read as TSON text, ignoring its extension', async () => {
+    const jsonNamedTson = join(dir, 'looks-like-json.json');
+    await writeFile(jsonNamedTson, '{ a: 1 }\n', 'utf8');
+    const io = captureOutput();
+    const code = await main(['validate', '--input', 'tson', jsonNamedTson]);
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('valid');
+  });
+
+  it('--input json forces a non-.json file to be read as JSON, ignoring its extension', async () => {
+    await runInitExample(dir);
+    const jsonInDisguise = join(dir, 'person-data.tn');
+    await writeFile(
+      jsonInDisguise,
+      JSON.stringify({ name: 'Ada Lovelace', age: 36, active: true }),
+      'utf8',
+    );
+    const code = await main([
+      'validate',
+      '--schema',
+      join(dir, 'person.tn'),
+      '--root',
+      'person',
+      '--input',
+      'json',
+      jsonInDisguise,
+    ]);
+    expect(code).toBe(EXIT.OK);
+  });
+
+  it('an unrecognized --input value is a usage error, exit 2', async () => {
+    const io = captureOutput();
+    const code = await main(['validate', '--input', 'yaml', join(dir, 'x.tn')]);
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('--input');
   });
 
   it('a schema and a mixed .tn/.json run share one compiled schema per encoding', async () => {

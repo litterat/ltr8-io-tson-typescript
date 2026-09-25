@@ -125,14 +125,17 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
       `CompiledSchema` (§3.4's out-of-band binding route — the only route this port implements,
       see Known gaps)
 - [x] CLI (`tson validate`) — a `.json` input (case-insensitive) is bound by `--schema`/`--root`;
-      standard input is read as JSON when a binding is given, TSON text otherwise; a `.json` input
-      with no binding, and a `--root` naming no entry, are usage errors (exit 2) checked before any
-      file opens. `--identifier-policy` reaches a `.json` input's schema-directed read too (§9.4),
-      not only `.tn`'s. **Behaviour change from before this package**: `--schema`/`--root` bound
-      standard input to a TSON-text read unconditionally; it now reads bound stdin as JSON, with no
-      flag to say otherwise (matching the reference CLI's own `ValidateCommand.isJson`, which gives
-      stdin no escape hatch either once a binding is given) — a script that piped `.tn` content into
-      a bound `tson validate -` now needs a named file instead of stdin.
+      a `--root` naming no entry is a usage error (exit 2) checked before any file opens.
+      `--identifier-policy` reaches a `.json` input's schema-directed read too (§9.4), not only
+      `.tn`'s. **Standard input is TSON text by default, whatever binding is given** —
+      `--input tson|json` forces every input this run reads, `-` included, to one encoding,
+      overriding the by-extension/TSON-for-stdin default; an unbound input this run reads as JSON (by extension or
+      by `--input`) is a usage error (§3.4 has no schemaless JSON reading). **Deliberate divergence
+      from the reference CLI**: the reference's own `ValidateCommand.isJson` reads bound standard
+      input as JSON unconditionally, with no escape hatch, so `cat data.tn | tson validate --schema
+s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port keeps stdin
+      as TSON text unconditionally instead, so that invocation reads `data.tn` correctly; `--input`
+      makes the JSON reading available too, explicitly rather than inferred from the binding.
 - [x] Package surface — `./json` subpath (ESM + CJS + types), `check:package` (publint,
       are-the-types-wrong), the browser bundle test, `smoke-cli.sh`'s `.json` case
 
@@ -237,6 +240,15 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
     JSON document straight into a host object the way `@ltr8/tson/bind`'s `readBind` does for TSON
     text. `src/bind/**` is importable from `src/json/**` (`eslint.config.js`'s own zone comment),
     so nothing structural blocks adding one; it is simply unbuilt.
+  - **§7.7 rule 2's contextual carve-out for a joining control does not reach JSON member names.**
+    For TSON text, `isIdentifierText` (`unicode/identifier-profile.ts`) enforces the rule ahead of
+    name hygiene as a matter of form, so a joiner (ZWNJ/ZWJ) reaching hygiene has already been
+    proven to sit in a permitted shaping context (a Persian compound, an Indic conjunct). A JSON
+    member name has no such lexer to enforce it first, and `unicode/policy.ts`'s own hygiene scan
+    (`firstDisallowedIdentifierStatusCharacter`) excludes every joiner from its check unconditionally
+    rather than applying §7.7 rule 2's context test itself — conservative (a joiner with no shaping
+    effect is admitted rather than wrongly refused), but not a full implementation of the rule at
+    the JSON layer.
   - **§9.4's token policy is not wired up anywhere in this package.** `ReadJsonOptions` carries no
     `tokenPolicy` field at all, so a schema-directed JSON read judges map keys and string values
     under no token policy; the schemaless door (`parseJson`/`parseJsonAsync`/`parseJsonCollecting`)

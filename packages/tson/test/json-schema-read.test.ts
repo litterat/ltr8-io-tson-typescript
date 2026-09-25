@@ -244,15 +244,20 @@ describe('§5 atoms', () => {
     expect(refusal('count', '{"$type": "nope", "$value": 42}').code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('a $value with no leading $type at an atom position is refused -- §3.3: a $value not led by $type is a resolver error', () => {
-    expect(refusal('count', '{"$value": 42}').code).toBe('VALIDATION_ERROR');
+  it("that refusal is located at the value, not at /$type -- matching the text stack's own guardSubsumption, which has no /$type pointer to descend into (§9.4)", () => {
+    const d = refusal('count', '{"$type": "label", "$value": "x"}');
+    expect(d.path).toBe('');
   });
 
-  it('$schema at an atom position is refused -- no atom position here is scoped (§7.8)', () => {
+  it('a $value with no leading $type at an atom position is refused -- §3.3, §9.4: a $value not led by $type is a resolver error', () => {
+    expect(refusal('count', '{"$value": 42}').code).toBe('UNKNOWN_TYPE_REF');
+  });
+
+  it('$schema at an atom position is refused -- no atom position here is scoped (§7.8, §9.4)', () => {
     expect(
       refusal('count', '{"$schema": "https://example.test/x.tn", "$type": "count", "$value": 42}')
         .code,
-    ).toBe('UNRECOGNIZED_FIELD');
+    ).toBe('UNKNOWN_TYPE_REF');
   });
 });
 
@@ -306,13 +311,21 @@ describe('§6.1 records', () => {
     expect(d.path).toBe('/shoe_size');
   });
 
-  it('a repeated member is DUPLICATE_FIELD (§3.1)', () => {
-    expect(refusal('person', '{"name": "Ada", "name": "Grace"}').code).toBe('DUPLICATE_FIELD');
+  it('an undeclared member is refused because nothing absorbs it -- closure is total, and all-or-nothing (§6.1.1, §9.1)', () => {
+    const result = read('person', '{"name": "Ada", "shoe_size": 9}');
+    expect(result.diagnostics[0]?.code).toBe('UNRECOGNIZED_FIELD');
+    expect(result.value).toBeUndefined();
   });
 
-  it('a reserved member outside the three-name table is a resolver error (§3.2) -- WP4C moves this off UNKNOWN_TYPE_REF (json-dispatch.test.ts has the full annotation-object surface)', () => {
+  it('a repeated member is DUPLICATE_FIELD, and nothing is built (§3.1, §9.1)', () => {
+    const result = read('person', '{"name": "Ada", "name": "Grace"}');
+    expect(result.diagnostics[0]?.code).toBe('DUPLICATE_FIELD');
+    expect(result.value).toBeUndefined();
+  });
+
+  it('a reserved member outside the three-name table is a resolver error (§3.2, §9.4 -- json-dispatch.test.ts has the full annotation-object surface)', () => {
     const d = refusal('person', '{"name": "Ada", "$bogus": 1}');
-    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.code).toBe('UNKNOWN_TYPE_REF');
     expect(d.path).toBe('/$bogus');
   });
 
@@ -464,7 +477,11 @@ describe('§6.2/§6.3 arrays, sets, tuples', () => {
 
   it('§3.3 recognition reaches an array position too -- no subtype to select into, so only a redundant $type restating it is admitted', () => {
     expect(accepted('tags', '{"$type": "tags", "$value": ["a", "b"]}')).toBe('["a","b"]');
-    expect(refusal('tags', '{"$type": "label", "$value": ["a"]}').code).toBe('TYPE_MISMATCH');
+    const d = refusal('tags', '{"$type": "label", "$value": ["a"]}');
+    expect(d.code).toBe('TYPE_MISMATCH');
+    // Located at the value, not at /$type -- matching the text stack's own guardSubsumption
+    // (§9.4; `atoms.ts`'s own note on this pointer convention).
+    expect(d.path).toBe('');
   });
 
   it('an element-optional array admits null as an absent element (§2.9)', () => {
@@ -510,6 +527,13 @@ describe('§6.2/§6.3 arrays, sets, tuples', () => {
     expect(refusal('pair', '["a", 1, 2]').code).toBe('WRONG_ARITY');
   });
 
+  it('§3.3 recognition reaches a tuple position too -- no subtype to select into, so only a redundant $type restating it is admitted', () => {
+    expect(accepted('pair', '{"$type": "pair", "$value": ["a", 1]}')).toBe('["a",1]');
+    const d = refusal('pair', '{"$type": "sized", "$value": ["a", 1]}');
+    expect(d.code).toBe('TYPE_MISMATCH');
+    expect(d.path).toBe('');
+  });
+
   it('a tuple slot takes null only where it is optional', () => {
     expect(accepted('maybe_pair', '[null, 1]')).toBe('[null,1]');
     expect(refusal('pair', '[null, 1]').code).toBe('FIELD_REQUIRED');
@@ -552,6 +576,12 @@ describe('§6.4 maps', () => {
     expect(d.path).toBe('/1.0');
   });
 
+  it('a repeated key is refused and nothing is built -- all-or-nothing (§9.1)', () => {
+    const result = read('by_number', '{"1": "a", "1.0": "b"}');
+    expect(result.diagnostics[0]?.code).toBe('DUPLICATE_MAP_KEY');
+    expect(result.value).toBeUndefined();
+  });
+
   it('an entry value is absent only where the map admits one', () => {
     expect(accepted('optional', '{"a": null}')).toBe('{"a":null}');
     expect(refusal('counts', '{"a": null}').code).toBe('FIELD_REQUIRED');
@@ -565,6 +595,16 @@ describe('§6.4 maps', () => {
 
   it('an empty object is a map of no entries', () => {
     expect(accepted('counts', '{}')).toBe('{}');
+  });
+
+  it('an entry value of the wrong type is refused at its own key', () => {
+    expect(refusal('counts', '{"a": "x"}').path).toBe('/a');
+  });
+
+  it('a member name needing RFC 6901 escaping gets it -- a key holding / or ~ would otherwise read as another step of the pointer', () => {
+    const d = refusal('counts', '{"a/b": "x"}');
+    expect(d.path).toBe('/a~1b');
+    expect(refusal('counts', '{"c~d": "x"}').path).toBe('/c~0d');
   });
 
   it('a compound-keyed map is a JSON array of pairs (pairs form)', () => {
@@ -592,6 +632,10 @@ describe('§6.4 maps', () => {
     expect(refusal('by_point', '[[{"x": 1, "y": 2}, "a"], [{"y": 2, "x": 1}, "b"]]').code).toBe(
       'DUPLICATE_MAP_KEY',
     );
+  });
+
+  it('a pairs-form entry value faces its own type, named by its own index', () => {
+    expect(refusal('by_point', '[[{"x": 1, "y": 2}, 9]]').path).toBe('/0/1');
   });
 });
 

@@ -189,10 +189,12 @@ export function buildMemberDispatcher(
 
   function* dispatch(rctx: JsonReadContext, lead: Lead): Task<unknown> {
     if (lead.schema) {
+      // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s top
+      // note.
       rctx
         .field(SCHEMA)
         .report(
-          'UNRECOGNIZED_FIELD',
+          'UNKNOWN_TYPE_REF',
           `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
             `position -- '${displayName}' is a record`,
           'no $schema at this position',
@@ -206,8 +208,10 @@ export function buildMemberDispatcher(
       // level to read and the tag is the only thing that can place it -- the ordinary wrapper
       // rule, not a second dispatch.
       if (lead.type === undefined) {
+        // §9.4's table: "a `$value` in an object not led by `$type`" is resolver category, not
+        // `VALIDATION_ERROR` -- the same divergence `reservedMembers.ts`'s top note records.
         rctx.report(
-          'VALIDATION_ERROR',
+          'UNKNOWN_TYPE_REF',
           `'${displayName}' is sealed, and a '$value' wrapper with no '$type' has nothing to ` +
             `place it as -- expected one of (${memberList})`,
           `one of (${memberList})`,
@@ -280,15 +284,16 @@ export function buildMemberDispatcher(
     }
     if (lead.type !== undefined && own.has(lead.type)) {
       // §8.1's redundant-tag rule assumes a type with direct instances; a sealed base has none.
-      rctx
-        .field(TYPE)
-        .report(
-          'VALIDATION_ERROR',
-          `'$type' names '${displayName}' itself, but it is sealed and has no direct instances ` +
-            `(§6.1.5) -- no value satisfies it; expected one of (${memberList})`,
-          `one of (${memberList})`,
-          lead.type,
-        );
+      // Reported at `rctx` (the record's own position), not at `/$type`, matching the Java
+      // reference's own `DispatchMemberReader.dispatch` -- see `dispatchTag.ts`'s top note on why
+      // (this is that same pointer convention, not `notAMember`'s own opposite one below).
+      rctx.report(
+        'VALIDATION_ERROR',
+        `'$type' names '${displayName}' itself, but it is sealed and has no direct instances ` +
+          `(§6.1.5) -- no value satisfies it; expected one of (${memberList})`,
+        `one of (${memberList})`,
+        lead.type,
+      );
       yield* skipNextValue(rctx);
       return undefined;
     }

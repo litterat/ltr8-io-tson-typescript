@@ -402,9 +402,25 @@ and `reader/tree/record.ts` are the second, and `json/schema/dispatchTag.ts`/`di
 and `compiler/subsumption.ts` are a third pair now provably close enough to name — both walk "the
 leading members/fields, decide, delegate", both derive the same `own`/alias set, and both report
 the identical `VALIDATION_ERROR`/`TYPE_MISMATCH`/`UNKNOWN_TYPE_REF` split
-(`json-dispatch.test.ts`'s own cross-encoding parity block is what checks that split has not
-drifted, standing in for the Java reference's `CrossEncodingParityTest` this port did not have
-until WP4C). `CrossEncodingParityTest`'s own guard is now real rather than a promise for a future
+(`json-dispatch.test.ts`'s own cross-encoding parity block, and now `json-cross-encoding-parity.test.ts`'s
+full port of the Java reference's own `CrossEncodingParityTest`, are what check that split has not
+drifted). WP4E's own pass over that port found the pair had already drifted twice — `dispatchTag.ts`
+and `json/schema/record.ts#admissibleTag` were reporting a record-family tag mismatch at `/$type`
+where `subsumption.ts` reports at the value (fixed, with the shared reasoning recorded at each
+call site), and `reader/tree/record.ts#valueForStatedAbsentField` was reporting one code
+(`ATOM_CONSTRAINT_VIOLATION`) for every non-voidable field written `_` where
+`json/schema/record.ts#statedNull` already split on `role` — proof this item's own risk is not
+theoretical. A repair pass over that same WP found the risk was not exhausted: fixing the split
+further exposed `compiler/subsumption.ts#buildMemberDispatchReader` falling back to the ABSTRACT
+base's own ordinary record reader wherever its lookahead could not place a value, which surfaced a
+_second_ diagnostic (an unrelated field's own closure violation) on top of a missing discriminator
+where `json/schema/dispatchMember.ts` reports exactly one — removed, so both sides now report the
+single `FIELD_REQUIRED`/`TYPE_MISMATCH` the reference's own `RecordMemberDispatchReader` does, per
+field, with nothing else inspected once it fires. The same pass found `json/schema/record.ts`'s
+own duplicate-member loop checking §3.1's repeated-name rule only for fields the schema declares,
+so a repeated _undeclared_ member reported two `UNRECOGNIZED_FIELD`s instead of a `DUPLICATE_FIELD`
+at the repeat — the identical gap existed in `reader/tree/record.ts`'s own loop, fixed in both
+together. `CrossEncodingParityTest`'s own guard is now real rather than a promise for a future
 work package: it is this port's ongoing defence against the two stacks drifting apart silently,
 not the trigger for unifying them — that trigger is still the shared module above, now with three
 named candidate pairs waiting for it rather than one.

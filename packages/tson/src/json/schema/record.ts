@@ -99,8 +99,8 @@ export interface FieldValue {
  * the spelling there. `tokenText` is `write(hostValue)` when the family's parser has a `write`
  * (every `number`/`number-or-string` family does -- `fieldValueOf`'s own note), so the exact and
  * approximate-numeric cases render through it rather than re-deriving a spelling from `hostValue`
- * by its JS `typeof` (which cannot render a `number` family's {@link TsonDecimal} host value at
- * all, and is why this function used to throw on one -- fixed here, not worked around).
+ * by its JS `typeof`, which cannot render a `number` family's {@link TsonDecimal} host value at
+ * all.
  */
 function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): JsonValue {
   switch (form) {
@@ -291,32 +291,36 @@ function slotToNode(slot: Slot): JsonValue | undefined {
  */
 function admissibleTag(ctx: JsonReadContext, plan: RecordPlan, content: JsonEvent): boolean {
   const admissible = Array.from(plan.own).join(' | ');
+  // Every refusal below is reported at `ctx` (the record's own position), never at `/$type`
+  // though the member is right there: [TSON-JSON] §9.4 holds both encodings to one pointer for a
+  // rule they share, and TSON text's tag is an annotation with no pointer step of its own, so a
+  // rule the two stacks share can only be located where they both have a location (the Java
+  // reference's own `RecordPlan.admitsTag` states this exact reasoning;
+  // `json-cross-encoding-parity.test.ts` pins it). This is `dispatchMember.ts`/`dispatchChoice.ts`'s
+  // own opposite choice, deliberately: there `$type` is genuinely the only carrier of a sealed or
+  // choice tag, so those two report at `/$type`.
   if (content.kind !== 'string') {
-    ctx
-      .field(TYPE)
-      .report(
-        'TYPE_MISMATCH',
-        `'$type' is a string naming a type, and this is ${describeEvent(content)}`,
-        admissible,
-        describeEvent(content),
-      );
+    ctx.report(
+      'TYPE_MISMATCH',
+      `'$type' is a string naming a type, and this is ${describeEvent(content)}`,
+      admissible,
+      describeEvent(content),
+    );
     return false;
   }
   if (plan.own.has(content.value)) return true;
   if (nameHygieneRefuses(ctx.field(TYPE), content.value)) return false;
   const resolves = plan.entries.has(content.value);
-  ctx
-    .field(TYPE)
-    .report(
-      resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
-      resolves
-        ? `'$type' names '${content.value}', which is not '${plan.displayName}' or an alias of it ` +
-            `(§7.2) -- expected ${admissible}`
-        : `'$type' names '${content.value}', which does not resolve in the governing schema's ` +
-            `namespace (§7.2) -- expected ${admissible}`,
-      admissible,
-      content.value,
-    );
+  ctx.report(
+    resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+    resolves
+      ? `'$type' names '${content.value}', which is not '${plan.displayName}' or an alias of it ` +
+          `(§7.2) -- expected ${admissible}`
+      : `'$type' names '${content.value}', which does not resolve in the governing schema's ` +
+          `namespace (§7.2) -- expected ${admissible}`,
+    admissible,
+    content.value,
+  );
   return false;
 }
 
@@ -330,10 +334,14 @@ function admissibleTag(ctx: JsonReadContext, plan: RecordPlan, content: JsonEven
  */
 function refuseReserved(ctx: JsonReadContext, name: string, displayName: string): void {
   if (name === SCHEMA) {
+    // §3.3's closing paragraph states this directly: `$schema` "is a resolver error at any
+    // position whose effective type is not a `scoped` instance" -- §9.4 file drawer, not
+    // `UNRECOGNIZED_FIELD`'s validation category, even though it does not appear itemised in
+    // §9.4's table row by row.
     ctx
       .field(SCHEMA)
       .report(
-        'UNRECOGNIZED_FIELD',
+        'UNKNOWN_TYPE_REF',
         `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
           `position -- '${displayName}' is a record`,
         'no $schema at this position',
@@ -342,10 +350,11 @@ function refuseReserved(ctx: JsonReadContext, name: string, displayName: string)
   } else if (name === TYPE) {
     refuseMisplaced(ctx, TYPE);
   } else if (name === VALUE) {
+    // §9.4: "a `$value` in an object not led by `$type`" is resolver category.
     ctx
       .field(VALUE)
       .report(
-        'UNRECOGNIZED_FIELD',
+        'UNKNOWN_TYPE_REF',
         "'$value' stands in an object not led by an admitted '$type' (§3.3) -- a wrapper's " +
           "'$value' follows its own leading, admitted '$type' and nothing else",
         "'$value' immediately after a leading '$type'",
@@ -388,6 +397,14 @@ export function buildRecordReader(
 
       const reportedBefore = outer.reported();
       const slots: Slot[] = new Array<Slot>(plan.names.length).fill(undefined);
+      // Every ordinary (non-`$`) member name seen so far, NFC-normalized -- tracked whether or
+      // not it matches a declared field. §3.1/§9.4's table puts a repeated member name at a
+      // record position under the resolver category unconditionally: identity is name identity,
+      // not "identity among declared fields", so a repeated *undeclared* member is the same
+      // `DUPLICATE_FIELD` error at its second occurrence, not a second `UNRECOGNIZED_FIELD`
+      // (closure is validation-category and asks a different question -- does this name denote a
+      // field at all -- answered once, at the name's first occurrence).
+      const seen = new Set<string>();
       let position = 0;
       let tagged = false;
 
@@ -421,19 +438,14 @@ export function buildRecordReader(
         position += 1;
         const memberName = toNfc(rawName);
         const at = plan.index.get(memberName);
+        if (seen.has(memberName)) {
+          yield* duplicateField(outer, memberName, at !== undefined);
+          continue;
+        }
+        seen.add(memberName);
         if (at === undefined) {
           yield* unmatched(outer, memberName);
           continue;
-        }
-        if (slots[at] !== undefined) {
-          outer
-            .schemaField(memberName)
-            .report(
-              'DUPLICATE_FIELD',
-              `'${memberName}' is written more than once in this record`,
-              'each field written at most once',
-              memberName,
-            );
         }
         slots[at] = yield* readField(outer, plan, at, memberName);
       }
@@ -454,6 +466,24 @@ export function buildRecordReader(
     },
   };
   return reader;
+}
+
+/**
+ * §3.1/§9.4: a member name (declared or not) repeated within one record, NFC identity, reported at
+ * its second and every later occurrence -- resolver category throughout, unlike the
+ * validation-category closure test `unmatched` runs for a name's first, undeclared occurrence.
+ * `declared` picks `schemaField` over `field` exactly where `unmatched`/`readField` would have --
+ * a repeated declared field still has a schema position to descend the pointer through.
+ */
+function* duplicateField(ctx: JsonReadContext, memberName: string, declared: boolean): Task<void> {
+  const at = declared ? ctx.schemaField(memberName) : ctx.field(memberName);
+  at.report(
+    'DUPLICATE_FIELD',
+    `'${memberName}' is written more than once in this record`,
+    'each field written at most once',
+    memberName,
+  );
+  yield* skipNextValue(at);
 }
 
 function* unmatched(ctx: JsonReadContext, memberName: string): Task<void> {

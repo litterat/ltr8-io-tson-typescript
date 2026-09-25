@@ -110,35 +110,35 @@ describe('§3.2/§3.3 the annotation object', () => {
     ).toBe('{"pet_type":"dog","name":"Rex","pack_size":3}');
   });
 
-  it('a wrapper with a member besides the reserved three is a resolver error (§3.3)', () => {
+  it('a wrapper with a member besides the reserved three is a resolver error (§3.3, §9.4)', () => {
     const d = refusalJson(
       'dog',
       '{"$type": "dog", "$value": {"pet_type": "dog", "name": "Rex", "pack_size": 3}, "extra": 1}',
     );
-    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$type after another member is a resolver error -- the reserved members must lead (§3.3)', () => {
+  it('$type after another member is a resolver error -- the reserved members must lead (§3.3, §9.4)', () => {
     const d = refusalJson(
       'dog',
       '{"pet_type": "dog", "$type": "dog", "name": "Rex", "pack_size": 3}',
     );
-    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$value in an object not led by an admitted $type is a resolver error', () => {
+  it('$value in an object not led by an admitted $type is a resolver error (§9.4)', () => {
     const d = refusalJson('dog', '{"$value": {"pet_type": "dog"}}');
-    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema is a resolver error everywhere this package reads (no scoped position built yet, §7.8)', () => {
+  it('$schema is a resolver error everywhere this package reads (no scoped position built yet, §7.8, §9.4)', () => {
     const d = refusalJson('dog', '{"$schema": "https://example.test/x.tn", "pet_type": "dog"}');
-    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('a $-initial member outside the closed reserved set is a resolver error (§3.2)', () => {
+  it('a $-initial member outside the closed reserved set is a resolver error (§3.2, §9.4)', () => {
     const d = refusalJson('dog', '{"$bogus": 1, "pet_type": "dog", "name": "Rex", "pack_size": 3}');
-    expect(d.code).toBe('UNRECOGNIZED_FIELD');
+    expect(d.code).toBe('UNKNOWN_TYPE_REF');
     expect(d.path).toBe('/$bogus');
   });
 });
@@ -407,9 +407,19 @@ describe('cross-encoding parity: same schema, same verdict', () => {
     expect(text.diagnostics).toEqual([]);
   });
 
-  it('DIVERGENCE: a refusal about a tag lands at different pointers -- the tag is an in-band member in JSON and an out-of-band annotation in text', () => {
+  /**
+   * A tag naming the ABSTRACT base itself is reported at the *value's* own pointer in both
+   * encodings, deliberately never at `/$type` though the member is right there in JSON: [TSON-JSON]
+   * §9.4 holds both encodings to one pointer for a rule they share, and TSON text's tag is an
+   * annotation with no pointer step of its own, so a rule the two stacks share can only be
+   * located where they both have a location (`dispatchTag.ts`'s own top note on this, matching
+   * the Java reference's `DispatchTagReader`/`RecordPlan.admitsTag`). This was a genuine pointer
+   * divergence before that fix landed -- `json-cross-encoding-parity.test.ts` now pins the general
+   * rule; this case is kept for `vehicle`'s own ABSTRACT-with-no-fields shape.
+   */
+  it('a tag naming the ABSTRACT base itself lands at the same pointer in both encodings', () => {
     const json = refusalJson('vehicle', '{"$type": "vehicle"}');
-    expect(json.path).toBe('/$type');
+    expect(json.path).toBe('');
     const text = refusalText('vehicle', '!vehicle {}');
     expect(text.path).toBe('');
   });

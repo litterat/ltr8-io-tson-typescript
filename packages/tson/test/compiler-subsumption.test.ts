@@ -299,17 +299,19 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
     expect(petTypeRef(`{ p: { pet_type: !text dog  name: "Rex"  breed: "corgi" } }`)).toBe('dog');
   });
 
-  it('the positional form of a single-selector base (§5.6) is never admitted as the base directly, even though the ordinary reader parses it cleanly: with no member in this closure it names the missing import, never "one of ()"', () => {
-    // `o`'s own ordinary record reader parses "whatever" as `orphan`'s positional fill for `sel`
-    // with zero diagnostics of its own (`sel` is a plain, unconstrained `text`) -- this is exactly
-    // the clean-parse-that-must-still-be-refused case, since `orphan` is ABSTRACT.
+  it('the positional form of a single-selector base (§5.6) is never admitted as the base directly: the positional fill never reaches the record-shape lookahead, so the selector is reported missing exactly as an omitted one would be', () => {
+    // The positional form of a one-field record is a bare token, never a `{ ... }` shape, so this
+    // dispatcher's own lookahead (which only looks inside a `record-start`) finds no discriminator
+    // token here at all -- the identical case to `sel` simply being left out, refused on the same
+    // terms (`FIELD_REQUIRED`, at the selector), never silently admitted as `orphan` itself even
+    // though `orphan`'s own ordinary record reader would parse "whatever" as `sel`'s positional
+    // fill cleanly.
     const result = readFamilyHolder(
       `{ p: { pet_type: dog  name: "Rex"  breed: "corgi" }  o: "whatever" }`,
     );
-    expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
-    const message = result.diagnostics[0]?.message ?? '';
-    expect(message).not.toContain('one of ()');
-    expect(message).toContain("expected a member of 'orphan'");
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+    expect(result.diagnostics[0]?.path).toBe('/o/sel');
+    expect(result.diagnostics[0]?.message).toContain("discriminator 'sel'");
   });
 
   it('a readable discriminator that no member (in an empty family) pins also names the missing import, never "one of ()"', () => {
@@ -389,15 +391,15 @@ describe(
     });
 
     it(
-      'a missing selector is a validation error even though the closed member’s own copy of ' +
-        'the field is optional (§5.7’s fixation) -- a template base has no reader of its own ' +
-        'to fall back to, and dispatch is decided by what is written, never by what a member ' +
-        'would inject (§7.2)',
+      'a missing selector is a required-field error even though the closed member’s own copy ' +
+        'of the field is optional (§5.7’s fixation) -- dispatch is decided by what is written, ' +
+        'never by what a member would inject (§7.2), and nothing else about the record is ' +
+        'inspected once that refusal fires',
       () => {
         const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n" } }`);
-        expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
-        expect(result.diagnostics[0]?.message).toContain('dog');
-        expect(result.diagnostics[0]?.message).toContain('cat');
+        expect(result.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+        expect(result.diagnostics[0]?.path).toBe('/p/type');
+        expect(result.diagnostics[0]?.message).toContain("discriminator 'type'");
       },
     );
 

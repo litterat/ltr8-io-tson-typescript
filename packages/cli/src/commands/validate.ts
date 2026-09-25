@@ -47,12 +47,16 @@
  * carries no `tokenPolicy` field at all -- so `--token-policy`/`--token-scripts` currently affect
  * only `.tn`/TSON-text inputs; see `STATUS.md`'s own "Known gaps" entry.
  *
- * Standard input has no name to classify by. It is read as JSON exactly when a binding is given
- * and nothing else says it is TSON text -- this CLI has no such flag, so in practice: bound stdin
- * is JSON, unbound stdin is TSON text, matching how the reference CLI's own `-` behaves relative
- * to its `--schema`/`--type` ("read as JSON when --schema and --type are given, since a .tn
- * document names its own binding and would not need them"), adapted to this CLI's own
- * out-of-band-only binding for `.tn` files too.
+ * **Standard input is TSON text by default, whatever binding is given** -- a deliberate
+ * divergence from the reference CLI (recorded in `STATUS.md`), which instead infers `-`'s
+ * encoding from whether `--schema`/`--type` are given ("read as JSON when they are, since a .tn
+ * document names its own binding and would not need them"). This CLI does not: `-` piped in is
+ * TSON text unconditionally, so `cat data.tn | tson validate --schema s.tn --root person -`
+ * reads `data.tn` as TSON regardless of `--schema`/`--root` being present, and a caller piping
+ * JSON says so explicitly. `--input tson|json` makes every input's encoding an explicit choice
+ * rather than an inferred one: omitted, a named file is classified by its own extension
+ * ([TSON-JSON] §3.1's `.json`) and `-` is always TSON; given, it forces every input this run
+ * reads, named or `-`, to that one encoding.
  */
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -80,9 +84,14 @@ import {
 } from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
+/** Which encoding an input is read as. */
+export type InputKind = 'json' | 'tson';
+
 export interface ValidateOptions {
   readonly schemaLocation?: string;
   readonly root?: string;
+  /** Forces every input's encoding, overriding the by-extension/`-`-is-TSON default (this module's own top note). `undefined` applies that default. */
+  readonly input?: InputKind;
   readonly policy: PolicyOptions;
   readonly files: readonly string[];
 }
@@ -251,16 +260,14 @@ function openSource(file: string): Readable {
   return file === '-' ? process.stdin : createReadStream(file);
 }
 
-/** Whether `file`'s own name marks it as a JSON encoding of TSON data ([TSON-JSON] §3.1: "a JSON file, and .json is its extension"). Case-insensitive, matching this CLI's other file-classification rules; never applied to `'-'`, which has no name to classify by (see {@link classifyInput}). */
+/** Whether `file`'s own name marks it as a JSON encoding of TSON data ([TSON-JSON] §3.1: "a JSON file, and .json is its extension"). Case-insensitive, matching this CLI's other file-classification rules; `'-'` has no name to classify by and never ends in `.json`, so absent `--input` it falls through {@link classifyInput} to TSON text, matching this module's own top note. */
 function isJsonPath(file: string): boolean {
   return file.toLowerCase().endsWith('.json');
 }
 
-type InputKind = 'json' | 'tson';
-
-/** Classifies one input by this module's own top note: a `.json` name is JSON; `'-'` is JSON exactly when a binding is given (nothing in this CLI can say otherwise); everything else is TSON text. */
-function classifyInput(file: string, bindingGiven: boolean): InputKind {
-  if (file === '-') return bindingGiven ? 'json' : 'tson';
+/** Classifies one input by this module's own top note: `forced` (`--input`), when given, wins outright; otherwise a `.json` name is JSON and everything else -- including `-` -- is TSON text. */
+function classifyInput(file: string, forced: InputKind | undefined): InputKind {
+  if (forced !== undefined) return forced;
   return isJsonPath(file) ? 'json' : 'tson';
 }
 
@@ -376,17 +383,17 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
   }
   const bindingGiven = schemaLocation !== undefined && root !== undefined;
 
-  const kinds = new Map(options.files.map((file) => [file, classifyInput(file, bindingGiven)]));
-  // [TSON-JSON] §3.4: this encoding has no schemaless reading at all, so a *named* `.json` input
-  // with no binding is refused up front -- unlike bound stdin (never possible here: `classifyInput`
-  // only ever calls stdin `'json'` when `bindingGiven` already holds) and unlike an unbound `.tn`
-  // input, which the schemaless branch below still checks on Class-1 terms.
+  const kinds = new Map(options.files.map((file) => [file, classifyInput(file, options.input)]));
+  // [TSON-JSON] §3.4: this encoding has no schemaless reading at all, so an input this run reads
+  // as JSON -- by extension, or forced with `--input json`, `-` included -- with no binding is
+  // refused up front, unlike an unbound TSON-text input, which the schemaless branch below still
+  // checks on Class-1 terms.
   if (!bindingGiven) {
-    const namedJson = options.files.find((file) => file !== '-' && isJsonPath(file));
-    if (namedJson !== undefined) {
+    const unboundJson = options.files.find((file) => kinds.get(file) === 'json');
+    if (unboundJson !== undefined) {
       throw new UsageError(
-        `validate: '${namedJson}' is a .json input, which has no schemaless reading ([TSON-JSON] ` +
-          '§3.4) -- give --schema and --root',
+        `validate: '${unboundJson}' is read as JSON, which has no schemaless reading ` +
+          '([TSON-JSON] §3.4) -- give --schema and --root',
       );
     }
   }

@@ -256,10 +256,13 @@ export function withAnnotationObject(
       const found = yield* leadOf(ctx);
       if (!leadPresent(found)) return yield* inner.read(ctx);
       if (found.schema) {
+        // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s
+        // top note on this port's reading of §9.4's table (a deliberate divergence from the Java
+        // reference, which reports `UNRECOGNIZED_FIELD` here too).
         ctx
           .field(SCHEMA)
           .report(
-            'UNRECOGNIZED_FIELD',
+            'UNKNOWN_TYPE_REF',
             `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
               `position -- '${displayName}' is not scoped`,
             'no $schema at this position',
@@ -269,11 +272,12 @@ export function withAnnotationObject(
         return undefined;
       }
       if (found.type === undefined) {
-        // §3.3: "a $value in an object that does not lead with $type is a resolver error" -- a
+        // §9.4's table: "a `$value` in an object not led by `$type`" is a resolver error, not
+        // `VALIDATION_ERROR` -- the same divergence `reservedMembers.ts`'s top note records. A
         // bare `$value` (`found.wrapper`) with nothing naming a type has nothing for this
         // no-subtype position to validate it as.
         ctx.report(
-          'VALIDATION_ERROR',
+          'UNKNOWN_TYPE_REF',
           `an annotation object at '${displayName}' needs a leading '$type' before '$value' ` +
             `(§3.3) -- a bare '$value' names nothing to read it as`,
           `'$type' naming '${displayName}'`,
@@ -285,18 +289,21 @@ export function withAnnotationObject(
       if (!own.has(found.type)) {
         if (!nameHygieneRefuses(ctx.field(TYPE), found.type)) {
           const resolves = entries.has(found.type);
-          ctx
-            .field(TYPE)
-            .report(
-              resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
-              resolves
-                ? `'$type' names '${found.type}', which is not '${displayName}' or an alias of ` +
-                    `it -- this position has no subtype for §7.2 subsumption to select`
-                : `'$type' names '${found.type}', which does not resolve in the governing ` +
-                    `schema's namespace (§7.2)`,
-              displayName,
-              found.type,
-            );
+          // Located at the value and not at `/$type` -- matches `dispatchTag.ts`'s own pointer
+          // convention (its top note there): [TSON-JSON] §9.4 holds both encodings to one pointer
+          // for a rule they share, and TSON text's tag is an annotation with no pointer step of
+          // its own (`compiler/subsumption.ts`'s own `guardSubsumption` reports every one of these
+          // cases at the value's own position, atom and array/tuple positions included).
+          ctx.report(
+            resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
+            resolves
+              ? `'$type' names '${found.type}', which is not '${displayName}' or an alias of ` +
+                  `it -- this position has no subtype for §7.2 subsumption to select`
+              : `'$type' names '${found.type}', which does not resolve in the governing ` +
+                  `schema's namespace (§7.2)`,
+            displayName,
+            found.type,
+          );
         }
         yield* skipNextValue(ctx);
         return undefined;
