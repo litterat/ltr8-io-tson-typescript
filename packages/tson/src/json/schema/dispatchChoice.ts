@@ -2,10 +2,10 @@
  * A choice-typed position ([TSON-JSON] §8): §8.2's discrimination predicate, over the
  * resolver-derived `disjoint` fact this port already computes for the text encoding
  * (`link/disjointness.ts`'s `discriminationClassOf`/`choiceDisjoint`, whose class derivation
- * already folds in Revision 36's class-stability rule -- see that module's own top note. There is
+ * already folds in §5.4's class-stability rule -- see that module's own top note. There is
  * therefore no separate "class stability" question to ask here, unlike the pinned Java reference,
- * whose own `DiscriminationClass.stable` predicate the change log's own §5.4 text folds into the
- * derivation itself).
+ * whose own `DiscriminationClass.stable` predicate is a separate check §5.4 folds into this
+ * port's derivation instead).
  *
  * A value at a choice position MAY omit the tag **if and only if** the choice is `disjoint`, and
  * selection is then by the JSON value kind, which names a discrimination class (§4.2) and so names

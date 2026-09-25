@@ -4,11 +4,11 @@
  * under) and a document's **content hash** (the `?sha256=` pin that makes a reference
  * content-addressed).
  *
- * This subpath exists because both are consumer-facing operations that the library previously
- * only performed inwardly. `Tson.preload` verifies a pin and the registry canonicalises every
- * identity, but a caller wanting to *compute* a hash for a document they hold — to stamp a
- * reference, to check one against a lock file, to write a `tson hash` of their own — had nothing
- * to call, and the alternative to exporting these is every such caller reimplementing §2.2.1.
+ * This subpath exists because both are consumer-facing operations in their own right, distinct
+ * from `Tson.preload`'s pin verification and the registry's identity canonicalisation. A caller
+ * wanting to *compute* a hash for a document they hold — to stamp a reference, to check one
+ * against a lock file, to write a `tson hash` of their own — calls here rather than
+ * reimplementing §2.2.1.
  *
  * It is a separate subpath rather than part of the default entry for the reason that entry's own
  * note gives: an import should not drag in more than it needs. Nothing here reaches the schema

@@ -3,8 +3,8 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: both spec parts implemented; 233/233 shared conformance subjects passing at the
-> pinned suite commit, Class 1 and Class 2.** See
+> **Status: all three spec parts implemented, including the Part 3 JSON encoding; 328/328 shared
+> conformance subjects passing at the pinned suite commit, Class 1 and Class 2.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
 > builds every browser-facing entry point and runs it with no Node globals in scope.
@@ -26,7 +26,7 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.35.x` implements the **2026 Revision 35** series. A new spec revision moves the
+built against, so `0.36.x` implements the **2026 Revision 36** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
@@ -44,9 +44,10 @@ authenticates a document together with its entire contract.
 
 The text format is Unicode-first and JSON-_like_, and deliberately not a JSON superset ([TSON-DATA]
 §4.1, §6): the notation carries no `null` keyword, treats field names as identifiers, and has no
-surrogate-pair escapes, so a JSON document is read through a JSON reader rather than as TSON.
-Commas and quotes are optional where unambiguous, identifiers may be in any script, and there are
-three structural forms distinguished by their contents rather than their brackets:
+surrogate-pair escapes, so a JSON document is read through the separate [TSON-JSON] encoding
+([`./json`](#json-encoding)) rather than as TSON text. Commas and quotes are optional where
+unambiguous, identifiers may be in any script, and there are three structural forms distinguished by
+their contents rather than their brackets:
 
 ```tson
 !!id:"https://example.com/orders/1042.tn"
@@ -81,11 +82,13 @@ A JSON document is **not** a TSON document ([TSON-DATA] §6). What the two share
 strings, `[ ]` arrays, `{ name: value }` records, the `\n \r \t \\ \"` escapes — is shared because
 each was a good idea on its own. What differs is load-bearing: TSON has no `null` keyword (§4.4),
 field names are identifiers (§2.5), and there are no surrogate-pair escapes (§7.2.2). JSON is read
-through a JSON reader — a second encoding of the same model, mapping `null` to absence and a
-non-identifier-keyed object to a map — which this port does not yet implement.
+through [TSON-JSON] instead — a second, schema-directed encoding of the same model, mapping `null`
+to absence and a non-identifier-keyed object to a map — behind this package's own [`./json`
+subpath](#json-encoding).
 
-Two conformance classes: **Class 1** implements the data format alone and needs nothing from Part 2;
-**Class 2** implements the schema layer too. This port targets both, and both are implemented.
+Two conformance classes in the shared corpus: **Class 1** implements the data format alone and needs
+nothing from Part 2; **Class 2** implements the schema layer too. This port targets both, and both
+are implemented, plus the Part 3 JSON encoding the corpus does not yet vector.
 
 ## API
 
@@ -168,7 +171,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/35/m/meta.tn', 'https://tson.io/2026/35/m/core.tn']);
+await tson.preload(['https://tson.io/2026/36/m/meta.tn', 'https://tson.io/2026/36/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -265,7 +268,7 @@ npm run demo:web                 # writes examples/web-demo/dist (index.html + d
 npx serve examples/web-demo/dist # ES modules need http://, not file://
 ```
 
-84 KB gzipped, all of it: lexer, parser, schema compiler, validator, and the three bundled schemas.
+155 KB gzipped, all of it: lexer, parser, schema compiler, validator, and the three bundled schemas.
 
 ### CLI
 
@@ -315,21 +318,21 @@ recursion is real — see [STATUS.md](STATUS.md).
 
 ## What is and isn't implemented
 
-Both Parts 1 and 2, plus Part 2's shared conformance suite, are implemented in full — see
+Parts 1 and 2, plus Part 2's shared conformance suite, are implemented in full — see
 [STATUS.md](STATUS.md) for the itemised checklist, including the small number of documented
-deferrals (e.g. `token_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
+deferrals (e.g. `enum_set` round-tripping as a plain `array`, `@doc` key annotations dropped from
 resolved schema output) and known gaps. Part 3, the JSON encoding, covers a schema-directed tree
 read and its CLI/package surface — narrower than the reference implementation's own scope, which
 also has an `objectReader` binding a JSON document straight into a host object; this port has no
 JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band-only
 binding, a scoped-position reader, the §3.5 HTTP header fields, or a schema-directed encoder — see
-[STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps. In particular:
+[STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/35/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/35/tson-part2-schema.md
-- Part 3 — JSON Encoding, vendored at `spec/tson-part3-json.md` (new in Revision 36)
+- Part 1 — Text Data Format: https://tson.io/raw/2026/36/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/36/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/36/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.
@@ -343,7 +346,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test                        # unit
-npm run test:conformance        # 233 shared subjects, at the pinned suite commit
+npm run test:conformance        # 328 shared subjects, at the pinned suite commit
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 

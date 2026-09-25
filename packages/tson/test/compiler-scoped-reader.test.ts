@@ -16,8 +16,8 @@ const FOREIGN_ID = 'https://tson.io/test-suite/scoped-reader/claim.tn';
 
 const FOREIGN_SCHEMA = `
 !!id:"${FOREIGN_ID}"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 {
   claim => {
     id: text
@@ -32,8 +32,8 @@ const FOREIGN_SCHEMA = `
 
 const HOST_SCHEMA = `
 !!id:"test://scoped-reader/host.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 {
   note => {
     body: text

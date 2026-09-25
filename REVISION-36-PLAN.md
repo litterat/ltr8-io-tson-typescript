@@ -240,6 +240,13 @@ value, field name, type-ref and annotation name in the stream, on all read paths
 them on the schemaless tree path only. That predates both pins and is not a Revision 36 change —
 record it as a gap rather than widening this run.
 
+## Stage 4, as executed
+
+Stage 4 ran as four workflows rather than two. Porting only part of the reference's JSON tests let
+real divergences survive two reviews, so 4c and 4d ported the rest of `tson-json/src/test/` case for
+case (Java-host binding excepted). That found and fixed bugs in both stacks, and closed the review
+findings.
+
 ## To report upstream
 
 - **Member dispatch against streaming.** §5.2 lets a text-encoded selector arrive after the fields
@@ -249,3 +256,25 @@ record it as a gap rather than widening this run.
 - The corpus's `REVISION` file still reads `33`.
 - The `!set_type` / `!array` §8.1 gap `CLAUDE.md` records survives this revision; `enum_set` is now
   `!set_type { element_type: text }` and writes, as before, as `!array`.
+- **Parametric modifiers (§5.7, §8.1, kernel `record_field` @doc).** §5.7 and §1.6 write `~ P` on an
+  unmarked name, and the reference refuses it; this port follows the spec. The kernel doc says a
+  held parametric field is "a required FREE field with the parameter in `value`", which contradicts
+  §8.1's "`value` present exactly when `role` is not FREE"; this port holds the eventual role.
+- **Pin distinctness "transitively" (§5.2).** A grandchild inherits its parent's pin, which §5.7
+  forbids it to change, so distinctness over the transitive `subtypes` would flag every grandchild.
+  Read over direct members, since "a family discriminates one level".
+- **A sealed or ABSTRACT record as a choice variant (§5.4, §7.2).** §7.2 gives choices variant
+  membership rather than subsumption, so a tag naming a family member is not a variant, and the
+  variant itself has no direct instances. Read literally, such a variant admits no value. This port
+  reads the variant through its own family.
+- **No resolver-category code for a reserved-member violation ([TSON-JSON] §3.2, §3.3, §9.4).** An
+  unknown `$foo`, a misplaced `$type` and extras in a wrapper are resolver errors, but the diagnostic
+  vocabulary has no code that means that. This port uses `UNKNOWN_TYPE_REF`.
+- **Where the reference diverges from Part 3**, each followed here as Part 3 reads:
+  - duplicate member names are compared after NFC (§3.1);
+  - a JSON number at an enum position matches by its lexeme (§5.2);
+  - a wrapper `$type` naming a sealed base takes the same refusal as the inline form;
+  - `$schema` without `$type` at an OPEN-with-subtypes position is refused by the concrete reader.
+- **`UNKNOWN_TYPE_REF` versus `TYPE_MISMATCH` (§7.2).** The reference's schema-directed dispatchers
+  report `TYPE_MISMATCH` even for a tag naming nothing. This port keeps `UNKNOWN_TYPE_REF` for a name
+  that denotes nothing, as its own commit message for that change states.

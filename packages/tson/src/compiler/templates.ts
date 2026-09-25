@@ -611,7 +611,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         `'${head}<...>' is a held body whose own application carries no constructor name`,
       );
     }
-    // One walk does what three steps used to: a parameter in a slot, a parameter inside an
+    // One walk covers all three shapes at once: a parameter in a slot, a parameter inside an
     // application a slot holds (`tree<p0>` becoming `tree<text>`), and a parameter inside a
     // collection are all the same thing here -- a token in a tree -- because the body was never
     // read against the constructor's vocabulary in the first place.

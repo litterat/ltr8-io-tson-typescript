@@ -531,7 +531,7 @@ function differences(name: string): string[] {
 
 describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixtures", () => {
   // A fixture's entry count is its schema's authored declaration count plus whatever §5.3's sugar
-  // forms lift to a closed synthetic entry: meta-kernel declares 50 and lifts 8, meta declares 38
+  // forms lift to a closed synthetic entry: meta-kernel declares 53 and lifts 8, meta declares 36
   // and lifts 7, core declares 50 and lifts none. Pinned because the two counts are easy to
   // conflate, and a schema whose declaration count drifts is a vendoring failure
   // `vendored-spec.test.ts` should have caught first.
@@ -548,6 +548,13 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
   // `examples`, `read_only`, `write_only`). core drops `alias`, its four alphabet siblings
   // (`base32`/`base64`/`base64url`/`hex`) and `unknown`, and gains `bytes`, `period`, `set`, and
   // the `scoped` instances `declared`/`extern`/`dynamic` plus `extern_of`/`extern_type`.
+  //
+  // Revision 36 moves both counts again: meta-kernel gains three -- `text_member_set` (§5.2's
+  // sparse member sets, `integer_member_set`'s text-element counterpart; `enum_set` itself keeps
+  // its name but its own element type moves from `identifier` to `text`), `record_extension_type`
+  // (the ABSTRACT/FINAL/OPEN enum record extension needs) and `enum_profile` (the IDENTIFIER/TEXT
+  // enum member-spelling choice). meta loses two: `discriminator` and `rest`, both superseded by
+  // the three-slot field grammar's own `=?`/`abstract` spelling.
   it.each([
     ['meta-kernel', 53, 61],
     ['meta', 36, 43],
@@ -568,7 +575,7 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
       pattern:
         /^(uri|regex|email|ipv4|ipv6|cidr4|cidr6|mac)\.body\.v\.spec$|^complex\.body\.v\.component$|^float(32|64)\.body\.v\.allow_(nan|infinity|subnormal|negative_zero)$/,
       reason:
-        'an atom specification`s REQUIRED_WITH_DEFAULT field (`spec`, `component`, the four ' +
+        'an atom specification field optional with role FIXED (`spec`, `component`, the four ' +
         '`allow_*` flags) is emitted where the fixture omits it at its default; whether such a ' +
         'field is written at default is a writer question (Wave 5)',
     },

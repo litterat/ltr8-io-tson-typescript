@@ -20,13 +20,13 @@
  * the linker it is deliberately *not* wired in — see this package's own report on this work
  * package for the citation.
  *
- * **§5.4's no-class list includes two straddling kinds (change log #17): an approximate atom
+ * **§5.4's no-class list includes two straddling kinds: an approximate atom
  * (`float_type`) still admitting `allow_nan` or `allow_infinity`, and a map whose key type, after
  * following its reference chain, is not an atom-family instance or an enum.** Both make `disjoint`
  * class-stable: a choice's untagged values are the same set in every encoding ([TSON-JSON] §8.3),
  * at the price that `( float64 | text )` needs a tag in text too unless the float narrows
- * `allow_nan`/`allow_infinity` to `false` (change log #17 calls this a language change on the text
- * side). This module follows §5.4's own text over the pinned Java reference's text-side
+ * `allow_nan`/`allow_infinity` to `false` -- a language change on the text side, not only the
+ * JSON one. This module follows §5.4's own text over the pinned Java reference's text-side
  * `DiscriminationClass` (`tson-compiler/.../reader/DiscriminationClass.java`), whose class
  * stability question is folded into a *separate* `stable()` predicate on the JSON side
  * (`tson-json/.../reader/DiscriminationClass.java`) rather than into `classify()` itself.

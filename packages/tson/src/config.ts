@@ -36,8 +36,8 @@
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
  * tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/35/m/meta.tn',
- *   'https://tson.io/2026/35/m/core.tn',
+ *   'https://tson.io/2026/36/m/meta.tn',
+ *   'https://tson.io/2026/36/m/core.tn',
  * ]);
  * ```
  *
@@ -253,8 +253,8 @@ export interface Config extends NestingLimitOptions {
  *
  * Stated once on the instance rather than per call, because the whole reason to hold a `Tson` is
  * to say a policy once. A schema is the more important half: it is routinely fetched from
- * somewhere else, and a deeply nested annotation value or type expression in one used to exhaust
- * the host call stack inside `resolveSchema` before this bound existed.
+ * somewhere else, and a deeply nested annotation value or type expression in one can exhaust
+ * the host call stack inside `resolveSchema` without this bound.
  */
 function limitOf(config: Config): NestingLimitOptions {
   return config.maxNestingDepth === undefined ? {} : { maxNestingDepth: config.maxNestingDepth };
@@ -303,11 +303,11 @@ function checkPin(reference: string, contentHash: string, identity: string): voi
 /**
  * `reference`'s own declared `?sha256=` pin, if any, MUST equal `identity`'s recorded content
  * hash -- [TSON-SCHEMA] §10.2's "a later pinned reference is verified against the identity's own
- * recorded hash". Silent only when nothing is recorded for `identity` at all, which no longer
- * happens for any schema this instance itself resolved or fetched ({@link recordContentHash} runs
- * for every one, via `resolveSchemaMethod`/`preload` below) -- the remaining case is an identity
- * registered directly as an already-linked {@link LinkedSchema} (`register`, e.g. the meta-kernel
- * bootstrap), which carries no source bytes to hash at all.
+ * recorded hash". Silent only when nothing is recorded for `identity` at all: every schema this
+ * instance itself resolved or fetched always has one recorded ({@link recordContentHash} runs for
+ * every one, via `resolveSchemaMethod`/`preload` below), so the only case with nothing recorded is
+ * an identity registered directly as an already-linked {@link LinkedSchema} (`register`, e.g. the
+ * meta-kernel bootstrap), which carries no source bytes to hash at all.
  */
 function verifyPin(
   contentHashes: ReadonlyMap<string, string>,
@@ -332,10 +332,9 @@ function verifyPin(
  * checked before the fetched bytes are trusted at all.
  *
  * Computing the digest is synchronous (`sha256HexSync` -- this module's own top note explains why
- * a hand-written SHA-256 exists rather than the async `crypto.subtle`), so unlike an earlier
- * version of this instance, *every* addressable schema resolved or fetched here gets a recorded
- * hash, not only an unaddressable one -- {@link verifyPin}'s own "nothing recorded" case no longer
- * applies to it.
+ * a hand-written SHA-256 exists rather than the async `crypto.subtle`), so *every* addressable
+ * schema resolved or fetched here gets a recorded hash, not only an unaddressable one --
+ * {@link verifyPin}'s own "nothing recorded" case never applies to it.
  */
 function recordContentHash(
   contentHashes: Map<string, string>,

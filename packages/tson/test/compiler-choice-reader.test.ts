@@ -212,8 +212,8 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
 
 const DISJOINT_SCHEMA = `
 !!id:"test://choice-disjoint.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 {
   designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }

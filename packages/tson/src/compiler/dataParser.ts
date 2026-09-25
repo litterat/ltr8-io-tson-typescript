@@ -172,9 +172,9 @@ function* dataValue(source: EventSource, ctx: ParseContext, depth: number): Task
     if (peeked.kind !== 'annotation-start') break;
     // `depth + 1`, and neither `depth` nor `0`. An annotation's value is a data value in its own
     // right, so `@a:@a:@a:...` recurses through this function once per annotation with no
-    // structural nesting at all to count -- and this used to pass `0`, which reset the counter at
-    // every annotation, so even a nesting chain walked straight past the bound into the host's
-    // own stack limit and out of `parse` as an uncaught RangeError.
+    // structural nesting at all to count -- passing `0` here would reset the counter at every
+    // annotation, letting a nesting chain walk straight past the bound into the host's own stack
+    // limit and out of `parse` as an uncaught RangeError.
     annotations.push(yield* annotation(source, ctx, depth + 1));
   }
 

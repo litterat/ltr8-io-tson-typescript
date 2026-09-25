@@ -218,7 +218,7 @@ function* parseTypeDef(state: CursorState): Task<TypeDef> {
     // (§4.2), and `~` is a special token with no role at type-def position." `~` keeps exactly
     // one grammar role, the field-modifier default-value marker (§5.2) -- a source document
     // that writes one here (`class2/schema/invalid/a-constructor-marker-is-not-grammar`) fails
-    // here rather than being read as a marker this revision no longer has.
+    // here rather than being silently read as a type-def marker, since the grammar has none.
     const here = yield* peekToken(state);
     throw parseError(
       here,

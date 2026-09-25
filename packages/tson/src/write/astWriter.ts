@@ -5,8 +5,8 @@
  * **The only writer in this package that writes syntax.** {@link writeTreeTo} (`treeWriter.ts`)
  * writes a `tree.Value` and {@link writeBindingTo} (`bindingWriter.ts`) a bound host value, both
  * of which describe a *value* and are free to choose how to spell it; an AST records what an
- * author wrote, including the choices a value no longer remembers -- which token was quoted, what
- * a record's field order was -- so this puts them back rather than deciding them again. Every
+ * author wrote, including the choices a `tree.Value` does not retain -- which token was quoted,
+ * what a record's field order was -- so this puts them back rather than deciding them again. Every
  * token is re-emitted with its own captured {@link TokenValue.text}/{@link TokenValue.form}
  * unchanged, so this module never has to make a single formatting decision (no quoting rule, no
  * numeric reformatting) -- which is exactly what makes **parse, then write, then re-parse** a

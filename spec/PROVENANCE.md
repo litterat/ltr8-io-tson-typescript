@@ -22,8 +22,8 @@ They are copies, not sources. Two things depend on that:
 - The spec snapshots are the revision this port was written against. Editing one would make the
   code disagree with the document that justifies it, silently.
 
-`spec.test.ts` fails if any file here drifts from the pinned checkout. `.prettierignore` covers
-this directory so formatting cannot rewrite them either.
+`test/conformance/vendored-spec.test.ts` fails if any file here drifts from the pinned checkout.
+`.prettierignore` covers this directory so formatting cannot rewrite them either.
 
 To move to a newer spec revision, change the pin in `scripts/fetch-references.sh`, re-run it, and
 re-copy — as one commit, so the diff shows what changed in the spec.

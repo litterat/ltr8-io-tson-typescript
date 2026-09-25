@@ -328,7 +328,7 @@ export interface TemplateBody {
   /**
    * The parameter names this entry binds, in declaration order — the arity and order an
    * application binds against (§5.10, §8.1). Read this instead of a stored
-   * `TypeDefinition.parameters` field, which the kernel no longer carries.
+   * `TypeDefinition.parameters` field — the kernel has no such field.
    */
   readonly parameters: readonly string[];
 

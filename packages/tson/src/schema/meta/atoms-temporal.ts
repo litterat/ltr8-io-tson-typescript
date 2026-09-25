@@ -106,7 +106,7 @@ export interface DateTimeType {
  * The meta-kernel's `duration_type` constructor (§5.5's `duration` atom, RFC 3339 Appendix A,
  * restricted to no `Y`/month-`M` component). Elapsed time — a signed exact count of seconds,
  * bounded at both ends by a signed 64-bit count of nanoseconds (about 292 years); `!period`
- * (`PeriodType`) carries the calendar half this family no longer does, which is what makes
+ * (`PeriodType`) carries the calendar half this family excludes, which is what makes
  * `duration` totally ordered and this family's bounds enforceable at all.
  *
  * **Every numeric field holds the *value*, not the token.** `min`/`exclusiveMin`,
@@ -144,7 +144,7 @@ export interface DurationType {
  * The meta-kernel's `period_type` constructor (§5.5's `period` atom, RFC 3339 Appendix A,
  * restricted to a `Y` component, an `M` component, or both — no fraction, no `W`/`D` component,
  * no `T` part). Calendar span — a signed integer count of months, so `P1Y` and `P12M` are one
- * value. The calendar half of what one duration used to carry, and the reason `!duration`
+ * value. The calendar half that `duration` excludes, and the reason `!duration`
  * (`DurationType`) can be totally ordered: a month has no fixed length, so months and seconds
  * are two value spaces rather than one partially ordered one.
  *

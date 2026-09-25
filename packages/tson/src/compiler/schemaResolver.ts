@@ -149,7 +149,7 @@ export interface ResolveSchemaOptions {
    * one exactly. Mirrors `desugar.ts`'s own `DesugarOptions.positions` -- indeed the very same map,
    * threaded through both phases so a declaration desugaring rebuilds keeps its position.
    *
-   * **Omitting this is no longer "no positions at all".** Every resolved entry's own `position`
+   * **Omitting this is not "no positions at all".** Every resolved entry's own `position`
    * (§8.1's diagnostic addition) falls back to `declaration.position` -- the position
    * `compiler/schemaParser.ts` already stamps on every declaration it parses -- so a caller that
    * builds no side-table of its own (every caller today) still gets one, via
@@ -173,9 +173,9 @@ export interface ResolveSchemaOptions {
  * `declaration`'s own source position for a diagnostic: `positions`' own side-table entry when
  * one is supplied and holds one, falling back to the position `compiler/schemaParser.ts` already
  * stamped onto every declaration it parses ({@link Declaration.position}). Every call site in this
- * module that used to read `positions?.get(declaration)` directly goes through this instead, so a
- * caller supplying no side-table of its own -- every caller today -- still gets a position rather
- * than `undefined` on every diagnostic and every resolved entry.
+ * module reads a declaration's position through this helper rather than `positions?.get(declaration)`
+ * directly, so a caller supplying no side-table of its own -- every caller today -- still gets a
+ * position rather than `undefined` on every diagnostic and every resolved entry.
  */
 function positionOf(
   declaration: Declaration,

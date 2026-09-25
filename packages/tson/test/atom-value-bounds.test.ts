@@ -19,8 +19,8 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { DecimalType, FloatType, RationalType } from '../src/schema/meta/atoms-numeric.js';
 
 const HEADER = `!!id:"https://example.com/t.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 `;
 
 function bodyOf(source: string, name = 'q'): unknown {

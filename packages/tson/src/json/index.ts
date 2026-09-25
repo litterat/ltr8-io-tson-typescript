@@ -169,10 +169,10 @@ export interface JsonParseResult {
  * unreachable by construction and there is nothing further to collect. **This is a narrower
  * posture than `facade/tree.ts`'s own `validate`** (which catches a base-syntax failure and
  * reports it through the receiver instead) **and than this same subpath's own schema-directed
- * `validateJson`/`validateJsonAsync`** (`json/facade.ts`, which does the same, now that its own
- * documented divergence from the text convention has been narrowed to only a §10.1 limit
- * refusal): the schemaless door stays simpler on purpose, since a caller who wants a base-syntax
- * failure collected already has a `DiagnosticsReceiver`-shaped door lower in this same module
+ * `validateJson`/`validateJsonAsync`** (`json/facade.ts`, which does the same, and still throws
+ * only for a §10.1 nesting-limit refusal): the schemaless door stays simpler on purpose, since a
+ * caller who wants a base-syntax failure collected already has a `DiagnosticsReceiver`-shaped
+ * door lower in this same module
  * (`readJsonDocument`, over a `collector()`) to reach for instead of this convenience wrapper.
  */
 export function parseJsonCollecting(

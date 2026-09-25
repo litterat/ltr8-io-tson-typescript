@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `!!id:"test://m.tn"
-!!meta:"https://tson.io/2026/35/m/meta.tn"
-!!import:"https://tson.io/2026/35/m/core.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
 `;
 const load = (decls: string) => resolveUserSchema(`${HEAD}{ ${decls} }`);
 

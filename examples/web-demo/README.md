@@ -39,7 +39,7 @@ npx serve examples/web-demo/dist      # or python3 -m http.server, or your own
 - **A library gap is not a verdict.** `NOT_IMPLEMENTED` is styled differently and worded
   differently, because it says nothing was checked rather than that the document is wrong.
 
-The schema and the scenarios are written against the **2026 Revision 35** spec series, which the
+The schema and the scenarios are written against the **2026 Revision 36** spec series, which the
 `!!meta`/`!!import` identities in the schema name. Moving to a new revision means moving those two
 lines with the bundled schemas they name, or every schema-layer scenario stops resolving.
 

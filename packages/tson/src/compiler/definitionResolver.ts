@@ -1314,9 +1314,9 @@ function resolveComposition(
   }
   checkSupertypeChainLimit(name, transitiveSupertypes);
 
-  // §4.1: at most one base kind may be reachable through the supertype chain -- kept as a
-  // validation-only call (its own diagnostic is the point) now that kind is derived rather than
-  // stored; see `determineKind`'s own doc.
+  // §4.1: at most one base kind may be reachable through the supertype chain -- kind is derived
+  // rather than stored, so this call is validation-only (its own diagnostic is the point); see
+  // `determineKind`'s own doc.
   determineKind(name, transitiveSupertypes);
   const body: RecordBody = {
     kind: 'record',
