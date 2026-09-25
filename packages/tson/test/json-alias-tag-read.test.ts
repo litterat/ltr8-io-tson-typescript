@@ -6,12 +6,12 @@
  * than two that happen to agree, so what `!s_of` does in TSON text `"$type": "s_of"` does here.
  *
  * Every position that matches a written name against a set is covered: a plain record, an abstract
- * base, and a sealed base's deeper tag all follow [TSON-SCHEMA] §7.2's general subsumption rule,
- * which flattens both chains before comparing -- the alias is admitted rather than rewritten to
- * its target, so the reader that runs is the one named for the entry the author wrote. A choice's
- * variants are the deliberate exception: §5.4 gives choice positions their own membership relation
- * rather than §7.2's, so an alias of a variant is not itself admitted there (see this file's own
- * choice-position cases, below).
+ * base, a sealed base's deeper tag, and -- alias-flattened on the same terms, though not through
+ * §7.2's own general subsumption rule -- a choice's variants (§5.4's own "Resolution" paragraph
+ * already reads a variant by what it *resolves to*; see this file's own choice-position cases,
+ * below, and `json/schema/dispatchChoice.ts`'s top note for the full citation). In every case the
+ * alias is admitted rather than rewritten to its target, so the reader that runs is the one named
+ * for the entry the author wrote.
  */
 import { expect, it } from 'vitest';
 
@@ -42,7 +42,9 @@ const SCHEMA_SOURCE = `
   note   => { body: text }
   count  => { n: int32 }
   n_of   => note
+  n2     => note
   either => ( note | count )
+  either2 => ( n_of | count )
 }
 `;
 
@@ -92,21 +94,42 @@ it('a sealed position places the value by its discriminator, then checks any tag
 });
 
 /**
- * A choice position discriminates by variant type name alone ([TSON-SCHEMA] §5.4's "Resolution"
- * paragraph), not by [TSON-SCHEMA] §7.2's general subsumption rule: [TSON-JSON] §3.3 says a
- * choice's admissible `$type` set is "a variant of it", and its own §1.5 companion text carves
- * choice positions out of the rule that governs "every other typed position", giving them their
- * own membership relation instead. §7.2's reference-chain flattening is what the *general* rule
- * follows both chains through; a choice's own relation never invokes it, so an alias of a variant
- * is a name this choice does not itself declare, same as any other non-variant name. This port's
- * text-encoding choice reader (`compiler/choiceReader.ts`) reads the same way -- an exact match
- * against the declared variant list, checked once at compile time -- so this is not a JSON-only
- * reading, and `dispatchChoice.ts`'s own top note has the fuller rationale.
+ * §5.4's own "Resolution" paragraph reads a variant by what it *resolves to* ("the resolver
+ * validates that each variant resolves to a distinct type"), not by its written spelling, and §8.3
+ * states the general principle a variant reference shares with every other one: "a reference is a
+ * hop, not a rewrite... the same type under another name". So `n_of` (an alias of `note`, a
+ * variant of `either`) names the variant it points to, the same identity question every other
+ * position in this file answers the same way. This port's text-encoding choice reader
+ * (`compiler/choiceReader.ts`) reads the same way -- alias-flattened, not subtype-flattened -- so
+ * this is not a JSON-only reading, and `dispatchChoice.ts`'s own top note has the fuller rationale,
+ * including where this diverges from the reference (subtype admission, not exercised by this
+ * fixture).
  */
-it('§5.4: a choice discriminates by variant name alone, so an alias of a variant is not the variant', () => {
-  expect(refusal('either', '{"$type":"n_of","body":"x"}').code).toBe('TYPE_MISMATCH');
+it('§5.4/§8.3: an alias of a variant is admitted at a choice position, matching the variant it names', () => {
+  expect(accepted('either', '{"$type":"n_of","body":"x"}')).toBe('{"body":"x"}');
 });
 
 it('flattening decides what a name means, not whether it is admitted: an unrelated alias is still refused', () => {
   expect(refusal('base', '{"$type":"n_of","body":"x"}').code).toBe('TYPE_MISMATCH');
+});
+
+/**
+ * `either2`'s own declared variant is `n_of`, itself an alias of `note` -- not a
+ * terminal. Flattening a written variant name to *its own* terminal first, then admitting every
+ * name that ends there (`dispatchChoice.ts`'s own top note), is what lets a tag name `note`
+ * (the variant's target) or `n2` (a sibling alias of the same target) here: both share `n_of`'s
+ * own terminal, so both are the variant `n_of` names, under the identical "a reference is a hop,
+ * not a rewrite" principle this file's other cases already apply -- flattening one way only (to
+ * the *written* variant's own aliases, never past it to its target) would miss both.
+ */
+it('a variant that is itself an alias admits its own target at the choice’s tag', () => {
+  expect(accepted('either2', '{"$type":"note","body":"x"}')).toBe('{"body":"x"}');
+});
+
+it('and a sibling alias of that same target, not only the variant’s own written spelling', () => {
+  expect(accepted('either2', '{"$type":"n2","body":"x"}')).toBe('{"body":"x"}');
+});
+
+it('the variant’s own written spelling still works too', () => {
+  expect(accepted('either2', '{"$type":"n_of","body":"x"}')).toBe('{"body":"x"}');
 });

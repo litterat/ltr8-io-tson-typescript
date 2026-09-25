@@ -37,6 +37,7 @@ import { compile, type CompiledSchema } from '../src/compiler/compile.js';
 import { readTree, validate as validateText } from '../src/facade/tree.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { readJsonTree, validateJson } from '../src/json/facade.js';
+import { tokenPolicy } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
@@ -67,6 +68,7 @@ const SCHEMA_SOURCE = `
   by_date   => { date => number }
   point     => { x: int32  y: int32 }
   by_point  => { point => text }
+  route     => { name: text  stops: [point] }
   employee  => person & { department: text }
   robot     => { serial: text }
   holder    => { who: person  labels: [text] }
@@ -580,6 +582,28 @@ describe('§6.1.5 subsumption at a field position', () => {
       '{"who": {"$type": "employee", "name": "Ada", "labels": []}, "labels": []}',
     );
   });
+
+  // Codes only, not the full rule: JSON's own `notAMember` (`dispatchMember.ts`) reports
+  // at `/p/$type`, since the name genuinely resolves nowhere (or resolves outside the family)
+  // this position admits and no shared-with-text rule is in play; TSON text's tag is an
+  // annotation with no pointer step of its own, so it reports at `/p` -- the same
+  // pointer-convention split `dispatchTag.ts`'s own top note documents for the "own.has"
+  // self-tag case, and `dispatchChoice.ts`'s tag-mismatch cases too.
+  it('§7.2’s two-step rule at a sealed position: a tag resolving nowhere is UNKNOWN_TYPE_REF in both encodings, never a "contradicts" validation error', () => {
+    sameCodes(
+      'kennel',
+      '{ p: !nope { pet_type: dog  name: "Rex"  breed: "corgi" } }',
+      '{"p": {"$type": "nope", "pet_type": "dog", "name": "Rex", "breed": "corgi"}}',
+    );
+  });
+
+  it('a sealed position’s tag resolving to a real type outside the family is TYPE_MISMATCH in both encodings -- admissible somewhere, not admitted here', () => {
+    sameCodes(
+      'kennel',
+      '{ p: !robot { pet_type: dog  name: "Rex"  breed: "corgi" } }',
+      '{"p": {"$type": "robot", "pet_type": "dog", "name": "Rex", "breed": "corgi"}}',
+    );
+  });
 });
 
 // ── §6.5 maps ───────────────────────────────────────────────────────────────────────────────
@@ -607,5 +631,66 @@ describe('§6.5 maps', () => {
       '{ { x: 1  y: 2 } => "a"  { y: 2  x: 1 } => "b" }',
       '[[{"x": 1, "y": 2}, "a"], [{"y": 2, "x": 1}, "b"]]',
     );
+  });
+});
+
+// ── All-or-nothing, cross-encoding (a port of the Java reference's `AllOrNothingReadTest`,
+// `tson-json/src/test/java/io/ltr8/tson/json/AllOrNothingReadTest.java`) ──────────────────────
+//
+// `aBindReadThatReportedAnythingReadsToNothingInBothEncodings` has no analogue: there is no
+// `objectReader` here at all (`STATUS.md`'s own JSON section, and every other file in this suite
+// that says the same).
+//
+// `aTokenRefusalLeavesNothingInEveryModeAndBothEncodings` still has no *cross-encoding* analogue,
+// though the gap it used to be blocked on is now half-closed: `ReadJsonOptions.tokenPolicy`
+// exists and is wired through (`json/schema/tokenHygiene.ts`, exercised in full by
+// `json-token-policy.test.ts`'s own port of `JsonTokenPolicyTest`), but the Java case compares
+// **four** modes -- TSON tree, TSON bind, JSON tree, JSON bind -- and none of the four map onto
+// what this port can build a genuine four-way comparison from: TSON bind and JSON bind have no
+// analogue at all (above), the *schemaless* TSON tree reader honours `tokenPolicy`
+// (`reader/schemaless/tree.ts`) but this package's own schemaless JSON door deliberately does not
+// (`STATUS.md`'s own "Known gaps": [TSON-JSON] §3.4 gives a schemaless JSON read no field names,
+// no `$type`, no schema-typed position at all for a policy to reach), and the *schema-directed*
+// TSON text reader (`compiler/compile.ts`) has no `tokenPolicy` wiring of its own to compare
+// against either -- a separate, pre-existing gap outside this file's JSON-only scope. What
+// **is** buildable and real is an all-or-nothing case within the JSON encoding alone, below.
+
+describe('AllOrNothingReadTest: a token refusal leaves nothing (JSON only -- see the note above)', () => {
+  it('a route whose name fails the token policy reads to nothing, with exactly the one refusal', () => {
+    const CYRILLIC_A = 'а';
+    const json = `{"name": "l${CYRILLIC_A}op", "stops": [{"x": 1, "y": 2}]}`;
+    const result = validateJson(json, {
+      schema: JSON_SCHEMA,
+      root: 'route',
+      tokenPolicy: tokenPolicy('ASCII_ONLY'),
+    });
+    expect(result.value).toBeUndefined();
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
+  });
+});
+
+describe('AllOrNothingReadTest: a read that reported anything reads to nothing, in both encodings', () => {
+  const BAD_TSON = '{ name: loop  stops: [ { x: 1  y: 2 } { x: a  y: 2 } ] }';
+  const BAD_JSON = '{"name": "loop", "stops": [{"x": 1, "y": 2}, {"x": "a", "y": 2}]}';
+
+  it('a tree read refused two levels down reads to nothing in both encodings, at the same pointer', () => {
+    const fromTson = validateText(bytesOf(BAD_TSON), { schema: TEXT_SCHEMA, root: 'route' });
+    expect(fromTson.value).toBeUndefined();
+    expect(fromTson.diagnostics.map((d) => d.path)).toEqual(['/stops/1/x']);
+
+    const fromJson = validateJson(BAD_JSON, { schema: JSON_SCHEMA, root: 'route' });
+    expect(fromJson.value).toBeUndefined();
+    expect(fromJson.diagnostics.map((d) => d.path)).toEqual(['/stops/1/x']);
+  });
+
+  it('the same documents made valid read whole -- the nulls above are the rule, not a broken read', () => {
+    const goodTson = BAD_TSON.replace('x: a', 'x: 3');
+    const goodJson = BAD_JSON.replace('"x": "a"', '"x": 3');
+    expect(
+      validateText(bytesOf(goodTson), { schema: TEXT_SCHEMA, root: 'route' }).value,
+    ).not.toBeUndefined();
+    expect(
+      validateJson(goodJson, { schema: JSON_SCHEMA, root: 'route' }).value,
+    ).not.toBeUndefined();
   });
 });

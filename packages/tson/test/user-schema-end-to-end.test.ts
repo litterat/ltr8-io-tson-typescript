@@ -323,6 +323,10 @@ describe('a non-conforming document is rejected with a located, named diagnostic
         expected: 'at least 1 characters',
         actual: '',
         dataPosition: { line: 3, column: 10, offset: 56 },
+        // `label`'s own declaration inside `reading` -- `compiler/schemaParser.ts` stamps a
+        // declaration's position at its name token, and `schemaResolver.ts` now falls back to it
+        // whenever a caller supplies no side-table of its own (this end-to-end pipeline does not).
+        schemaPosition: { line: 6, column: 3, offset: 118 },
       },
       {
         code: 'ATOM_CONSTRAINT_VIOLATION',
@@ -334,6 +338,7 @@ describe('a non-conforming document is rejected with a located, named diagnostic
         expected: '>= -2147483648 and <= 2147483647',
         actual: '99999999999',
         dataPosition: { line: 8, column: 38, offset: 209 },
+        schemaPosition: { line: 15, column: 3, offset: 281 },
       },
     ]);
   });

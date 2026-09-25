@@ -43,9 +43,10 @@
  * reading for this encoding at all ("this encoding has none"), so a `.json` input with no binding
  * is a usage error, checked before any file is opened, rather than falling back to a Class-1-style
  * check the way an unbound `.tn` file does. **§9.4's token policy** (map keys and string values,
- * once a deployment sets one) is not wired up anywhere in `@ltr8/tson/json` yet -- `ReadJsonOptions`
- * carries no `tokenPolicy` field at all -- so `--token-policy`/`--token-scripts` currently affect
- * only `.tn`/TSON-text inputs; see `STATUS.md`'s own "Known gaps" entry.
+ * once a deployment sets one) now reaches a schema-directed JSON read (`ReadJsonOptions.tokenPolicy`,
+ * `json/schema/tokenHygiene.ts`) -- but this CLI does not thread it there yet: the code below still
+ * passes only `identifierPolicy` to `validateJsonAsync`, so `--token-policy`/`--token-scripts`
+ * currently affect only `.tn`/TSON-text inputs; see `STATUS.md`'s own "Known gaps" entry.
  *
  * **Standard input is TSON text by default, whatever binding is given** -- a deliberate
  * divergence from the reference CLI (recorded in `STATUS.md`), which instead infers `-`'s
@@ -273,10 +274,12 @@ function classifyInput(file: string, forced: InputKind | undefined): InputKind {
 
 /**
  * The root name plus whichever of the two encodings' compiled forms this run's own inputs need --
- * `text` for every `.tn`/unbound-by-stdin input, `json` for every `.json` input and bound stdin.
- * Built from one shared {@link LinkedSchema} (`runValidate`'s own `loadLinkedSchema`), so a run
- * mixing both encodings against one schema compiles it once per encoding, never per file, and
- * "compiled but no root name" stays unrepresentable rather than a runtime check away.
+ * `text` for every `.tn` input and for stdin (`classifyInput`'s own default, this module's top
+ * note: stdin is TSON text unless `--input json` forces it), `json` for every `.json` input and
+ * for stdin only when `--input json` is given. Built from one shared {@link LinkedSchema}
+ * (`runValidate`'s own `loadLinkedSchema`), so a run mixing both encodings against one schema
+ * compiles it once per encoding, never per file, and "compiled but no root name" stays
+ * unrepresentable rather than a runtime check away.
  */
 interface SchemaContext {
   readonly root: string;

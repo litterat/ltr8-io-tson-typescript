@@ -28,3 +28,20 @@ export function* skipValue(ctx: JsonReadContext, first: JsonEvent): Task<void> {
 export function* skipNextValue(ctx: JsonReadContext): Task<void> {
   yield* skipValue(ctx, yield* ctx.next());
 }
+
+/**
+ * Consumes the rest of an object or array whose own opening event was consumed elsewhere --
+ * {@link skipValue}'s own loop, entered at depth 1 directly rather than derived from a first
+ * event. `json/schema/record.ts`'s own use: a record reader reached via `opened`
+ * (`json/schema/route.ts`'s own top note) never itself consumes the object's opening
+ * brace, so it has no `first` event of its own to hand {@link skipValue}, though it is
+ * always one level inside the object precisely because that brace has already gone by.
+ */
+export function* skipRestOfObject(ctx: JsonReadContext): Task<void> {
+  let depth = 1;
+  while (depth > 0) {
+    const event = yield* ctx.next();
+    if (event.kind === 'object-start' || event.kind === 'array-start') depth += 1;
+    else if (event.kind === 'object-end' || event.kind === 'array-end') depth -= 1;
+  }
+}

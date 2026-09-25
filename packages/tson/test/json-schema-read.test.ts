@@ -19,11 +19,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { Diagnostic } from '../src/core/diagnostic.js';
+import { isVerdict, type Diagnostic } from '../src/core/diagnostic.js';
 import { compileJsonSchema } from '../src/json/schema/compile.js';
 import { validateJson, type ValidateJsonResult } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
 import { DEFAULT_NAME_POLICY } from '../src/unicode/policy.js';
+import type { LinkedSchema } from '../src/link/link.js';
+import type { TypeDefinition } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
@@ -37,8 +39,10 @@ const SCHEMA = resolveUserSchema(`
   label      => text
   key        => uuid
   day        => date
+  blob       => bytes
   colour     => !enum [ RED GREEN BLUE ]
   activity   => !enum { members: ["sedentary" "lightly active"]  profile: TEXT }
+  country    => !text ^ { length: 2  members: ["AU" "NZ"] }
   flag       => boolean
   nothing    => void
   small      => !integer ^ { min: 0  max: 10 }
@@ -175,6 +179,17 @@ describe('§5 atoms', () => {
     expect(accepted('day', '"2026-07-01"')).toBe('"2026-07-01"');
   });
 
+  it('bytes reads its selected alphabet (§5.6, JsonAtomReadTest#bytesReadsItsSelectedAlphabet)', () => {
+    // Accepting and echoing back a plain string alone would pass even if `bytes` were read as
+    // `text` -- these two also refuse, proving the base64 parser is actually the one judging it
+    // (the Java case cannot make this distinction itself: its own `atoms()`-mode compile hands
+    // back a decoded `byte[]` whose length it can assert directly, where this port's tree-mode
+    // compile only has the accepted *spelling* to assert against).
+    expect(accepted('blob', '"AQID"')).toBe('"AQID"');
+    expect(refusal('blob', '"!!!!"').code).toBe('ATOM_FORM_INVALID');
+    expect(refusal('blob', '"AQI"').code).toBe('ATOM_FORM_INVALID');
+  });
+
   it("a malformed string is the family's contract rejection (§5.1)", () => {
     expect(refusal('day', '"2026-13-99"').code).toBe('ATOM_FORM_INVALID');
   });
@@ -199,6 +214,11 @@ describe('§5 atoms', () => {
   it('a value-set enum reads a member no identifier rule would admit', () => {
     expect(accepted('activity', '"lightly active"')).toBe('"lightly active"');
     expect(refusal('activity', '"very active"').code).toBe('ATOM_CONSTRAINT_VIOLATION');
+  });
+
+  it('text_type.members is enforced from the same parser as an enum (§5.6, JsonAtomReadTest)', () => {
+    expect(accepted('country', '"NZ"')).toBe('"NZ"');
+    expect(refusal('country', '"GB"').code).toBe('ATOM_CONSTRAINT_VIOLATION');
   });
 
   it('boolean matches on content like any other enum (§5.2): a string spelling its member is the same value as the JSON boolean', () => {
@@ -233,6 +253,21 @@ describe('§5 atoms', () => {
 
   it('an alias reads as its target (§8.3)', () => {
     expect(accepted('alias', '42')).toBe('42');
+  });
+
+  it('a refusal names the declaration that judged it (JsonAtomReadTest)', () => {
+    const d = refusal('day', '"2026-13-99"');
+    // The canonical identity ([TSON-DATA] §2.2.1: scheme stripped) is what entries are keyed by.
+    expect(d.schemaId).toBe('example.test/json-schema-read.tn');
+    expect(d.schemaPointer).toBe('/day');
+    // [TSON-JSON] §9.4, agreeing with the Java reference: "a decoder SHOULD additionally report
+    // the schema position". `compiler/schemaParser.ts` now stamps a declaration's own source
+    // position onto it at parse time, and `compiler/schemaResolver.ts` falls back to that stamp
+    // whenever a caller supplies no side-table of its own -- `resolveUserSchema` (this file's own
+    // fixture pipeline) is one such caller, and so is `config.ts#resolveAgainstRegistry` (the
+    // real `Tson.resolveSchema`), so this now holds for both encodings' production path.
+    expect(d.schemaPosition).toEqual({ line: 11, column: 3, offset: 252 });
+    expect(d.path, 'the data pointer: this value is the document root').toBe('');
   });
 
   it('a redundant tag at an atom position is read straight through -- §3.3 recognition, an atom having no subtype to select into but its own name (or an alias of it)', () => {
@@ -321,6 +356,33 @@ describe('§6.1 records', () => {
     const result = read('person', '{"name": "Ada", "name": "Grace"}');
     expect(result.diagnostics[0]?.code).toBe('DUPLICATE_FIELD');
     expect(result.value).toBeUndefined();
+  });
+
+  /**
+   * §3.1's duplicate-identity test is judged before §6.1.1's closure test, for every member name
+   * -- declared or not. `zzz`'s first occurrence has not yet repeated, so it asks only the closure
+   * question (UNRECOGNIZED_FIELD, matching `anUndeclaredMemberIsRefusedRatherThanCollected`
+   * above); its second occurrence answers the duplicate-identity question instead, and never asks
+   * closure a second time.
+   */
+  it('a repeated undeclared member is UNRECOGNIZED_FIELD once and DUPLICATE_FIELD at the repeat, not UNRECOGNIZED_FIELD twice (§3.1)', () => {
+    const result = read('person', '{"name": "a", "zzz": 1, "zzz": 2}');
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'UNRECOGNIZED_FIELD',
+      'DUPLICATE_FIELD',
+    ]);
+    expect(result.diagnostics[1]?.path).toBe('/zzz');
+    expect(result.value).toBeUndefined();
+  });
+
+  /** As above, where the repeat is spelled differently but is the same name under NFC (§2.5, §3.1). */
+  it('an NFC-equivalent pair of undeclared member names is the same duplicate-identity case', () => {
+    // "café" (precomposed é) and "café" (e + combining acute) are one NFC identity.
+    const result = read('person', '{"name": "a", "caf\\u00e9": 1, "cafe\\u0301": 2}');
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'UNRECOGNIZED_FIELD',
+      'DUPLICATE_FIELD',
+    ]);
   });
 
   it('a reserved member outside the three-name table is a resolver error (§3.2, §9.4 -- json-dispatch.test.ts has the full annotation-object surface)', () => {
@@ -422,10 +484,12 @@ describe('§6.1 records', () => {
     expect(missing.path).toBe('/from');
   });
 
-  it('an optional field with an unmarked type refuses null', () => {
+  it('an optional field with an unmarked type refuses null, and the message names voidability, not a nonexistent requirement', () => {
     const d = refusal('marks', '{"nickname": null, "from": 1, "version": "2.0"}');
     expect(d.code).toBe('FIELD_REQUIRED');
     expect(d.path).toBe('/nickname');
+    expect(d.message).not.toContain('required');
+    expect(d.message).toContain('not voidable');
   });
 
   it('a voidable defaulted field is cleared by null and defaulted by omission', () => {
@@ -662,6 +726,17 @@ describe('all-or-nothing and collecting reads', () => {
   it('the root pointer is the empty string, a location and not an absence', () => {
     expect(refusal('person', '[1, 2]').path).toBe('');
   });
+
+  it('a problem carries the position it was found at -- the value, not the member name (CollectingJsonReadTest)', () => {
+    const d = refusal('person', '{"name": "Ada", "tries": "x"}');
+    expect(d.dataPosition?.line).toBe(1);
+    // The opening quote of "x" -- the value `tries` could not take, not the `tries` member name.
+    expect(d.dataPosition?.column).toBe(26);
+  });
+
+  it('an ordinary disagreement is a verdict on the document (CollectingJsonReadTest)', () => {
+    expect(isVerdict(refusal('person', '{"name": "Ada", "tries": "x"}').code)).toBe(true);
+  });
 });
 
 // ── §8.2 name hygiene ────────────────────────────────────────────────────────────────────────
@@ -705,6 +780,167 @@ describe('§8.2 name hygiene', () => {
 // and member dispatch, choice discrimination, cross-encoding parity -- is `json-dispatch.test.ts`'s
 // own concern; §8.5's scoped positions are the one dispatch-adjacent gap still open
 // (`json/schema/compile.ts`'s own top note).
+
+// ── Gaps: NOT_IMPLEMENTED is a compile-time-total, read-time-non-verdict placeholder ──────────
+//
+// A port of the Java reference's `JsonAtomReadTest#aConstructorThisEncodingCannotYetReadIsAGap
+// AndNotAVerdict`/`#aSchemaWithUnreadableEntriesStillCompiles`. The Java pair reaches its gap
+// through `lookup => { text => int32 }`: its own `atoms()`-mode compile leaves a map's own
+// constructor unbuilt. That example does not port -- `json/schema/map.ts` reads maps in full in
+// this package's tree-mode compile, strictly more coverage than the Java module has (this file's
+// own top note, and `json/schema/atoms.ts`'s own top note on the one place the divergence runs
+// the other way). `json/schema/compile.ts`'s own top note names what compiles to
+// {@link notImplementedReader} here instead: a scoped position, a meta 'data' construct, an
+// unmaterialised generic application, and a genuinely unapplied non-record template.
+//
+// A scoped position and a meta 'data' construct are each reachable through this package's own
+// resolve/link pipeline (`dynamic` -- one of core.tn's three scoped instances -- and meta-kernel's
+// own `data` entry, respectively); an unmaterialised generic application and an unapplied
+// non-record template are not producible that way without hand-writing a schema this port's own
+// resolver would refuse before it ever reached compile (Part 2 §5.10: "bare references to a
+// parameterized type without `<>` are resolver errors"), so those two are exercised by hand-
+// building the `LinkedSchema` directly -- the same technique `templates.test.ts` already uses
+// for `compiler/compile.ts`'s own equivalent branches -- to reach `compileJsonSchema` at all.
+describe('gaps (§8.5, one corner of §5.10)', () => {
+  function handLinked(entries: Record<string, TypeDefinition>): LinkedSchema {
+    const map = new Map(Object.entries(entries));
+    return {
+      id: 'test://json-schema-read/gaps.tn',
+      meta: 'https://tson.io/2026/36/m/meta.tn',
+      imports: [],
+      entries: map,
+      keyAnnotations: new Map(),
+      bootstrap: false,
+      origins: new Map([...map.keys()].map((k) => [k, 'test://json-schema-read/gaps.tn'])),
+    };
+  }
+
+  /** `result`'s one diagnostic -- `json-schema-read.test.ts`'s own module-level `refusal` helper, over an already-read `ValidateJsonResult` rather than a `(typeName, json)` pair. */
+  function onlyDiagnostic(result: ValidateJsonResult): Diagnostic {
+    expect(result.diagnostics.length, JSON.stringify(result.diagnostics)).toBe(1);
+    const diagnostic = result.diagnostics[0];
+    if (diagnostic === undefined) throw new Error('unreachable');
+    return diagnostic;
+  }
+
+  it("a scoped position -- core.tn's own `dynamic` -- is a gap and not a verdict", () => {
+    const gapSchema = resolveUserSchema(`
+!!id:"https://example.test/gaps-scoped.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
+{
+  either => dynamic
+}
+`);
+    const compiled = compileJsonSchema(gapSchema);
+    const result = validateJson('null', {
+      schema: compiled,
+      root: 'either',
+      identifierPolicy: DEFAULT_NAME_POLICY,
+    });
+    const diagnostic = onlyDiagnostic(result);
+    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
+    expect(isVerdict(diagnostic.code), 'a gap must not be a verdict on the document').toBe(false);
+  });
+
+  it("a meta-layer 'data' construct -- meta-kernel's own `data` entry composed onto -- is a gap and not a verdict", () => {
+    const compiled = compileJsonSchema(
+      handLinked({
+        op: {
+          supertypes: ['top'],
+          subtypes: [],
+          body: { kind: 'operation' },
+          annotations: [],
+        },
+      }),
+    );
+    const result = validateJson('{}', {
+      schema: compiled,
+      root: 'op',
+      identifierPolicy: DEFAULT_NAME_POLICY,
+    });
+    const diagnostic = onlyDiagnostic(result);
+    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
+    expect(isVerdict(diagnostic.code)).toBe(false);
+  });
+
+  it('an unmaterialised generic application is a gap and not a verdict', () => {
+    const compiled = compileJsonSchema(
+      handLinked({
+        box: {
+          supertypes: [],
+          subtypes: [],
+          body: {
+            kind: 'reference',
+            target: {
+              name: 'pair',
+              arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
+              annotations: [],
+            },
+          },
+          annotations: [],
+        },
+      }),
+    );
+    const result = validateJson('{}', {
+      schema: compiled,
+      root: 'box',
+      identifierPolicy: DEFAULT_NAME_POLICY,
+    });
+    const diagnostic = onlyDiagnostic(result);
+    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
+    expect(isVerdict(diagnostic.code)).toBe(false);
+  });
+
+  it('an open template family base with no type of its own is a gap and not a verdict', () => {
+    const compiled = compileJsonSchema(
+      handLinked({
+        box: {
+          supertypes: [],
+          subtypes: [],
+          body: { parameters: ['T'], template: '[T]' },
+          annotations: [],
+        },
+      }),
+    );
+    const result = validateJson('[]', {
+      schema: compiled,
+      root: 'box',
+      identifierPolicy: DEFAULT_NAME_POLICY,
+    });
+    const diagnostic = onlyDiagnostic(result);
+    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
+    expect(isVerdict(diagnostic.code)).toBe(false);
+  });
+
+  it('a schema with unreadable entries still compiles: the gap is per entry, not per schema (aSchemaWithUnreadableEntriesStillCompiles)', () => {
+    const compiled = compileJsonSchema(
+      handLinked({
+        colour: {
+          supertypes: ['top'],
+          subtypes: [],
+          body: { kind: 'enum', members: ['RED', 'GREEN'], profile: 'IDENTIFIER' },
+          annotations: [],
+        },
+        unreadable: {
+          supertypes: [],
+          subtypes: [],
+          body: { parameters: ['T'], template: '[T]' },
+          annotations: [],
+        },
+      }),
+    );
+    // The gap does not stop the schema's other entry from compiling, or from reading cleanly.
+    expect(compiled.get('unreadable')).toBeDefined();
+    expect(
+      validateJson('"RED"', {
+        schema: compiled,
+        root: 'colour',
+        identifierPolicy: DEFAULT_NAME_POLICY,
+      }).diagnostics,
+    ).toEqual([]);
+  });
+});
 
 // ── Streaming: async equals sync over every byte-offset split ───────────────────────────────
 

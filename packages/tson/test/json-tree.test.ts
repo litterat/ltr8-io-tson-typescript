@@ -1,3 +1,18 @@
+/**
+ * Checked against the Java reference's `tree/JsonValueTest`
+ * (`tson-json/src/test/java/io/ltr8/tson/json/tree/JsonValueTest.java`). Its `Builder` describe
+ * block has no port: `json/tree.ts` has no `JsonObject.Builder` class at all -- `jsonObject` takes
+ * an already-ordered `Map` directly, with no incremental `put`/`build` state machine for a builder
+ * class to hold -- so `builds_its_members_in_order_and_answers_what_a_put_replaced` and
+ * `is_single_use_so_nothing_can_reach_the_map_it_handed_over` have nothing to port to; the
+ * ordering half of the first is covered below by `object equality is over the member set, not the
+ * order`'s own re-emission assertion, and the single-use half does not apply to a plain function.
+ * Likewise `containers_are_immutable_and_copy_defensively`'s *unmodifiable-map-throws* half is
+ * only a compile-time `ReadonlyMap`/`readonly T[]` here, not a runtime guarantee the way Java's
+ * `Collections.unmodifiableMap` is -- there is no `UnsupportedOperationException` analogue to
+ * assert, so only the defensive-copy half (`jsonObject`/`jsonArray` copying their input rather
+ * than aliasing it) ports, as `the object builder copies defensively` below.
+ */
 import { describe, expect, it } from 'vitest';
 import {
   asBigInt,
@@ -12,6 +27,7 @@ import {
   EMPTY_JSON_OBJECT,
   equalJsonValue,
   get,
+  JSON_NULL,
   jsonArray,
   jsonBoolean,
   jsonNull,
@@ -172,6 +188,19 @@ describe('the value model', () => {
     const built = jsonObject(members);
     members.set('a', jsonNumber('2'));
     expect(built.members.get('a')).toEqual(jsonNumber('1'));
+  });
+
+  it('the array constructor copies defensively too', () => {
+    const elements = [jsonNumber('1')];
+    const built = jsonArray(elements);
+    elements.push(jsonNumber('2'));
+    expect(built.elements).toEqual([jsonNumber('1')]);
+  });
+
+  it('the singletons are singletons', () => {
+    expect(jsonBoolean(true)).toBe(jsonBoolean(true));
+    expect(jsonNull()).toBe(JSON_NULL);
+    expect(equalJsonValue(JSON_NULL, parseJson('null'))).toBe(true);
   });
 });
 

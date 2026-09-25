@@ -29,6 +29,23 @@
  * a second, drifting classification of the schema. Classifying the *value's own peeked form* at
  * read time, below, is new work this module owns: the schema-side classification only says which
  * class each variant's declared type occupies, never what a document actually wrote.
+ *
+ * **The tagged route is alias-flattened, not subtype-flattened.** A `!type-ref` naming an alias of
+ * a variant is admitted -- §8.3's "a reference is a hop, not a rewrite... the same type under
+ * another name" holds for a variant reference exactly as it does everywhere else, and §5.4's own
+ * "Resolution" paragraph already reads a variant by what it *resolves to* ("the resolver validates
+ * that each variant resolves to a distinct type"), not by its written spelling -- so `variants`
+ * (below) is flattened through `link/referenceChain.ts`'s own `admitting`, the same alias-flattening
+ * `compiler/subsumption.ts` uses for record subsumption. A `!type-ref` naming a proper *subtype* of
+ * a variant is not admitted, deliberately: §7.2 carves choice positions out of the subtype-inclusive
+ * subsumption rule it states for "every other typed position" ("Choice-typed positions discriminate
+ * by variant membership (§5.4) ... under their own membership relations"), and §8.4 gives the
+ * structural reason -- a choice has no expected supertype for a tag to be admitted *into*, only a
+ * closed variant list a name either names or does not; an author who wants a subtype reachable by
+ * tag types the position by the record family instead. `json/schema/dispatchChoice.ts`'s own top
+ * note has the fuller citation and reads the same way; the reference implementation's own
+ * `DispatchChoiceReader` flattens both aliases and subtypes, so this is a deliberate divergence for
+ * the subtype half only.
  */
 import type { Task } from '../io/bytes.js';
 import type { SchemaLocation } from '../core/diagnostic.js';
@@ -41,6 +58,8 @@ import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/gr
 import { abandonedValue, type TreeTypeResolver } from '../reader/tree/support.js';
 import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
 import { discriminationClassOf, type DiscriminationClass } from '../link/disjointness.js';
+import { admitting, terminal } from '../link/referenceChain.js';
+import { hasChoiceSelfTag } from './subsumption.js';
 import type { TsonEvent } from '../stream/event.js';
 
 /** [TSON-DATA] §4's fixed base-type order, mapped onto §5.4's own classes -- the token half of {@link classifyEvent}. */
@@ -100,6 +119,20 @@ export function choiceTreeReader(
     parser: resolveType(variant.name),
   }));
   const names = variants.map((variant) => variant.name).join(' | ');
+
+  // Alias-flattened tag lookup (this module's own top note): every written name whose reference
+  // chain terminates at a variant maps to that variant's own reader -- never a variant's subtype,
+  // which this map does not flatten in. A variant is flattened to *its own* terminal first
+  // (`terminal`) before `admitting` runs, so a variant that is itself an alias admits its
+  // target and every sibling alias too, not only its own written spelling -- the same one-hop-
+  // further flattening `json/schema/dispatchChoice.ts`'s own top note explains.
+  const byWrittenName = new Map<string, (typeof variants)[number]>();
+  for (const variant of variants) {
+    const target = terminal(variant.name, (n) => namespace.get(n));
+    for (const written of admitting([target], namespace)) {
+      if (!byWrittenName.has(written)) byWrittenName.set(written, variant);
+    }
+  }
 
   // Untagged recovery's own `class -> variant` map -- built only when `disjoint` says the classes
   // are distinct, and rebuilt from the classes themselves rather than trusted blindly: a
@@ -176,7 +209,7 @@ export function choiceTreeReader(
       }
 
       const typeRefName = lookahead.typeRefName;
-      const variant = variants.find((candidate) => candidate.name === typeRefName);
+      const variant = byWrittenName.get(typeRefName);
       if (variant === undefined) {
         // §7.2's own two-step resolution rule: a name `namespace` declares nothing under is
         // `UNKNOWN_TYPE_REF` ("a built-in annotation name not defined by the active schema is an
@@ -197,7 +230,15 @@ export function choiceTreeReader(
         yield* skipDataValue(choiceCtx);
         return abandonedValue();
       }
-      return yield* variant.parser.read(choiceCtx);
+      // The sealed self-tag continuation (`compiler/subsumption.ts`'s own top note): only
+      // ever offered by a variant whose own name is what `typeRefName` names here
+      // (`variants`/`byWrittenName` are alias-flattened but never subtype-flattened,
+      // this module's own top note), so this never fires for a tag naming a member or a subtype
+      // of the variant -- only for the variant's own name, the one spelling a choice over a
+      // sealed family otherwise leaves unwritable.
+      return hasChoiceSelfTag(variant.parser)
+        ? yield* variant.parser.readChoiceSelfTag(choiceCtx)
+        : yield* variant.parser.read(choiceCtx);
     },
   };
 }

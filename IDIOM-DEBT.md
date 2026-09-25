@@ -378,15 +378,17 @@ shared `Cursor`, exactly mirroring the text encoding's `PathStep`-adjacent field
 `src/json/**` cannot import the implementation it duplicates. The two `ReadContext`-shaped types
 are now closer in shape than the trigger below already argued they were.
 
-**One more narrowing this pair shares, deliberately.** `json/schema/dispatchChoice.ts`'s `$type`
-at a choice position matches a written variant name exactly — no §7.2 alias flattening, no subtype
-admission for a record variant. A literal reading of §8.1 admits both ("a record whose `$type`
-names a proper subtype of a variant validates as that subtype"), but `compiler/choiceReader.ts`
-does the identical exact-name match for the text encoding (confirmed by reading it), so this is
-the dispatch pair's own cross-encoding parity holding, not a JSON-only shortcut: widening only the
-JSON side would create a new divergence in the act of fixing an old one. Left narrower than the
-literal spec text on both sides, recorded here rather than only in a code comment because it is a
-design decision for the pair, not an implementation detail of either half.
+**One more narrowing this pair shares, and it is not idiom debt.** `json/schema/dispatchChoice.ts`'s
+`$type` at a choice position is flattened for alias (`link/referenceChain.ts`'s own `admitting`,
+over the declared variant list, each first walked to its own terminal so a variant that is itself
+an alias admits its target and every sibling alias too) but not for subtype, and
+`compiler/choiceReader.ts` reads identically — alias-flattened, not subtype-flattened — so this is
+the dispatch pair's own cross-encoding parity holding, not a JSON-only shortcut. This is the
+opposite of what this file records elsewhere: a deliberate _divergence_ from the reference's own
+`DispatchChoiceReader` (which flattens subtypes in too), not a place this port mirrors it, so the
+reasoning and its consequence for a sealed/abstract-with-no-discriminators variant's own name
+(`json/schema/route.ts`'s own `ChoiceSelfTagReadable`) live in `STATUS.md`'s "Known gaps" now,
+not here.
 
 **Trigger.** The reference's own: a shared `tson-encoding` module extracting "everything above
 the event level" once a second working stack exists to find the seam from

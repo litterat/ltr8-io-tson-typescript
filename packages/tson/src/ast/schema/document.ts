@@ -1,4 +1,5 @@
 import type { Annotation } from '../value.js';
+import type { Position } from '../../core/position.js';
 import type { TypeDef } from './typedef.js';
 
 /**
@@ -64,6 +65,14 @@ export interface SchemaMap {
  * declaration whose whole type-def is the bare mark word is a declaration missing its
  * definition — a parse error the parser building this type raises, never represented here. A
  * mark on a non-record definition is a resolver error, not a parse error.
+ *
+ * `position` is the name token's own source position — this package's diagnostic addition, with
+ * no counterpart in the grammar itself. `compiler/schemaResolver.ts` copies it onto the resolved
+ * `TypeDefinition` (§8.1's own diagnostic addition there), which is what lets a
+ * `Diagnostic.schemaPosition` name a line at all: without it every resolved entry's `position` is
+ * `undefined` and every diagnostic naming that entry loses its line. `compiler/desugar.ts` carries
+ * it forward automatically when it rebuilds a declaration whose body contains sugar (a plain
+ * object spread), so a rewritten declaration keeps the position its author wrote.
  */
 export interface Declaration {
   readonly nameAnnotations: readonly Annotation[];
@@ -71,4 +80,5 @@ export interface Declaration {
   readonly typeDefAnnotations: readonly Annotation[];
   readonly mark?: 'abstract' | 'final';
   readonly typeDef: TypeDef;
+  readonly position?: Position;
 }

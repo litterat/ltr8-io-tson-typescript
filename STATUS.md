@@ -249,14 +249,55 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
     rather than applying §7.7 rule 2's context test itself — conservative (a joiner with no shaping
     effect is admitted rather than wrongly refused), but not a full implementation of the rule at
     the JSON layer.
-  - **§9.4's token policy is not wired up anywhere in this package.** `ReadJsonOptions` carries no
-    `tokenPolicy` field at all, so a schema-directed JSON read judges map keys and string values
-    under no token policy; the schemaless door (`parseJson`/`parseJsonAsync`/`parseJsonCollecting`)
-    takes no token or identifier policy either, though §9.4's policies have nothing to reach there
-    in the first place ([TSON-JSON] §3.4: no field names, no `$type`, no schema-typed position at
-    all). `identifierPolicy` **is** implemented for the schema-directed read (`ReadJsonOptions`,
-    `json/schema/nameHygiene.ts`) and the CLI passes `--identifier-policy` through to it for a
-    `.json` input exactly as it does for a `.tn` one.
+  - **§9.4's token policy reaches the schema-directed JSON read** (`ReadJsonOptions.tokenPolicy`,
+    `json/schema/tokenHygiene.ts`), at exactly the two positions §9.4 names: a map key
+    (`json/schema/map.ts`'s object-form key loop; a pairs-form key reads through an ordinary
+    `AtomReader` and is covered by the atom case below) and a string-shaped atom value
+    (`json/schema/atoms.ts`'s `makeAtomReader`, checked whenever the arriving event is a JSON
+    `'string'`, whatever atom family it is faced to). Checked exactly once per token even where a
+    dispatcher (`withAnnotationObject`'s own peek) crosses it first — from the call site rather
+    than a stream-level hook, since the two call sites are exactly §9.4's own reach; see
+    `tokenHygiene.ts`'s own top note on why a blind stream hook would over-reach into record field
+    names, which §9.4 gives to the identifier policy instead. `identifierPolicy` **is** implemented
+    for the schema-directed read (`ReadJsonOptions`, `json/schema/nameHygiene.ts`) and the CLI
+    passes `--identifier-policy` through to it for a `.json` input exactly as it does for a `.tn`
+    one; **`--token-policy`/`--token-scripts` do not yet reach a `.json` input** — the CLI
+    (`packages/cli/src/commands/validate.ts`) still only threads `tokenPolicy` to the schemaless
+    _text_ path, a remaining piece of wiring rather than a library gap. The schemaless JSON door
+    (`parseJson`/`parseJsonAsync`/`parseJsonCollecting`) takes no token or identifier policy
+    either, deliberately: §9.4's policies have nothing to reach there in the first place
+    ([TSON-JSON] §3.4: no field names, no `$type`, no schema-typed position at all).
+  - **A reserved-member violation (§3.2/§3.3) has no code of its own and reports `UNKNOWN_TYPE_REF`
+    instead, a stretched second use of a code whose primary meaning is "the name denotes nothing".**
+    `json/schema/reservedMembers.ts`'s own top note lays out the reasoning at length: an unknown
+    `$foo`, a `$schema`/`$type` out of lead position, a `$value` with no leading `$type`, and extra
+    members beside `$value` in wrapper form are all [TSON-JSON] §9.4's `resolver` category, and
+    `UNKNOWN_TYPE_REF` is the closest of `core/diagnostic.ts`'s closed code set that fits both the
+    category and (loosely) the meaning — no code here means "a reserved member sits where the
+    grammar does not admit one". The reference implementation reports these as
+    `Diagnostic.Code.UNRECOGNIZED_FIELD`, which its own `Class2ConformanceSuiteTest.categoryOf`
+    files under `validation`, not `resolver` — so this is a divergence in both the code and the
+    category from the reference, taken deliberately because §9.4's own table is explicit about the
+    category these violations belong to. Whether a dedicated code (a new `RESERVED_MEMBER_MISPLACED`
+    or similar) is worth adding to the closed set, over continuing to overload `UNKNOWN_TYPE_REF`,
+    is an open question rather than a settled one; recorded here so it is not lost between reviews.
+  - **A choice variant that is itself a sealed or abstract-with-no-discriminators record family is
+    tagged by its own name, never by a subtype's.** [TSON-JSON] §7.2 (schema series) carves choice
+    positions out of the subtype-inclusive subsumption rule it states for "every other typed
+    position", giving them §5.4's own variant-membership relation instead
+    (`json/schema/dispatchChoice.ts`'s and `compiler/choiceReader.ts`'s own top notes have the
+    full citation); the reference implementation's own `DispatchChoiceReader` flattens subtypes in
+    too ("a variant, an alias of one, or a subtype of one by its tag"), and this port follows it
+    for the alias half only, deliberately. Where the variant's own name has no direct instances
+    (an ABSTRACT-with-discriminators/SEALED family, or an ABSTRACT-with-subtypes family reached
+    inline), `json/schema/route.ts`'s own `ChoiceSelfTagReadable`/`compiler/subsumption.ts`'s own
+    `ChoiceSelfTagReader` let the variant's own name still place a value — reading its
+    discriminators exactly as the untagged route would — since it is the only spelling admissible
+    at the choice's own tag and the shape would otherwise be unwritable inline in the text
+    encoding (JSON alone has a second route via the wrapper form's fresh `$value` object). A
+    subtype's own name stays refused at the choice's tag either way; reaching one still means
+    typing the position by the record family instead (Part 3 §8.4's own closing paragraph), or,
+    in JSON only, wrapping (`{"$type": "<family>", "$value": {"$type": "<subtype>", ...}}`).
 
 - **`type_argument` is bound as a variant where the kernel declares a field group.** The kernel has
   `type_argument => { ( name: type_ref | value: value ) }` — one record whose two members form a

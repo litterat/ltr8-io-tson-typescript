@@ -71,7 +71,7 @@ describe('parseJson (front door)', () => {
     expect(error).not.toBeInstanceOf(TsonParseError);
   });
 
-  it('throws TsonReadError at a §3.1 duplicate member', () => {
+  it('throws TsonReadError at a §3.1 duplicate member, naming and locating the repeat (JsonTest)', () => {
     let error: unknown;
     try {
       parseJson('{"a": 1, "a": 2}');
@@ -79,7 +79,46 @@ describe('parseJson (front door)', () => {
       error = e;
     }
     expect(error).toBeInstanceOf(TsonReadError);
-    expect((error as TsonReadError).diagnostic.code).toBe('DUPLICATE_FIELD');
+    const diagnostic = (error as TsonReadError).diagnostic;
+    expect(diagnostic.code).toBe('DUPLICATE_FIELD');
+    expect(diagnostic.message).toContain("'a' is already a member");
+    expect(diagnostic.path).toBe('/a');
+  });
+
+  it('member order is preserved although nothing reads it (§6.1.6, JsonTest)', () => {
+    const value = parseJson('{"z":1,"a":2,"m":3}');
+    if (value.kind !== 'object') throw new Error(`expected an object, got '${value.kind}'`);
+    expect([...value.members.keys()]).toEqual(['z', 'a', 'm']);
+  });
+
+  it('duplicates in sibling objects are not duplicates (JsonTest)', () => {
+    const value = parseJson('[{"a": 1}, {"a": 2}]');
+    if (value.kind !== 'array') throw new Error(`expected an array, got '${value.kind}'`);
+    expect(value.elements).toHaveLength(2);
+  });
+
+  it('bytes and a string parse alike, and bytes are where the UTF-8 rules bite (JsonTest#bytes_and_a_string_parse_alike_and_bytes_are_where_the_utf8_rules_bite)', () => {
+    const source = '{"é": [1, true, null]}';
+    expect(equalJsonValue(parseJson(source), parseJson(new TextEncoder().encode(source)))).toBe(
+      true,
+    );
+    // A string has no route to malformed UTF-8 at all -- a JS string is UTF-16 already -- so the
+    // half of this case that actually exercises the lexer's own UTF-8 decoding only has a bytes
+    // route: a lone lead byte (0xC3 wants one continuation byte) between two quotes.
+    let error: unknown;
+    try {
+      parseJson(new Uint8Array([0x22, 0xc3, 0x22]));
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(TsonLexError);
+    expect((error as TsonLexError).message).toContain('UTF-8');
+  });
+
+  it('the nesting bound reaches parse and refuses before any reducer descends, and a raised bound admits a deeper document (JsonTest)', () => {
+    const deep = '['.repeat(200) + '1' + ']'.repeat(200);
+    expect(() => parseJson(deep)).toThrow(TsonLimitRefusedError);
+    expect(parseJson(deep, { maxNestingDepth: 256 }).kind).toBe('array');
   });
 });
 
@@ -99,11 +138,12 @@ describe('parseJsonAsync', () => {
 });
 
 describe('parseJsonCollecting', () => {
-  it('collects every duplicate-member problem in one pass rather than stopping at the first', () => {
+  it('collects every duplicate-member problem in one pass rather than stopping at the first (JsonTest)', () => {
     const result = parseJsonCollecting('{"a": 1, "a": 2, "b": 3, "b": 4}');
     expect(result.value).toBeUndefined();
     expect(result.diagnostics).toHaveLength(2);
     expect(result.diagnostics.every((d) => d.code === 'DUPLICATE_FIELD')).toBe(true);
+    expect(result.diagnostics.map((d) => d.path)).toEqual(['/a', '/b']);
   });
 
   it('returns the value when nothing was reported', () => {
@@ -127,12 +167,21 @@ describe('parseJsonCollecting', () => {
 });
 
 describe('§3.1 duplicate-member identity', () => {
+  it('a duplicate is judged by decoded name, not by spelling (JsonTest#a_duplicate_is_judged_by_decoded_name_not_by_spelling)', () => {
+    // The Java reference already decodes escapes before comparing -- \\u0061 is 'a', so this is
+    // the same name written two ways -- which this port's own `readJsonDocument` matches exactly:
+    // both parse the member name's escapes first (§3.1's own grammar) and compare the result.
+    expect(() => parseJson('{"ab": 1, "\\u0061b": 2}')).toThrow(TsonReadError);
+  });
+
   it(
-    'name identity is the NFC-normalized decoded string, per Part 3 §3.1 -- the reading this ' +
-      'port follows where the Java reference compares undecoded, un-normalized names',
+    'name identity is additionally NFC-normalized, per Part 3 §3.1 -- a real divergence from the ' +
+      'Java reference, which decodes escapes (above) but does not NFC-normalize the result',
     () => {
-      // "é" (precomposed é) and "é" (e + combining acute) are one name under NFC.
-      const result = parseJsonCollecting('{"é": 1, "é": 2}');
+      // "é" (precomposed é) and "é" (e + combining acute) are one name under NFC; the Java
+      // reference has no `Normalizer` call anywhere in its own JSON tree-reading path, so the
+      // same two source strings are two distinct names there.
+      const result = parseJsonCollecting('{"é": 1, "é": 2}');
       expect(result.value).toBeUndefined();
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.code).toBe('DUPLICATE_FIELD');

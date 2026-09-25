@@ -1,3 +1,14 @@
+/**
+ * Ported case-for-case from the Java reference's `lexer/JsonLexerTest`
+ * (`tson-json/src/test/java/io/ltr8/tson/json/lexer/JsonLexerTest.java`). One divergence, carried
+ * through every case below rather than called out per-case: `TsonLexError.message` already
+ * includes the position (`core/errors.ts`'s `TsonPositionedError` appends `" at "` plus
+ * `core/position.ts`'s own `formatPosition` -- `"line:column"`, e.g. `"at 1:8"` -- to every
+ * message it builds), where the reference's `ParseException.getMessage()` omits it and only
+ * `toString()` adds it. So a case here that only wants "what went wrong" still finds the position
+ * text present in `.message` -- expected, not a bug -- and no case asserts a message's *absence* of
+ * a position the way the reference's own `a_message_states_what_went_wrong...` half does.
+ */
 import { describe, expect, it } from 'vitest';
 import { TsonLexError } from '../src/core/errors.js';
 import { fromBytes, fromString, runSync } from '../src/io/bytes.js';
@@ -279,6 +290,12 @@ describe('§3.1 positions', () => {
   it('end of input reports the position after the last token', () => {
     const tokens = scan('[1]');
     expect(tokens.at(-1)?.start).toEqual({ line: 1, column: 4, offset: 3 });
+  });
+
+  it('a message states what went wrong, and the position states where', () => {
+    const e = refused('[1, +2]');
+    expect(e.message).toContain("'+'");
+    expect(e.position).toEqual({ line: 1, column: 5, offset: 4 });
   });
 });
 

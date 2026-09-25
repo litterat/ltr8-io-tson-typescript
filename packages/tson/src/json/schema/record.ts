@@ -73,7 +73,7 @@ import {
   type AtomForm,
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
-import { skipNextValue, skipValue } from './eventSkip.js';
+import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
 import {
   readWrappedValue,
@@ -381,18 +381,24 @@ export function buildRecordReader(
     *read(readCtx: JsonReadContext): Task<JsonValue | undefined> {
       return (yield* reader.readExact(readCtx, reader)) as JsonValue | undefined;
     },
-    *readExact(readCtx: JsonReadContext, wrapped: JsonTypeReader): Task<unknown> {
+    *readExact(readCtx: JsonReadContext, wrapped: JsonTypeReader, opened = false): Task<unknown> {
       const outer = readCtx.inRecord(plan.schemaLocation);
-      const opening = yield* outer.next();
-      if (opening.kind !== 'object-start') {
-        outer.report(
-          'TYPE_MISMATCH',
-          `'${plan.displayName}' is a record and takes a JSON object, and this is ${describeEvent(opening)}`,
-          'an object',
-          describeEvent(opening),
-        );
-        yield* skipValue(outer, opening);
-        return undefined;
+      // `opened`: a choice-routed continuation (`json/schema/dispatchMember.ts`'s own top note,
+      // `json/schema/route.ts`'s) has already consumed this object's opening brace and its own
+      // leading tag for real; there is nothing left to recognize before this record's own fields,
+      // so this skips straight to reading them.
+      if (!opened) {
+        const opening = yield* outer.next();
+        if (opening.kind !== 'object-start') {
+          outer.report(
+            'TYPE_MISMATCH',
+            `'${plan.displayName}' is a record and takes a JSON object, and this is ${describeEvent(opening)}`,
+            'an object',
+            describeEvent(opening),
+          );
+          yield* skipValue(outer, opening);
+          return undefined;
+        }
       }
 
       const reportedBefore = outer.reported();
@@ -428,11 +434,11 @@ export function buildRecordReader(
               position += 1;
               continue;
             }
-            yield* skipValue(outer, opening);
+            yield* skipRestOfObject(outer);
             return undefined;
           }
           refuseReserved(outer, rawName, plan.displayName);
-          yield* skipValue(outer, opening);
+          yield* skipRestOfObject(outer);
           return undefined;
         }
         position += 1;
@@ -549,7 +555,9 @@ function* statedNull(
   }
   fctx.report(
     'FIELD_REQUIRED',
-    `'${memberName}' is required and not voidable, and null is not a value here`,
+    field.optional
+      ? `'${memberName}' is not voidable, so null is not a value here -- omit the member instead`
+      : `'${memberName}' is required and not voidable, and null is not a value here`,
     'a value',
     'null',
   );

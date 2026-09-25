@@ -33,15 +33,15 @@ import type { RecordField } from '../../schema/meta/bodies.js';
 import type { TypeDefinition } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/referenceChain.js';
 import { toNfc } from '../../unicode/nfc.js';
-import type { JsonReadContext } from '../readContext.js';
+import { lookingAhead, type JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
 import { contentOf, describeEvent, fieldValueParser, type AtomForm } from './atoms.js';
 import type { CompileContext } from './compile.js';
-import { skipNextValue, skipValue } from './eventSkip.js';
+import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
 import { fieldValueOf, resolveFieldBody } from './record.js';
 import { lead as leadOf, SCHEMA, TYPE, type Lead } from './reservedMembers.js';
-import { routeTo, type ExactReader, type Route } from './route.js';
+import { routeTo, type ChoiceSelfTagReadable, type ExactReader, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost } from './valueIdentity.js';
 
@@ -187,7 +187,24 @@ export function buildMemberDispatcher(
     return undefined;
   }
 
-  function* dispatch(rctx: JsonReadContext, lead: Lead): Task<unknown> {
+  /**
+   * `skipNextValue` assumes `rctx` sits at an unconsumed value's own opening event, which
+   * holds for every ordinary (`opened: false`) call below -- `rctx` is still at this
+   * object's own `object-start`, since nothing before this point ever truly consumes it
+   * (every dispatcher's own lookahead peeks and rewinds). It does not hold for `readAt`'s own
+   * `opened` branch: there, the caller has already consumed the opening brace and the leading
+   * tag for real, so `rctx` sits mid-object, and discarding "the rest of this record" means
+   * `skipRestOfObject`'s own depth-1 loop, not `skipNextValue`'s depth-from-`first` one.
+   */
+  function* skipRest(rctx: JsonReadContext, opened: boolean): Task<void> {
+    if (opened) {
+      yield* skipRestOfObject(rctx);
+    } else {
+      yield* skipNextValue(rctx);
+    }
+  }
+
+  function* dispatch(rctx: JsonReadContext, lead: Lead, opened: boolean): Task<unknown> {
     if (lead.schema) {
       // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s top
       // note.
@@ -222,7 +239,7 @@ export function buildMemberDispatcher(
       }
       const route = routes.get(lead.type);
       return route !== undefined
-        ? yield* route.read(rctx, lead)
+        ? yield* route.read(rctx, lead, opened)
         : yield* notAMember(rctx, lead.type);
     }
 
@@ -251,7 +268,7 @@ export function buildMemberDispatcher(
             `'${selector.name}' as a leading member`,
             '(missing)',
           );
-        yield* skipNextValue(rctx);
+        yield* skipRest(rctx, opened);
         return undefined;
       }
       const decoded = decodeSelector(selector, raw);
@@ -265,7 +282,7 @@ export function buildMemberDispatcher(
             pinnedList,
             describeEvent(raw),
           );
-        yield* skipNextValue(rctx);
+        yield* skipRest(rctx, opened);
         return undefined;
       }
       key.push(decoded);
@@ -279,7 +296,7 @@ export function buildMemberDispatcher(
         pinnedList,
         `${tuple} as stated`,
       );
-      yield* skipNextValue(rctx);
+      yield* skipRest(rctx, opened);
       return undefined;
     }
     if (lead.type !== undefined && own.has(lead.type)) {
@@ -304,15 +321,16 @@ export function buildMemberDispatcher(
           `'${selected}' was matched by pins but has no route -- this is a library bug`,
         );
       }
-      return yield* route.read(rctx, lead);
+      return yield* route.read(rctx, lead, opened);
     }
     const route = routes.get(lead.type);
-    return route !== undefined ? yield* route.read(rctx, lead) : yield* notAMember(rctx, lead.type);
+    return route !== undefined
+      ? yield* route.read(rctx, lead, opened)
+      : yield* notAMember(rctx, lead.type);
   }
 
-  const reader: JsonTypeReader & ExactReader = {
-    *read(ctx: JsonReadContext): Task<unknown> {
-      const rctx = ctx.inRecord(schemaLocation);
+  function* readAt(rctx: JsonReadContext, opened: boolean): Task<unknown> {
+    if (!opened) {
       const peeked = yield* rctx.peek();
       if (peeked.kind !== 'object-start') {
         const found = yield* rctx.next();
@@ -326,11 +344,86 @@ export function buildMemberDispatcher(
         return undefined;
       }
       const lead = yield* leadOf(rctx, selectorNames);
-      return yield* dispatch(rctx, lead);
+      return yield* dispatch(rctx, lead, false);
+    }
+    // `opened` (`json/schema/route.ts`'s own top note): the caller has already consumed the
+    // object's opening brace and a leading tag naming this family's own base for real -- nothing
+    // reserved remains to recognize, so only the discriminators are read, from wherever the
+    // stream now sits.
+    const selectors = yield* leadingSelectors(rctx, selectorNames);
+    const lead: Lead = { schema: false, typed: false, type: undefined, wrapper: false, selectors };
+    return yield* dispatch(rctx, lead, true);
+  }
+
+  const reader: JsonTypeReader & ExactReader & ChoiceSelfTagReadable = {
+    *read(ctx: JsonReadContext): Task<unknown> {
+      return yield* readAt(ctx.inRecord(schemaLocation), false);
     },
-    *readExact(ctx: JsonReadContext, _wrapped: JsonTypeReader): Task<unknown> {
-      return yield* reader.read(ctx);
+    *readExact(ctx: JsonReadContext, _wrapped: JsonTypeReader, opened = false): Task<unknown> {
+      return yield* readAt(ctx.inRecord(schemaLocation), opened);
+    },
+    *readChoiceSelfTag(ctx: JsonReadContext): Task<unknown> {
+      // Called only by `json/schema/dispatchChoice.ts`, and only when this sealed family is a
+      // choice variant and the document's own `$type` names the family's own base -- admissible
+      // there (it is a declared variant, §8.1) though the base has no direct instances of its own
+      // (§6.1.5), and no more specific name is admissible at a choice's own tag (no subtype
+      // admission, `dispatchChoice.ts`'s own top note). `ctx` sits unconsumed at the object's own
+      // opening brace; this consumes it and that leading tag for real -- the caller has already
+      // judged the tag admissible, so neither is re-checked -- then dispatches on the
+      // discriminators exactly as the untagged route would: the choice mechanism finishing what
+      // it started, not a second, looser admissibility rule (`compiler/subsumption.ts`'s own
+      // `readChoiceSelfTag` is the text-stack analogue).
+      const rctx = ctx.inRecord(schemaLocation);
+      const opening = yield* rctx.next();
+      if (opening.kind !== 'object-start') {
+        rctx.report(
+          'TYPE_MISMATCH',
+          `'${displayName}' is a record and takes a JSON object, and this is '${opening.kind}'`,
+          'an object',
+          opening.kind,
+        );
+        yield* skipValue(rctx, opening);
+        return undefined;
+      }
+      yield* rctx.next(); // '$type' member-name
+      yield* rctx.next(); // the tag's own scalar value
+      return yield* readAt(rctx, true);
     },
   };
   return reader;
+}
+
+/** Whether `event` is one `leadingSelectors` may capture -- `reservedMembers.ts`'s own `isScalarEvent`, restated locally rather than exported for this module's one use. */
+function isScalarEvent(event: JsonEvent): boolean {
+  return (
+    event.kind === 'string' ||
+    event.kind === 'number' ||
+    event.kind === 'boolean' ||
+    event.kind === 'null'
+  );
+}
+
+/**
+ * `reservedMembers.ts`'s own `lead` selector loop, restated for a cursor that is already
+ * positioned at the family's own leading members with nothing reserved before them to recognize
+ * (`readAt`'s own `opened` branch, above) -- a bounded peek, rewound, exactly like `lead` itself.
+ */
+function* leadingSelectors(
+  rctx: JsonReadContext,
+  wanted: ReadonlySet<string>,
+): Task<ReadonlyMap<string, JsonEvent>> {
+  return yield* lookingAhead(rctx, function* (ahead): Task<ReadonlyMap<string, JsonEvent>> {
+    const selectors = new Map<string, JsonEvent>();
+    let event = yield* ahead.peek();
+    while (selectors.size < wanted.size && event.kind === 'member-name') {
+      const name = toNfc(event.name);
+      yield* ahead.next(); // the member-name just peeked
+      const value = yield* ahead.peek();
+      if (!wanted.has(name) || selectors.has(name) || !isScalarEvent(value)) break;
+      selectors.set(name, value);
+      yield* ahead.next(); // the value
+      event = yield* ahead.next(); // the next member-name, or whatever follows
+    }
+    return selectors;
+  });
 }

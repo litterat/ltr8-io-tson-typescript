@@ -12,9 +12,10 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { Diagnostic } from '../src/core/diagnostic.js';
+import { isVerdict, type Diagnostic } from '../src/core/diagnostic.js';
+import { TsonReadError } from '../src/core/errors.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
-import { validateJson, type ReadJsonOptions } from '../src/json/facade.js';
+import { readJsonTree, validateJson, type ReadJsonOptions } from '../src/json/facade.js';
 import { parseJson } from '../src/json/index.js';
 import { jsonValueToText } from '../src/json/write.js';
 import { DEFAULT_NAME_POLICY, permitting } from '../src/unicode/policy.js';
@@ -95,6 +96,39 @@ describe('the case the rule exists for', () => {
     );
     expect(POLICY.has(problem.code)).toBe(true);
   });
+
+  it('a refusal is a verdict but not an invalidity, and names the name it refused (JsonIdentifierPolicyTest)', () => {
+    const lookAlike = `n${CYRILLIC_A}me`;
+    const problem = refusal('account', `{"password": "s3cret", "${lookAlike}": "x"}`);
+    // The mixed-script name refuses under the restriction-level mechanism specifically -- not
+    // merely "some policy code", which the shared `refusal` helper above already narrows to.
+    expect(problem.code).toBe('RESTRICTED_SCRIPT');
+    // Pinned to `core/diagnostic.ts`'s own documented, codebase-wide convention: "a refusal *is* a
+    // verdict ({@link isVerdict}) -- the processor looked and declined... though not a validity
+    // one" -- applied identically to both encodings, not a JSON-only choice. Worth flagging rather
+    // than silently carrying over (`CLAUDE.md`'s own spec-feedback rule): [TSON-JSON] §9.4 reads
+    // the other way for a name-hygiene refusal ("not judged... never a verdict on the document"),
+    // and Part 1's own §8.1 is the section that would have to settle which reading governs
+    // `isVerdict`, `core/diagnostic.ts` being shared infrastructure well outside this file's own
+    // JSON-only scope to relitigate.
+    expect(isVerdict(problem.code), 'the processor looked and declined').toBe(true);
+    expect(problem.actual).toBe(`'${lookAlike}'`);
+  });
+
+  it('a fail-fast read throws it like any other problem (JsonIdentifierPolicyTest)', () => {
+    const lookAlike = `n${CYRILLIC_A}me`;
+    let thrown: unknown;
+    try {
+      readJsonTree(`{"password": "s3cret", "${lookAlike}": "x"}`, {
+        schema: COMPILED,
+        root: 'account',
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(TsonReadError);
+    expect((thrown as TsonReadError).diagnostic.code).toBe('RESTRICTED_SCRIPT');
+  });
 });
 
 // ── The reach, which is narrower than "every name" ──────────────────────────────────────────
@@ -106,6 +140,12 @@ describe('the reach, narrower than "every name"', () => {
 
   it('§3.2: at a map position every member name is an ordinary key -- data, under the token policy', () => {
     expect(problemsOf('lookup', `{"p${CYRILLIC_A}ssword": 1}`)).toEqual([]);
+  });
+
+  it('even a key outside the identifier profile is an ordinary key at a map position (JsonIdentifierPolicyTest)', () => {
+    // U+00AD SOFT HYPHEN: inside the grammar's continue set, outside the identifier profile --
+    // `RESTRICTED_CHARACTER`'s own trigger at a record position, an ordinary byte at a map one.
+    expect(problemsOf('lookup', '{"na­me": 1}')).toEqual([]);
   });
 
   it('a conforming document draws nothing, so the check costs an ordinary read no verdict', () => {

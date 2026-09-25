@@ -144,6 +144,62 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
     runSync(reader.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
   });
+
+  /**
+   * §5.4/§8.3: a variant reference is a hop, not a rewrite, so an alias of a variant names the
+   * variant it points to -- `dispatchChoice.ts`'s own top note has the fuller citation, and
+   * `json-alias-tag-read.test.ts` pins the same reading for the JSON encoding.
+   */
+  it('dispatches an alias of a variant to the variant it names (§5.4, §8.3)', () => {
+    const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
+      [
+        'phone_of',
+        {
+          supertypes: [],
+          subtypes: [],
+          annotations: [],
+          body: { kind: 'reference', target: { name: 'phone', arguments: [] } },
+        },
+      ],
+    ]);
+    const reader = choiceTreeReader(
+      'contact_method',
+      'contact_method',
+      BODY,
+      resolveType,
+      LOCATION,
+      false,
+      namespace,
+    );
+    const value = runSync(reader.read(bodyContextOver('!phone_of 5551234')));
+    expect(value).toEqual({
+      kind: 'atom',
+      value: 5551234,
+      typeRef: 'phone',
+      annotations: { values: [] },
+    });
+  });
+
+  it('a proper subtype of a variant is not itself admitted -- a deliberate divergence from the reference (§7.2, §8.4)', () => {
+    const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
+      [
+        'phone_sub',
+        { supertypes: ['phone'], subtypes: [], annotations: [], body: { kind: 'text_type' } },
+      ],
+    ]);
+    const reader = choiceTreeReader(
+      'contact_method',
+      'contact_method',
+      BODY,
+      resolveType,
+      LOCATION,
+      false,
+      namespace,
+    );
+    const { ctx, diagnostics } = collectingContextOver('!phone_sub 5551234');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+  });
 });
 
 // ── Untagged recovery at a disjoint choice (§5.4) ──────────────────────────────────────────────
@@ -271,5 +327,125 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
       typeRef: 'boolean',
       annotations: { values: [] },
     });
+  });
+});
+
+// ── §6.1.5 / §8.4: a sealed family's own name as a choice variant ──────────────────────────────
+
+/**
+ * `pet` is a choice variant of `c1` and is itself a SEALED family (§6.1.5's third
+ * reading, member-dispatched by `pet_type`). Every variant of `c1` shares the record
+ * shape, so no untagged route recovers it and the tag is always required (§5.4) -- and since no
+ * subtype admission holds at a choice's own tag (this file's own case above), `dog`/`cat`
+ * are not themselves admissible there. `pet`'s own name is the *only* admissible spelling,
+ * though `pet` has no direct instances of its own (§6.1.5) -- exactly the combination
+ * `compiler/choiceReader.ts`'s own `hasChoiceSelfTag` exists for.
+ */
+const SEALED_CHOICE_SCHEMA = `
+!!id:"test://choice-sealed.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
+{
+  pet => abstract {
+    pet_type: text =?
+    name: text
+  }
+  dog => pet & { pet_type?: = "dog"  breed: text }
+  cat => pet & { pet_type?: = "cat"  indoor: boolean }
+
+  robot => { serial: text }
+
+  c1 => ( pet | robot )
+}
+`;
+
+const sealedChoiceCompiled = compile(resolveUserSchema(SEALED_CHOICE_SCHEMA));
+
+describe("choiceTreeReader -- a sealed family's own name as a choice variant (§6.1.5, §8.4)", () => {
+  it('the sealed base’s own name, tagged, dispatches on the discriminator it carries', () => {
+    const result = validate(
+      sealedChoiceCompiled,
+      'c1',
+      disjointBytes('!pet { pet_type: dog  name: Rex  breed: corgi }'),
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('the other member selects just as well, from the same tag', () => {
+    const result = validate(
+      sealedChoiceCompiled,
+      'c1',
+      disjointBytes('!pet { pet_type: cat  name: Tom  indoor: true }'),
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('a discriminator this document contradicts is still refused, exactly as the untagged route would refuse it', () => {
+    const result = validate(
+      sealedChoiceCompiled,
+      'c1',
+      disjointBytes('!pet { pet_type: bird  name: Kiwi }'),
+    );
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+  });
+
+  it('a subtype’s own name is still not admissible at the choice’s tag -- this fix only reaches the variant’s own name', () => {
+    const result = validate(
+      sealedChoiceCompiled,
+      'c1',
+      disjointBytes('!dog { pet_type: dog  name: Rex  breed: corgi }'),
+    );
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+  });
+
+  it('the same sealed base at an ordinary (non-choice) position still refuses its own name -- this fix is choice-routed only', () => {
+    const result = validate(
+      sealedChoiceCompiled,
+      'pet',
+      disjointBytes('!pet { pet_type: dog  name: Rex  breed: corgi }'),
+    );
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+  });
+});
+
+// ── §5.4/§8.3: a variant that is itself an alias ────────────────────────────────────────────────
+
+/**
+ * `either2`'s own declared variant is `n_of`, itself an alias of `note` -- not a terminal.
+ * Flattening a written variant name to *its own* terminal first, then admitting every name that
+ * ends there (`compiler/choiceReader.ts`'s own top note), is what lets a tag name `note` (the
+ * variant's target) or `n2` (a sibling alias of the same target): both share `n_of`'s own
+ * terminal. Flattening one way only (to the *written* variant's own aliases, never past it to its
+ * target) would miss both -- `json-alias-tag-read.test.ts`'s own case is the JSON-side twin.
+ */
+const ALIAS_VARIANT_SCHEMA = `
+!!id:"test://choice-alias-variant.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
+{
+  note    => { body: text }
+  n_of    => note
+  n2      => note
+  count   => { n: int32 }
+  either2 => ( n_of | count )
+}
+`;
+
+const aliasVariantCompiled = compile(resolveUserSchema(ALIAS_VARIANT_SCHEMA));
+
+describe('choiceTreeReader -- a variant that is itself an alias (§5.4, §8.3)', () => {
+  it('admits the alias variant’s own target', () => {
+    const result = validate(aliasVariantCompiled, 'either2', disjointBytes('!note { body: "x" }'));
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('admits a sibling alias of that same target', () => {
+    const result = validate(aliasVariantCompiled, 'either2', disjointBytes('!n2 { body: "x" }'));
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('the variant’s own written spelling still works too', () => {
+    const result = validate(aliasVariantCompiled, 'either2', disjointBytes('!n_of { body: "x" }'));
+    expect(result.diagnostics).toEqual([]);
   });
 });

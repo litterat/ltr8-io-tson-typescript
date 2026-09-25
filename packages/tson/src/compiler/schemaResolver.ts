@@ -143,10 +143,17 @@ export interface SchemaResolverDeps {
 /** Options for {@link resolveSchema}. */
 export interface ResolveSchemaOptions {
   /**
-   * The identity-keyed source position of every declaration `document` carries, mirroring
-   * `desugar.ts`'s own `DesugarOptions.positions` -- indeed the very same map, threaded through
-   * both phases so a declaration desugaring rebuilds keeps its position. Every resolved entry's
-   * own `position` (§8.1's diagnostic addition) comes from here.
+   * An identity-keyed source position for a declaration `document` carries, overriding that
+   * declaration's own {@link Declaration.position} where both are present -- a caller tracking
+   * positions out of band (across a rewrite this module does not itself see, say) can still name
+   * one exactly. Mirrors `desugar.ts`'s own `DesugarOptions.positions` -- indeed the very same map,
+   * threaded through both phases so a declaration desugaring rebuilds keeps its position.
+   *
+   * **Omitting this is no longer "no positions at all".** Every resolved entry's own `position`
+   * (§8.1's diagnostic addition) falls back to `declaration.position` -- the position
+   * `compiler/schemaParser.ts` already stamps on every declaration it parses -- so a caller that
+   * builds no side-table of its own (every caller today) still gets one, via
+   * {@link positionOf}.
    */
   readonly positions?: WeakMap<Declaration, Position>;
   /**
@@ -160,6 +167,21 @@ export interface ResolveSchemaOptions {
    * {@link unresolvedPlaceholder} -- and must not be linked, registered, or compiled.
    */
   readonly receiver?: DiagnosticsReceiver;
+}
+
+/**
+ * `declaration`'s own source position for a diagnostic: `positions`' own side-table entry when
+ * one is supplied and holds one, falling back to the position `compiler/schemaParser.ts` already
+ * stamped onto every declaration it parses ({@link Declaration.position}). Every call site in this
+ * module that used to read `positions?.get(declaration)` directly goes through this instead, so a
+ * caller supplying no side-table of its own -- every caller today -- still gets a position rather
+ * than `undefined` on every diagnostic and every resolved entry.
+ */
+function positionOf(
+  declaration: Declaration,
+  positions: WeakMap<Declaration, Position> | undefined,
+): Position | undefined {
+  return positions?.get(declaration) ?? declaration.position;
 }
 
 /**
@@ -214,7 +236,7 @@ export function resolveSchema(
       : {
           reportFailedDeclaration(declaration, error): void {
             receiver.report(
-              schemaProblem(id, declaration.name, error, positions?.get(declaration)),
+              schemaProblem(id, declaration.name, error, positionOf(declaration, positions)),
             );
           },
         };
@@ -268,7 +290,7 @@ export function resolveSchema(
           'namespaceGetter was invoked before its own DefinitionResolver was assigned',
         );
       }
-      const position = positions?.get(declaration);
+      const position = positionOf(declaration, positions);
       const resolved = resolver.resolve(declaration, position);
       refuseHeadAbstraction(name, resolved);
       namespace.set(name, resolved);
@@ -280,7 +302,7 @@ export function resolveSchema(
       if (receiver === undefined) {
         throw e;
       }
-      const position = positions?.get(declaration);
+      const position = positionOf(declaration, positions);
       receiver.report(schemaProblem(id, name, e, position));
       const placeholder = unresolvedPlaceholder(position, typeParamsOfDeclaration(declaration));
       namespace.set(name, placeholder);
@@ -342,7 +364,9 @@ export function resolveSchema(
         }
         unkinded.add(name);
         const declaration = declarations.get(name);
-        receiver.report(schemaProblem(id, name, error, declaration && positions?.get(declaration)));
+        receiver.report(
+          schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
+        );
       },
     }),
   );
@@ -359,7 +383,12 @@ export function resolveSchema(
           reportFailedApplication(entryName, error): void {
             const declaration = declarations.get(entryName);
             receiver.report(
-              schemaProblem(id, entryName, error, declaration && positions?.get(declaration)),
+              schemaProblem(
+                id,
+                entryName,
+                error,
+                declaration && positionOf(declaration, positions),
+              ),
             );
           },
         };
@@ -415,7 +444,7 @@ export function resolveSchema(
       if (receiver === undefined) {
         throw e;
       }
-      receiver.report(schemaProblem(id, name, e, positions?.get(declaration)));
+      receiver.report(schemaProblem(id, name, e, positionOf(declaration, positions)));
       nameAnnotations = [];
     }
     // A merged form is keyed by the name it merged onto, and contributes nothing at all where

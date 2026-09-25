@@ -30,7 +30,7 @@ import type { JsonTypeReader } from './types.js';
  * call reads turn out to be one after all -- see `json/schema/record.ts`'s own use.
  */
 export interface ExactReader extends JsonTypeReader {
-  readExact(ctx: JsonReadContext, wrapped: JsonTypeReader): Task<unknown>;
+  readExact(ctx: JsonReadContext, wrapped: JsonTypeReader, opened?: boolean): Task<unknown>;
 }
 
 /** Whether `reader` implements {@link ExactReader} — every dispatcher in this directory does, and so does `json/schema/record.ts`'s own plain record reader; an atom, array, tuple or map reader does not, so a `$type`/wrapper reaching one of those can only be read as a wrapper (`json/schema/route.ts`'s own `routeTo`). */
@@ -38,20 +38,43 @@ export function hasReadExact(reader: JsonTypeReader): reader is ExactReader {
   return typeof (reader as Partial<ExactReader>).readExact === 'function';
 }
 
+/**
+ * A reader that can additionally be entered when an enclosing choice
+ * (`json/schema/dispatchChoice.ts`) has already consumed, for real, the object's opening brace
+ * and a leading `$type` naming this reader's own sealed family -- admissible there because it is
+ * a declared variant, even though the base has no direct instances of its own (§6.1.5) and no
+ * more specific name is admissible at a choice's own tag (`dispatchChoice.ts`'s own top note).
+ * `json/schema/dispatchMember.ts`'s own reader is the one implementation; every other reader in
+ * this directory has no such case to handle and leaves this capability unimplemented.
+ */
+export interface ChoiceSelfTagReadable extends JsonTypeReader {
+  readChoiceSelfTag(ctx: JsonReadContext): Task<unknown>;
+}
+
+/** Whether `reader` implements {@link ChoiceSelfTagReadable} -- only `json/schema/dispatchMember.ts`'s own sealed-family reader ever does. */
+export function hasChoiceSelfTag(reader: JsonTypeReader): reader is ChoiceSelfTagReadable {
+  return typeof (reader as Partial<ChoiceSelfTagReadable>).readChoiceSelfTag === 'function';
+}
+
 export interface Route {
-  /** The reader for `name`, whatever it is -- what reads a wrapper's `$value`. */
-  read(ctx: JsonReadContext, lead: Lead): Task<unknown>;
+  /**
+   * The reader for `name`, whatever it is -- what reads a wrapper's `$value`. `opened`
+   * (`json/schema/dispatchMember.ts`'s own top note) forwards a choice-routed continuation past
+   * this route; it never applies to a wrapper's `$value`, which is always a fresh object of its
+   * own.
+   */
+  read(ctx: JsonReadContext, lead: Lead, opened?: boolean): Task<unknown>;
 }
 
 /** Builds the route to `resolve(name)`: the wrapper form reads its `$value` at the entry reader; the inline form reads exactly `name`'s own type, through {@link ExactReader.readExact} where the resolved reader offers one and through the wrapper reading otherwise (a type that never reads a bare object as its own value can only be a wrapper). */
 export function routeTo(resolve: () => JsonTypeReader): Route {
   return {
-    *read(ctx: JsonReadContext, lead: Lead): Task<unknown> {
+    *read(ctx: JsonReadContext, lead: Lead, opened = false): Task<unknown> {
       const entry = resolve();
       if (lead.wrapper || !hasReadExact(entry)) {
         return yield* readWrapped(ctx, entry);
       }
-      return yield* entry.readExact(ctx, entry);
+      return yield* entry.readExact(ctx, entry, opened);
     },
   };
 }

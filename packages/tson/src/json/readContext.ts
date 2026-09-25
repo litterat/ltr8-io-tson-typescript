@@ -44,7 +44,12 @@ import type {
 import { TsonInternalError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
-import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
+import {
+  DEFAULT_NAME_POLICY,
+  DEFAULT_TOKEN_POLICY,
+  type NamePolicy,
+  type TokenPolicy,
+} from '../unicode/policy.js';
 import type { JsonEvent, JsonEventSource } from './stream.js';
 
 /**
@@ -75,6 +80,7 @@ interface Cursor {
   readonly events: JsonEventSource;
   readonly receiver: DiagnosticsReceiver;
   readonly identifierPolicy: NamePolicy;
+  readonly tokenPolicy: TokenPolicy;
   position: Position | undefined;
   reported: number;
   /**
@@ -132,6 +138,13 @@ export interface JsonReadContext {
   schemaField(name: string): JsonReadContext;
   /** This read's identifier-hygiene policy ([TSON-DATA] §8.2), for a reader judging a name. */
   identifierPolicy(): NamePolicy;
+  /**
+   * This read's token policy ([TSON-DATA] §8.2's "Values" paragraph), for a reader judging a map
+   * key or a string value ([TSON-JSON] §9.4: "the token policy, when a deployment sets one,
+   * reaches map keys and string values"). Defaults to {@link DEFAULT_TOKEN_POLICY}, which checks
+   * nothing.
+   */
+  tokenPolicy(): TokenPolicy;
   /** Hands one problem to this read's receiver, located at this context's pointer and position. */
   report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void;
   /** How many problems this read has reported so far, counting every context derived from it. */
@@ -250,6 +263,9 @@ function makeContext(
     identifierPolicy(): NamePolicy {
       return cursor.identifierPolicy;
     },
+    tokenPolicy(): TokenPolicy {
+      return cursor.tokenPolicy;
+    },
     report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void {
       const path = renderPath(tail);
       const schemaPointer =
@@ -276,17 +292,23 @@ function makeContext(
   return ctx;
 }
 
-/** A context over `events`, reporting through `receiver`, judging names under `identifierPolicy` (default {@link DEFAULT_NAME_POLICY}). */
+/**
+ * A context over `events`, reporting through `receiver`, judging names under `identifierPolicy`
+ * (default {@link DEFAULT_NAME_POLICY}) and map keys/string values under `tokenPolicy` (default
+ * {@link DEFAULT_TOKEN_POLICY}, which checks nothing).
+ */
 export function createJsonReadContext(
   events: JsonEventSource,
   receiver: DiagnosticsReceiver,
   identifierPolicy: NamePolicy = DEFAULT_NAME_POLICY,
+  tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): JsonReadContext {
   return makeContext(
     {
       events,
       receiver,
       identifierPolicy,
+      tokenPolicy,
       position: undefined,
       reported: 0,
       rewound: [],

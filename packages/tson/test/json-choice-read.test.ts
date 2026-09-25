@@ -148,21 +148,21 @@ describe('§8.1: the tagged form, admitted at every choice position', () => {
   });
 
   /**
-   * A choice position discriminates by variant type name alone ([TSON-SCHEMA] §5.4's own
-   * "Resolution" paragraph), not by [TSON-SCHEMA] §7.2's general subsumption rule that admits a
-   * proper subtype: [TSON-JSON] §3.3 restricts the admissible `$type` at a choice position to "a
-   * variant of it", and carves choice positions out of the rule that "governs every other typed
-   * position", giving them their own membership relation instead (§8.4's own reasoning: a choice
-   * has no expected supertype for a tag to be admitted *into*, only a closed variant list a name
-   * either names or does not). `unit_circle` composes `circle` and so resolves to a real,
-   * declared entry -- `TYPE_MISMATCH`, not `UNKNOWN_TYPE_REF` -- but it is not itself a variant of
-   * `shape`, so a tag naming it is refused exactly like any other non-variant name. This port's
-   * text-encoding choice reader (`compiler/choiceReader.ts`) reads the same way; `dispatchChoice.ts`'s
-   * own top note has the fuller rationale. The reference's own `DispatchChoiceReader` reads this
-   * differently (its own Javadoc: "a variant, an alias of one or a subtype of one by its tag"),
-   * which this port does not follow here -- reported as a Part 3/reference divergence.
+   * A choice position's `$type` is flattened for alias, not for subtype (`dispatchChoice.ts`'s own
+   * top note has the full citation): [TSON-SCHEMA] §7.2 carves choice positions out of the
+   * subtype-inclusive subsumption rule it states for "every other typed position", giving them
+   * §5.4's own variant membership instead, and §8.4 gives the structural reason -- a choice has no
+   * expected supertype for a tag to be admitted *into*, only a closed variant list a name either
+   * names or does not. `unit_circle` composes `circle` (a proper subtype, not an alias) and so
+   * resolves to a real, declared entry -- `TYPE_MISMATCH`, not `UNKNOWN_TYPE_REF` -- but it is not
+   * itself a variant of `shape`, so a tag naming it is refused exactly like any other non-variant
+   * name. This port's text-encoding choice reader (`compiler/choiceReader.ts`) reads the same way.
+   * The reference's own `DispatchChoiceReader` reads this differently (its own Javadoc: "a
+   * variant, an alias of one or a subtype of one by its tag") -- this port follows it for the
+   * alias half (`json-alias-tag-read.test.ts`'s own choice-position case) and diverges for the
+   * subtype half exercised here, deliberately, reported as a Part 3/reference divergence.
    */
-  it('§5.4: a choice discriminates by variant name alone, so a proper subtype of a variant is not the variant', () => {
+  it('§5.4: a choice discriminates by variant identity (name or alias), so a proper subtype of a variant is not the variant', () => {
     const problem = refusal('shape', '{"$type": "unit_circle", "radius": 1.0, "fixed": true}');
     expect(problem.code).toBe('TYPE_MISMATCH');
     expect(problem.path).toBe('/$type');
@@ -209,5 +209,100 @@ describe('§8.3 class stability', () => {
 
   it('a tag still reads at an unstable choice: stability gates the untagged route, never the tagged form', () => {
     expect(accepted('loose', '{"$type": "float64", "$value": 1.5}')).toBe('1.5');
+  });
+});
+
+// ── §6.1.5 / §8.4: a sealed family's own name as a choice variant ──────────────────────────────
+
+/**
+ * `pet` is a choice variant of `c1` and is itself a SEALED family (§6.1.5's third reading, member-
+ * dispatched by `pet_type`). Every variant of `c1` shares the brace class, so `c1` is not disjoint
+ * and the tag is always required (§8.2) -- and since no subtype admission holds at a choice's own
+ * tag (this file's own case above), `dog`/`cat` are not themselves admissible there. `pet`'s own
+ * name is the *only* admissible spelling, though `pet` has no direct instances of its own
+ * (§6.1.5) -- exactly the combination `dispatchChoice.ts`'s own top note and
+ * `json/schema/route.ts`'s own \`ChoiceSelfTagReadable\` exist for: without it, this shape would be
+ * unwritable inline (though the wrapper form, \`{"$type":"pet","$value":{...}}\`, already reaches
+ * it a different way, by giving \`pet_type\` a fresh object with no leading tag of its own to
+ * conflict with).
+ */
+const SEALED_CHOICE_SCHEMA = `
+!!id:"https://example.test/choice-sealed.tn"
+!!meta:"https://tson.io/2026/36/m/meta.tn"
+!!import:"https://tson.io/2026/36/m/core.tn"
+{
+  pet => abstract {
+    pet_type: text =?
+    name: text
+  }
+  dog => pet & { pet_type?: = "dog"  breed: text }
+  cat => pet & { pet_type?: = "cat"  indoor: boolean }
+
+  robot => { serial: text }
+
+  c1 => ( pet | robot )
+}
+`;
+
+const SEALED_CHOICE_COMPILED: JsonCompiledSchema = compileJsonSchema(
+  resolveUserSchema(SEALED_CHOICE_SCHEMA),
+);
+
+function sealedProblems(json: string): readonly Diagnostic[] {
+  return validateJson(json, { schema: SEALED_CHOICE_COMPILED, root: 'c1' }).diagnostics;
+}
+
+function sealedAccepted(json: string): string {
+  const result = validateJson(json, { schema: SEALED_CHOICE_COMPILED, root: 'c1' });
+  expect(result.diagnostics, 'expected a clean read').toEqual([]);
+  if (result.value === undefined) throw new Error('accepted a read with no value');
+  return jsonValueToText(result.value);
+}
+
+describe("§6.1.5/§8.4: a sealed family's own name as a choice variant", () => {
+  it('the sealed base’s own name, tagged inline, dispatches on the discriminator it carries', () => {
+    expect(
+      sealedAccepted('{"$type": "pet", "pet_type": "dog", "name": "Rex", "breed": "corgi"}'),
+    ).toBe('{"pet_type":"dog","name":"Rex","breed":"corgi"}');
+  });
+
+  it('the other member selects just as well, from the same tag', () => {
+    expect(
+      sealedAccepted('{"$type": "pet", "pet_type": "cat", "name": "Tom", "indoor": true}'),
+    ).toBe('{"pet_type":"cat","name":"Tom","indoor":true}');
+  });
+
+  it('the wrapper form reaches the same value a different way -- $value is a fresh object with no tag to strip', () => {
+    expect(
+      sealedAccepted(
+        '{"$type": "pet", "$value": {"pet_type": "dog", "name": "Rex", "breed": "corgi"}}',
+      ),
+    ).toBe('{"pet_type":"dog","name":"Rex","breed":"corgi"}');
+  });
+
+  it('a discriminator this document contradicts is still refused, exactly as the untagged route would refuse it', () => {
+    const problems = sealedProblems('{"$type": "pet", "pet_type": "bird", "name": "Kiwi"}');
+    expect(problems.length).toBe(1);
+    expect(problems[0]?.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('a subtype’s own name is still not admissible at the choice’s tag -- this fix only reaches the variant’s own name', () => {
+    const problem = sealedProblems(
+      '{"$type": "dog", "pet_type": "dog", "name": "Rex", "breed": "corgi"}',
+    );
+    expect(problem.length).toBe(1);
+    expect(problem[0]?.code).toBe('TYPE_MISMATCH');
+  });
+
+  it('the same sealed base at an ordinary (non-choice) position still refuses its own name -- this fix is choice-routed only', () => {
+    const result = validateJson(
+      '{"$type": "pet", "pet_type": "dog", "name": "Rex", "breed": "corgi"}',
+      {
+        schema: SEALED_CHOICE_COMPILED,
+        root: 'pet',
+      },
+    );
+    expect(result.diagnostics.length).toBe(1);
+    expect(result.diagnostics[0]?.code).toBe('VALIDATION_ERROR');
   });
 });

@@ -36,7 +36,7 @@ import {
 import { TsonInternalError, TsonLexError, TsonParseError, TsonReadError } from '../core/errors.js';
 import type { NestingLimitOptions } from '../core/limits.js';
 import { fromBytes, fromString, runOver, runSync, type ByteInput, type Task } from '../io/bytes.js';
-import type { NamePolicy } from '../unicode/policy.js';
+import type { NamePolicy, TokenPolicy } from '../unicode/policy.js';
 import { createJsonReadContext } from './readContext.js';
 import type { JsonCompiledSchema, JsonTypeReader } from './schema/compile.js';
 import { createJsonStream } from './stream.js';
@@ -51,6 +51,13 @@ export interface ReadJsonOptions extends NestingLimitOptions {
   readonly root: string;
   /** [TSON-DATA] §8.2's identifier policy, applied to an unmatched record member name (`json/schema/nameHygiene.ts`). Defaults to `unicode/policy.ts`'s own `DEFAULT_NAME_POLICY`. */
   readonly identifierPolicy?: NamePolicy;
+  /**
+   * [TSON-DATA] §8.2's "Values" token policy, reached into this encoding by [TSON-JSON] §9.4:
+   * "the token policy, when a deployment sets one, reaches map keys and string values"
+   * (`json/schema/tokenHygiene.ts`). Defaults to `unicode/policy.ts`'s own
+   * `DEFAULT_TOKEN_POLICY`, which checks nothing.
+   */
+  readonly tokenPolicy?: TokenPolicy;
 }
 
 function rootReaderOf(options: ReadJsonOptions): JsonTypeReader {
@@ -109,7 +116,12 @@ function* readJsonDocumentValue(
   receiver: DiagnosticsReceiver,
   options: ReadJsonOptions,
 ): Task<JsonValue | undefined> {
-  const ctx = createJsonReadContext(events, receiver, options.identifierPolicy);
+  const ctx = createJsonReadContext(
+    events,
+    receiver,
+    options.identifierPolicy,
+    options.tokenPolicy,
+  );
   const rootLocation = options.schema.rootDeclaration(options.root);
   const anchored = rootLocation === undefined ? ctx : ctx.underDeclaration(rootLocation);
   const value = yield* reader.read(anchored);

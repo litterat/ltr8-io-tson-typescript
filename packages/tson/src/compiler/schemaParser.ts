@@ -165,7 +165,11 @@ function* parseSchemaMap(state: CursorState): Task<SchemaMap> {
 
 function* parseDeclaration(state: CursorState): Task<Declaration> {
   const nameAnnotations = yield* parseAnnotationList(state);
-  const name = yield* expectTypeName(state, 'a declaration name');
+  // Inlines `expectTypeName` (rather than calling it) so this site alone keeps the name token's
+  // own `.start` -- the declaration's `position` (`ast/schema/document.ts`'s own note on why).
+  const nameToken = yield* expect(state, 'unquoted-token', 'a declaration name');
+  rejectNumericTypeName(nameToken.text, nameToken.start);
+  const name = nameToken.text;
   yield* expect(state, 'map-arrow-token', "a declaration's '=>'");
   const typeDefAnnotations = yield* parseAnnotationList(state);
   const mark = yield* parseDefinitionMarkOpt(state);
@@ -176,6 +180,7 @@ function* parseDeclaration(state: CursorState): Task<Declaration> {
     typeDefAnnotations,
     ...(mark !== undefined ? { mark } : {}),
     typeDef,
+    position: nameToken.start,
   };
 }
 

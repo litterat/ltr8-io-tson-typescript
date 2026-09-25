@@ -26,6 +26,7 @@ import { jsonArray, jsonNull, jsonObject, type JsonValue } from '../tree.js';
 import { describeEvent, fieldValueParser, type FieldValueParser } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
+import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost, identityOfNode } from './valueIdentity.js';
 
@@ -151,6 +152,15 @@ function objectFormReader(
         }
         count += 1;
         const at = outer.field(event.name);
+        // [TSON-JSON] §9.4: the token policy, when a deployment sets one, reaches map keys -- an
+        // object-form key never reaches `keyParser`'s own reader (it is read straight off the
+        // member-name event, not through a nested value), so this is the one place object-form
+        // keys need their own check; a pairs-form key reads through `keyReader.read` (an ordinary
+        // `AtomReader`), which `atoms.ts`'s own `makeAtomReader` already covers.
+        if (tokenHygieneRefuses(at, event.name)) {
+          yield* entryValue(at, valueReader, optionalValues, event.name);
+          continue;
+        }
         let hostKey: unknown;
         try {
           hostKey = keyParser.parse(event.name);

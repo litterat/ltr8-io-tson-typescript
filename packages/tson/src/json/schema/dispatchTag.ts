@@ -154,10 +154,17 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
         // located where they both have a location (the Java reference's own `DispatchTagReader`
         // states this exact reasoning; `json-cross-encoding-parity.test.ts` pins it).
         // `dispatchMember.ts`'s own sealed-base self-tag case follows the same convention, at the
-        // record's own position; its `notAMember` case (a tag naming something outside the
-        // family) and every `dispatchChoice.ts` tag-mismatch case stay at `/$type`, since there
-        // the name genuinely resolves nowhere this position admits and no shared-with-text rule
-        // is in play.
+        // record's own position. Its `notAMember` case (a tag naming something outside the
+        // family) and every `dispatchChoice.ts` tag-mismatch case stay at `/$type` instead -- not
+        // because no shared-with-text rule is in play (`compiler/choiceReader.ts`'s own
+        // UNKNOWN_TYPE_REF/TYPE_MISMATCH split applies the identical membership rule, over the
+        // identical two-step resolution question), but because *this* branch's own reasoning
+        // above doesn't carry over to them: this branch is reached only when `lead.type` names
+        // the position's *own* type, and that position is what the tag and the text-side
+        // annotation share a location with. `notAMember` and the choice cases instead name
+        // something admitted nowhere this position (or this choice) knows, so there is no shared
+        // position left for the two stacks to agree on -- the pointers genuinely differ, and
+        // `json-cross-encoding-parity.test.ts` compares codes alone for exactly those cases.
         ctx.report(
           'VALIDATION_ERROR',
           `'$type' names '${displayName}' itself, but it is abstract and has no direct ` +

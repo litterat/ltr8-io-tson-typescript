@@ -57,6 +57,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import { selfNames } from '../../link/referenceChain.js';
 import type { JsonReadContext } from '../readContext.js';
+import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonEvent } from '../stream.js';
 import { jsonBoolean, jsonNull, jsonNumber, jsonString, type JsonValue } from '../tree.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
@@ -442,6 +443,12 @@ function makeAtomReader(
     *read(ctx: JsonReadContext): Task<unknown> {
       ctx = ctx.underDeclaration(schemaLocation);
       const event = yield* ctx.next();
+      // [TSON-JSON] §9.4: the token policy, when a deployment sets one, reaches string values --
+      // checked before this event is asked to satisfy `form` at all, exactly as
+      // `nameHygieneRefuses` judges hygiene before drawing the verdict it would otherwise report.
+      if (event.kind === 'string' && tokenHygieneRefuses(ctx, event.value)) {
+        return undefined;
+      }
       const content = contentOf(form, event);
       if (content === undefined) {
         yield* reportUnreadable(ctx, event, () => {

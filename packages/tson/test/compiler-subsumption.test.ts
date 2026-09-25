@@ -262,6 +262,17 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
     expect(result.diagnostics[0]?.message).toContain('contradicts');
   });
 
+  it('§7.2’s two-step rule is asked before agreement: a tag resolving nowhere is UNKNOWN_TYPE_REF, never the "contradicts" VALIDATION_ERROR', () => {
+    const result = readFamilyHolder(`{ p: !nope { pet_type: dog  name: "Rex"  breed: "corgi" } }`);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+  });
+
+  it('a tag resolving to a real type outside this family is TYPE_MISMATCH, not "contradicts" -- admissible somewhere, not admitted here', () => {
+    const result = readFamilyHolder(`{ p: !frame { pet_type: dog  name: "Rex"  breed: "corgi" } }`);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    expect(result.diagnostics[0]?.message).toContain('frame');
+  });
+
   it(
     '§5.2/§5.5 the FIXED check compares VALUES, never annotations -- an annotated pin ' +
       "('pet_type: @doc:\"x\" dog') still equals the schema's unannotated one ('= \"dog\"')",

@@ -1,6 +1,29 @@
+/**
+ * Ported case-for-case from the Java reference's `stream/JsonStreamTest`
+ * (`tson-json/src/test/java/io/ltr8/tson/json/stream/JsonStreamTest.java`), with one adjustment
+ * this file's own `SourceContract` describe block explains: `JsonEventSource` here has no
+ * `hasNext()` -- a consumer decides it has read the whole document by the `kind` of the event
+ * `next()` just returned, matching the Task-driven, sync-shaped style every reader in this
+ * codebase uses (`CLAUDE.md`'s suspension section) -- so the reference's `has_next_stays_true_...`
+ * and `a_peeked_end_event_still_counts_as_pending` cases have no analogue: `end-of-document` is a
+ * value like any other, not a state a caller can be past or short of.
+ *
+ * `pulling_past_the_end_is_a_caller_error` **does** have a direct analogue, ported below as `a
+ * pull past end-of-document is a caller error`: `advanceGrammar`'s own `'done'` state
+ * (`stream.ts`) throws `TsonInternalError` for exactly this call, the direct counterpart of the
+ * Java's `NoSuchElementException` -- a library-bug-shaped error rather than a grammar one, since a
+ * caller that pulls a third time after `end-of-document` already has everything the document
+ * contains and is asking for a fourth thing that was never there.
+ */
 import { describe, expect, it } from 'vitest';
-import { TsonLimitRefusedError, TsonParseError } from '../src/core/errors.js';
-import { fromString, runSync } from '../src/io/bytes.js';
+import {
+  TsonInternalError,
+  TsonLimitRefusedError,
+  TsonParseError,
+  TsonSchemaValidationError,
+} from '../src/core/errors.js';
+import { DEFAULT_MAX_NESTING_DEPTH } from '../src/core/limits.js';
+import { fromBytes, fromString, runSync } from '../src/io/bytes.js';
 import { createJsonStream, type JsonEvent } from '../src/json/stream.js';
 
 function render(event: JsonEvent): string {
@@ -207,6 +230,14 @@ describe('grammar', () => {
 describe('depth bound (§10.1)', () => {
   const nested = (depth: number) => '['.repeat(depth) + '1' + ']'.repeat(depth);
 
+  it("the default bound is the processor policy's own, not a copy of it", () => {
+    // §10.1: "in JSON clothing, and the same policy applies with the same defaults" -- so this
+    // stream counts against the one default, and a deployment that raises it raises it for both
+    // encodings at once.
+    expect(DEFAULT_MAX_NESTING_DEPTH).toBe(64);
+    expect(events(nested(DEFAULT_MAX_NESTING_DEPTH))).toHaveLength(64 * 2 + 2);
+  });
+
   it('a document at the bound reads and one past it is refused', () => {
     expect(events(nested(64))).toHaveLength(64 * 2 + 2);
     let error: TsonLimitRefusedError | undefined;
@@ -244,6 +275,26 @@ describe('depth bound (§10.1)', () => {
     expect(() => events('{"a": {"b": 1}}', 1)).toThrow(TsonLimitRefusedError);
   });
 
+  it('the refusal lands at the container that did not fit, before any consumer descends', () => {
+    const stream = createJsonStream(fromString('[[[1]]]'), { maxNestingDepth: 2 });
+    expect(runSync(stream.next()).kind).toBe('array-start');
+    expect(runSync(stream.next()).kind).toBe('array-start');
+    let error: TsonLimitRefusedError | undefined;
+    try {
+      runSync(stream.next());
+    } catch (e) {
+      error = e as TsonLimitRefusedError;
+    }
+    expect(error).toBeInstanceOf(TsonLimitRefusedError);
+    expect(error?.position).toEqual({ line: 1, column: 3, offset: 2 });
+  });
+
+  it('a bound below one is a caller error, and maxNestingDepthOf is where it is refused', () => {
+    // The stream takes no bare depth of its own; `core/limits.ts`'s `maxNestingDepthOf` refuses a
+    // non-positive bound once, for every encoding, rather than each enforcement site checking it.
+    expect(() => events('1', 0)).toThrow(TsonSchemaValidationError);
+  });
+
   it('a document deeper than the frame array starts at reads when the bound allows', () => {
     expect(events(nested(200), 256)).toHaveLength(200 * 2 + 2);
   });
@@ -260,7 +311,21 @@ describe('source contract', () => {
 
   it('a document read from bytes streams alike', () => {
     const source = '{"é": [1, true, null]}';
-    expect(events(source)).toEqual(events(source));
+    const stream = createJsonStream(fromBytes(new TextEncoder().encode(source)));
+    const rendered: string[] = [];
+    for (;;) {
+      const event = runSync(stream.next());
+      rendered.push(render(event));
+      if (event.kind === 'end-of-document') break;
+    }
+    expect(events(source)).toEqual(rendered);
+  });
+
+  it('a pull past end-of-document is a caller error (pulling_past_the_end_is_a_caller_error)', () => {
+    const stream = createJsonStream(fromString('1'));
+    expect(runSync(stream.next()).kind).toBe('number');
+    expect(runSync(stream.next()).kind).toBe('end-of-document');
+    expect(() => runSync(stream.next())).toThrow(TsonInternalError);
   });
 });
 
