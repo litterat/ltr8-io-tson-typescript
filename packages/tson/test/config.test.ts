@@ -13,9 +13,9 @@ import { describe, expect, it } from 'vitest';
 
 import { createTson, mapSchemaSource, type SchemaSource } from '../src/config.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
-  tokenPolicy,
+  scriptPolicy,
   withRestrictionLevel,
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
@@ -410,14 +410,14 @@ describe('mapSchemaSource: a SchemaSource over an in-memory table (port of TsonS
 describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
   it('reports both policies and the UCD release they were computed against', () => {
     const tson = createTson();
-    expect(tson.processorPolicy.identifierPolicy).toEqual(DEFAULT_NAME_POLICY);
+    expect(tson.processorPolicy.identifierPolicy).toEqual(DEFAULT_IDENTIFIER_POLICY);
     expect(tson.processorPolicy.tokenPolicy).toEqual(DEFAULT_TOKEN_POLICY);
     expect(tson.processorPolicy.unicodeDataVersion).toBe(UTS39_VERSION);
   });
 
   it('carries the policies the instance was configured with, not the defaults', () => {
-    const identifierPolicy = withRestrictionLevel(DEFAULT_NAME_POLICY, 'ASCII_ONLY');
-    const token = tokenPolicy('SINGLE_SCRIPT');
+    const identifierPolicy = withRestrictionLevel(DEFAULT_IDENTIFIER_POLICY, 'ASCII_ONLY');
+    const token = scriptPolicy('SINGLE_SCRIPT');
     const tson = createTson({ identifierPolicy, tokenPolicy: token });
     expect(tson.processorPolicy.identifierPolicy).toEqual(identifierPolicy);
     expect(tson.processorPolicy.tokenPolicy).toEqual(token);

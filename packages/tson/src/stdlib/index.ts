@@ -1,6 +1,6 @@
 /**
  * `@ltr8/tson/stdlib` — the three schemas every TSON schema is ultimately written against
- * (`meta-kernel`, `meta.tn`, `core.tn`), embedded as source text, and the one function that
+ * (`meta-kernel`, `meta.tn`, `core.tn`, and the `policy.tn` vocabulary), embedded as source text, and the one function that
  * registers them into a {@link Tson}.
  *
  * **Its own subpath, never the default entry.** The reference implementation's
@@ -10,7 +10,7 @@
  * at. Splitting it out is what lets both callers get what they want — `import { standardLibrary }
  * from '@ltr8/tson/stdlib'` is one line, and not writing that line costs nothing.
  *
- * **No I/O, on any platform.** The three documents are string constants generated into
+ * **No I/O, on any platform.** The four documents are string constants generated into
  * `schemas.generated.ts` from `spec/m/` by `scripts/gen-stdlib-schemas.mjs`, not files read at
  * run time — a published package is not installed next to this repository's `spec/`, and a
  * browser cannot read files at all. Nothing here touches a {@link SchemaSource}, so registering
@@ -27,12 +27,12 @@ import { encodeUtf8 } from '../io/utf8.js';
 import { bootstrapMetaKernel } from '../schema/bootstrap.js';
 import { linkSchema } from '../link/link.js';
 import { createTson, type Config, type Tson } from '../config.js';
-import { CORE_TN, META_KERNEL_TN, META_TN } from './schemas.generated.js';
+import { CORE_TN, META_KERNEL_TN, META_TN, POLICY_TN } from './schemas.generated.js';
 
-export { CORE_TN, META_KERNEL_TN, META_TN } from './schemas.generated.js';
+export { CORE_TN, META_KERNEL_TN, META_TN, POLICY_TN } from './schemas.generated.js';
 
 /**
- * Registers `meta-kernel`, `meta.tn` and `core.tn` into `tson`, in the order their dependencies
+ * Registers `meta-kernel`, `meta.tn`, `core.tn` and `policy.tn` into `tson`, in the order their dependencies
  * require, and returns the same instance so a caller can chain.
  *
  * Idempotent per instance is *not* claimed: registering twice is a caller error, and the registry
@@ -53,6 +53,10 @@ export function registerStandardLibrary(tson: Tson): Tson {
   tson.resolveSchema(META_KERNEL_TN);
   tson.resolveSchema(META_TN);
   tson.resolveSchema(CORE_TN);
+  // The processor-policy vocabulary (§8.2): served by identity like the others so a document
+  // written against it resolves, but nothing here loads a policy *document* and no document or
+  // schema selects the policy it is judged under.
+  tson.resolveSchema(POLICY_TN);
   return tson;
 }
 

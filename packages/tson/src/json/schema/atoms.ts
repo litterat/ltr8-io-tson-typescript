@@ -513,7 +513,7 @@ export function voidReader(
       yield* reportUnreadable(ctx, event, () => {
         ctx.report(
           'TYPE_MISMATCH',
-          `'${displayName}' admits only the absent sentinel, spelled null, and this is ${describeEvent(event)}`,
+          `'${displayName}' admits only the void sentinel, spelled null, and this is ${describeEvent(event)}`,
           'null',
           describeEvent(event),
         );

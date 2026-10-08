@@ -482,7 +482,7 @@ function buildMemberDispatchReader(
               `member by reading it, so a value that leaves it out (omitted, written '_', or not ` +
               `a plain token) selects nothing`,
             `a value for '${fieldName}'`,
-            '(absent)',
+            '(missing)',
           );
         yield* skipDataValue(ctx);
         return abandonedValue();

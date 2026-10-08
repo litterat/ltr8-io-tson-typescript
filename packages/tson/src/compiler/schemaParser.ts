@@ -862,7 +862,7 @@ function* parseTypeArg(state: CursorState): Task<TypeArg> {
     return { kind: 'ref', ref: yield* parseMap(state) };
   }
   if (t.type === 'absent-token') {
-    throw parseError(t, "the absent sentinel '_' is not valid in a type argument position (§7.6)");
+    throw parseError(t, "the void sentinel '_' is not valid in a type argument position (§7.6)");
   }
   throw mismatch('a type argument (a type reference or a scalar value)', t);
 }

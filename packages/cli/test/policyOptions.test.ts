@@ -11,9 +11,8 @@ describe('consumePolicyOptions: defaults', () => {
     const { policy, rest } = consumePolicyOptions([]);
     expect(policy.identifierPolicy).toEqual({
       skeletonDistinctness: true,
-      identifierStatus: true,
       restrictionLevel: 'HIGHLY_RESTRICTIVE',
-      restrictionUnit: 'WHOLE_NAME',
+      perSegment: false,
       permittedScripts: [],
     });
     expect(policy.tokenPolicy).toEqual({ restrictionLevel: 'UNRESTRICTED', permittedScripts: [] });
@@ -59,14 +58,14 @@ describe('consumePolicyOptions: --identifier-policy / --token-policy', () => {
       'moderately-restrictive',
     ]);
     expect(policy.identifierPolicy.restrictionLevel).toBe('MODERATELY_RESTRICTIVE');
-    expect(policy.identifierPolicy.restrictionUnit).toBe('PER_SEGMENT');
+    expect(policy.identifierPolicy.perSegment).toBe(true);
   });
 });
 
 describe('consumePolicyOptions: --identifier-per-segment', () => {
-  it('sets restrictionUnit to PER_SEGMENT under the default (scanning) level', () => {
+  it('sets perSegment under the default (scanning) level', () => {
     const { policy } = consumePolicyOptions(['--identifier-per-segment']);
-    expect(policy.identifierPolicy.restrictionUnit).toBe('PER_SEGMENT');
+    expect(policy.identifierPolicy.perSegment).toBe(true);
     expect(policy.identifierPolicy.restrictionLevel).toBe('HIGHLY_RESTRICTIVE');
   });
 

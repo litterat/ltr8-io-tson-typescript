@@ -56,10 +56,10 @@ import { diagnosticCodeForMechanism } from '../core/diagnostic.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonNameHygieneRefusedError } from '../core/errors.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   nameHygieneRefusal,
   type NameHygieneRefusal,
-  type NamePolicy,
+  type IdentifierPolicy,
 } from '../unicode/policy.js';
 import { UTS39_VERSION } from '../unicode/uts39.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
@@ -78,11 +78,11 @@ export interface CheckNameHygieneOptions {
   readonly schemaId: string;
   /**
    * [TSON-DATA] §8.2's name-hygiene policy, applied over every scope this module checks.
-   * Defaults to {@link DEFAULT_NAME_POLICY} — mechanisms 1 and 2 enforced, mechanism 3 at
+   * Defaults to {@link DEFAULT_IDENTIFIER_POLICY} — mechanisms 1 and 2 enforced, mechanism 3 at
    * Highly Restrictive over the whole name — matching §8.2's own defaults, the same default
    * `reader/schemaless/tree.ts` applies to its own Part 1 scope.
    */
-  readonly identifierPolicy?: NamePolicy;
+  readonly identifierPolicy?: IdentifierPolicy;
   /**
    * Where a refusal is reported, letting every other entry still be checked. Omitted means
    * fail-fast: the first refusal throws {@link TsonNameHygieneRefusedError} — never {@link
@@ -121,7 +121,7 @@ export function checkNameHygiene(
   options: CheckNameHygieneOptions,
 ): void {
   const { schemaId, receiver } = options;
-  const identifierPolicy = options.identifierPolicy ?? DEFAULT_NAME_POLICY;
+  const identifierPolicy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const namespaceRefusal = nameHygieneRefusal(merged.keys(), identifierPolicy);
   if (namespaceRefusal !== undefined) {
@@ -187,7 +187,7 @@ function checkEnumMembers(
   entry: string,
   def: TypeDefinition,
   label: EnumLabelProfile,
-  policy: NamePolicy,
+  policy: IdentifierPolicy,
   schemaId: string,
   receiver: DiagnosticsReceiver | undefined,
 ): void {
@@ -225,8 +225,8 @@ function checkEnumMembers(
  * reach them". Built from `base`, the caller's own configured policy, so a deployment's mechanism-1
  * relaxation still applies here too; only mechanisms 2 and 3 are unconditionally dropped.
  */
-function textProfileScopePolicy(base: NamePolicy): NamePolicy {
-  return { ...base, identifierStatus: false, restrictionLevel: 'UNRESTRICTED' };
+function textProfileScopePolicy(base: IdentifierPolicy): IdentifierPolicy {
+  return { ...base, restrictionLevel: 'UNRESTRICTED' };
 }
 
 /** One entry's own §11.4 scope — its record field names or its enum members — or `undefined` for every other body shape, which declares no scope of its own. */
@@ -275,7 +275,7 @@ function checkFieldValues(
   entry: string,
   def: TypeDefinition,
   merged: ReadonlyMap<string, TypeDefinition>,
-  policy: NamePolicy,
+  policy: IdentifierPolicy,
   schemaId: string,
   receiver: DiagnosticsReceiver | undefined,
 ): void {
@@ -322,6 +322,8 @@ function reportOrThrow(
       mechanism: refusal.mechanism,
       names: refusal.names,
       uts39Version: UTS39_VERSION,
+      schemaId,
+      pointer: `/${pointerName}`,
     });
   }
   receiver.report({

@@ -37,7 +37,7 @@ import { compile, type CompiledSchema } from '../src/compiler/compile.js';
 import { readTree, validate as validateText } from '../src/facade/tree.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { readJsonTree, validateJson } from '../src/json/facade.js';
-import { tokenPolicy } from '../src/unicode/policy.js';
+import { scriptPolicy } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
@@ -459,11 +459,11 @@ describe('base cases', () => {
     );
   });
 
-  it('the absent sentinel at a required field: _ in text, null in JSON, one verdict', () => {
+  it('the void sentinel at a required field: _ in text, null in JSON, one verdict', () => {
     sameRule('person', '{ name: _  labels: [] }', '{"name": null, "labels": []}');
   });
 
-  it('§6.1.2: the absent sentinel at a defaulted field -- the fix is omission, and stating absence is refused in both', () => {
+  it('§6.1.2: the void sentinel at a defaulted field -- the fix is omission, and stating absence is refused in both', () => {
     sameRule(
       'person',
       '{ name: "Ada"  tries: _  labels: [] }',
@@ -644,7 +644,7 @@ describe('§6.5 maps', () => {
 // `aTokenRefusalLeavesNothingInEveryModeAndBothEncodings` still has no *cross-encoding* analogue,
 // though the gap it used to be blocked on is now half-closed: `ReadJsonOptions.tokenPolicy`
 // exists and is wired through (`json/schema/tokenHygiene.ts`, exercised in full by
-// `json-token-policy.test.ts`'s own port of `JsonTokenPolicyTest`), but the Java case compares
+// `json-token-policy.test.ts`'s own port of `JsonScriptPolicyTest`), but the Java case compares
 // **four** modes -- TSON tree, TSON bind, JSON tree, JSON bind -- and none of the four map onto
 // what this port can build a genuine four-way comparison from: TSON bind and JSON bind have no
 // analogue at all (above), the *schemaless* TSON tree reader honours `tokenPolicy`
@@ -662,7 +662,7 @@ describe('AllOrNothingReadTest: a token refusal leaves nothing (JSON only -- see
     const result = validateJson(json, {
       schema: JSON_SCHEMA,
       root: 'route',
-      tokenPolicy: tokenPolicy('ASCII_ONLY'),
+      tokenPolicy: scriptPolicy('ASCII_ONLY'),
     });
     expect(result.value).toBeUndefined();
     expect(result.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);

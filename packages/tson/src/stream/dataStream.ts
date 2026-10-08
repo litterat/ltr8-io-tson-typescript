@@ -658,7 +658,7 @@ function* stepCoreValue(state: StreamState): Task<void> {
     default:
       throw parseError(
         t,
-        `expected a value (record, map, array, empty braces, the absent sentinel '_', or a token), ` +
+        `expected a value (record, map, array, empty braces, the void sentinel '_', or a token), ` +
           `found ${describe(t)}`,
       );
   }
@@ -720,7 +720,7 @@ function* parseBraceValue(state: StreamState): Task<void> {
 
   throw parseError(
     t1,
-    `expected a value (record, map, array, empty braces, the absent sentinel '_', or a token), ` +
+    `expected a value (record, map, array, empty braces, the void sentinel '_', or a token), ` +
       `found ${describe(t1)}`,
   );
 }

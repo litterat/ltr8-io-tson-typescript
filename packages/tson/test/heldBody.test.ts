@@ -304,7 +304,7 @@ describe('defaultAnnotationValueEncoder', () => {
     });
   });
 
-  it('encodes null/undefined as the absent sentinel', () => {
+  it('encodes null/undefined as the void sentinel', () => {
     expect(defaultAnnotationValueEncoder(undefined).coreValue).toEqual({ kind: 'absent' });
   });
 

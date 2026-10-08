@@ -113,7 +113,7 @@ export function tupleTreeReader(
             'FIELD_REQUIRED',
             `'${displayName}' position [${String(index)}] is absent, but this position is required`,
             'a value',
-            '(absent)',
+            '_',
           );
         }
       } else {

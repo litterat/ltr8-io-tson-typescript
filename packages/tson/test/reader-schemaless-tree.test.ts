@@ -233,7 +233,7 @@ describe('schemalessTreeReader -- name identity is NFC identity (§2.5, §2.6)',
   });
 });
 
-describe('schemalessTreeReader -- the absent sentinel is not a map key (§2.9)', () => {
+describe('schemalessTreeReader -- the void sentinel is not a map key (§2.9)', () => {
   it('rejects an absent key, which no grammar rule and no schema can refuse first', () => {
     const { diagnostics } = readCollect('{ _ => 1 }');
     expect(diagnostics.map((d) => d.code)).toEqual(['ABSENT_MAP_KEY']);

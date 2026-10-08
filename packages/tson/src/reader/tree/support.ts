@@ -119,7 +119,7 @@ export function renderValue(value: Value): string {
     case 'atom':
       return renderAtomValue(value.value);
     case 'absent':
-      return "the absent sentinel '_'";
+      return "the void sentinel '_'";
     case 'record':
       return `a record${value.typeRef !== undefined ? ` '${value.typeRef}'` : ''}`;
     case 'map':

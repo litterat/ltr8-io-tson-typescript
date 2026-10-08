@@ -443,7 +443,7 @@ describe("a template's bare record body (§5.2)", () => {
 // ── §5.2's field-state table, exercised through a template body ─────────
 
 describe('field-marks validation (§5.2)', () => {
-  it("the absent sentinel '_' is no longer a modifier value: '~ _' and '= _' are parse errors, not resolver errors", () => {
+  it("the void sentinel '_' is no longer a modifier value: '~ _' and '= _' are parse errors, not resolver errors", () => {
     expect(() => desugarDoc('box => <T> { v: T ~ _ }')).toThrow(TsonParseError);
     expect(() => desugarDoc('box => <T> { v: T = _ }')).toThrow(TsonParseError);
   });

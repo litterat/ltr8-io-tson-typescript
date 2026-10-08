@@ -8,7 +8,7 @@ import {
   restrictedCharacterViolation,
   type IdentifierProfile,
 } from '../../src/unicode/identifier-profile.js';
-import { DEFAULT_NAME_POLICY, judgeName, perSegment } from '../../src/unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY, judgeName, perSegment } from '../../src/unicode/policy.js';
 import { createConfusableScope } from '../../src/unicode/skeleton.js';
 
 // [TSON-SCHEMA] §5.5, §7.7: an identifier profile as data, built from `identifier_type`'s facets.
@@ -140,19 +140,19 @@ describe('restrictedCharacterViolation and profileSeparates (§8.2)', () => {
 describe('judgeName -- every rule a name fails (§8.2)', () => {
   it('reports the restricted-character rule before the restricted-script rule, and both for a name failing both', () => {
     const name = `${CYR_A}dmin${NKO}`;
-    const violations = judgeName(name, NAME_PROFILE, DEFAULT_NAME_POLICY);
+    const violations = judgeName(name, NAME_PROFILE, DEFAULT_IDENTIFIER_POLICY);
     expect(violations.map((v) => v.mechanism)).toEqual(['identifier-status', 'restriction-level']);
   });
 
   it('reports one rule alone when only one fails', () => {
     expect(
-      judgeName(`${CYR_A}dmin`, NAME_PROFILE, DEFAULT_NAME_POLICY).map((v) => v.mechanism),
+      judgeName(`${CYR_A}dmin`, NAME_PROFILE, DEFAULT_IDENTIFIER_POLICY).map((v) => v.mechanism),
     ).toEqual(['restriction-level']);
-    expect(judgeName('admin', NAME_PROFILE, DEFAULT_NAME_POLICY)).toEqual([]);
+    expect(judgeName('admin', NAME_PROFILE, DEFAULT_IDENTIFIER_POLICY)).toEqual([]);
   });
 
   it('divides a name at the profile’s own separators under a per-segment unit', () => {
-    const policy = perSegment(DEFAULT_NAME_POLICY);
+    const policy = perSegment(DEFAULT_IDENTIFIER_POLICY);
     const mixed = `id-${CYR_A}${CYR_A}`;
     expect(judgeName(mixed, NAME_PROFILE, policy)).toEqual([]);
     // Under a profile that does not add `-`, the hyphen is not a separator and the name mixes scripts.

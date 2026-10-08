@@ -346,7 +346,9 @@ createTson({ maxNestingDepth: 128 }); // every schema it resolves and document i
 ```
 
 §8.2's three name-hygiene mechanisms are on by default (skeleton distinctness, `Identifier_Status`,
-Highly Restrictive over the whole name). Relaxation is a **code decision stated at the call site** —
+Highly Restrictive over the whole name). A refusal is §8.1's fifth outcome: `isVerdict` is `false`
+for its code (`CONFUSABLE_NAMES`, `RESTRICTED_CHARACTER`, `RESTRICTED_SCRIPT`; `isNameRefusal`), and
+`tson validate` reports the file `NOT_CHECKED` and still exits 1. Relaxation is a **code decision stated at the call site** —
 never an environment variable, because a security policy read from the environment is ambient
 authority. State it once on the instance, via `Config.identifierPolicy`:
 
@@ -354,9 +356,8 @@ authority. State it once on the instance, via `Config.identifierPolicy`:
 const tson = createTson({
   identifierPolicy: {
     skeletonDistinctness: true,
-    identifierStatus: true,
-    restrictionLevel: 'ASCII_ONLY', // ASCII_ONLY | SINGLE_SCRIPT | HIGHLY_RESTRICTIVE | …
-    restrictionUnit: 'WHOLE_NAME', // or 'PER_SEGMENT' — §8.2's first relaxation to reach for
+    restrictionLevel: 'ASCII_ONLY', // ASCII_ONLY | SINGLE_SCRIPT | HIGHLY_RESTRICTIVE | …; UNRESTRICTED drops Identifier_Status too
+    perSegment: false, // true applies the level per segment — §8.2's first relaxation to reach for
     permittedScripts: [], // combinations admitted in addition to the level -- build with `permitting`
   },
 });
@@ -365,13 +366,15 @@ const tson = createTson({
 Script combinations are `ScriptId` numbers, not names — `scriptNamed('Latin')` resolves the UCD
 `Script` property's long-form name to one, so `permittedScripts: [[scriptNamed('Latin')!,
 scriptNamed('Cyrillic')!]]` admits that combination in addition to whatever the level already
-allows. `NamePolicy`/`TokenPolicy` themselves are not exported by name — build a plain object
-satisfying `Config.identifierPolicy`/`Config.tokenPolicy`'s shape rather than importing the type.
+allows. `IdentifierPolicy`, `ScriptPolicy` and `ProcessorPolicy` are exported types, with
+`DEFAULT_IDENTIFIER_POLICY`, `NO_IDENTIFIER_POLICY`, `perSegment`, `permitting`,
+`withRestrictionLevel`, `withSkeletonDistinctness` and `scriptPolicy` to derive a relaxed copy, and
+`withIdentifierPolicy(config, …)`/`withTokenPolicy(config, …)` to set one on a `Config`.
 
 `Config.tokenPolicy` is the same shape's counterpart over _values_ rather than declared names —
 only the restricted-script mechanism applies there, since a value has no identifier profile to
 violate and no scope to be distinct within; it defaults to `UNRESTRICTED`, so an ordinary read
-scans no values at all. `tson.processorPolicy` reports both policies together with the UCD version
+scans no values at all. `tson.processorPolicy` reports both policies, §9.1's limits and the UCD version
 they were computed against, the same record `tson policy` prints from the command line.
 
 Name hygiene decides **policy, not validity**: it can never make a document invalid, and its verdict

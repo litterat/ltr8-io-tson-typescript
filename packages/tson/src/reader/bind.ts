@@ -284,7 +284,7 @@ function describeEvent(e: TsonEvent): string {
     case 'empty-brace':
       return '{}';
     case 'absent':
-      return "the absent sentinel '_'";
+      return "the void sentinel '_'";
     case 'token':
       return `a token ('${e.text}')`;
     default:
@@ -517,7 +517,7 @@ function* readRecord<T>(
             'FIELD_REQUIRED',
             `missing required field '${fieldNameEvent.name}'`,
             `a value for '${fieldNameEvent.name}'`,
-            '(absent)',
+            '_',
           );
         }
       } else {
@@ -589,7 +589,7 @@ function fillMissingFields<T>(
         'FIELD_REQUIRED',
         `missing required field '${slot.wireName}'`,
         `a value for '${slot.wireName}'`,
-        '(absent)',
+        '(missing)',
       );
   }
 }
@@ -758,8 +758,8 @@ function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomRea
         yield* ctx.next();
         ctx.report(
           'TYPE_MISMATCH',
-          "the absent sentinel '_' must not appear as a map key (§2.9)",
-          'a real map key, never the absent sentinel',
+          "the void sentinel '_' must not appear as a map key (§2.9)",
+          'a real map key, never the void sentinel',
           '_',
         );
         yield* ctx.next(); // map-arrow

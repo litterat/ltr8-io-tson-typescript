@@ -288,7 +288,7 @@ function* untagged(
     ctx.report(
       'FIELD_REQUIRED',
       `'${displayName}' admits no absence, and JSON null is this encoding's spelling of the ` +
-        `absent sentinel (§7)`,
+        `void sentinel (§7)`,
       `a value of one of (${namesList})`,
       'null',
     );

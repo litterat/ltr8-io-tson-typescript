@@ -25,8 +25,8 @@ export function absentTreeReader(displayName: string): TypeReader<Value> {
       } else {
         ctx.report(
           'TYPE_MISMATCH',
-          `expected the absent sentinel '_' for '${displayName}', found ${describeEvent(e)}`,
-          "the absent sentinel '_'",
+          `expected the void sentinel '_' for '${displayName}', found ${describeEvent(e)}`,
+          "the void sentinel '_'",
           describeEvent(e),
         );
         yield* skipCoreValue(ctx);

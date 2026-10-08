@@ -73,7 +73,7 @@ their contents rather than their brackets:
 - **Records** `{ name: value }` — fields, separated by `:`
 - **Maps** `{ key => value }` — arbitrary keys, separated by `=>`
 - **Arrays** `[ a b c ]` — whitespace or commas
-- **`_`** — the absent sentinel, distinct from `null`, and it occupies an array slot
+- **`_`** — the void sentinel, distinct from `null`, and it occupies an array slot
 - **`@name`** — annotations, ordered and repeatable, preserved verbatim
 - **`!name`** — type annotations
 - **`!!name:"…"`** — directives: `id`, `schema`, `meta`, `import`, and only those

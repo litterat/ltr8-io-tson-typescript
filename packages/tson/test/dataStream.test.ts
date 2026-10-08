@@ -87,7 +87,7 @@ describe('a data value at the document root (§2.3, §7.4)', () => {
     ]);
   });
 
-  it('the absent sentinel is the whole document (§2.9)', () => {
+  it('the void sentinel is the whole document (§2.9)', () => {
     expect(shape('_')).toEqual(['DocumentStart(|)', 'Absent', 'DocumentEnd']);
   });
 
@@ -261,7 +261,7 @@ describe('records (§2.5)', () => {
     ]);
   });
 
-  it('a field value may be the absent sentinel', () => {
+  it('a field value may be the void sentinel', () => {
     expect(shape('{ x: _ }')).toEqual([
       'DocumentStart(|)',
       'RecordStart',
@@ -419,7 +419,7 @@ describe('brace disambiguation (§2.8): at most two tokens of lookahead', () => 
     ]);
   });
 
-  it('the absent sentinel as a key parses structurally -- rejecting it is a resolver-layer concern (§2.9)', () => {
+  it('the void sentinel as a key parses structurally -- rejecting it is a resolver-layer concern (§2.9)', () => {
     expect(shape('{ _ => 1 }')).toEqual([
       'DocumentStart(|)',
       'MapStart',
@@ -466,7 +466,7 @@ describe('arrays (§2.7)', () => {
     expect(shape('[1, 2, 3]')).toEqual(shape('[1 2 3]'));
   });
 
-  it('the absent sentinel occupies a positional slot (§2.9)', () => {
+  it('the void sentinel occupies a positional slot (§2.9)', () => {
     expect(shape('[1 _ 3]')).toEqual([
       'DocumentStart(|)',
       'ArrayStart',

@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { linkSchema } from '../src/link/link.js';
 import type { ImportedSchema, Schema } from '../src/compiler/schemaResolver.js';
 import { collector } from '../src/core/diagnostic.js';
+import { diagnosticOfNameRefusal, isVerdict } from '../src/core/diagnostic.js';
 import { TsonNameHygieneRefusedError, TsonSchemaValidationError } from '../src/core/errors.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   perSegment,
   withSkeletonDistinctness,
 } from '../src/unicode/policy.js';
@@ -338,6 +339,19 @@ describe("checkNameHygiene: a template's own type parameters (this implementatio
     expect(refused.message).toContain('type parameters');
   });
 
+  it('a thrown schema-load refusal carries its §8.2 code and a pointer to the refused declaration', () => {
+    const s = schema('https://x/s.tn', [
+      ['box', def(record([field('v', ref(ID_POLZOVATELYA))]), { parameters: [ID_POLZOVATELYA] })],
+    ]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(diagnosticOfNameRefusal(refused)).toMatchObject({
+      code: 'RESTRICTED_SCRIPT',
+      schemaId: 'https://x/s.tn',
+      schemaPointer: '/box',
+    });
+    expect(isVerdict(diagnosticOfNameRefusal(refused).code)).toBe(false);
+  });
+
   it('leaves an entry with no type parameters unaffected', () => {
     const s = schema('https://x/s.tn', [['box', def(RECORD, { parameters: [] })]]);
     expect(() => linkSchema(s)).not.toThrow();
@@ -349,7 +363,9 @@ describe("checkNameHygiene: a template's own type parameters (this implementatio
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError);
     expect(() =>
-      linkSchema(s, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
+      linkSchema(s, {
+        identifierPolicy: withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false),
+      }),
     ).not.toThrow();
   });
 });
@@ -397,7 +413,7 @@ describe('checkNameHygiene: the rule never fires on a lone name', () => {
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError); // the default whole-name level refuses one of them
     expect(() =>
-      linkSchema(s, { identifierPolicy: perSegment(DEFAULT_NAME_POLICY) }),
+      linkSchema(s, { identifierPolicy: perSegment(DEFAULT_IDENTIFIER_POLICY) }),
     ).not.toThrow();
   });
 });
@@ -410,7 +426,9 @@ describe('checkNameHygiene: the policy is relaxable by the caller, and enforced 
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError);
     expect(() =>
-      linkSchema(s, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
+      linkSchema(s, {
+        identifierPolicy: withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false),
+      }),
     ).not.toThrow();
   });
 });

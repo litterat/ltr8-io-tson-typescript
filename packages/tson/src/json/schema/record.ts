@@ -462,7 +462,7 @@ export function buildRecordReader(
       if (plan.groups.length > 0) {
         validateGroups(outer, plan, slots);
       }
-      fillAbsent(outer, plan, slots);
+      fillMissing(outer, plan, slots);
 
       if (outer.reported() !== reportedBefore) return undefined;
       const members = new Map<string, JsonValue>();
@@ -621,7 +621,7 @@ function validateGroups(ctx: JsonReadContext, plan: RecordPlan, slots: readonly 
   }
 }
 
-function fillAbsent(ctx: JsonReadContext, plan: RecordPlan, slots: Slot[]): void {
+function fillMissing(ctx: JsonReadContext, plan: RecordPlan, slots: Slot[]): void {
   for (let i = 0; i < slots.length; i += 1) {
     if (slots[i] !== undefined) continue;
     const omission = plan.omitted[i];

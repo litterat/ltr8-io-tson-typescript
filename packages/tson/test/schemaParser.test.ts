@@ -527,7 +527,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
     expect(thrownBy(`${META} { x => { f: text =? v } }`)).toBeInstanceOf(TsonParseError);
   });
 
-  it("the absent sentinel '_' is no longer a modifier value", () => {
+  it("the void sentinel '_' is no longer a modifier value", () => {
     expect(thrownBy(`${META} { x => { f: text? = _ } }`)).toBeInstanceOf(TsonParseError);
     expect(thrownBy(`${META} { x => { f: text ~ _ } }`)).toBeInstanceOf(TsonParseError);
   });
@@ -869,7 +869,7 @@ describe('type arguments (§12.1, §5.10)', () => {
     expect(def.ref.args[1]).toEqual({ kind: 'ref', ref: { kind: 'simpleRef', name: 'N' } });
   });
 
-  it('rejects the absent sentinel as a type argument', () => {
+  it('rejects the void sentinel as a type argument', () => {
     expect(thrownBy(`${META} { x => box<_> }`)).toBeInstanceOf(TsonParseError);
   });
 

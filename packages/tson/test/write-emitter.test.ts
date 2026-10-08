@@ -106,7 +106,7 @@ describe('§2.5/§7.7 field names -- an identifier, written unquoted, or no lega
   it.each([
     ['42x', 'digit-led: a digit is not XID_Start (§7.7)'],
     ['_id', 'token-initial _ is XID_Continue only, never XID_Start'],
-    ['_', 'the absent sentinel is not a name (§2.9)'],
+    ['_', 'the void sentinel is not a name (§2.9)'],
     ['', 'identifier-start requires a code point'],
     ['first name', 'space is outside the identifier grammar'],
     ['.', 'a boundary sign is not identifier-continue'],

@@ -41,7 +41,7 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
-import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { checkDisjointAssertions, computeDisjointness } from './disjointness.js';
@@ -137,7 +137,7 @@ export interface LinkDeps {
   readonly receiver?: DiagnosticsReceiver;
   /**
    * [TSON-DATA] §8.2's name-hygiene policy, applied over [TSON-SCHEMA] §11.4's schema-layer
-   * scopes (`nameHygiene.ts`'s own `checkNameHygiene`). Defaults to {@link DEFAULT_NAME_POLICY}
+   * scopes (`nameHygiene.ts`'s own `checkNameHygiene`). Defaults to {@link DEFAULT_IDENTIFIER_POLICY}
    * — mechanisms 1 and 2 enforced, mechanism 3 at Highly Restrictive over the whole name — the
    * same default every other name-hygiene call site in this package applies. A relaxation is a
    * caller's explicit code decision (§8.2 forbids relaxing one silently), passed here exactly
@@ -151,7 +151,7 @@ export interface LinkDeps {
    * (meta.tn and core.tn included, once resolved the normal way rather than through the
    * bootstrap route) has no such restriction and may take a caller's own policy.
    */
-  readonly identifierPolicy?: NamePolicy;
+  readonly identifierPolicy?: IdentifierPolicy;
 }
 
 /**
@@ -166,7 +166,7 @@ export interface LinkDeps {
  */
 export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const { resolveImport, structureNamespace, receiver } = deps;
-  const identifierPolicy = deps.identifierPolicy ?? DEFAULT_NAME_POLICY;
+  const identifierPolicy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const origins = new Map<string, string>();
   const textEnums = new Set<string>();

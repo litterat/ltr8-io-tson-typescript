@@ -764,9 +764,23 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
         'person',
         jsonFile,
       ]);
+      // §8.1's fifth outcome: not a verdict, so the file is NOT_CHECKED -- and still exit 1.
       expect(code).toBe(EXIT.INVALID);
       expect(io.stdout()).toContain('RESTRICTED_SCRIPT');
       expect(io.stdout()).not.toContain('UNRECOGNIZED_FIELD');
+      const json = captureOutput();
+      await main([
+        'validate',
+        '--format',
+        'json',
+        '--schema',
+        join(dir, 'person.tn'),
+        '--root',
+        'person',
+        jsonFile,
+      ]);
+      const report = JSON.parse(json.stdout()) as { outcome: string };
+      expect(report.outcome).toBe('NOT_CHECKED');
     });
 
     it('--identifier-policy unrestricted admits the name, which then reports UNRECOGNIZED_FIELD instead', async () => {

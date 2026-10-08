@@ -72,7 +72,7 @@ export const DEFAULT_RESTRICTION_LEVEL: RestrictionLevel = 'HIGHLY_RESTRICTIVE';
 export const DEFAULT_RESTRICTION_UNIT: RestrictionUnit = 'WHOLE_NAME';
 
 /**
- * One script combination a {@link "./policy.js"} `NamePolicy`/`TokenPolicy` admits over and
+ * One script combination a {@link "./policy.js"} `IdentifierPolicy`/`ScriptPolicy` admits over and
  * above its level — the port of the pinned Java reference's `TsonUnicodePolicy.permitting`,
  * e.g. `[SCRIPT_LATIN, SCRIPT_CYRILLIC]` for a deployment that knows it is Russian. A plain
  * array rather than a `ReadonlySet`: a combination is always small (two or three scripts) and a
@@ -205,7 +205,7 @@ function satisfiesLevelOverUnit(
  * character the profile adds is its punctuation and the profile, not the policy, knows which they
  * are.
  *
- * `permittedScripts` (default {@link NO_PERMITTED_SCRIPTS}) is `NamePolicy`/`TokenPolicy`'s own
+ * `permittedScripts` (default {@link NO_PERMITTED_SCRIPTS}) is `IdentifierPolicy`/`ScriptPolicy`'s own
  * script-combination admission (§8.2 mechanism 3's relaxation device): a mixed-script unit whose
  * scripts are contained in any one of these combinations satisfies `level` regardless of what
  * `level` alone would say, checked ahead of `level`'s own rules — see {@link covered}.

@@ -76,7 +76,7 @@ describe('root value shapes (§2.3, §7.4)', () => {
     });
   });
 
-  it('the absent sentinel (§2.9)', () => {
+  it('the void sentinel (§2.9)', () => {
     expect(doc('_')).toEqual({ root: { annotations: [], coreValue: { kind: 'absent' } } });
   });
 
@@ -376,7 +376,7 @@ describe('positions are identity-keyed, never structural (WeakMap<CoreValue, Pos
   });
 });
 
-describe('the absent sentinel is a value, not a missing key (§2.9)', () => {
+describe('the void sentinel is a value, not a missing key (§2.9)', () => {
   it('a record field explicitly holding "_" is structurally distinct from having no such field', () => {
     const d = doc('{ x: _ }');
     const record = d.root.coreValue as {

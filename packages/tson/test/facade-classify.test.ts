@@ -58,7 +58,7 @@ describe('kind dispatch (§2.2)', () => {
     );
   });
 
-  it('classifies the absent sentinel as data -- §2.2’s own pure-metadata document', () => {
+  it('classifies the void sentinel as data -- §2.2’s own pure-metadata document', () => {
     expect(classifyDocument(bytesOf('!!id:"https://example.com/reserved.tn"\n_\n'))).toEqual({
       kind: 'data',
       id: 'https://example.com/reserved.tn',

@@ -42,7 +42,7 @@ export function describeEvent(e: TsonEvent): string {
     case 'empty-brace':
       return '{}';
     case 'absent':
-      return "the absent sentinel '_'";
+      return "the void sentinel '_'";
     case 'token':
       return `token '${e.text}'`;
     default:

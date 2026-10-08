@@ -67,6 +67,7 @@ import {
   TsonBindMismatchError,
   TsonMissingBindingError,
   TsonReadError,
+  TsonNameHygieneRefusedError,
   TsonRefusedError,
 } from '../core/errors.js';
 import { DEFAULT_MAX_SUPERTYPE_CHAIN, supertypeChainLimitRefusal } from '../core/limits.js';
@@ -2467,6 +2468,15 @@ function bindAnnotationValue(
   } catch (e) {
     // A refusal under §8.2's name-hygiene policy says this processor declined the value, not that
     // the schema is wrong: it reaches the caller as the fifth outcome, unwrapped.
+    if (e instanceof TsonNameHygieneRefusedError && e.pointer === undefined) {
+      throw new TsonNameHygieneRefusedError(e.message, {
+        mechanism: e.mechanism,
+        names: e.names,
+        uts39Version: e.uts39Version,
+        pointer: `/${declaration}`,
+        cause: e,
+      });
+    }
     if (e instanceof TsonRefusedError) throw e;
     if (e instanceof TsonReadError) {
       throw new TsonSchemaValidationError(

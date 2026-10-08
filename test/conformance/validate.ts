@@ -55,16 +55,16 @@ const RESOLVER_CODES: ReadonlySet<DiagnosticCode> = new Set([
  * codes, which §8.1 says MUST NOT be reported in any of the four categories.
  */
 function categoryOf(vector: Vector<Class2Layer>, diagnostic: Diagnostic): Category {
-  if (!isVerdict(diagnostic.code)) {
-    throw new Error(
-      `${vector.name}: RUNNER.md rule 3c -- '${diagnostic.code}' is not a verdict on the data ` +
-        `(it says this could not be checked, not that it is invalid): ${diagnostic.message}`,
-    );
-  }
   if (isNameRefusal(diagnostic.code)) {
     throw new Error(
       `${vector.name}: §8.2 name hygiene ('${diagnostic.code}') is a policy refusal, which §8.1 ` +
         `says MUST NOT be reported in any of the four categories: ${diagnostic.message}`,
+    );
+  }
+  if (!isVerdict(diagnostic.code)) {
+    throw new Error(
+      `${vector.name}: RUNNER.md rule 3c -- '${diagnostic.code}' is not a verdict on the data ` +
+        `(it says this could not be checked, not that it is invalid): ${diagnostic.message}`,
     );
   }
   if (VALIDATION_CODES.has(diagnostic.code)) return 'validation';
@@ -122,9 +122,7 @@ export function checkValidateVector(
               : result.diagnostics.map((d) => d.code).join(', ')),
         );
       }
-      const categorised = result.diagnostics.filter(
-        (d) => isVerdict(d.code) && !isNameRefusal(d.code),
-      );
+      const categorised = result.diagnostics.filter((d) => isVerdict(d.code));
       if (categorised.length > 0) {
         throw new Error(
           `${vector.name}: a refusal must not also be reported in one of §8.1's four categories; ` +

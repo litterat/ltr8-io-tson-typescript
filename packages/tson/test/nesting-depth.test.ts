@@ -163,7 +163,7 @@ describe('the limit is configurable (§9.1 asks for a bound, not for this number
     // The five [TSON-SCHEMA] §11.5 schema-side limits ride along at their own spec defaults --
     // not independently configurable yet (`core/limits.ts`'s own top note) -- so only
     // `maxNestingDepth` reflects what this instance was configured with.
-    expect(tson.limitsPolicy).toEqual({
+    expect(tson.processorPolicy.limits).toEqual({
       maxNestingDepth: 20,
       maxImportClosure: 64,
       maxSchemaEntries: 65_536,

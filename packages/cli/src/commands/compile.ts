@@ -18,7 +18,7 @@
  * question about a root, not about the schema as a whole.
  */
 import { readFile } from 'node:fs/promises';
-import type { LinkedSchema, Tson } from '@ltr8/tson';
+import { TsonNameHygieneRefusedError, type LinkedSchema, type Tson } from '@ltr8/tson';
 import { outcomeOfFiles, type Outcome } from '../outcome.js';
 import { isInvalidSchemaError } from '../problem.js';
 import {
@@ -46,6 +46,11 @@ async function compileOne(tson: Tson, file: string): Promise<CompileFileResult> 
   } catch (error) {
     if (isInvalidSchemaError(error)) {
       return { file, outcome: 'INVALID', message: error.message };
+    }
+    // §8.2's fifth outcome: this processor's policy declined the schema, which says nothing
+    // about whether it is valid -- not checked, and (like any rejection) exit 1.
+    if (error instanceof TsonNameHygieneRefusedError) {
+      return { file, outcome: 'NOT_CHECKED', message: error.message };
     }
     throw error;
   }

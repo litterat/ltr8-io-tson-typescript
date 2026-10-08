@@ -92,7 +92,7 @@ describe('§8.2 untagged: the kind selects', () => {
     expect(problem.message.includes('boolean') || problem.message.includes('string')).toBe(true);
   });
 
-  it('§7: null carries no class at all -- it is the absent sentinel, and a choice admits no absence', () => {
+  it('§7: null carries no class at all -- it is the void sentinel, and a choice admits no absence', () => {
     expect(refusal('scalar_or_list', 'null').code).toBe('FIELD_REQUIRED');
   });
 

@@ -114,7 +114,7 @@ export function arrayTreeReader(
             'FIELD_REQUIRED',
             `'${displayName}' element [${String(index)}] is absent, but elements are required`,
             'a value',
-            '(absent)',
+            '_',
           );
         }
         decoded = absentNode();

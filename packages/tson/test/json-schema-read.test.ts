@@ -23,7 +23,7 @@ import { isVerdict, type Diagnostic } from '../src/core/diagnostic.js';
 import { compileJsonSchema } from '../src/json/schema/compile.js';
 import { validateJson, type ValidateJsonResult } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
-import { DEFAULT_NAME_POLICY } from '../src/unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY } from '../src/unicode/policy.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { TypeDefinition } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
@@ -118,7 +118,7 @@ function read(typeName: string, json: string): ValidateJsonResult {
   return validateJson(json, {
     schema: COMPILED,
     root: typeName,
-    identifierPolicy: DEFAULT_NAME_POLICY,
+    identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
   });
 }
 
@@ -783,7 +783,10 @@ describe('§8.2 name hygiene', () => {
   });
 
   it('an unrestricted policy refuses nothing, and the closure rule speaks instead', () => {
-    const unrestricted = { ...DEFAULT_NAME_POLICY, restrictionLevel: 'UNRESTRICTED' as const };
+    const unrestricted = {
+      ...DEFAULT_IDENTIFIER_POLICY,
+      restrictionLevel: 'UNRESTRICTED' as const,
+    };
     const result = validateJson(`{"password": "s3cret", "p${CYRILLIC_A}ssword": "evil"}`, {
       schema: COMPILED,
       root: 'account',
@@ -860,7 +863,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const result = validateJson('null', {
       schema: compiled,
       root: 'either',
-      identifierPolicy: DEFAULT_NAME_POLICY,
+      identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
     expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
@@ -881,7 +884,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const result = validateJson('{}', {
       schema: compiled,
       root: 'op',
-      identifierPolicy: DEFAULT_NAME_POLICY,
+      identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
     expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
@@ -909,7 +912,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const result = validateJson('{}', {
       schema: compiled,
       root: 'box',
-      identifierPolicy: DEFAULT_NAME_POLICY,
+      identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
     expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
@@ -933,7 +936,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const result = validateJson('[]', {
       schema: compiled,
       root: 'box',
-      identifierPolicy: DEFAULT_NAME_POLICY,
+      identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
     expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
@@ -966,7 +969,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
       validateJson('"RED"', {
         schema: compiled,
         root: 'colour',
-        identifierPolicy: DEFAULT_NAME_POLICY,
+        identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
       }).diagnostics,
     ).toEqual([]);
   });

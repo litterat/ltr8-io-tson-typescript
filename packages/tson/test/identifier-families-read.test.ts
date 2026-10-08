@@ -14,7 +14,7 @@ import { isNameRefusal, isVerdict, type Diagnostic } from '../src/core/diagnosti
 import { TsonNameHygieneRefusedError } from '../src/core/errors.js';
 import { compileJsonSchema } from '../src/json/schema/compile.js';
 import { validateJson } from '../src/json/facade.js';
-import { DEFAULT_NAME_POLICY, withSkeletonDistinctness } from '../src/unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY, withSkeletonDistinctness } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
@@ -52,7 +52,9 @@ const CYRILLIC_PASS = 'раѕѕ';
 
 function text(root: string, source: string, relaxed = false): readonly Diagnostic[] {
   const compiled = relaxed
-    ? compile(LINKED, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) })
+    ? compile(LINKED, {
+        identifierPolicy: withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false),
+      })
     : TEXT;
   return validate(compiled, root, new TextEncoder().encode(source)).diagnostics;
 }
@@ -62,8 +64,8 @@ function json(root: string, source: string, relaxed = false): readonly Diagnosti
     schema: JSON_SCHEMA,
     root,
     identifierPolicy: relaxed
-      ? withSkeletonDistinctness(DEFAULT_NAME_POLICY, false)
-      : DEFAULT_NAME_POLICY,
+      ? withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false)
+      : DEFAULT_IDENTIFIER_POLICY,
   }).diagnostics;
 }
 

@@ -337,6 +337,12 @@ export type NameHygieneMechanism =
  * the mechanisms depend on `confusables.txt`, `IdentifierStatus.txt`, and `Script` -- none of
  * which the Unicode Consortium freezes -- so two conforming processors can legitimately disagree,
  * and the version is the only thing that explains it (`unicode/uts39.ts`'s own `UTS39_VERSION`).
+ *
+ * A refusal while loading a schema is a verdict-free outcome too, and carries the §8.2 code its
+ * mechanism reports (`diagnosticCodeForMechanism(error.mechanism)`) with {@link schemaId} and a
+ * {@link pointer} to the declaration holding the refused key, so every site that collects a schema
+ * failure reports it under `CONFUSABLE_NAMES`, `RESTRICTED_CHARACTER` or `RESTRICTED_SCRIPT` and
+ * never as a generic schema error.
  */
 export class TsonNameHygieneRefusedError extends TsonRefusedError {
   override readonly name: string = 'TsonNameHygieneRefusedError';
@@ -350,6 +356,17 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
   readonly names: readonly string[];
   /** The UCD release this refusal was computed against. */
   readonly uts39Version: string;
+  /**
+   * When the refused name sits in a schema: that schema's canonical `!!id`. Absent for a refusal
+   * in a data document.
+   */
+  readonly schemaId?: string;
+  /**
+   * When the refused name sits in a schema: an RFC 6901 pointer to the declaration that holds it
+   * (`/<entry>`), the same pointer a collected diagnostic carries as `schemaPointer`. Absent for a
+   * refusal in a data document.
+   */
+  readonly pointer?: string;
 
   constructor(
     message: string,
@@ -357,6 +374,8 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
       readonly mechanism: NameHygieneMechanism;
       readonly names: readonly string[];
       readonly uts39Version: string;
+      readonly schemaId?: string;
+      readonly pointer?: string;
       readonly cause?: unknown;
     },
   ) {
@@ -364,6 +383,8 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
     this.mechanism = details.mechanism;
     this.names = details.names;
     this.uts39Version = details.uts39Version;
+    if (details.schemaId !== undefined) this.schemaId = details.schemaId;
+    if (details.pointer !== undefined) this.pointer = details.pointer;
   }
 }
 

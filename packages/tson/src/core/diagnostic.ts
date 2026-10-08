@@ -1,5 +1,10 @@
 import type { NameHygieneMechanism } from '../unicode/policy.js';
-import { TsonAtomParseError, type SchemaFetchReason, type TsonAtomTypeError } from './errors.js';
+import {
+  TsonAtomParseError,
+  type SchemaFetchReason,
+  type TsonAtomTypeError,
+  type TsonNameHygieneRefusedError,
+} from './errors.js';
 // Referenced only from a TSDoc {@link} tag above, which the unused-vars rule cannot see -- see
 // `atom/contract.ts`'s own copy of this note.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -157,8 +162,9 @@ export type DiagnosticCode =
   // Three codes, one per mechanism, rather than one code beside a `mechanism` field, for the
   // reason the five `SCHEMA_*` codes above give: the mechanism is what a consumer routes on.
   //
-  // A refusal *is* a verdict ({@link isVerdict}) -- the processor looked and declined, and the
-  // sender holds the fix -- though not a validity one.
+  // A refusal is not a verdict ({@link isVerdict}): it asserts nothing about whether the document
+  // is valid, only that this processor's policy declined it -- another deployment's policy may
+  // accept the same bytes. It is §8.1's fifth outcome, reported apart from the four categories.
 
   /** Two names in one scope reduce to one UTS #39 skeleton (mechanism 1). */
   | 'CONFUSABLE_NAMES'
@@ -215,9 +221,23 @@ export function diagnosticCodeForMechanism(mechanism: NameHygieneMechanism): Dia
 }
 
 /**
+ * The diagnostic a thrown {@link TsonNameHygieneRefusedError} reports: its §8.2 code, its message,
+ * and -- for a refusal while loading a schema -- the schema's id and the pointer to the refused
+ * key. One function, so a fail-fast throw and a collecting report cannot disagree on either.
+ */
+export function diagnosticOfNameRefusal(error: TsonNameHygieneRefusedError): Diagnostic {
+  return {
+    code: diagnosticCodeForMechanism(error.mechanism),
+    message: error.message,
+    ...(error.schemaId === undefined ? {} : { schemaId: error.schemaId }),
+    ...(error.pointer === undefined ? {} : { schemaPointer: error.pointer }),
+  };
+}
+
+/**
  * Whether `code` is one of §8.2's three name-hygiene refusals. A refusal is never reported under
- * one of §8.1's four categories, so a consumer asking "was this reported as an error of the
- * document" asks `isVerdict(code) && !isNameRefusal(code)`.
+ * one of §8.1's four categories and is not a verdict ({@link isVerdict}), so "was this reported
+ * as an error of the document" is simply `isVerdict(code)`.
  */
 export function isNameRefusal(code: DiagnosticCode): boolean {
   return (
@@ -227,6 +247,9 @@ export function isNameRefusal(code: DiagnosticCode): boolean {
 
 /** The codes that assert nothing about the document -- see {@link isVerdict}. */
 const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
+  'CONFUSABLE_NAMES',
+  'RESTRICTED_CHARACTER',
+  'RESTRICTED_SCRIPT',
   'NOT_IMPLEMENTED',
   'BIND_MISMATCH',
   'SCHEMA_NOT_PERMITTED',
@@ -240,27 +263,18 @@ const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
  * Whether `code` reports something an evaluation actually looked at and found, as opposed to a
  * check this library could not run at all.
  *
- * **This line is narrower than §8.1's own "not judged" line, deliberately.** §8.1 states
- * "not judged is a fifth outcome, not a verdict", with two members: a §8.2/§9.1 **refusal** (the
- * processor looked, under its own policy or limits, and declined) and an **unavailable schema**
- * (the processor had nothing to look with at all, §10.1). Both are outside §8.1's four categories
- * either way -- a refusal is never one of `FIELD_REQUIRED`/`TYPE_MISMATCH`/etc., and a fetch
- * failure is never one either, which every consumer of this module keeps as its own separate
- * check ({@link isNameRefusal}, for one). What this function answers
- * is a different, narrower question a consumer still needs split out from that pair: whether a
- * *rule ran against the document at all*. A refusal is squarely on the "ran" side of that split --
- * the processor read the name or counted the nesting and declined on its own terms, which is why
- * `core/limits.ts` *throws* `TsonLimitRefusedError` rather than silently continuing, and why the
- * CLI's own `exit.ts` gives a refusal the same exit code as an ordinary rejection (its own note
- * has the reasoning). An unavailable schema is on the "did not run" side, with `NOT_IMPLEMENTED`
- * and `BIND_MISMATCH` beside it for two further reasons a rule never reached the document at all:
- * nothing here asserts anything about the document -- which is exactly what a caller routing on
- * the answer needs, and why a plain `valid: boolean` cannot carry it (it conflates *was this
- * checked* with *did it pass*).
+ * **A `false` answer means the document was not judged**, §8.1's "fifth outcome, not a verdict".
+ * Two groups answer `false`. A §8.2 name refusal ({@link isNameRefusal}) says this processor's
+ * policy declined the document, which asserts nothing about its validity: another deployment's
+ * policy may accept the same bytes. The rest say no rule ran: `NOT_IMPLEMENTED` that this library
+ * could not check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five
+ * `SCHEMA_*` codes that no schema was obtained to check against (§10.1). A limit refusal
+ * (`LIMIT_REFUSED`) is still a verdict: the processor counted the nesting and declined on a
+ * property of the document itself.
  *
- * The seven `NON_VERDICT` codes are not-run for three different reasons: `NOT_IMPLEMENTED` that
- * this library could not check it, `BIND_MISMATCH` that the reading application is wired wrong,
- * and the five `SCHEMA_*` codes that no schema was obtained to check against.
+ * A consumer that asks whether a document was *rejected* rather than *judged* asks
+ * {@link isNameRefusal} beside this: the CLI reports a refused file as `NOT_CHECKED` and still
+ * exits 1, since the sender holds the fix.
  *
  * Stated here so no consumer keeps its own copy of the set. Two already would -- the CLI's exit
  * code and its report outcome -- and a private copy each is how two consumers come to disagree

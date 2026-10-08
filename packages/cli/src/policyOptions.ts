@@ -12,7 +12,7 @@
  * person running the CLI is told which configuration refused their document and has no way to
  * change it, being the deployment the report is describing.
  *
- * **`@ltr8/tson`'s own `NamePolicy`/`TokenPolicy` types are still not part of any published
+ * **`@ltr8/tson`'s own `IdentifierPolicy`/`ScriptPolicy` types are still not part of any published
  * subpath** (`unicode/index.ts`'s own top note). This module never imports them by name -- it
  * derives their shape from the `Config.identifierPolicy`/`Config.tokenPolicy` fields those types
  * back, so whatever `Config` accepts is exactly what is built here, with no second, drifting copy
@@ -20,7 +20,7 @@
  * `RestrictionLevel`'s own doc), not library internals, so restating them here is restating the
  * spec, not the library.
  *
- * **Script-combination admission.** `@ltr8/tson`'s `NamePolicy`/`TokenPolicy`
+ * **Script-combination admission.** `@ltr8/tson`'s `IdentifierPolicy`/`ScriptPolicy`
  * (`unicode/policy.ts`) now carry a `permittedScripts` field -- the port of the reference
  * implementation's `TsonUnicodePolicy.permitting` -- so `--identifier-scripts`/`--token-scripts`
  * are honoured rather than refused. `scriptNamed`/`scriptName` (`@ltr8/tson`'s own top-level
@@ -33,8 +33,8 @@
 import { createTson, scriptNamed, type Config, type ScriptId, type Tson } from '@ltr8/tson';
 import { UsageError } from './exit.js';
 
-export type NamePolicy = NonNullable<Config['identifierPolicy']>;
-export type TokenPolicy = NonNullable<Config['tokenPolicy']>;
+export type IdentifierPolicy = NonNullable<Config['identifierPolicy']>;
+export type ScriptPolicy = NonNullable<Config['tokenPolicy']>;
 
 /**
  * UTS #39 §5.2's six restriction levels, loosest last -- see `@ltr8/tson`'s own `RestrictionLevel`
@@ -42,7 +42,7 @@ export type TokenPolicy = NonNullable<Config['tokenPolicy']>;
  * alone cannot be iterated) because that module is not part of this package's public surface; see
  * this file's own top note.
  */
-export type RestrictionLevel = NamePolicy['restrictionLevel'];
+export type RestrictionLevel = IdentifierPolicy['restrictionLevel'];
 
 const LEVELS = [
   'ASCII_ONLY',
@@ -178,8 +178,8 @@ function assembleLevel(
 
 /** [TSON-DATA] §8.2's policy for one run, always concrete -- what a run configures by giving no flags at all is `identifierPolicy`/`tokenPolicy` at their own §8.2 defaults, not an absent value. */
 export interface PolicyOptions {
-  readonly identifierPolicy: NamePolicy;
-  readonly tokenPolicy: TokenPolicy;
+  readonly identifierPolicy: IdentifierPolicy;
+  readonly tokenPolicy: ScriptPolicy;
 }
 
 export interface ConsumedPolicyOptions {
@@ -264,13 +264,11 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
   return {
     policy: {
       identifierPolicy: {
-        // §8.2's own defaults for the two mechanisms this CLI exposes no flag for (matching the
-        // reference implementation, whose own PolicyOptions/TsonUnicodePolicy carry no flag for
-        // either): both stay enforced regardless of what the level/unit flags above say.
+        // §8.2's own default for the mechanism this CLI exposes no flag for: skeleton distinctness
+        // stays enforced regardless of what the level/unit flags above say.
         skeletonDistinctness: true,
-        identifierStatus: true,
         restrictionLevel: resolvedIdentifierLevel,
-        restrictionUnit: identifierPerSegment ? 'PER_SEGMENT' : 'WHOLE_NAME',
+        perSegment: identifierPerSegment,
         permittedScripts: identifierScripts,
       },
       tokenPolicy: { restrictionLevel: resolvedTokenLevel, permittedScripts: tokenScripts },
@@ -305,7 +303,7 @@ export function processorPolicyOf(options: PolicyOptions): ProcessorPolicy {
  * no document in hand" -- {@link limitsPolicyOf} is exactly that reachability, this CLI's
  * counterpart to {@link processorPolicyOf}.
  */
-export type LimitsPolicy = Tson['limitsPolicy'];
+export type LimitsPolicy = Tson['processorPolicy']['limits'];
 
 /**
  * The {@link LimitsPolicy} this CLI applies, read back through a real, ephemeral `createTson`
@@ -315,5 +313,5 @@ export type LimitsPolicy = Tson['limitsPolicy'];
  * does not thread it through), so every run is judged under the library's own defaults.
  */
 export function limitsPolicyOf(): LimitsPolicy {
-  return createTson({}).limitsPolicy;
+  return createTson({}).processorPolicy.limits;
 }

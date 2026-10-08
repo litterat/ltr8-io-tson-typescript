@@ -203,7 +203,7 @@ export function* parseCoreValue(state: CursorState): Task<CoreValue> {
     default:
       throw parseError(
         t,
-        `expected a value (record, map, array, empty braces, the absent sentinel '_', or a token), ` +
+        `expected a value (record, map, array, empty braces, the void sentinel '_', or a token), ` +
           `found ${describe(t)}`,
       );
   }
@@ -267,7 +267,7 @@ function* parseBraceValue(state: CursorState): Task<RecordValue | MapValue | Emp
 
   throw parseError(
     t1,
-    `expected a value (record, map, array, empty braces, the absent sentinel '_', or a token), ` +
+    `expected a value (record, map, array, empty braces, the void sentinel '_', or a token), ` +
       `found ${describe(t1)}`,
   );
 }

@@ -64,9 +64,9 @@ import {
   limitsPolicyOf,
   schemaEntriesLimitRefusal,
 } from './core/limits.js';
-import type { LimitsPolicy, NestingLimitOptions } from './core/limits.js';
+import type { NestingLimitOptions } from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
-import type { NamePolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
+import type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
 import { declaredSha256, isAddressable, sha256HexSync, UNADDRESSABLE } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
@@ -215,7 +215,7 @@ export interface Config extends NestingLimitOptions {
   /**
    * [TSON-DATA] §8.2's name-hygiene policy, applied by {@link Tson.readTree}/{@link Tson.validate}
    * over each schemaless record's own field names (§8.2's one Part 1 scope). Omitted means
-   * `reader/schemaless/tree.ts`'s own default (`DEFAULT_NAME_POLICY` -- mechanisms 1 and 2
+   * `reader/schemaless/tree.ts`'s own default (`DEFAULT_IDENTIFIER_POLICY` -- mechanisms 1 and 2
    * enforced, mechanism 3 at Highly Restrictive over the whole name), matching §8.2's own
    * defaults exactly, the same way an omitted {@link NestingLimitOptions.maxNestingDepth} keeps
    * that module's own default.
@@ -237,7 +237,7 @@ export interface Config extends NestingLimitOptions {
    * The meta-kernel's own bootstrap is deliberately outside its reach: that link is pinned to the
    * default, so relaxing a policy here can never change whether the kernel itself loads.
    */
-  readonly identifierPolicy?: NamePolicy;
+  readonly identifierPolicy?: IdentifierPolicy;
 
   /**
    * [TSON-DATA] §8.2's policy over *values* -- the token profile a read applies to every
@@ -247,7 +247,24 @@ export interface Config extends NestingLimitOptions {
    * rule ever applies here: a value has no identifier profile to violate, and no scope to be
    * distinct within, so the other two mechanisms have nothing to say about one.
    */
-  readonly tokenPolicy?: TokenPolicy;
+  readonly tokenPolicy?: ScriptPolicy;
+}
+
+/**
+ * `config` with its identifier policy (§8.2: names) replaced. Relaxation is a code decision made
+ * at the call site that holds the `Config` -- never read from the environment, and never selected
+ * by a document or a schema.
+ */
+export function withIdentifierPolicy<C extends Config>(
+  config: C,
+  identifierPolicy: IdentifierPolicy,
+): C {
+  return { ...config, identifierPolicy };
+}
+
+/** `config` with its token policy (§8.2 "Values") replaced; see {@link withIdentifierPolicy}. */
+export function withTokenPolicy<C extends Config>(config: C, tokenPolicy: ScriptPolicy): C {
+  return { ...config, tokenPolicy };
 }
 
 /**
@@ -265,8 +282,8 @@ function limitOf(config: Config): NestingLimitOptions {
 
 /** {@link Config.identifierPolicy} and {@link Config.tokenPolicy}, as the fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, two fields over. */
 function policyOptionsOf(config: Config): {
-  readonly identifierPolicy?: NamePolicy;
-  readonly tokenPolicy?: TokenPolicy;
+  readonly identifierPolicy?: IdentifierPolicy;
+  readonly tokenPolicy?: ScriptPolicy;
 } {
   return {
     ...(config.identifierPolicy === undefined ? {} : { identifierPolicy: config.identifierPolicy }),
@@ -384,7 +401,10 @@ function importedFrom(schema: LinkedSchema): ImportedSchema {
  * by one needs the same compiled readers and compiling is not free. Keyed by identity in a
  * `WeakMap`: a linked schema nobody holds any more takes its compiled form with it.
  */
-const compiledMetas = new WeakMap<LinkedSchema, Map<NamePolicy | undefined, CompiledSchema>>();
+const compiledMetas = new WeakMap<
+  LinkedSchema,
+  Map<IdentifierPolicy | undefined, CompiledSchema>
+>();
 
 /**
  * The compiled readers of `meta` under `identifierPolicy` (§8.2): the policy decides what a value
@@ -392,9 +412,10 @@ const compiledMetas = new WeakMap<LinkedSchema, Map<NamePolicy | undefined, Comp
  */
 function compiledMetaFor(
   meta: LinkedSchema,
-  identifierPolicy: NamePolicy | undefined,
+  identifierPolicy: IdentifierPolicy | undefined,
 ): CompiledSchema {
-  const byPolicy = compiledMetas.get(meta) ?? new Map<NamePolicy | undefined, CompiledSchema>();
+  const byPolicy =
+    compiledMetas.get(meta) ?? new Map<IdentifierPolicy | undefined, CompiledSchema>();
   compiledMetas.set(meta, byPolicy);
   const already = byPolicy.get(identifierPolicy);
   if (already !== undefined) return already;
@@ -438,7 +459,7 @@ function resolveAgainstRegistry(
   contentHashes: ReadonlyMap<string, string>,
   bytes: Uint8Array,
   limit: NestingLimitOptions,
-  identifierPolicy: NamePolicy | undefined,
+  identifierPolicy: IdentifierPolicy | undefined,
 ): LinkedSchema {
   const document = runSync(parseSchemaDocument(fromBytes(bytes), limit));
   const id = document.id;
@@ -560,8 +581,9 @@ export interface Tson {
   preload(references: readonly string[]): Promise<void>;
 
   /**
-   * The [TSON-DATA] §8.2 policy this instance judges under, and the UCD release it was computed
-   * against -- stated once for the instance rather than repeated on every refusal.
+   * What this instance admits and spends: the [TSON-DATA] §8.2 identifier and token policies, §9.1's
+   * limits ([TSON-SCHEMA] §11.5 for the work resolving a schema adds), and the UCD release the rules
+   * were computed against -- stated once for the instance rather than repeated on every refusal.
    *
    * Three reasons it belongs here and not on a diagnostic. **Cardinality**: the version is
    * constant for the life of the instance, so a copy inside every refusal is waste. **Time**: a
@@ -570,17 +592,6 @@ export interface Tson {
    * only the second is actionable.
    */
   readonly processorPolicy: ProcessorPolicy;
-
-  /**
-   * [TSON-DATA] §9.1's resource-limits policy this instance enforces ([TSON-SCHEMA] §11.5 for the
-   * work resolving a schema adds on top of a document's own bytes) -- reported beside {@link
-   * processorPolicy} on the same terms §9.1 states for it: with any report that carries a
-   * refusal, and reachable independently of one, so a sender can learn what fits before writing.
-   *
-   * Currently the nesting-depth bound alone (`core/limits.ts`'s own `LimitsPolicy`); `STATUS.md`'s
-   * known gaps names the other sixteen §9.1/§11.5 limits this instance does not enforce.
-   */
-  readonly limitsPolicy: LimitsPolicy;
 
   parse(source: Uint8Array, options?: NestingLimitOptions): ParsedDocument;
   parse(source: AsyncByteSource, options?: NestingLimitOptions): Promise<ParsedDocument>;
@@ -712,8 +723,11 @@ export function createTson(config: Config = {}): Tson {
     compile: compileMethod,
     fetch: fetchReference,
     preload,
-    processorPolicy: processorPolicy(config.identifierPolicy, config.tokenPolicy),
-    limitsPolicy: limitsPolicyOf(limit),
+    processorPolicy: processorPolicy(
+      config.identifierPolicy,
+      config.tokenPolicy,
+      limitsPolicyOf(limit),
+    ),
     // Bound to this instance's limit (and, for a schemaless tree read, its two Unicode policies) rather
     // than passed through bare, so `tson.parse(bytes)`/`tson.readTree(bytes)`/`tson.validate(bytes)`
     // obey the policy the instance was configured with. A caller's own per-call options still

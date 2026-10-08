@@ -63,7 +63,7 @@ import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
 import { resolvesToScoped, terminalDefinition } from '../link/referenceChain.js';
-import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
 
@@ -160,10 +160,10 @@ export interface CompileDeps {
    * [TSON-DATA] §8.2's name-hygiene policy over a value of an identifier family: a name wherever
    * it stands, so the per-name mechanisms reach it under the family's own profile, and the keys of
    * a map keyed by one and the elements of a set of them are look-alike scopes (§11.4). Defaults
-   * to {@link DEFAULT_NAME_POLICY}. Stated once per compile, as a relaxation is a code decision
+   * to {@link DEFAULT_IDENTIFIER_POLICY}. Stated once per compile, as a relaxation is a code decision
    * and never ambient.
    */
-  readonly identifierPolicy?: NamePolicy;
+  readonly identifierPolicy?: IdentifierPolicy;
 }
 
 /**
@@ -181,7 +181,7 @@ function buildReader(
   resolve: (name: string) => TypeReader<Value>,
   compileForeign: (uri: string) => CompiledSchema | undefined,
   foreignSchemasConfigured: boolean,
-  policy: NamePolicy,
+  policy: IdentifierPolicy,
 ): TypeReader<Value> {
   const body = definition.body;
   // Whether `typeName` is an identifier family (§8.3 followed to its constructor): a name wherever
@@ -505,7 +505,7 @@ function buildScopedReader(
  */
 export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledSchema {
   const cache = new Map<string, TypeReader<Value>>();
-  const policy = deps.identifierPolicy ?? DEFAULT_NAME_POLICY;
+  const policy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
   const foreignCompiled = new Map<string, CompiledSchema>();
 
   function compileForeign(uri: string): CompiledSchema | undefined {

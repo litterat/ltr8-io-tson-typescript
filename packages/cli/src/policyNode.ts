@@ -5,12 +5,12 @@
  * (`identifier_policy`, `token_policy`), each a `level`/`per_segment`/`permitting` triple, plus
  * `unicode_data_version`.
  *
- * **`permitting` now carries every admitted combination**, `@ltr8/tson`'s `NamePolicy`/
- * `TokenPolicy` (`unicode/policy.ts`) having gained `permittedScripts` -- each combination
+ * **`permitting` now carries every admitted combination**, `@ltr8/tson`'s `IdentifierPolicy`/
+ * `ScriptPolicy` (`unicode/policy.ts`) having gained `permittedScripts` -- each combination
  * resolved back from its `ScriptId`s to script names via `@ltr8/tson`'s `scriptName`, in the
  * order `--identifier-scripts`/`--token-scripts` added them.
  *
- * **`token_policy.per_segment` is always `false`.** `@ltr8/tson`'s `TokenPolicy` has no
+ * **`token_policy.per_segment` is always `false`.** `@ltr8/tson`'s `ScriptPolicy` has no
  * per-segment axis at all (`unicode/policy.ts`'s own doc: "`_`/`-` are ordinary characters in a
  * value, not word separators"), unlike the reference implementation's `TsonUnicodePolicy`, which
  * both surfaces share. Stating it here keeps the two surfaces' wire shape symmetric rather than
@@ -107,7 +107,7 @@ export function policyJson(policy: ProcessorPolicy): PolicyJson {
   return {
     identifier_policy: unicodePolicyJson(
       policy.identifierPolicy.restrictionLevel,
-      policy.identifierPolicy.restrictionUnit === 'PER_SEGMENT',
+      policy.identifierPolicy.perSegment,
       permittingNames(policy.identifierPolicy.permittedScripts),
     ),
     token_policy: unicodePolicyJson(
@@ -146,7 +146,7 @@ export function policyNode(policy: ProcessorPolicy): Value {
         'identifier_policy',
         unicodePolicyNode(
           policy.identifierPolicy.restrictionLevel,
-          policy.identifierPolicy.restrictionUnit === 'PER_SEGMENT',
+          policy.identifierPolicy.perSegment,
           permittingNames(policy.identifierPolicy.permittedScripts),
         ),
       ],
@@ -184,7 +184,7 @@ export function policyText(policy: ProcessorPolicy): string {
   return [
     `identifier policy: ${unicodePolicySummary(
       policy.identifierPolicy.restrictionLevel,
-      policy.identifierPolicy.restrictionUnit === 'PER_SEGMENT',
+      policy.identifierPolicy.perSegment,
       permittingNames(policy.identifierPolicy.permittedScripts),
     )}`,
     `token policy:      ${unicodePolicySummary(
@@ -200,7 +200,7 @@ export function policyText(policy: ProcessorPolicy): string {
 export function policySummary(policy: ProcessorPolicy): string {
   const identifier = unicodePolicySummary(
     policy.identifierPolicy.restrictionLevel,
-    policy.identifierPolicy.restrictionUnit === 'PER_SEGMENT',
+    policy.identifierPolicy.perSegment,
     permittingNames(policy.identifierPolicy.permittedScripts),
   );
   const token = unicodePolicySummary(
@@ -215,7 +215,7 @@ export function policySummary(policy: ProcessorPolicy): string {
 export function isDefaultPolicy(policy: ProcessorPolicy): boolean {
   return (
     policy.identifierPolicy.restrictionLevel === 'HIGHLY_RESTRICTIVE' &&
-    policy.identifierPolicy.restrictionUnit === 'WHOLE_NAME' &&
+    !policy.identifierPolicy.perSegment &&
     policy.identifierPolicy.permittedScripts.length === 0 &&
     policy.tokenPolicy.restrictionLevel === 'UNRESTRICTED' &&
     policy.tokenPolicy.permittedScripts.length === 0

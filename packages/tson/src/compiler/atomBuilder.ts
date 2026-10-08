@@ -52,7 +52,7 @@ import { createMembershipCheck, createPatternCheck, createTextParser } from '../
 import { createIdentifierParser } from '../atom/text/identifier.js';
 import { createEnumParser } from '../atom/enum.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
-import { DEFAULT_NAME_POLICY, judgeName, type NamePolicy } from '../unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY, judgeName, type IdentifierPolicy } from '../unicode/policy.js';
 import { reportNameViolations } from '../reader/tree/refusal.js';
 import { createUuidParser } from '../atom/network/uuid.js';
 import { createUriParser } from '../atom/network/uri.js';
@@ -196,8 +196,8 @@ function withTextFacets(
 export interface AtomReaderOptions {
   /** The `normalization` of an enum's label type (§7.4), recorded by linking (`LinkedSchema.enumForms`); `NONE` when absent. */
   readonly enumForm?: Normalization;
-  /** [TSON-DATA] §8.2's name-hygiene policy over the values of identifier families; {@link DEFAULT_NAME_POLICY} when absent. */
-  readonly identifierPolicy?: NamePolicy;
+  /** [TSON-DATA] §8.2's name-hygiene policy over the values of identifier families; {@link DEFAULT_IDENTIFIER_POLICY} when absent. */
+  readonly identifierPolicy?: IdentifierPolicy;
 }
 
 /**
@@ -224,7 +224,7 @@ export function buildAtomReader(
       return wrap(createTextParser(name, atom), name);
     case 'identifier_type': {
       const profile = identifierProfileOf(atom);
-      const policy = options.identifierPolicy ?? DEFAULT_NAME_POLICY;
+      const policy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
       return atomTreeReader(
         atomTypeReader(createIdentifierParser(name, atom), name, (ctx, value) => {
           const violations = judgeName(value, profile, policy);

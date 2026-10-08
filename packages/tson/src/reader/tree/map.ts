@@ -113,8 +113,8 @@ export function mapTreeReader(
         yield* ctx.next(); // the absent key itself
         ctx.report(
           'TYPE_MISMATCH',
-          `'${displayName}': the absent sentinel '_' must not appear as a map key (§2.9)`,
-          "a real map key, never the absent sentinel '_'",
+          `'${displayName}': the void sentinel '_' must not appear as a map key (§2.9)`,
+          "a real map key, never the void sentinel '_'",
           '_',
         );
         yield* ctx.next(); // map-arrow
@@ -159,7 +159,7 @@ export function mapTreeReader(
             'FIELD_REQUIRED',
             `'${displayName}' entry '${keySegment}' is absent, but values are required`,
             'a value',
-            '(absent)',
+            '_',
           );
         }
         value = absentNode();
