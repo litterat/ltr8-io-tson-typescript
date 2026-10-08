@@ -22,6 +22,7 @@ import {
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
+import { declareOrder } from '../../value/orderedness.js';
 import { reportConfusablePair } from './refusal.js';
 import { abandonedValue, type TreeTypeResolver } from './support.js';
 import { createConfusableScope } from '../../unicode/skeleton.js';
@@ -191,7 +192,7 @@ export function mapTreeReader(
       if (mapCtx.reported() > mark) {
         return abandonedValue();
       }
-      return mapNode(entries, name, annotations);
+      return declareOrder(mapNode(entries, name, annotations), body.ordered);
     },
   };
 }

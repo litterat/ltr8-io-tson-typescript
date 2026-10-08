@@ -81,7 +81,7 @@ import {
   identifierProfileOf,
   profileIncoherence,
 } from '../unicode/identifier-profile.js';
-import { applyNormalization } from '../unicode/normalization.js';
+import { applyNormalization, asciiLowercase } from '../unicode/normalization.js';
 import { toNfc } from '../unicode/nfc.js';
 import { parseRegex } from '../regex/index.js';
 import {
@@ -552,7 +552,7 @@ function checkFixed<T>(
 ): void {
   if (!equals(source, refined)) {
     out.push(
-      `changes '${facet}' from ${render(source)} to ${render(refined)} -- a ${facet} is fixed where ` +
+      `changes '${facet}' from ${render(source)} to ${render(refined)} -- '${facet}' is fixed where ` +
         'the type is constructed, and a refinement only restates it',
     );
   }
@@ -1248,8 +1248,8 @@ function uriNarrows(source: UriType | IriType, refined: UriType | IriType): stri
   checkSubset(
     out,
     'schemes',
-    (source.schemes ?? []).map((scheme) => scheme.toLowerCase()),
-    (refined.schemes ?? []).map((scheme) => scheme.toLowerCase()),
+    (source.schemes ?? []).map(asciiLowercase),
+    (refined.schemes ?? []).map(asciiLowercase),
   );
   checkOnlyWithdraws(out, 'allow_relative', source.allowRelative, refined.allowRelative);
   checkOnlyWithdraws(out, 'allow_fragment', source.allowFragment, refined.allowFragment);

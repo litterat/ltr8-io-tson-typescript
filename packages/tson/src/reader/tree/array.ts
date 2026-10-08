@@ -24,6 +24,7 @@ import {
   skipCoreValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
+import { declareOrder } from '../../value/orderedness.js';
 import { reportConfusablePair } from './refusal.js';
 import { abandonedValue, renderValue, type TreeTypeResolver } from './support.js';
 import { createConfusableScope } from '../../unicode/skeleton.js';
@@ -166,7 +167,7 @@ export function arrayTreeReader(
       if (arrayCtx.reported() > mark) {
         return abandonedValue();
       }
-      return arrayNode(elements, name, annotations);
+      return declareOrder(arrayNode(elements, name, annotations), body.ordered);
     },
   };
 }

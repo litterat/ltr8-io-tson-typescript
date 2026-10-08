@@ -21,6 +21,7 @@
  */
 import { decimalIdentityKey, identityKey } from '../../value/equality.js';
 import { toNfc } from '../../unicode/nfc.js';
+import { declaredOrder } from '../../value/orderedness.js';
 import { toBigDecimal, type JsonValue } from '../tree.js';
 
 /** A value carrying its own identity beside it — a tree-mode atom reader's own node (`json/schema/atoms.ts`'s `treeAtomKeyedReader`), whose spelling and value space are two different things. */
@@ -58,14 +59,21 @@ export function identityOfNode(node: JsonValue): string {
       return `b:${String(node.value)}`;
     case 'null':
       return 'null';
-    case 'array':
-      return `[${node.elements.map(identityOfNode).join(',')}]`;
+    case 'array': {
+      // [TSON-SCHEMA] §7.5: an array (or pairs-form map) whose type says `ordered: false` is its
+      // members, not their sequence, so the reduction carries no order either.
+      const elements = node.elements.map(identityOfNode);
+      return `[${(declaredOrder(node) === false ? elements.sort() : elements).join(',')}]`;
+    }
     case 'object': {
-      // §6.1.6: member order carries no meaning, so two objects differing only in order are one
-      // key -- sorted by the NFC-reduced name so the reduction itself carries no order either.
-      const entries = [...node.members.entries()]
-        .map(([name, value]) => `${toNfc(name)}:${identityOfNode(value)}`)
-        .sort();
+      // §6.1.6: a record's member order carries no meaning, so two objects differing only in
+      // order are one key -- sorted by the NFC-reduced name so the reduction itself carries no
+      // order either. An object-form map whose type says `ordered: true` (§7.5) is the exception:
+      // its entry sequence is part of the value.
+      const entries = [...node.members.entries()].map(
+        ([name, value]) => `${toNfc(name)}:${identityOfNode(value)}`,
+      );
+      if (declaredOrder(node) !== true) entries.sort();
       return `{${entries.join(',')}}`;
     }
   }

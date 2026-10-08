@@ -59,6 +59,7 @@ import { tryParseNumber } from '../base/numberGrammar.js';
 import { toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType, type BaseToken } from '../base/baseTypeResolver.js';
 import { readFullDate, readFullTime } from '../atom/temporal/rfc3339.js';
+import { parseReference } from '../atom/network/uri.js';
 import {
   fieldGroupBinding,
   integerSizeBinding,
@@ -100,6 +101,24 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
 
     case 'text':
       return wire.text;
+
+    // `schema_identity => !iri_type { allow_fragment: false }` (meta.tn, [TSON-DATA] §2.2.1): an
+    // IRI-reference, relative included, never carrying a fragment -- the key type of
+    // `scoped.schemas`, so the rule is the type's and not a check beside it.
+    case 'schema_identity': {
+      let shape;
+      try {
+        shape = parseReference(wire.text, true, 'schema_identity');
+      } catch (error) {
+        throw readError(error instanceof Error ? error.message : String(error));
+      }
+      if (shape.fragment) {
+        throw readError(
+          `'${wire.text}' has a fragment, which a schema identity refuses -- it names a schema, not a place in one ([TSON-DATA] §2.2.1)`,
+        );
+      }
+      return wire.text;
+    }
 
     case 'boolean':
       if (wire.text === 'true') return true;

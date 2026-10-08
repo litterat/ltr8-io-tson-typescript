@@ -13,9 +13,9 @@ import { compatibilityDecompositionOf, nfkcCasefoldOf } from './normalization-ta
  *
  * The compatibility forms read checked-in data (`normalization-tables.ts`), not the host's:
  * `NFKC` is NFC of the text with every code point put through its compatibility decomposition, and
- * `NFKC_CASEFOLD` is NFC of the text with every code point put through its `NFKC_Casefold` value.
- * NFC itself is `String.prototype.normalize`, the one place the host is consulted, which is safe
- * because canonical decompositions never change once a character is encoded (`nfc.ts`).
+ * `NFKC_CASEFOLD` is NFC of the NFD text with every code point put through its `NFKC_Casefold`
+ * value. NFC and NFD are `String.prototype.normalize`, the one place the host is consulted, which
+ * is safe because canonical decompositions never change once a character is encoded (`nfc.ts`).
  * `ASCII_CASEFOLD` maps U+0041..005A to U+0061..007A and nothing else: no Unicode normalization
  * runs, so a full-width or Kelvin-sign spelling stays distinct. It is the comparison the
  * case-insensitive ASCII naming systems state -- RFC 9110 field names, RFC 3986 §3.1 schemes,
@@ -55,11 +55,24 @@ export function nfcFloor(text: string): string {
 }
 
 /**
- * `toNFKC_Casefold(text)` (The Unicode Standard §3.13): each code point mapped to its
- * `NFKC_Casefold` value, then the whole text put into NFC. Over ASCII it is lowercasing.
+ * `toNFKC_Casefold(NFD(text))` (The Unicode Standard D147): the text decomposed canonically, each
+ * code point mapped to its `NFKC_Casefold` value, then the whole text put into NFC. Over ASCII it is lowercasing.
  */
 export function nfkcCasefold(text: string): string {
-  return mapThenNfc(text, nfkcCasefoldOf, asciiLowercase);
+  return mapThenNfc(nfdFloor(text), nfkcCasefoldOf, asciiLowercase);
+}
+
+/**
+ * `text` in NFD, the step Unicode D147 puts ahead of the `NFKC_Casefold` mapping. Without it a
+ * composed and a decomposed spelling that are NFC-equal can fold apart (`Á` + U+0345), and no
+ * comparison may go below NFC. Allocation-free for text below U+00C0, which has no canonical
+ * decomposition. Canonical decomposition is covered by the same stability policy as NFC.
+ */
+function nfdFloor(text: string): string {
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) >= 0xc0) return text.normalize('NFD');
+  }
+  return text;
 }
 
 /** U+0041..005A mapped to U+0061..007A and nothing else; the same string when there is none. */

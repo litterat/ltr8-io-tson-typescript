@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   atLeastOne,
   describeGroup,
+  spellGroup,
   groupMemberNames,
   groupViolations,
   groupRefusals,
@@ -49,6 +50,9 @@ describe('FieldGroup (§5.11, §8.1): options, optional members, optional', () =
     expect(describeGroup(ONE_OF)).toBe('a | b');
     expect(describeGroup(OPTIONS)).toBe('host port? | socket');
     expect(describeGroup(AT_LEAST_ONE)).toBe('email | phone');
+    expect(spellGroup(ONE_OF)).toBe('(a | b)');
+    expect(spellGroup(AT_MOST_ONE)).toBe('(a | b)?');
+    expect(spellGroup(AT_LEAST_ONE)).toBe('(email | phone)+');
   });
 });
 

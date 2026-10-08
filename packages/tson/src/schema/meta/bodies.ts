@@ -252,8 +252,9 @@ export function groupRefusals(
 }
 
 /**
- * A group as its spelling reads, for a message (§5.11): options separated by `|`, a member marked
- * `?` where it is optional within its option, and the at-least-one group as its members.
+ * A group's options as its spelling reads inside the parentheses, for a message (§5.11): options
+ * separated by `|`, a member marked `?` where it is optional within its option, and the
+ * at-least-one group as its members.
  */
 export function describeGroup(group: FieldGroup): string {
   if (atLeastOne(group)) return (group.members[0] ?? []).join(' | ');
@@ -263,6 +264,16 @@ export function describeGroup(group: FieldGroup): string {
       option.map((member) => (optionalMembers.includes(member) ? `${member}?` : member)).join(' '),
     )
     .join(' | ');
+}
+
+/**
+ * A group as it is written (§5.11): {@link describeGroup} parenthesised, followed by the group's
+ * own `?`, or by the `+` of the at-least-one group -- so a message quotes the spelling the author
+ * would have to change.
+ */
+export function spellGroup(group: FieldGroup): string {
+  const suffix = atLeastOne(group) ? '+' : group.optional ? '?' : '';
+  return `(${describeGroup(group)})${suffix}`;
 }
 
 /**

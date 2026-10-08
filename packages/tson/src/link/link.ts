@@ -45,10 +45,17 @@ import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { checkDisjointAssertions, computeDisjointness } from './disjointness.js';
-import { checkEnumLabels, enumLabelForm, membersAreNames } from './enumLabels.js';
+import {
+  checkEnumLabels,
+  enumLabelForm,
+  enumLabelProfile,
+  membersAreNames,
+  type EnumLabelProfile,
+} from './enumLabels.js';
 import { checkNameHygiene } from './nameHygiene.js';
 import { validateReferences } from './referenceValidation.js';
 import { checkEveryEntryIsInhabited } from './typeInhabitance.js';
+import { checkFieldGroups } from './fieldGroups.js';
 import { checkRecordExtension } from './recordExtension.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -197,6 +204,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     structureNamespace === undefined
       ? undefined
       : (name: string): TypeDefinition | undefined => structureNamespace.get(name);
+  const enumProfiles = new Map<string, EnumLabelProfile>();
   for (const name of localNames) {
     const definition = merged.get(name);
     if (
@@ -207,6 +215,8 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
       continue;
     }
     if (!membersAreNames(definition, entryOf, structureOf)) textEnums.add(name);
+    const labelProfile = enumLabelProfile(definition, entryOf, structureOf);
+    if (labelProfile !== undefined) enumProfiles.set(name, labelProfile);
     const form = enumLabelForm(definition, entryOf, structureOf);
     if (form !== 'NONE') enumForms.set(name, form);
   }
@@ -233,6 +243,12 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     identifierPolicy,
     textEnums,
     refusedEnums,
+    enumProfiles,
+    ...(receiver === undefined ? {} : { receiver }),
+  });
+
+  checkFieldGroups(merged, localNames, {
+    schemaId: schema.id,
     ...(receiver === undefined ? {} : { receiver }),
   });
 

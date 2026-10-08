@@ -142,13 +142,15 @@ in conversation rather than silently picking.
   2), not a subtraction from the profile.
 
   **The tables are checked in and authoritative; the host is not consulted for these
-  properties.** NFC is the one exception, and a deliberate one: `unicode/nfc.ts` calls
-  `String.prototype.normalize`, which is ECMA-262 rather than `Intl` and so needs no data of its
+  properties.** NFC and NFD are the exceptions, and deliberate ones: `unicode/nfc.ts` and
+  `unicode/normalization.ts` call `String.prototype.normalize`, which is ECMA-262 rather than
+  `Intl` and so needs no data of its
   own to ship. That is safe where shipping a table would not be, because Unicode's own
   normalization stability policy freezes it: a character's canonical decomposition never changes
   once encoded, and no new canonically-decomposable characters are added — so for every character
-  the checked-in `XID` tables admit, every host answers the NFC question identically.
-  NFC is the _only_ normalization form the host answers: `NFKC` and `NFKC_CASEFOLD` (the
+  the checked-in `XID` tables admit, every host answers the NFC and NFD questions identically (NFD
+  is canonical decomposition, covered by the same policy; `skeleton.ts` uses it too).
+  NFC and NFD are the _only_ normalization forms the host answers: `NFKC` and `NFKC_CASEFOLD` (the
   `normalization` facet's compatibility forms, which decide which spellings of a name are one
   value) read a checked-in compatibility-decomposition table and `NFKC_Casefold` table, and
   `ASCII_CASEFOLD` maps A–Z alone. Never call `toLowerCase` or `Intl` for a fold. The tables

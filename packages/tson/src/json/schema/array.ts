@@ -18,6 +18,7 @@ import { describeEvent, reportUnreadable, treeAtomKeyedReader } from './atoms.js
 import type { CompileContext } from './compile.js';
 import type { JsonTypeReader } from './types.js';
 import { reportConfusablePair } from './nameHygiene.js';
+import { declareOrder } from '../../value/orderedness.js';
 import { identityOfNode, isIdentified } from './valueIdentity.js';
 import { createConfusableScope } from '../../unicode/skeleton.js';
 import { terminalDefinition } from '../../link/referenceChain.js';
@@ -133,8 +134,9 @@ export function buildArrayReader(
       checkSize(outer, name, elements.length, minItems, maxItems);
 
       if (outer.reported() !== reportedBefore) return undefined;
-      return jsonArray(
-        elements.map((slot) => (slot === ABSENT ? jsonNull() : (slot as JsonValue))),
+      return declareOrder(
+        jsonArray(elements.map((slot) => (slot === ABSENT ? jsonNull() : (slot as JsonValue)))),
+        body.ordered,
       );
     },
   };

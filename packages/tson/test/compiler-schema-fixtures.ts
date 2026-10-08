@@ -16,35 +16,16 @@ import { compile } from '../src/compiler/compile.js';
 import { createAnnotationValueReader } from '../src/schema/annotationReader.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
 import type { DefinitionGetter } from '../src/compiler/resolverTypes.js';
-import { toCoreValue, type AtomEncoder } from '../src/bind/encode.js';
+import { toCoreValue } from '../src/bind/encode.js';
+import { defaultAtomEncoder } from '../src/write/bindingWriter.js';
 import { topBinding } from '../src/schema/bindings.js';
 import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
-import type { TokenValue } from '../src/ast/value.js';
 
 const SPEC = fileURLToPath(new URL('../../../spec/m/', import.meta.url));
 
 function bundledSource(file: string): Uint8Array {
   return new Uint8Array(readFileSync(SPEC + file));
 }
-
-/** As `bundled-schemas-resolve.test.ts`'s own `encodeAtom` -- needed to close over `SourceBodyEncoder` for §5.6's chained atom-refinement merge (`uint8 => !integer ^ { ... }`, which every fixed-width core.tn integer instance uses). */
-const encodeAtom: AtomEncoder = (binding, value): TokenValue => {
-  if (typeof value === 'object' && value !== null && 'text' in value && 'form' in value) {
-    const token = value as { text: string; form: TokenValue['form'] };
-    return { kind: 'token', text: token.text, form: token.form };
-  }
-  if (typeof value === 'string') {
-    return {
-      kind: 'token',
-      text: value,
-      form: binding.wireType === 'text' ? 'single-line' : 'unquoted',
-    };
-  }
-  if (typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'number') {
-    return { kind: 'token', text: String(value), form: 'unquoted' };
-  }
-  return { kind: 'token', text: JSON.stringify(value), form: 'unquoted' };
-};
 
 type BundledName = 'meta-kernel' | 'meta' | 'core';
 const CHAIN: Record<BundledName, readonly BundledName[]> = {
@@ -76,7 +57,7 @@ function resolveBundled(name: BundledName, meta: LinkedSchema): Schema {
     // the `@doc` on each declaration is lost from the resolved output.
     annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
-    encodeSourceBody: (body) => toCoreValue(topBinding, body, encodeAtom),
+    encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport: () => ({ entries: meta.entries, originOf: () => meta.id }),
   });
 }
@@ -125,7 +106,7 @@ export function resolveUserSchema(source: string): LinkedSchema {
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
     annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
-    encodeSourceBody: (body) => toCoreValue(topBinding, body, encodeAtom),
+    encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport: () => ({ entries: core.entries, originOf: () => core.id }),
   });
   return linkSchema(unlinked, {

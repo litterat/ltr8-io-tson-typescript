@@ -485,6 +485,10 @@ describe('uri_type and iri_type narrowing (§5.7)', () => {
     expect(checkAtomNarrows(source, { ...uri, schemes: ['ftp'] }).join(' ')).toContain('schemes');
     // An unset source admits every scheme, so setting one narrows it.
     expect(checkAtomNarrows(uri, { ...uri, schemes: ['https'] })).toEqual([]);
+    // §5.5: only A-Z fold, so the Kelvin sign is not `k` and a host lowercasing would admit it.
+    expect(
+      checkAtomNarrows({ ...uri, schemes: ['k'] }, { ...uri, schemes: ['\u212A'] }).join(' '),
+    ).toContain('schemes');
   });
 
   it('allow_relative and allow_fragment may be withdrawn and never granted back', () => {

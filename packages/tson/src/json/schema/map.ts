@@ -30,6 +30,7 @@ import type { CompileContext } from './compile.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonTypeReader } from './types.js';
+import { declareOrder } from '../../value/orderedness.js';
 import { identityOfHost, identityOfNode } from './valueIdentity.js';
 
 const ABSENT = Symbol('json.map.absent');
@@ -112,6 +113,7 @@ export function buildMapReader(
         keyParser,
         valueReader,
         optionalValues,
+        body.ordered,
         minItems,
         maxItems,
       )
@@ -121,6 +123,7 @@ export function buildMapReader(
         ctx.resolve(body.keyType.name),
         valueReader,
         optionalValues,
+        body.ordered,
         minItems,
         maxItems,
       );
@@ -139,6 +142,7 @@ function objectFormReader(
   keyParser: FieldValueParser,
   valueReader: JsonTypeReader,
   optionalValues: boolean,
+  ordered: boolean,
   minItems: bigint | undefined,
   maxItems: bigint | undefined,
 ): JsonTypeReader<JsonValue> {
@@ -232,7 +236,7 @@ function objectFormReader(
         const node = slotNode(values[i]);
         if (memberName !== undefined && node !== undefined) members.set(memberName, node);
       }
-      return jsonObject(members);
+      return declareOrder(jsonObject(members), ordered);
     },
   };
 }
@@ -243,6 +247,7 @@ function pairsFormReader(
   keyReader: JsonTypeReader,
   valueReader: JsonTypeReader,
   optionalValues: boolean,
+  ordered: boolean,
   minItems: bigint | undefined,
   maxItems: bigint | undefined,
 ): JsonTypeReader<JsonValue> {
@@ -287,7 +292,7 @@ function pairsFormReader(
         const v = slotNode(values[i]);
         if (k !== undefined && v !== undefined) pairs.push(jsonArray([k, v]));
       }
-      return jsonArray(pairs);
+      return declareOrder(jsonArray(pairs), ordered);
     },
   };
 }

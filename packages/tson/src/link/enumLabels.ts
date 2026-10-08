@@ -27,6 +27,7 @@ import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
+import { identifierProfileOf, type IdentifierProfile } from '../unicode/identifier-profile.js';
 import { nfcFloor } from '../unicode/normalization.js';
 import { isDataBody } from './bodyKind.js';
 import { terminal } from './referenceChain.js';
@@ -168,6 +169,30 @@ export function enumLabelForm(
     default:
       return 'NONE';
   }
+}
+
+/** The profile an enum's members are judged under, and the form they are put into first. */
+export interface EnumLabelProfile {
+  readonly profile: IdentifierProfile;
+  readonly form: Normalization;
+}
+
+/**
+ * The identifier profile `enumeration`'s members are judged under, with the form they are put into:
+ * its label type's own (§7.4 -- each member "is a value of" `type`, so a profile's own additions
+ * are exempt for a member as they are for a value at a position typed by it). `undefined` unless
+ * the label type is an identifier family.
+ */
+export function enumLabelProfile(
+  enumeration: TypeDefinition,
+  local: EntryGetter,
+  structure: EntryGetter | undefined,
+): EnumLabelProfile | undefined {
+  const label = enumLabelType(enumeration, local, structure);
+  const body = label?.definition.body;
+  if (body === undefined || !('kind' in body) || isDataBody(body)) return undefined;
+  if (body.kind !== 'identifier_type') return undefined;
+  return { profile: identifierProfileOf(body), form: body.normalization };
 }
 
 /** One problem, and the entry it is reported against -- always one this schema declares. */

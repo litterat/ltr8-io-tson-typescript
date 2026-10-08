@@ -602,12 +602,14 @@ export function inferAll(
       continue;
     }
     if (!isHeldBody(body)) continue;
+    const writtenTypes = written.get(name) ?? new Map<string, TypeRef>();
     const occurrences = createOccurrences(
       body.parameterNames,
-      written.get(name) ?? new Map(),
+      writtenTypes,
       readsInStructure(definition, get),
     );
     try {
+      requireEarlierParameters(body.parameterNames, writtenTypes);
       walkBody(body, { occurrences, meta });
     } catch (e: unknown) {
       if (!(e instanceof TsonSchemaValidationError)) throw e;
@@ -617,6 +619,28 @@ export function inferAll(
     observed.set(name, occurrences);
   }
   return settle(observed, recorded, entries, reporter, { local: get, meta });
+}
+
+/**
+ * §5.10: a parameter's written `type` that names a parameter names one declared **before** it, so
+ * every argument an earlier parameter binds is known when a later one is read.
+ */
+function requireEarlierParameters(
+  parameterNames: readonly string[],
+  written: ReadonlyMap<string, TypeRef>,
+): void {
+  parameterNames.forEach((parameter, index) => {
+    const type = written.get(parameter);
+    if (type === undefined) return;
+    const named = parameterNames.indexOf(type.name);
+    if (named >= index) {
+      throw new TsonSchemaValidationError(
+        `parameter '${parameter}' is declared '${parameter}: ${spell(type)}', and '${type.name}' ` +
+          (named === index ? 'is the parameter itself' : 'is declared after it') +
+          " -- a parameter's type names an earlier parameter only (§5.10)",
+      );
+    }
+  });
 }
 
 /** The same answer as kinds, for the materialiser, which asks only which channel an argument travels on. */
@@ -663,6 +687,63 @@ export function inferOne(
     if (only !== undefined) result.set(parameter, only);
   }
   return result;
+}
+
+/**
+ * One template's parameters, typed from their own uses alone, for a call-site check made before
+ * the batch pass has stamped them (§5.10). A parameter whose type only the cross-template fixed
+ * point could ground, or whose uses disagree, is typed as an unbounded type parameter -- which
+ * judges nothing, so a verdict here is never one the batch pass would retract. What a declaration
+ * wrote beyond the uses (`<N: int8>`) narrows further and is judged when the batch pass settles.
+ */
+export function inferOneParameters(
+  template: TypeDefinition,
+  meta: DefinitionGetter,
+  local: (name: string) => TypeDefinition | undefined,
+): readonly TemplateParam[] | undefined {
+  if (!isTemplateBody(template.body) || !isHeldBody(template.body)) return undefined;
+  const structural = readsInStructure(template, local);
+  const occurrences = createOccurrences(template.body.parameterNames, new Map(), structural);
+  try {
+    walkBody(template.body, { occurrences, meta });
+  } catch (e: unknown) {
+    if (e instanceof TsonSchemaValidationError) return undefined;
+    throw e;
+  }
+  const namespaces: Namespaces = { local, meta };
+  return template.body.parameterNames.map(
+    (name) => currentOf(occurrences, name, namespaces) ?? { name, type: TYPE_REF },
+  );
+}
+
+/**
+ * The parameters of `template` that stand in a **type position** somewhere in its own body --
+ * `T` in `{ a: T }` -- and so take a type, never a literal (§5.10). A parameter reaching a
+ * position only through another template's argument list, or standing nowhere the walk can see,
+ * is not named here: its kind is not settled by this template alone.
+ */
+export function typePositionParameters(
+  template: TypeDefinition,
+  meta: DefinitionGetter,
+  local: (name: string) => TypeDefinition | undefined,
+): ReadonlySet<string> {
+  if (!isTemplateBody(template.body) || !isHeldBody(template.body)) return new Set();
+  const occurrences = createOccurrences(
+    template.body.parameterNames,
+    new Map(),
+    readsInStructure(template, local),
+  );
+  try {
+    walkBody(template.body, { occurrences, meta });
+  } catch (e: unknown) {
+    if (e instanceof TsonSchemaValidationError) return new Set();
+    throw e;
+  }
+  const named = new Set<string>();
+  for (const [parameter, uses] of occurrences.uses) {
+    if (uses.length > 0 && uses.every((use) => kindOf(use.type) === 'TYPE')) named.add(parameter);
+  }
+  return named;
 }
 
 // ── The fixed point ──────────────────────────────────────────────────────────────────────────

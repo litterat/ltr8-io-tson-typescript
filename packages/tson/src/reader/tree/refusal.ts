@@ -48,7 +48,7 @@ export function reportNameViolations(
       ctx,
       violation.mechanism,
       [name],
-      `the name ${violation.detail} (refused under [TSON-DATA] §8.2's name-hygiene policy)`,
+      `the name ${violation.detail}`,
       'a name this processor will accept',
       `'${name}'`,
     );

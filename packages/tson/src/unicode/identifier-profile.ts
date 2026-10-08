@@ -240,8 +240,8 @@ function at(text: string, codePoint: number, index: number): string {
  * `members` is only ever asked of a well-formed name.
  *
  * Reports a violation rather than throwing one, so the same check serves a caller that owes a
- * parse error and one that owes a diagnostic. Indexes are UTF-16 offsets into `text`, as
- * `joining-controls.ts` addresses it; every judgement is by code point.
+ * parse error and one that owes a diagnostic. Every judgement is by code point, and so is every
+ * index a message states: a code point's position in the text, never a UTF-16 offset.
  */
 export function checkIdentifier(profile: IdentifierProfile, text: string): string | undefined {
   if (text.length === 0) return 'an identifier may not be empty';
@@ -260,23 +260,24 @@ export function checkIdentifier(profile: IdentifierProfile, text: string): strin
   let afterMedial = false;
   let lastIndex = 0;
   let lastCodePoint = first;
-  for (let i = first > 0xffff ? 2 : 1; i < text.length;) {
+  let ordinal = 1; // the code point index of the character at `i`
+  for (let i = first > 0xffff ? 2 : 1; i < text.length; ordinal += 1) {
     const codePoint = text.codePointAt(i) ?? 0;
     if (profileContinue(profile, codePoint)) {
       if ((codePoint === ZWNJ || codePoint === ZWJ) && !isJoiningControlPermitted(text, i)) {
         return (
-          `${at(text, codePoint, i)} is a join control outside the contexts UTS #39 §3.1.1.1 ` +
+          `${at(text, codePoint, ordinal)} is a join control outside the contexts UTS #39 §3.1.1.1 ` +
           'permits -- it has no shaping effect here, so it is invisible'
         );
       }
       afterMedial = false;
     } else if (has(profile.medial, codePoint)) {
-      if (afterMedial) return `${at(text, codePoint, i)} follows another medial character`;
+      if (afterMedial) return `${at(text, codePoint, ordinal)} follows another medial character`;
       afterMedial = true;
     } else {
-      return `${at(text, codePoint, i)} cannot appear in an identifier`;
+      return `${at(text, codePoint, ordinal)} cannot appear in an identifier`;
     }
-    lastIndex = i;
+    lastIndex = ordinal;
     lastCodePoint = codePoint;
     i += codePoint > 0xffff ? 2 : 1;
   }
@@ -323,7 +324,8 @@ export function restrictedCharacterViolation(
   profile: IdentifierProfile,
   text: string,
 ): string | undefined {
-  for (let i = 0; i < text.length;) {
+  let ordinal = 0;
+  for (let i = 0; i < text.length; ordinal += 1) {
     const codePoint = text.codePointAt(i) ?? 0;
     if (
       codePoint !== ZWNJ &&
@@ -331,7 +333,7 @@ export function restrictedCharacterViolation(
       !identifierStatusAllowed(codePoint) &&
       !added(profile, codePoint)
     ) {
-      return `${at(text, codePoint, i)} is Identifier_Status=Restricted (UTS #39)`;
+      return `${at(text, codePoint, ordinal)} is Identifier_Status=Restricted (UTS #39)`;
     }
     i += codePoint > 0xffff ? 2 : 1;
   }

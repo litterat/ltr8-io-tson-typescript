@@ -387,6 +387,10 @@ the reference's tson-json diff.
 `CLAUDE.md` (the `enum_set` quotation and anything the revision moved), `IDIOM-DEBT.md`,
 `ORCHESTRATION.md` and `.claude/agents/tson-porter.md`.
 
+Move the tests in `packages/tson/test/stage2-repair.test.ts` into the test files of their subjects
+(normalization, enum binding, value identity, record extension, field groups, templates), since a
+test file is named for what it tests, not for the pass that wrote it.
+
 **Gate:** the full CI list in `CLAUDE.md`, in order, green.
 
 ## To report upstream

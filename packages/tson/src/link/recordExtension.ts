@@ -48,7 +48,7 @@ import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
-import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
+import { isTemplateBody, type Top, type TypeDefinition } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 
 // `Top`'s own union mixes closed literal-`kind` members with one open one (`Data.kind: string`,
@@ -111,7 +111,29 @@ export function checkRecordExtension(
   for (const [name, def] of merged) {
     const body = def.body;
     if (isRecordBody(body) && body.discriminators !== undefined) {
-      checkFamily(name, body, merged, localNames, options);
+      checkFamily(name, body.discriminators, selectorOf(body), merged, localNames, options);
+    } else if (
+      isTemplateBody(body) &&
+      body.extension !== undefined &&
+      body.discriminators !== undefined &&
+      body.discriminators.length > 0
+    ) {
+      // A record-bodied template family base (§5.10) holds its body unread and so has no fields:
+      // each selector's declared type is the one every member carries, since a selector mentions
+      // no type parameter and so substitution never touches it. A base with no member yet has no
+      // pins to judge.
+      const members = directMembers(name, merged);
+      checkFamily(
+        name,
+        body.discriminators,
+        (fieldName) =>
+          members
+            .map((member) => member.body.fields.find((field) => field.name === fieldName))
+            .find((field) => field !== undefined),
+        merged,
+        localNames,
+        options,
+      );
     }
   }
 }
@@ -242,18 +264,29 @@ export function directMembers(
 
 // ── One family ───────────────────────────────────────────────────────────────────────────────
 
+/** A closed base's selector field by name: the base declares it itself. */
+function selectorOf(baseBody: RecordBody): (fieldName: string) => RecordField | undefined {
+  return (fieldName) => baseBody.fields.find((candidate) => candidate.name === fieldName);
+}
+
 function checkFamily(
   baseName: string,
-  baseBody: RecordBody,
+  discriminators: readonly string[],
+  selectorField: (fieldName: string) => RecordField | undefined,
   merged: ReadonlyMap<string, TypeDefinition>,
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
 ): void {
-  const discriminators = baseBody.discriminators ?? [];
   const fieldReaders = new Map<string, TypeReader<Value>>();
   let selectorsOk = true;
   for (const fieldName of discriminators) {
-    const fieldReader = checkSelectorType(baseName, fieldName, baseBody, merged, options);
+    const fieldReader = checkSelectorType(
+      baseName,
+      fieldName,
+      selectorField(fieldName),
+      merged,
+      options,
+    );
     if (fieldReader === undefined) {
       selectorsOk = false;
       continue;
@@ -380,14 +413,14 @@ function requireAt<T>(array: readonly T[], index: number): T {
 function checkSelectorType(
   baseName: string,
   fieldName: string,
-  baseBody: RecordBody,
+  field: RecordField | undefined,
   merged: ReadonlyMap<string, TypeDefinition>,
   options: CheckRecordExtensionOptions,
 ): TypeReader<Value> | undefined {
-  const field: RecordField | undefined = baseBody.fields.find(
-    (candidate) => candidate.name === fieldName,
-  );
   if (field === undefined) {
+    // A template base with no member yet has no selector type to read; a pin has nothing to be
+    // judged against and the first member that arrives brings the type.
+    if (isTemplateBase(baseName, merged)) return undefined;
     // `discriminators` is populated by the same resolver pass that populates `fields`
     // (`definitionResolver.ts`'s own `resolveEntry`), always from a name it just pushed into
     // `fields` -- this is an invariant of that resolver, never a document-level defect.
@@ -410,6 +443,11 @@ function checkSelectorType(
   return buildAtomReader(field.type.name, terminalDef.body);
 }
 
+function isTemplateBase(name: string, merged: ReadonlyMap<string, TypeDefinition>): boolean {
+  const body = merged.get(name)?.body;
+  return body !== undefined && isTemplateBody(body);
+}
+
 // ── Reporting ────────────────────────────────────────────────────────────────────────────────
 
 function fail(
@@ -419,7 +457,12 @@ function fail(
 ): void {
   const { schemaId, receiver } = options;
   if (receiver === undefined) {
-    throw new TsonSchemaValidationError(message);
+    // A thrown error has no pointer to carry, so the declaration it is reported against is named
+    // in the message: for a member minted at a use site, the declaration that wrote it (or whose
+    // closing minted it, change log §8.2 item 2).
+    throw new TsonSchemaValidationError(
+      pointerName === undefined ? message : `${message} (in the declaration of '${pointerName}')`,
+    );
   }
   receiver.report({
     code: 'SCHEMA_ERROR',

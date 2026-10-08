@@ -44,6 +44,8 @@ import { createEmitter, stringSink } from './emitter.js';
  * {@link AtomEncoder} instead.
  */
 export const defaultAtomEncoder: AtomEncoder = (binding: AtomBinding<unknown>, value: unknown) => {
+  const written = asWrittenToken(value);
+  if (written !== undefined) return written;
   const known = formatKnownAtom(binding.wireType, value);
   if (known !== undefined) {
     const form: TokenForm = known.quoted ? 'single-line' : 'unquoted';
@@ -51,6 +53,20 @@ export const defaultAtomEncoder: AtomEncoder = (binding: AtomBinding<unknown>, v
   }
   return primitiveToken(binding.wireType, value);
 };
+
+/**
+ * A value that already is a written token (`schema.meta`'s `Token`: `text` and `form`), as a
+ * schema's own enum members and defaults are when a resolved schema is encoded to its wire form
+ * (§8.1). It is written as it stands, since its form was fixed where the author wrote it.
+ */
+function asWrittenToken(
+  value: unknown,
+): { kind: 'token'; text: string; form: TokenForm } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { text, form } = value as { text?: unknown; form?: unknown };
+  if (typeof text !== 'string' || typeof form !== 'string') return undefined;
+  return { kind: 'token', text, form: form as TokenForm };
+}
 
 function primitiveToken(
   wireType: string,

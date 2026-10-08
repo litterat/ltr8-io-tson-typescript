@@ -100,7 +100,14 @@ import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
-import { inferOne, kindOf, readsInStructure, type Kind } from './parameterTypes.js';
+import {
+  inferOne,
+  inferOneParameters,
+  kindOf,
+  readsInStructure,
+  typePositionParameters,
+  type Kind,
+} from './parameterTypes.js';
 import { terminal } from '../link/referenceChain.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { enumLabelForm } from '../link/enumLabels.js';
@@ -380,6 +387,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * than once.
    */
   const kindsOnDemand = new Map<string, ReadonlyMap<string, Kind>>();
+  const typePositionsOf = new Map<string, ReadonlySet<string>>();
 
   /** The first few links of the closing chain, for the depth guard's own message. */
   function chain(): string {
@@ -411,7 +419,23 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       if (declaration !== undefined) {
         early.push({ declaration, head, args });
       }
-      return classify(head, template, parameters, args);
+      const classified = classify(head, template, parameters, args);
+      // The application is judged against the parameters its own template's uses give, before
+      // any substitution: a wrong argument is a verdict at the call (§5.10), and would otherwise
+      // surface as an invalid body inside the materialised entry.
+      const inferred =
+        deps.metaTypes === undefined || !isHeldBody(template.body)
+          ? undefined
+          : inferOneParameters(template, deps.metaTypes, (n) => deps.namespaceDefinitions(n));
+      if (inferred !== undefined && isTemplateBody(template.body)) {
+        checkArguments(
+          head,
+          { ...template, body: { ...template.body, parameters: [...inferred] } },
+          classified,
+          false,
+        );
+      }
+      return classified;
     }
     const classified = classify(head, template, parameters, args);
     checkArguments(head, template, classified);
@@ -504,6 +528,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     head: string,
     template: TypeDefinition,
     args: readonly TypeArgument[],
+    parametersAreSettled = true,
   ): void {
     if (!isTemplateBody(template.body) || template.body.parameters.length !== args.length) {
       return;
@@ -513,6 +538,18 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       const argument = args[i];
       if (argument === undefined) return;
       if (kindOf(parameter.type) === 'TYPE') {
+        // A literal is a value, and a type parameter is bound by a type (§5.10). Judged only
+        // against settled parameters: an ungrounded one may yet turn out to take a value.
+        if (
+          parametersAreSettled &&
+          argument.kind === 'value' &&
+          typePositions(head, template).has(parameter.name)
+        ) {
+          throw new TsonSchemaValidationError(
+            `'${head}<...>' binds '${parameter.name}' to the literal '${argument.value.text}', but ` +
+              `'${parameter.name}' is a type parameter and takes a type (§5.10)`,
+          );
+        }
         if (
           parameter.bound !== undefined &&
           argument.kind === 'ref' &&
@@ -530,6 +567,19 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         );
       }
     });
+  }
+
+  /** The parameters of `head` that stand in a type position of its own body, memoised per head. */
+  function typePositions(head: string, template: TypeDefinition): ReadonlySet<string> {
+    let named = typePositionsOf.get(head);
+    if (named === undefined) {
+      named =
+        deps.metaTypes === undefined
+          ? new Set<string>()
+          : typePositionParameters(template, deps.metaTypes, (n) => deps.namespaceDefinitions(n));
+      typePositionsOf.set(head, named);
+    }
+    return named;
   }
 
   function checkBound(head: string, parameter: string, argument: string, bound: string): void {

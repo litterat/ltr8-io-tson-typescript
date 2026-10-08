@@ -747,12 +747,15 @@ const scopeKindBinding: Binding<ScopeKind> = atom<ScopeKind>('scope_kind');
  */
 const scopedSchemaTypesBinding: Binding<readonly string[]> = arrayOf<string>(identifierBinding);
 
+/** `schema_identity` (meta.tn): an IRI-reference with no fragment, decoded by the meta atom decoder. */
+const schemaIdentityBinding: Binding<string> = atom<string>('schema_identity');
+
 const scopedSchemasBinding: MapBinding<ReadonlyMap<string, readonly string[]>> = map<
   ReadonlyMap<string, readonly string[]>,
   string,
   readonly string[]
 >({
-  key: textBinding,
+  key: schemaIdentityBinding,
   value: scopedSchemaTypesBinding,
   construct: (entries) => new Map(entries),
   read: (host) => host,

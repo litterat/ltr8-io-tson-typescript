@@ -70,7 +70,8 @@ import {
   TsonRefusedError,
 } from '../core/errors.js';
 import { DEFAULT_MAX_SUPERTYPE_CHAIN, supertypeChainLimitRefusal } from '../core/limits.js';
-import type { DataValue, RecordValue } from '../ast/value.js';
+import type { DataValue, RecordValue, ScopedValue } from '../ast/value.js';
+import { asciiLowercase } from '../unicode/normalization.js';
 import type { Annotation as WrittenAnnotation } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
 import type { ConstructionDef, RefinedDef, TypeDef } from '../ast/schema/typedef.js';
@@ -99,7 +100,7 @@ import type {
 import { isConstructor } from '../schema/meta/typedef.js';
 import { groupMembers, lowerGroup } from './groupLowering.js';
 import {
-  describeGroup,
+  spellGroup,
   fieldOmission,
   isGroupMember,
   type FieldGroup,
@@ -128,6 +129,7 @@ import {
   EXTENSION,
   FIELDS,
   NAME,
+  OPTIONAL,
   ROLE,
   TYPE,
   VALUE,
@@ -291,6 +293,7 @@ function deriveTemplateFamilyFacts(
     for (const field of record.fields) {
       if (
         field.role === 'FIXED' &&
+        !field.optional &&
         field.value?.form === 'UNQUOTED' &&
         parameters.includes(field.value.text)
       ) {
@@ -728,7 +731,7 @@ function resolveInstanceTemplate(
   const asRecordFields: RecordField[] = wireFields.fields.map((f) => ({
     name: f.name,
     type: f.type,
-    optional: false,
+    optional: f.optional,
     voidable: false,
     role: f.role === 'FIXED' || f.role === 'DEFAULT' ? f.role : 'FREE',
     ...(f.value === undefined ? {} : { value: f.value }),
@@ -803,6 +806,8 @@ interface HeldFieldSummary {
   readonly name: string;
   readonly type: TypeRef;
   readonly role: string;
+  /** The name carries `?` (§5.2): the key may be missing. */
+  readonly optional: boolean;
   readonly value?: Token;
 }
 
@@ -833,6 +838,7 @@ function parseHeldRecordFields(record: RecordValue): {
         name: nameValue.text,
         type,
         role,
+        optional: wireField(fieldRecord, OPTIONAL)?.kind === 'token',
         ...(valueValue?.kind === 'token'
           ? { value: { text: valueValue.text, form: metaFormOfLexer(valueValue.form) } }
           : {}),
@@ -954,8 +960,14 @@ function checkNarrows(name: string, sourceName: string, sourceBody: Top, refined
   if (!isAtom(sourceBody) || !isAtom(refinedBody)) return;
   const violations = checkAtomNarrows(sourceBody, refinedBody);
   if (violations.length > 0) {
+    // A facet fixed at construction is not widened by a move; it is not movable at all, and the
+    // message says which of the two the author did.
+    const fixed = violations.every((violation) => violation.includes('is fixed where'));
     throw new TsonSchemaValidationError(
-      `'${name}': refinement of '!${sourceName}' widens rather than tightens it (§5.7): ${violations.join('; ')}`,
+      `'${name}': refinement of '!${sourceName}' ` +
+        (fixed
+          ? `moves a facet that is fixed at construction (§5.5, §5.7): ${violations.join('; ')}`
+          : `widens rather than tightens it (§5.7): ${violations.join('; ')}`),
     );
   }
 }
@@ -996,7 +1008,9 @@ function mergeWithSource(
     for (const field of sourceEncoded.fields) merged.set(field.name, field);
   }
   if (newBindings.coreValue.kind === 'record') {
-    for (const field of newBindings.coreValue.fields) merged.set(field.name, field);
+    for (const field of newBindings.coreValue.fields) {
+      merged.set(field.name, inheritOrder(field, merged.get(field.name)));
+    }
   } else if (newBindings.coreValue.kind !== 'empty-brace') {
     // The author's error, not a gap: §12.1's `atom-refinement` takes a `record-def`, so this
     // verdict does not change as this library improves.
@@ -1009,6 +1023,47 @@ function mergeWithSource(
     annotations: newBindings.annotations,
     typeRef: constructorName,
     coreValue: mergedRecord,
+  };
+}
+
+/** The member-set facets whose surviving members keep their inherited order (§7.5). */
+const ORDERED_BY_INHERITANCE: ReadonlySet<string> = new Set(['members', 'schemes', 'within']);
+
+/**
+ * A refinement that shrinks a member set keeps the surviving members in their inherited order
+ * (§7.5): `[https http ftp]` refined to `[FTP https]` is `[https ftp]`, whatever order the
+ * refinement wrote them in. Members the source does not hold keep their written order after the
+ * inherited ones; they are refused by the narrowing check, not reordered away. `schemes` compare
+ * with ASCII case folded (§5.5), every other set by its text.
+ */
+function inheritOrder<F extends { readonly name: string; readonly value: ScopedValue }>(
+  written: F,
+  inherited: F | undefined,
+): F {
+  if (inherited === undefined || !ORDERED_BY_INHERITANCE.has(written.name)) return written;
+  const was = inherited.value.value.coreValue;
+  const now = written.value.value.coreValue;
+  if (was.kind !== 'array' || now.kind !== 'array') return written;
+  const key = (element: ScopedValue): string | undefined => {
+    const core = element.value.coreValue;
+    if (core.kind !== 'token') return undefined;
+    return written.name === 'schemes' ? asciiLowercase(core.text) : core.text;
+  };
+  const rank = (element: ScopedValue): number => {
+    const wanted = key(element);
+    const at = was.elements.findIndex((candidate) => key(candidate) === wanted);
+    return at < 0 ? was.elements.length : at;
+  };
+  const ordered = now.elements
+    .map((element, index) => ({ element, index, rank: rank(element) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.element);
+  return {
+    ...written,
+    value: {
+      ...written.value,
+      value: { ...written.value.value, coreValue: { ...now, elements: ordered } },
+    },
   };
 }
 
@@ -1669,7 +1724,7 @@ function refineOnto(
     if (entry.kind === 'groupDef') {
       if (!restatesInheritedGroup(deps, name, entry, fields, groups, inheritedFieldIndex)) {
         throw new TsonSchemaValidationError(
-          `'${name}': the group (${describeGroup(lowerGroup(entry))}) names no inherited group -- a refinement ` +
+          `'${name}': the group ${spellGroup(lowerGroup(entry))} names no inherited group -- a refinement ` +
             "copies its source's whole field set and admits no new fields or groups; composition ('&') is " +
             'what adds one (§5.7, §5.11)',
         );
@@ -1978,13 +2033,15 @@ function resolveTighteningField(
     );
   }
   if (isMember) {
-    restateMemberMark(declarationName, fieldDef, groups);
+    // The default is refused first: it is the more basic fault, and the name mark a member written
+    // beside it is then not also reported as loosening its option.
     if (fieldDef.modifier?.kind === 'default') {
       throw new TsonSchemaValidationError(
         `${prefix}the restated group member '${fieldDef.name}' takes a default ('~') -- a default ` +
           "is a value only omission reaches, and omission is the group's, not one member's (§5.11)",
       );
     }
+    restateMemberMark(declarationName, fieldDef, groups);
   }
   const { field } = resolveField(deps, fieldDef, parameters, inherited);
   // §5.11: a member is never anything but optional as a field -- its own omission question is its
@@ -2253,7 +2310,7 @@ function restatesInheritedGroup(
   const restated = restatement.members.flat();
   const inheritedMembers = restated.filter((m) => inheritedFieldIndex.has(m));
   if (inheritedMembers.length === 0) return false;
-  const prefix = `${declarationName === undefined ? '' : `'${declarationName}': `}the restated group (${describeGroup(restatement)}) `;
+  const prefix = `${declarationName === undefined ? '' : `'${declarationName}': `}the restated group ${spellGroup(restatement)} `;
   if (inheritedMembers.length !== restated.length) {
     throw new TsonSchemaValidationError(
       `${prefix}adds a member the source does not declare -- changing membership is a resolver error (§5.11)`,
@@ -2278,7 +2335,7 @@ function restatesInheritedGroup(
     );
   if (!sameOptions) {
     throw new TsonSchemaValidationError(
-      `${prefix}does not match the inherited group (${describeGroup(inherited)}) -- a restatement MUST ` +
+      `${prefix}does not match the inherited group ${spellGroup(inherited)} -- a restatement MUST ` +
         'have the same options, their members in the same order, and changing membership is a ' +
         'resolver error (§5.11)',
     );
