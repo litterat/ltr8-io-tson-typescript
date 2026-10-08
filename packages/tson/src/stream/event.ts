@@ -12,7 +12,7 @@ import type { TokenForm } from '../lexer/token.js';
  * Every value position (document root, record field, map key/value, array element, an
  * annotation's own value) has the same self-delimiting shape in the stream: zero or more
  * {@link AnnotationStart}/{@link AnnotationEnd} pairs, an optional {@link TypeRef}, then exactly
- * one core-value — either a single leaf event ({@link TokenEvent}, {@link AbsentEvent},
+ * one core-value — either a single leaf event ({@link TokenEvent}, {@link VoidEvent},
  * {@link EmptyBraceEvent}) or a matched {@link RecordStart}/{@link RecordEnd},
  * {@link MapStart}/{@link MapEnd}, or {@link ArrayStart}/{@link ArrayEnd} pair.
  *
@@ -34,7 +34,7 @@ export type TsonEvent =
   | ArrayStart
   | ArrayEnd
   | TokenEvent
-  | AbsentEvent
+  | VoidEvent
   | EmptyBraceEvent;
 
 /**
@@ -165,8 +165,8 @@ export interface TokenEvent {
 }
 
 /** `"_"` (§2.9): the explicitly-void sentinel, the format's one spelling of absence and distinct from every typed value -- including the unquoted token `null`, an ordinary string under base type resolution (§4.4). */
-export interface AbsentEvent {
-  readonly kind: 'absent';
+export interface VoidEvent {
+  readonly kind: 'void';
   readonly position: Position;
 }
 

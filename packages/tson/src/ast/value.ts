@@ -45,7 +45,7 @@ export interface DataValue {
  * the exact strings the conformance test suite's parser-layer vectors use for a core-value's own
  * `kind:` field.
  */
-export type CoreValue = RecordValue | MapValue | ArrayValue | EmptyBrace | AbsentValue | TokenValue;
+export type CoreValue = RecordValue | MapValue | ArrayValue | EmptyBrace | VoidValue | TokenValue;
 
 /**
  * `record = "{" ws field *( separator field ) ws "}"` (§2.5, §7.4).
@@ -109,16 +109,16 @@ export interface EmptyBrace {
 }
 
 /**
- * `absent = "_"` (§2.9): the explicitly-void sentinel, the format's one spelling of absence and
+ * `void = "_"` (§2.9): the void sentinel, the format's one spelling of "no value" and
  * distinct from every typed value -- including the unquoted token `null`, which is an ordinary
  * string under base type resolution (§4.4) and carries no special status of its own.
  *
  * The spec forbids `_` in map-key position, but as a *resolver-layer* rule, not a grammar one
- * ("the map-entry production accepts any value in key position, and the resolver rejects absent
+ * ("the map-entry production accepts any value in key position, and the resolver rejects void
  * keys", §2.9). This structural type deliberately does not reject it here.
  */
-export interface AbsentValue {
-  readonly kind: 'absent';
+export interface VoidValue {
+  readonly kind: 'void';
 }
 
 /**

@@ -68,11 +68,11 @@ describe('arrayTreeReader -- void elements (§5.3 voidable)', () => {
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
-  it('a voidable element written `_` is silently AbsentNode, no diagnostic', () => {
+  it('a voidable element written `_` is silently VoidNode, no diagnostic', () => {
     const { ctx, diagnostics } = collectingContextOver('[1 _ 3]');
     const value = runSync(reader({ voidable: true }).read(ctx));
     if (value.kind !== 'array') throw new Error('unreachable');
-    expect(value.elements.map((e) => e.kind)).toEqual(['atom', 'absent', 'atom']);
+    expect(value.elements.map((e) => e.kind)).toEqual(['atom', 'void', 'atom']);
     expect(diagnostics.diagnostics).toEqual([]);
   });
 });

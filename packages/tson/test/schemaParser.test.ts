@@ -820,7 +820,7 @@ describe('map sugar (§5.3)', () => {
     expect(def.ref.size).toEqual({ kind: 'ranged', lower: '1', upper: '10' });
   });
 
-  it('rejects "?" on the key side, where an absent key states an entry for nothing', () => {
+  it('rejects "?" on the key side, where a void key states an entry for nothing', () => {
     expect(thrownBy(`${META} { x => {text? => integer} }`)).toBeInstanceOf(TsonParseError);
   });
 

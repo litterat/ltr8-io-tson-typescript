@@ -8,14 +8,14 @@
  * story, and building continues past it anyway (so later elements keep the indices the source
  * data gave them, and `uniqueItems` never compares against the fake sentinel a failed read hands
  * back), but the tree this reader ultimately returns for the array is never a partial one. An
- * explicitly-`_` element is the one legitimate {@link AbsentNode} this reader ever produces.
+ * explicitly-`_` element is the one legitimate {@link VoidNode} this reader ever produces.
  */
 import type { Task } from '../../io/bytes.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import type { ArrayBody } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
-import { absentNode, arrayNode } from '../../tree/nodes.js';
+import { voidNode, arrayNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -107,17 +107,17 @@ export function arrayTreeReader(
       // `verifyFixed` skips its equality check on the same checkpoint. The element is still handed
       // to `sink` so later indices stay accurate; the whole array is abandoned below regardless.
       let elementAbandoned: boolean;
-      if (elementPeek.kind === 'absent') {
-        yield* ctx.next(); // consume the absent event regardless of voidability
+      if (elementPeek.kind === 'void') {
+        yield* ctx.next(); // consume the void event regardless of voidability
         if (!body.voidable) {
           elementCtx.report(
             'FIELD_REQUIRED',
-            `'${displayName}' element [${String(index)}] is absent, but elements are required`,
+            `'${displayName}' element [${String(index)}] is void, but elements are required`,
             'a value',
             '_',
           );
         }
-        decoded = absentNode();
+        decoded = voidNode();
         elementAbandoned = false;
       } else {
         const before = ctx.reported();

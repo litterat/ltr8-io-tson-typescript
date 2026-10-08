@@ -808,7 +808,7 @@ function* rejectMapQuestion(state: CursorState, side: string): Task<void> {
     const here = yield* peekToken(state);
     throw parseError(
       here,
-      `'?' is not permitted on a map type's ${side} (§5.3); an absent key states an entry for nothing`,
+      `'?' is not permitted on a map type's ${side} (§5.3); a void key states an entry for nothing`,
     );
   }
 }
@@ -861,7 +861,7 @@ function* parseTypeArg(state: CursorState): Task<TypeArg> {
   if (t.type === 'lbrace') {
     return { kind: 'ref', ref: yield* parseMap(state) };
   }
-  if (t.type === 'absent-token') {
+  if (t.type === 'void-token') {
     throw parseError(t, "the void sentinel '_' is not valid in a type argument position (§7.6)");
   }
   throw mismatch('a type argument (a type reference or a scalar value)', t);

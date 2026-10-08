@@ -227,8 +227,8 @@ describe('§5.2 one mark per question', () => {
 
   /**
    * Both trees keep the spelling of absence (§7.2): a field written `_` or `null` stands as the
-   * absent node in the tree, and a field never written is not there at all -- the text tree's
-   * `kind: 'absent'` and the JSON tree's `kind: 'null'` at the same fields, in both directions.
+   * void node in the tree, and a field never written is not there at all -- the text tree's
+   * `kind: 'void'` and the JSON tree's `kind: 'null'` at the same fields, in both directions.
    */
   it('both trees keep which spelling of absence arrived', () => {
     const text = readTree(bytesOf('{ from: _  timeout: _  version: "2.0" }'), {
@@ -242,7 +242,7 @@ describe('§5.2 one mark per question', () => {
     });
     if (json.kind !== 'object') throw new Error(`expected an object, got '${json.kind}'`);
     for (const field of ['from', 'timeout']) {
-      expect(text.fields.get(field)?.kind, field).toBe('absent');
+      expect(text.fields.get(field)?.kind, field).toBe('void');
       expect(json.members.get(field)?.kind, field).toBe('null');
     }
     expect(text.fields.has('nickname')).toBe(false);
@@ -506,7 +506,7 @@ describe('base cases', () => {
     );
   });
 
-  it('an absent element in a required-element array: _ in text, null in JSON, one verdict at one index', () => {
+  it('a void element in a required-element array: _ in text, null in JSON, one verdict at one index', () => {
     sameRule(
       'person',
       '{ name: "Ada"  labels: [ "x", _ ] }',
@@ -640,7 +640,7 @@ describe('§6.4 maps', () => {
     sameVerdict('counts', '{ "a" => { b: 1 } }', '{"a": {"b": 1}}');
   });
 
-  it('an entry value absent where values are required: _ in text, null in JSON, one verdict at one key', () => {
+  it('a void entry value where values are required: _ in text, null in JSON, one verdict at one key', () => {
     sameRule('counts', '{ "a" => _ }', '{"a": null}');
   });
 

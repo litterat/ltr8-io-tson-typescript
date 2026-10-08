@@ -22,7 +22,7 @@ export type TokenType =
   /** An unquoted token: identifiers, numbers, dates, etc. (§7.1, §7.3). */
   | 'unquoted-token'
   /** `_` — the void sentinel (§2.9). */
-  | 'absent-token'
+  | 'void-token'
   /** `{` (§7.2 rule 4). */
   | 'lbrace'
   /** `}` (§7.2 rule 4). */

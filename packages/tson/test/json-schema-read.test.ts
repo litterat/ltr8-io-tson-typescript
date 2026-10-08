@@ -570,7 +570,7 @@ describe('§6.2/§6.3 arrays, sets, tuples', () => {
     expect(d.path).toBe('');
   });
 
-  it('an element-optional array admits null as an absent element (§2.9)', () => {
+  it('an element-optional array admits null as a void element (§2.9)', () => {
     expect(accepted('maybe_tags', '["a", null, "c"]')).toBe('["a",null,"c"]');
   });
 
@@ -668,7 +668,7 @@ describe('§6.4 maps', () => {
     expect(result.value).toBeUndefined();
   });
 
-  it('an entry value is absent only where the map admits one', () => {
+  it('an entry value is void only where the map admits one', () => {
     expect(accepted('optional', '{"a": null}')).toBe('{"a":null}');
     expect(refusal('counts', '{"a": null}').code).toBe('FIELD_REQUIRED');
   });

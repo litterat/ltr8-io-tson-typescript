@@ -37,7 +37,7 @@
  * problem, a collecting one gathers them all. **Reporting never abandons the value here** --
  * unlike a schema-governed tree/bind read (`reader/tree/support.ts`'s own `abandonedValue`), this
  * reader keeps building: the node is still constructed and its children are still read, so one
- * pass finds everything, and a leaf whose atom rejected the token stands as an {@link AbsentNode}
+ * pass finds everything, and a leaf whose atom rejected the token stands as an {@link VoidNode}
  * rather than aborting the container around it. It is the facade above this reader that decides
  * whether that tree ever reaches a caller: `facade/tree.ts`'s own `validate` withholds `value`
  * for the whole document whenever anything was reported, whatever layer raised it -- so this
@@ -80,7 +80,7 @@ import type {
   ScopedValue,
 } from '../../ast/value.js';
 import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/nodes.js';
-import { absentNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
+import { voidNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
 import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
 import { toNfc } from '../../unicode/nfc.js';
 import {
@@ -320,8 +320,8 @@ function* readStructuralCoreValue(
     case 'token':
       checkTokenHygiene(ctx, e.text, tokenPolicy);
       return { kind: 'token', text: e.text, form: e.form };
-    case 'absent':
-      return { kind: 'absent' };
+    case 'void':
+      return { kind: 'void' };
     case 'empty-brace':
       return { kind: 'empty-brace' };
     default:
@@ -538,9 +538,9 @@ function* readNode(
     case 'empty-brace':
       yield* ctx.next();
       return recordNode(new Map(), typeRefName, annotations);
-    case 'absent':
+    case 'void':
       yield* ctx.next();
-      return absentNode(typeRefName, annotations);
+      return voidNode(typeRefName, annotations);
     case 'token':
       yield* ctx.next();
       checkTokenHygiene(ctx, peeked.text, tokenPolicy);
@@ -757,12 +757,12 @@ function* readMap(
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
     const key = yield* readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, depth + 1);
-    if (key.kind === 'absent') {
+    if (key.kind === 'void') {
       // §2.9: the void sentinel states that a position carries no value, and a map key is a
       // position that must. The map-entry production admits any value in key position, so this
       // is the reader's to refuse -- no grammar rule and no schema can see it first.
       ctx.report(
-        'ABSENT_MAP_KEY',
+        'VOID_MAP_KEY',
         `a map key is the void sentinel -- '_' states that a position carries no value (§2.9), ` +
           `and an entry with no key states an entry for nothing`,
         'a key',
@@ -830,7 +830,7 @@ function leaf(
     } catch (error) {
       if (error instanceof TsonAtomTypeError) {
         reportAtomViolation(ctx, match.name, error, token.text);
-        return absentNode(typeRefName, annotations);
+        return voidNode(typeRefName, annotations);
       }
       throw error;
     }
@@ -873,7 +873,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
 // ---------------------------------------------------------------------------------------------
 
 /** A unique stand-in for the void sentinel `_` as a key identity -- distinct from every real decoded value, including the string `"null"` (quoted or not: base resolution's own `StringValue`, §4.4). */
-const ABSENT_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-absent-key');
+const VOID_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-void-key');
 
 /**
  * The value {@link deepEqual}-comparable identity of `node`, for duplicate-key detection. Equates
@@ -910,7 +910,7 @@ function identityDigest(value: unknown): string {
     case 'undefined':
       return 'u';
     case 'symbol':
-      // `ABSENT_KEY_IDENTITY` is the one symbol `keyIdentity` ever produces -- a fixed tag is
+      // `VOID_KEY_IDENTITY` is the one symbol `keyIdentity` ever produces -- a fixed tag is
       // enough, and the `'unscaled' in value` shape checks below cannot even run on a symbol.
       return 'y';
     default:
@@ -961,8 +961,8 @@ function keyIdentity(node: Value): unknown {
     }
     case 'map':
       return node.entries.map((entry) => [keyIdentity(entry.key), keyIdentity(entry.value)]);
-    case 'absent':
-      return ABSENT_KEY_IDENTITY;
+    case 'void':
+      return VOID_KEY_IDENTITY;
     case 'tuple':
     case 'missing':
       throw new TsonInternalError(

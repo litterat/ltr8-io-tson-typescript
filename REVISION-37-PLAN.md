@@ -40,7 +40,7 @@ Class 2 subjects fail, for one reason**: the kernel's `atom_specification.spec` 
 kernel's own `iri`, so `meta-kernel.tn` does not bootstrap. Five more fail to parse their sidecar,
 because the harness does not admit `refused` in the new `class2/validate/refused/` bucket.
 
-## Stage 1: the contract layer, the grammar, and the bootstrap
+## Stage 1: the contract layer, the grammar, and the bootstrap (done, `55c043e`)
 
 **One package, run alone, reviewed by the manager before anything fans out.** As in Revision 36,
 this is the contract layer (`schema/meta/`, `ast/schema/`) plus every consumer that must change for
@@ -140,13 +140,13 @@ harness.
 - 459 discovered. Report the Class 2 pass count and attribute every remaining failure to a WP.
 - `npm run typecheck && npm run lint && npm run format:check && npm test` green.
 
-## Stage 2: the Revision 37 rules
+## Stage 2: the Revision 37 rules (done, `7b0ad34`, `6b72655`, `d20d7ea`, `e505a60`; review closed in `3c126ec`)
 
 Four packages, run **in sequence** because they share `definitionResolver.ts`, `atomChecks.ts` and
 the reader. Each package's gate is that the previous packages' vectors stay green and its own go
 green.
 
-### WP2A: field-group options (#18; Part 2 §5.9, §5.10.1, §5.11, §7.6, §8.1)
+### WP2A (done, `7b0ad34`): field-group options (#18; Part 2 §5.9, §5.10.1, §5.11, §7.6, §8.1)
 
 - The three validity rules, and the declaration rules that refuse a group which only restates
   plain fields or another group. A group needs at least two members, so a bare group of one option
@@ -171,7 +171,7 @@ Vectors: `a-field-group-option-holds-several-fields`, the eight group vectors in
 `an-option-of-several-fields-chosen-whole`, `an-option-whose-marked-members-are-left-out`,
 `an-optional-group-with-no-option-chosen`, `an-empty-discriminator-list`.
 
-### WP2B: typed parameters and declared family members (#9, #4; Part 2 §5.2, §5.10, §8.1, §8.2; change log §8.2 items 2, 5, 6, 10–12)
+### WP2B (done, `6b72655`): typed parameters and declared family members (#9, #4; Part 2 §5.2, §5.10, §8.1, §8.2; change log §8.2 items 2, 5, 6, 10–12)
 
 - **Start from what Stage 1 left.** `compiler/parameterTypes.ts` is a full port of Java
   `ParameterTypes`. It covers derivation, agreement, the may-not-widen bound check, the
@@ -210,7 +210,7 @@ Vectors: the eight template vectors in `schema/invalid` and `schema/valid`,
 `a-use-site-application-is-read-where-it-is-written`, the positional-enum-template vectors, the
 two modified `applying-template-directly*` vectors.
 
-### WP2C: identifier families, enum types, and normalization (#7, #19; Part 1 §2.6, §7.1, §7.7, §8.2; Part 2 §5.4, §5.5, §5.7, §7.4, §7.7, §11.4; change log §8.2 items 4, 8)
+### WP2C (done, `d20d7ea`): identifier families, enum types, and normalization (#7, #19; Part 1 §2.6, §7.1, §7.7, §8.2; Part 2 §5.4, §5.5, §5.7, §7.4, §7.7, §11.4; change log §8.2 items 4, 8)
 
 - **Start from what Stage 1 left.** `json/schema/atoms.ts`'s `identifierReader` applies §7.7's
   fixed grammar to every `identifier_type`, while the text side (`atomBuilder.ts`) checks none, so
@@ -251,7 +251,7 @@ two modified `applying-template-directly*` vectors.
 Vectors: the identifier-, enum-, normalization-, casing-, NFC-, fold-, refused-, and
 supplementary-character vectors in `schema/` and `validate/`.
 
-### WP2D: atoms and positions (#5, #8, #10–#15, #20; Part 1 §2.2.1, §3.3, §5.2, §5.4–§5.6; Part 2 §5.4, §5.5, §7.1, §7.3, §7.5, §7.8)
+### WP2D (done, `e505a60`): atoms and positions (#5, #8, #10–#15, #20; Part 1 §2.2.1, §3.3, §5.2, §5.4–§5.6; Part 2 §5.4, §5.5, §7.1, §7.3, §7.5, §7.8)
 
 - **URI and IRI.** `!uri` follows RFC 3986's grammar, not 2396's: empty host, empty path, IPvFuture,
   digits-only port. US-ASCII only, and a character beyond it is a **resolver** error. A relative
@@ -295,12 +295,12 @@ tuple vectors, `a-container-states-whether-order-is-part-of-its-value`,
 
 **Gate:** 459/459.
 
-## Stage 3: behaviour the change log does not state
+## Stage 3: behaviour the change log does not state (done, `fbe9710`, `7fc6ca9`)
 
 The reference carries behaviour between the pins that no change-log item names. Two packages over
 disjoint files, run in sequence.
 
-### WP3A: refusals, policy and identity
+### WP3A (done, `fbe9710`): refusals, policy and identity
 
 - **A name refusal is not a verdict (`b7d84f1d`).** `CONFUSABLE_NAMES`, `RESTRICTED_CHARACTER` and
   `RESTRICTED_SCRIPT` join the non-verdict codes, and `core/diagnostic.ts`'s `isVerdict` is the one
@@ -324,7 +324,7 @@ disjoint files, run in sequence.
 - **Wording.** A missing required field reads `(missing)`, never `(absent)`. Rule names and
   messages say "void" and "void sentinel".
 
-### WP3B: `strip` and the CLI
+### WP3B (done, `7fc6ca9`): `strip` and the CLI
 
 - **`strip` (Java `TsonSchemaStripper`, `StripCommand`).** It parses a schema document, drops
   `!!id`, drops a header argument's `?query` while keeping its `#fragment`, and shortens a bundled
@@ -343,7 +343,7 @@ disjoint files, run in sequence.
 
 **Gate:** 459/459, unit green, `npm run smoke:cli` green.
 
-## Stage 4: Part 3, the JSON encoding
+## Stage 4: Part 3, the JSON encoding (done, `bba901c`)
 
 Part 3 defines no type-system rule. Each change spells, in JSON, a rule Part 1 or Part 2 owns, so
 this stage follows Stage 2 and reuses what it built through the paths `src/json` may import. **If a
@@ -380,7 +380,7 @@ the reference's tson-json diff.
 
 **Gate:** the JSON unit tests, 459/459 unchanged, and the browser bundle builds.
 
-## Stage 5: sweep
+## Stage 5: sweep (done)
 
 `/2026/36/` → `/2026/37/` across the unit tests, `README.md`, `skills/tson-ts/` and
 `examples/web-demo/`. Version both packages 0.37.0. Refresh `STATUS.md` (459 subjects, the gaps),
@@ -434,5 +434,23 @@ test file is named for what it tests, not for the pass that wrote it.
 - **`policy.tn` is outside `strip`'s shortening.** The reference shortens `meta-kernel`, `meta` and
   `core` and leaves `policy` its full URL. That may be deliberate, since nothing imports policy as a
   schema, but it is unstated.
+
+- **Resolved output names `!array` where the fixture names `!set_type`.** The Java writes
+  `enum_set`'s body under `array`, and its fixture test cannot see it, since it binds the fixture
+  into the value model and compares `TypeDefinition` objects where both forms arrive as one
+  `ArrayBody`. This port names the applied constructor from the entry's `source` and compares
+  written form. A §8.1 conformance gap in the Java.
+- **A limit refusal is not a verdict in the Java, and is one here (§8.1, §9.1).** The Java's
+  `Code.verdict()` groups `LIMIT_EXCEEDED` with the name refusals and the fetch codes; this port's
+  `isVerdict('LIMIT_REFUSED')` answers `true`. §8.1 does not say which outcome a limit refusal
+  belongs to. The port-side question is recorded in `IDIOM-DEBT.md` item 10.
+- **`extern_of`/`extern_type` never narrowed (Stage 4).** Template substitution skipped map keys
+  and values, and a binding's canonical form rendered every map as `?`, so entries differing only
+  in `schemas` merged. Fixed here in both encodings. Worth checking the Java for the same.
+- **A bare annotation in a schema is read as the void sentinel against its type**, so a bare
+  annotation whose type is not void is refused. The change log states `@deprecated` as bare, but
+  not the general rule.
+- **Corpus sidecars still spell the void sentinel `absent`** (`absent:` in the reader and parser
+  sidecars, `absent-token` in the lexer's), where Part 1 §2.9 and the Java now say void.
 
 _The rest is collected as the run goes._

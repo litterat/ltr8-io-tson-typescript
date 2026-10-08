@@ -87,7 +87,7 @@ export type DiagnosticCode =
   /** Two entries of one map share a key (§2.6). */
   | 'DUPLICATE_MAP_KEY'
   /** A map entry's key is the void sentinel (§2.9). */
-  | 'ABSENT_MAP_KEY'
+  | 'VOID_MAP_KEY'
   /** Two fields of one record share a name (§2.5). */
   | 'DUPLICATE_FIELD'
   /**

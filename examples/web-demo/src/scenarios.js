@@ -87,7 +87,7 @@ export const SCENARIOS = [
   when:     !datetime "2026-08-28T05:14:00Z"
   where:    !ipv4 "10.0.0.1"
   who:      !nonesuch "unknown to the built-in vocabulary"
-  absent:   _
+  void:     _
   null:     null
   nested:   { a: [1 2 3,]  b: { c: _ } }
 }

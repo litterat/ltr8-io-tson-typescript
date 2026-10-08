@@ -58,7 +58,7 @@ const TOKEN_FORM: Record<SchemaTokenForm, EventTokenForm> = {
  * `null` instead"), and the container-reader counterpart to `reader/bind.ts`'s own
  * `abandonedValue`.
  *
- * **Why this, and not {@link absentNode}.** `AbsentNode` is a real tree node: it is what a
+ * **Why this, and not {@link voidNode}.** `VoidNode` is a real tree node: it is what a
  * document's own written `_` reads to, and every container above this position may legitimately
  * hold one as a genuine child value. Handing the same node back for "this position's own read
  * failed" would make the two indistinguishable from the tree alone -- a caller holding a partial
@@ -118,7 +118,7 @@ export function renderValue(value: Value): string {
   switch (value.kind) {
     case 'atom':
       return renderAtomValue(value.value);
-    case 'absent':
+    case 'void':
       return "the void sentinel '_'";
     case 'record':
       return `a record${value.typeRef !== undefined ? ` '${value.typeRef}'` : ''}`;

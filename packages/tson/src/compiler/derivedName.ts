@@ -76,7 +76,7 @@ function appendReadable(out: string[], value: CoreValue): void {
       break;
     case 'map':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       out.push('_v');
       break;
   }
@@ -132,7 +132,7 @@ function appendValue(out: string[], value: CoreValue): void {
       out.push(')');
       break;
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       out.push('?');
       break;
   }

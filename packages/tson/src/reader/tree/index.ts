@@ -14,7 +14,7 @@ export { mapTreeReader } from './map.js';
 export { arrayTreeReader } from './array.js';
 export { tupleTreeReader } from './tuple.js';
 export { atomTreeReader, atomTypeReader } from './atom.js';
-export { absentTreeReader } from './absent.js';
+export { voidTreeReader } from './void.js';
 export { captureAnnotations } from './annotations.js';
 export {
   describeEvent,

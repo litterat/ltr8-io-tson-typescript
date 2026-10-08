@@ -72,7 +72,7 @@ satisfies. `write` has no async overload — a `Value` is already in memory.
 ### The tree model (also `@ltr8/tson/tree`)
 
 ```ts
-type Value = RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | AbsentNode | MissingNode;
+type Value = RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | VoidNode | MissingNode;
 
 interface RecordNode {
   kind: 'record';
@@ -104,8 +104,8 @@ interface AtomNode {
   typeRef?: string;
   annotations: Annotations;
 }
-interface AbsentNode {
-  kind: 'absent';
+interface VoidNode {
+  kind: 'void';
   typeRef?: string;
   annotations: Annotations;
 }
@@ -152,8 +152,8 @@ type AtomValue =
   | MacAddress;
 ```
 
-Constructors: `recordNode`, `mapNode`, `arrayNode`, `tupleNode`, `atomNode`, `absentNode`,
-`missingNode`, `tsonDocument`, plus the `ABSENT` constant.
+Constructors: `recordNode`, `mapNode`, `arrayNode`, `tupleNode`, `atomNode`, `voidNode`,
+`missingNode`, `tsonDocument`, plus the `VOID` constant.
 
 Accessors — **all total, none throws**:
 
@@ -488,6 +488,8 @@ Real, and worth knowing before you write around them:
 - **A data document's annotations are preserved but never resolved (§6).** An unknown `@annotation`
   on data, or one whose value does not match its declared type, passes. The schema side does
   enforce this.
-- **`@ltr8/tson/json` has no `objectReader`/bind counterpart, no in-band-only `$schema`/`$type`
-  binding, no `scoped`-position reader, and no schema-directed encoder.** See `STATUS.md`'s Part 3
-  section for the full, current list.
+- **`@ltr8/tson/json` has no `objectReader`/bind counterpart and no schema-directed encoder, and it
+  has no registry of its own.** A `scoped` position's EXTERN `$schema` is looked up through the
+  `foreignSchemas` the caller passes to `compileJsonSchema(linked, { foreignSchemas })`; without
+  one the push reports `SCHEMA_NOT_PERMITTED`. See `STATUS.md`'s Part 3 section for the full,
+  current list.

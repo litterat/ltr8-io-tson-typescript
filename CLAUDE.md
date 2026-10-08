@@ -10,10 +10,10 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/36/tson-part1-data.md
+  https://tson.io/raw/2026/37/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/36/tson-part2-schema.md
-- Part 3 — the JSON encoding: https://tson.io/raw/2026/36/tson-part3-json.md
+  https://tson.io/raw/2026/37/tson-part2-schema.md
+- Part 3 — the JSON encoding: https://tson.io/raw/2026/37/tson-part3-json.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than
@@ -23,10 +23,10 @@ trusting a cached copy.
 port is written against:
 
 - `.references/ltr8-io-tson-java` — the reference implementation, **pinned** to a fixed commit so the
-  port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the three
-  live bundled schemas `spec/m/{meta-kernel,meta,core}.tn` plus their `*-resolved.tn` resolver-output
-  fixtures.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 328
+  port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the four
+  live bundled schemas `spec/m/{meta-kernel,meta,core,policy}.tn` plus the `*-resolved.tn`
+  resolver-output fixtures of the first three.
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 459
   subjects over `tests/<class>/<layer>/<bucket>/`. **Pinned**, like the Java: a corpus that tracked
   `main` turned this repo's CI red on an upstream commit with no change here.
 
@@ -34,8 +34,8 @@ Both are required before the conformance project will run. A SessionStart hook f
 automatically in cloud sessions; run the script yourself locally.
 
 `spec/` holds the same spec snapshots, the change log, and bundled schemas — Parts 1 through 3 plus
-`tson-rev36-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
-`.references/` is gitignored and absent from a bare clone, but the three bundled schemas are loaded
+`tson-rev37-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
+`.references/` is gitignored and absent from a bare clone, but the four bundled schemas are loaded
 at runtime and every `§` citation in the source refers to the spec text, so both have to be readable
 without network access. They are copies: do not edit them, and move the pin and re-copy together.
 `spec/PROVENANCE.md` records where they came from and `vendored-spec.test.ts` fails if they drift.

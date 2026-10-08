@@ -11,15 +11,15 @@
  *
  * **The read is all-or-nothing.** A position that reported anything -- a wrong-arity gap, or a
  * failed element read -- abandons the whole tuple (`support.ts`'s own `abandonedValue`), never a
- * partial one built around the gap. A slot legitimately absent (the sentinel `_` at a voidable
- * position) is the one case that produces a real {@link AbsentNode}.
+ * partial one built around the gap. A slot legitimately void (the sentinel `_` at a voidable
+ * position) is the one case that produces a real {@link VoidNode}.
  */
 import type { Task } from '../../io/bytes.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import type { TupleBody, TupleElement } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
-import { absentNode, tupleNode } from '../../tree/nodes.js';
+import { voidNode, tupleNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -106,8 +106,8 @@ export function tupleTreeReader(
       const slotCtx = ctx.index(index);
       yield* refuseUnscopedSchemaRef(slotCtx, slot.scoped, slot.schema.elementType.name);
       const elementPeek = yield* ctx.peek();
-      if (elementPeek.kind === 'absent') {
-        yield* ctx.next(); // consume the absent event regardless of voidability
+      if (elementPeek.kind === 'void') {
+        yield* ctx.next(); // consume the void event regardless of voidability
         if (!slot.schema.voidable) {
           slotCtx.report(
             'FIELD_REQUIRED',
@@ -146,7 +146,7 @@ export function tupleTreeReader(
       if (tupleCtx.reported() > mark) {
         return abandonedValue();
       }
-      const elements = decoded.map((value) => value ?? absentNode());
+      const elements = decoded.map((value) => value ?? voidNode());
       return tupleNode(elements, name, annotations);
     },
   };

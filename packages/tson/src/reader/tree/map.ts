@@ -12,7 +12,7 @@ import type { ReadContext, TypeReader } from '../contracts.js';
 import type { MapBody } from '../../schema/meta/bodies.js';
 import type { TsonEvent } from '../../stream/event.js';
 import type { MapEntry, Value } from '../../tree/nodes.js';
-import { absentNode, mapNode } from '../../tree/nodes.js';
+import { voidNode, mapNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -109,7 +109,7 @@ export function mapTreeReader(
     for (;;) {
       const keyPeek = yield* ctx.peek();
       if (keyPeek.kind === 'map-end') break;
-      if (keyPeek.kind === 'absent') {
+      if (keyPeek.kind === 'void') {
         yield* ctx.next(); // the absent key itself
         ctx.report(
           'TYPE_MISMATCH',
@@ -150,19 +150,19 @@ export function mapTreeReader(
       yield* refuseUnscopedSchemaRef(valueCtx, scopedValue, body.valueType.name);
       const valuePeek = yield* ctx.peek();
       let value: Value;
-      if (valuePeek.kind === 'absent') {
-        // The entry is present with an absent value, so it counts toward the size bounds either
+      if (valuePeek.kind === 'void') {
+        // The entry is present with a void value, so it counts toward the size bounds either
         // way (§5.3); what voidability decides is whether the absence is permitted at all (§7.6).
         yield* ctx.next();
         if (!body.voidable) {
           valueCtx.report(
             'FIELD_REQUIRED',
-            `'${displayName}' entry '${keySegment}' is absent, but values are required`,
+            `'${displayName}' entry '${keySegment}' is void, but values are required`,
             'a value',
             '_',
           );
         }
-        value = absentNode();
+        value = voidNode();
       } else {
         value = yield* valueParser.read(valueCtx);
       }

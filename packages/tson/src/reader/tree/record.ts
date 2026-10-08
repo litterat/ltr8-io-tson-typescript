@@ -29,7 +29,7 @@ import {
   type RecordField,
 } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
-import { absentNode, recordNode } from '../../tree/nodes.js';
+import { voidNode, recordNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -191,7 +191,7 @@ export function recordTreeReader(
    * value is even peeked, and a FIXED field is never voidable (§5.2's own refusal), so this
    * function's own `role` is always `'FREE'` or `'DEFAULT'`.
    *
-   * Admitted exactly when `voidable` (§2.9: present with an absent value, distinct from never
+   * Admitted exactly when `voidable` (§2.9: present with a void value, distinct from never
    * written); refused everywhere else, split by `role` on the same terms the JSON encoding's own
    * `json/schema/record.ts#statedNull` already does, both ports of the reference's one shared
    * `RecordDiagnostics.absenceAtRequiredField`/`absenceAtDefaultedField` ([TSON-JSON] §9.4: one
@@ -205,7 +205,7 @@ export function recordTreeReader(
   function valueForStatedVoidField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
     if (schema.voidable) {
-      return absentNode();
+      return voidNode();
     }
     const omission = fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'));
     if (schema.role === 'DEFAULT') {
@@ -214,7 +214,7 @@ export function recordTreeReader(
         .report(
           'ATOM_CONSTRAINT_VIOLATION',
           `'${schema.name}' on '${displayName}' is always filled from the schema and cannot be ` +
-            `written as absent -- omit the field to take its default (§5.2)`,
+            `written as void -- omit the field to take its default (§5.2)`,
           `the field omitted, or a value for '${schema.name}'`,
           '_',
         );
@@ -250,7 +250,7 @@ export function recordTreeReader(
     yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
     const check = at(fixedCheck, schemaIndex, 'fixed-check');
     const peeked = yield* ctx.peek();
-    if (peeked.kind === 'absent') {
+    if (peeked.kind === 'void') {
       yield* ctx.next();
       // §5.2: a pin on a voidable type is refused at the schema, so a FIXED field is never
       // voidable -- a written `_` is always refused here, never a second spelling of the pin.
@@ -268,7 +268,7 @@ export function recordTreeReader(
       // The token isn't a value of the field's own type at all, already reported against this path.
       return;
     }
-    const fixedValue = check.value ?? absentNode();
+    const fixedValue = check.value ?? voidNode();
     if (!valuesEqual(written, fixedValue)) {
       fieldCtx.report(
         'FIELD_FIXED',
@@ -346,7 +346,7 @@ export function recordTreeReader(
       yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
       const valuePeek = yield* ctx.peek();
       let decoded: Value | undefined;
-      if (valuePeek.kind === 'absent') {
+      if (valuePeek.kind === 'void') {
         yield* ctx.next();
         decoded = valueForStatedVoidField(ctx, schemaIndex);
       } else {

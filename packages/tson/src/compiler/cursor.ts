@@ -189,7 +189,7 @@ export function isAlwaysMapStart(type: TokenType): boolean {
     case 'bang':
     case 'lbrace':
     case 'lbracket':
-    case 'absent-token':
+    case 'void-token':
       return true;
     default:
       return false;

@@ -1076,7 +1076,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         };
       case 'map':
       case 'empty-brace':
-      case 'absent':
+      case 'void':
       case 'token':
         return value;
     }

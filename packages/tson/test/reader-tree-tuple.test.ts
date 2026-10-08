@@ -66,11 +66,11 @@ describe('tupleTreeReader -- positions (§5.3 [TSON-SCHEMA])', () => {
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
-  it('a voidable position written `_` is silently AbsentNode', () => {
+  it('a voidable position written `_` is silently VoidNode', () => {
     const { ctx, diagnostics } = collectingContextOver('[_ 1]');
     const value = runSync(reader([slot('text', true), slot('int32')]).read(ctx));
     if (value.kind !== 'tuple') throw new Error('unreachable');
-    expect(value.elements[0]?.kind).toBe('absent');
+    expect(value.elements[0]?.kind).toBe('void');
     expect(diagnostics.diagnostics).toEqual([]);
   });
 });

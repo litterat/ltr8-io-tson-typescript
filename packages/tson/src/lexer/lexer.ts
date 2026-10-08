@@ -986,7 +986,7 @@ function* nextToken(state: LexerState): Task<TokenType> {
   if (cp === QUOTE) return yield* lexQuoted(state);
   if (cp === UNDERSCORE) {
     yield* advance(state);
-    return finish(state, 'absent-token', '_');
+    return finish(state, 'void-token', '_');
   }
   if (cp === CP_LBRACE) {
     yield* advance(state);

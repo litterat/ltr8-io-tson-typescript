@@ -16,7 +16,7 @@
 import type { Task } from '../io/bytes.js';
 import { adjacentTo } from '../lexer/token.js';
 import type {
-  AbsentValue,
+  VoidValue,
   Annotation,
   ArrayValue,
   CoreValue,
@@ -150,7 +150,7 @@ function* parseDataTypeRefName(state: CursorState): Task<string> {
       next,
       `'!${name.text}?' uses the optional suffix, which is schema syntax and not available in a ` +
         `data value (§3.2): optionality is a field's state where the schema declares it, and a ` +
-        `value that is absent is written '_' (§2.9)`,
+        `value that is void is written '_' (§2.9)`,
     );
   }
   if (!isStructuralDelimiter(next.type) && adjacentTo(name, next)) {
@@ -192,9 +192,9 @@ export function* parseCoreValue(state: CursorState): Task<CoreValue> {
         yield* advance(state);
         return yield* parseArrayTail(state);
       });
-    case 'absent-token':
+    case 'void-token':
       yield* advance(state);
-      return { kind: 'absent' } satisfies AbsentValue;
+      return { kind: 'void' } satisfies VoidValue;
     case 'unquoted-token':
     case 'single-line-token':
     case 'multi-line-token':

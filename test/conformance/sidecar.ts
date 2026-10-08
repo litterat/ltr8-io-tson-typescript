@@ -338,7 +338,7 @@ function tokenText(dv: DataValue, what: string): string {
 
 /** Whether `dv`'s core-value is the void sentinel `_`. */
 function isAbsent(dv: DataValue): boolean {
-  return dv.coreValue.kind === 'absent';
+  return dv.coreValue.kind === 'void';
 }
 
 function requireField(fields: Map<string, DataValue>, name: string, context: string): DataValue {

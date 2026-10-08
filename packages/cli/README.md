@@ -14,7 +14,7 @@ npx @ltr8/tson-cli strip person.tn
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
-`0.36.x` is built against the 2026 Revision 36 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+`0.37.x` is built against the 2026 Revision 37 series. `@ltr8/tson` and `@ltr8/tson-cli` are
 released in lockstep at the same version.
 
 ## Commands

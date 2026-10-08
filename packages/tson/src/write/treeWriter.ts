@@ -106,9 +106,9 @@ function writeValueTo(value: Value, out: Emitter): void {
     case 'atom':
       writeAtomTo(value, out);
       break;
-    case 'absent':
+    case 'void':
       if (value.typeRef !== undefined) out.typeRef(value.typeRef);
-      out.absentValue();
+      out.voidValue();
       break;
   }
 }

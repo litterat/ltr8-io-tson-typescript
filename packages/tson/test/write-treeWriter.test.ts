@@ -53,7 +53,7 @@ describe('value-preserving round trip through the real schemaless reader', () =>
     ['an untyped float', '3.5'],
     ['a boolean', 'true'],
     ['a string', '"hello"'],
-    ['absent', '_'],
+    ['void', '_'],
   ])('%s', (_label, text) => {
     const document = readSchemaless(text);
     const written = writeTree(document);

@@ -142,7 +142,7 @@ export type AnnotationValueEncoder = (value: unknown) => DataValue;
 
 export function defaultAnnotationValueEncoder(value: unknown): DataValue {
   if (value === null || value === undefined) {
-    return { annotations: [], coreValue: { kind: 'absent' } };
+    return { annotations: [], coreValue: { kind: 'void' } };
   }
   if (typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'number') {
     return { annotations: [], coreValue: tokenValue(String(value)) };

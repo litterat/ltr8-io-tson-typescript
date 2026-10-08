@@ -26,10 +26,15 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.36.x` implements the **2026 Revision 36** series. A new spec revision moves the
+built against, so `0.37.x` implements the **2026 Revision 37** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
+
+**Breaking at 0.37.0:** the void sentinel's public names follow the reference's. `AbsentNode`,
+`absentNode`, `ABSENT`, the `'absent'` node and value kind, `Emitter.absentValue()` and the
+`ABSENT_MAP_KEY` diagnostic code are now `VoidNode`, `voidNode`, `VOID`, `'void'`,
+`Emitter.voidValue()` and `VOID_MAP_KEY`.
 
 Both packages are released in lockstep at the same version, and `@ltr8/tson-cli` depends on
 `@ltr8/tson` at an exact pin rather than a range: the two are built and tested together, and the CLI
@@ -83,7 +88,7 @@ strings, `[ ]` arrays, `{ name: value }` records, the `\n \r \t \\ \"` escapes �
 each was a good idea on its own. What differs is load-bearing: TSON has no `null` keyword (§4.4),
 field names are identifiers (§2.5), and there are no surrogate-pair escapes (§7.2.2). JSON is read
 through [TSON-JSON] instead — a second, schema-directed encoding of the same model, mapping `null`
-to absence and a non-identifier-keyed object to a map — behind this package's own [`./json`
+to the void sentinel and a non-identifier-keyed object to a map — behind this package's own [`./json`
 subpath](#json-encoding).
 
 Two conformance classes in the shared corpus: **Class 1** implements the data format alone and needs
@@ -171,7 +176,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/36/m/meta.tn', 'https://tson.io/2026/36/m/core.tn']);
+await tson.preload(['https://tson.io/2026/37/m/meta.tn', 'https://tson.io/2026/37/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -288,7 +293,7 @@ cat person-data.tn | npx @ltr8/tson-cli validate --schema person.tn --root perso
 cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root person --input json -
 ```
 
-Five commands: `validate`, `compile`, `policy`, `hash`, `init-example`. `validate`/`compile`/`hash`
+Six commands: `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`. `validate`/`compile`/`hash`
 register `@ltr8/tson/stdlib`'s embedded `meta-kernel`/`meta.tn`/`core.tn`, so they work offline with
 no `SchemaSource` configured. `--format json`/`--format tson` report an `outcome` of `VALID`,
 `INVALID` or `NOT_CHECKED` — a document whose schema could not be obtained is `NOT_CHECKED`, not
@@ -330,9 +335,9 @@ binding, the §3.5 HTTP header fields, or a schema-directed encoder — see
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/36/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/36/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/36/tson-part3-json.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/37/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/37/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/37/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.

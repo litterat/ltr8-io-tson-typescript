@@ -1049,7 +1049,7 @@ function namesToken(value: CoreValue, text: string): boolean {
       return value.fields.some((field) => namesToken(field.value.value.coreValue, text));
     case 'map':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return false;
   }
 }
@@ -1158,7 +1158,7 @@ function renameValue(value: CoreValue, substitution: ReadonlyMap<string, string>
       };
     case 'map':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return value;
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
-import { absentTreeReader } from '../src/reader/tree/absent.js';
+import { voidTreeReader } from '../src/reader/tree/void.js';
 import {
   bodyContextOver,
   collectingContextOver,
@@ -10,7 +10,7 @@ import {
 import { runSync } from '../src/io/bytes.js';
 
 /**
- * `reader/tree/atom.ts`/`absent.ts` -- ported from `AtomTypeReader`/`AtomTreeReader`/`AbsentTreeReader`.
+ * `reader/tree/atom.ts`/`void.ts` -- ported from `AtomTypeReader`/`AtomTreeReader`/`VoidTreeReader`.
  */
 
 describe('atomTypeReader -- the AtomType bridge (§5)', () => {
@@ -64,28 +64,28 @@ describe('atomTreeReader -- wraps a delegate into a Value (§5)', () => {
   it('a soft-failed delegate read yields no node at all -- the diagnostic carries the story (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('"nope"');
     const value = runSync(intTreeReader.read(ctx));
-    // A read is all-or-nothing: no AbsentNode placeholder stands in for a refused leaf either.
+    // A read is all-or-nothing: no VoidNode placeholder stands in for a refused leaf either.
     expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 });
 
-describe('absentTreeReader -- the void reader (§7.3)', () => {
-  it('reads `_` into an AbsentNode', () => {
-    const value = runSync(absentTreeReader('void').read(bodyContextOver('_')));
-    expect(value).toEqual({ kind: 'absent', annotations: { values: [] } });
+describe('voidTreeReader -- the void reader (§7.3)', () => {
+  it('reads `_` into an VoidNode', () => {
+    const value = runSync(voidTreeReader('void').read(bodyContextOver('_')));
+    expect(value).toEqual({ kind: 'void', annotations: { values: [] } });
   });
 
   it('reports TYPE_MISMATCH for anything else, and yields no node at all (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('42');
-    const value = runSync(absentTreeReader('void').read(ctx));
+    const value = runSync(voidTreeReader('void').read(ctx));
     expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
   it('fully discards a mismatched container so the stream stays positioned', () => {
     const { ctx, diagnostics } = collectingContextOver('[1 2 3]');
-    runSync(absentTreeReader('void').read(ctx));
+    runSync(voidTreeReader('void').read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
     // Nothing left to pull but document-end -- proves the whole array was skipped, not just its `[`.
     const trailing = runSync(ctx.next());

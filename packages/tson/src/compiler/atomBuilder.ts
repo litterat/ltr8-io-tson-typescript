@@ -34,7 +34,7 @@ import { atomNode } from '../tree/nodes.js';
 import type { Task } from '../io/bytes.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import { atomTreeReader, atomTypeReader } from '../reader/tree/atom.js';
-import { absentTreeReader } from '../reader/tree/absent.js';
+import { voidTreeReader } from '../reader/tree/void.js';
 import { captureAnnotations } from '../reader/tree/annotations.js';
 import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from '../reader/tree/grammar.js';
 import { abandonedValue } from '../reader/tree/support.js';
@@ -103,7 +103,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
  * `value`'s own reading contract (meta-kernel.tn: "the token, uninterpreted, read by the type the
  * position hands it to"). Not routed through {@link wrap} since its host inhabitants span three of
  * `AtomValue`'s cases rather than being fixed to one -- this is the one type whose contract is
- * "carry the token and let the position decide". There is no absent outcome here, since `_` is a
+ * "carry the token and let the position decide". There is no void outcome here, since `_` is a
  * distinct event kind this reader never sees as a `token`.
  *
  * The escape hatch is a *carrier*, not a resolution step: base type resolution applies only in
@@ -215,7 +215,7 @@ export function buildAtomReader(
     case 'value_type':
       return valueTreeReader(name);
     case 'void_type':
-      return absentTreeReader(name);
+      return voidTreeReader(name);
     case 'enum':
       return wrap(createEnumParser(name, atom, options.enumForm), name);
     case 'integer_type':

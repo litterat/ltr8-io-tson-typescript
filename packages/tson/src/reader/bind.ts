@@ -264,7 +264,7 @@ function* skipCoreValue(ctx: ReadContext): Task<void> {
       yield* ctx.next(); // array-end
       return;
     case 'token':
-    case 'absent':
+    case 'void':
     case 'empty-brace':
       return; // leaf, already consumed
     default:
@@ -283,7 +283,7 @@ function describeEvent(e: TsonEvent): string {
       return 'an array';
     case 'empty-brace':
       return '{}';
-    case 'absent':
+    case 'void':
       return "the void sentinel '_'";
     case 'token':
       return `a token ('${e.text}')`;
@@ -394,8 +394,8 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
     }
     case 'token':
       return { kind: 'token', text: e.text, form: e.form };
-    case 'absent':
-      return { kind: 'absent' };
+    case 'void':
+      return { kind: 'void' };
     case 'empty-brace':
       return { kind: 'empty-brace' };
     default:
@@ -510,7 +510,7 @@ function* readRecord<T>(
         yield* ctx.next();
       }
       const valuePeek = yield* ctx.peek();
-      if (valuePeek.kind === 'absent') {
+      if (valuePeek.kind === 'void') {
         yield* ctx.next();
         if (slot.required) {
           fieldCtx.report(
@@ -754,7 +754,7 @@ function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomRea
     for (;;) {
       const keyPeek = yield* ctx.peek();
       if (keyPeek.kind === 'map-end') break;
-      if (keyPeek.kind === 'absent') {
+      if (keyPeek.kind === 'void') {
         yield* ctx.next();
         ctx.report(
           'TYPE_MISMATCH',

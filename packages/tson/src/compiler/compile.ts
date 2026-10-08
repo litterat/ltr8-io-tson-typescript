@@ -635,7 +635,7 @@ export function* readValue(
  * reported anything -- a token-policy refusal the stream itself raised, a construction failure
  * deep in the tree, or the trailing-content check {@link readValue} makes after the root read
  * returns -- yields no value, because a tree whose placeholder for a refused value is the same
- * node as a real absent one cannot say which of its parts to trust. `value` is `undefined` rather
+ * node as a real void one cannot say which of its parts to trust. `value` is `undefined` rather
  * than a placeholder `Value` for exactly that reason; see `reader/tree/support.ts`'s own
  * `abandonedValue` for the mechanism every constructing reader in this stack already uses to
  * reach this point.

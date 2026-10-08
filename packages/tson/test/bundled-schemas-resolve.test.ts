@@ -184,7 +184,7 @@ const encodeAtom: AtomEncoder = (binding, value): TokenValue => {
 function fixtureAnnotationValue(value: DataValue): Canonical {
   const core = value.coreValue;
   if (core.kind === 'token') return core.text;
-  if (core.kind === 'absent') return NO_VALUE;
+  if (core.kind === 'void') return NO_VALUE;
   return canonical(value);
 }
 
@@ -224,7 +224,7 @@ function canonicalCore(value: CoreValue, entry: boolean, head?: string): Canonic
       return value.form === 'unquoted' ? canonicalName(value.text) : JSON.stringify(value.text);
     case 'empty-brace':
       return {};
-    case 'absent':
+    case 'void':
       return '_';
     case 'array':
       return value.elements.map((element) => canonical(element.value));
@@ -322,7 +322,7 @@ function renderAnnotationValue(value: unknown): Canonical {
   if (typeof value === 'object' && value !== null && 'kind' in value) {
     const node = value as { kind: string; value?: unknown };
     if (node.kind === 'atom') return String(node.value);
-    if (node.kind === 'absent') return NO_VALUE;
+    if (node.kind === 'void') return NO_VALUE;
   }
   if (typeof value === 'object' && value !== null && 'text' in value) {
     return (value as { text: string }).text;

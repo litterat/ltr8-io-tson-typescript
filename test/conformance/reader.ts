@@ -138,7 +138,7 @@ export function assertReaderValueMatches(
 ): void {
   switch (expected.kind) {
     case 'absent':
-      if (actual.kind !== 'absent') {
+      if (actual.kind !== 'void') {
         throw new Error(`${path}: expected the void sentinel, got kind '${actual.kind}'`);
       }
       return;

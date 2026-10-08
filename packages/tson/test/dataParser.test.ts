@@ -77,7 +77,7 @@ describe('root value shapes (§2.3, §7.4)', () => {
   });
 
   it('the void sentinel (§2.9)', () => {
-    expect(doc('_')).toEqual({ root: { annotations: [], coreValue: { kind: 'absent' } } });
+    expect(doc('_')).toEqual({ root: { annotations: [], coreValue: { kind: 'void' } } });
   });
 
   it('empty braces (§2.8), left unresolved at this layer', () => {
@@ -384,7 +384,7 @@ describe('the void sentinel is a value, not a missing key (§2.9)', () => {
       fields: readonly { name: string; value: { value: { coreValue: CoreValue } } }[];
     };
     expect(record.fields).toHaveLength(1);
-    expect(defined(record.fields[0]).value.value.coreValue).toEqual({ kind: 'absent' });
+    expect(defined(record.fields[0]).value.value.coreValue).toEqual({ kind: 'void' });
   });
 
   it('"{}" is its own empty-brace core-value, never an empty record with zero fields', () => {
@@ -399,7 +399,7 @@ describe('the void sentinel is a value, not a missing key (§2.9)', () => {
       kind: 'map';
       entries: readonly { key: { coreValue: CoreValue } }[];
     };
-    expect(defined(map.entries[0]).key.coreValue).toEqual({ kind: 'absent' });
+    expect(defined(map.entries[0]).key.coreValue).toEqual({ kind: 'void' });
   });
 });
 

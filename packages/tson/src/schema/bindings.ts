@@ -735,7 +735,7 @@ const referenceBinding: RecordBinding<Reference> = record<Reference>({
 const scopeKindBinding: Binding<ScopeKind> = atom<ScopeKind>('scope_kind');
 
 /**
- * `scoped.schemas`'s own value type, `[type_name; 1..]?` (§7.8) -- a non-empty list, or the absent
+ * `scoped.schemas`'s own value type, `[type_name; 1..]?` (§7.8) -- a non-empty list, or the void
  * sentinel meaning "every type this schema declares".
  *
  * The two arrive here as one: `_` at this position reads as the empty list (`bind/decode.ts`'s own

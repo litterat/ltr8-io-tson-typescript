@@ -293,7 +293,7 @@ describe('leaf tokens', () => {
   it("'_' is the only absence spelling (§2.9, §4.4); 'null' is an ordinary unquoted token", () => {
     expect(
       emit((out) => {
-        out.absentValue();
+        out.voidValue();
       }),
     ).toBe('_');
     expect(

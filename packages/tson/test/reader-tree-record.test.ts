@@ -123,12 +123,12 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     });
   });
 
-  it('a required, voidable field written `_` (§2.9) is present as an AbsentNode -- the key is still required (§5.2)', () => {
+  it('a required, voidable field written `_` (§2.9) is present as an VoidNode -- the key is still required (§5.2)', () => {
     const r = reader([field('name', 'text'), field('age', 'int32', { voidable: true })]);
     const stated = runSync(r.read(bodyContextOver('{ name: "Ada" age: _ }')));
     if (stated.kind !== 'record') throw new Error('unreachable');
     expect(stated.fields.has('age')).toBe(true);
-    expect(stated.fields.get('age')).toEqual({ kind: 'absent', annotations: { values: [] } });
+    expect(stated.fields.get('age')).toEqual({ kind: 'void', annotations: { values: [] } });
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" }');
     runSync(r.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
@@ -143,7 +143,7 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     const omitted = runSync(r.read(bodyContextOver('{ name: "Ada" }')));
     if (stated.kind !== 'record' || omitted.kind !== 'record') throw new Error('unreachable');
     expect(stated.fields.has('age')).toBe(true);
-    expect(stated.fields.get('age')).toEqual({ kind: 'absent', annotations: { values: [] } });
+    expect(stated.fields.get('age')).toEqual({ kind: 'void', annotations: { values: [] } });
     expect(omitted.fields.has('age')).toBe(false);
   });
 

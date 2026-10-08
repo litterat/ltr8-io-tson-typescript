@@ -307,7 +307,7 @@ function isAlwaysMapStart(type: TokenType): boolean {
     case 'bang':
     case 'lbrace':
     case 'lbracket':
-    case 'absent-token':
+    case 'void-token':
       return true;
     default:
       return false;
@@ -484,7 +484,7 @@ function* parseTypeRefName(state: StreamState): Task<string> {
       next,
       `'!${name.text}?' uses the optional suffix, which is schema syntax and not available in a ` +
         `data value (§3.2): optionality is a field's state where the schema declares it, and a ` +
-        `value that is absent is written '_' (§2.9)`,
+        `value that is void is written '_' (§2.9)`,
     );
   }
   if (!isStructuralDelimiter(next.type) && adjacentTo(name, next)) {
@@ -640,9 +640,9 @@ function* stepCoreValue(state: StreamState): Task<void> {
       state.ready.push({ kind: 'array-start', position: t.start });
       pushFrame(state, { kind: 'array', first: true });
       return;
-    case 'absent-token':
+    case 'void-token':
       yield* advance(state);
-      state.ready.push({ kind: 'absent', position: t.start });
+      state.ready.push({ kind: 'void', position: t.start });
       return;
     case 'unquoted-token':
     case 'single-line-token':

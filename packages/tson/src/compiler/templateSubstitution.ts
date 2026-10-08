@@ -138,7 +138,7 @@ export function substitute(
       return map;
     }
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return value;
   }
 }

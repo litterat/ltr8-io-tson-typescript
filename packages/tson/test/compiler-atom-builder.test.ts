@@ -258,7 +258,7 @@ describe('buildAtomReader -- value_type and void_type (§4.2): told apart by con
   it('reads a void_type instance as the void sentinel only, rejecting a real token', () => {
     const reader = buildAtomReader('void', { kind: 'void_type' });
     expect(runSync(reader.read(bodyContextOver('_')))).toEqual({
-      kind: 'absent',
+      kind: 'void',
       annotations: { values: [] },
     });
     const { ctx, diagnostics } = collectingContextOver('"nope"');
@@ -295,7 +295,7 @@ describe('buildAtomReader -- value_type and void_type (§4.2): told apart by con
   it('recognises both by constructor: an instance under any other name reads the same', () => {
     const nothing = buildAtomReader('nothing', { kind: 'void_type' });
     expect(runSync(nothing.read(bodyContextOver('_')))).toEqual({
-      kind: 'absent',
+      kind: 'void',
       annotations: { values: [] },
     });
     const anything = buildAtomReader('anything', { kind: 'value_type' });

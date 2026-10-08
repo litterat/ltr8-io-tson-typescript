@@ -45,21 +45,21 @@ export type {
   ArrayNode,
   TupleNode,
   AtomNode,
-  AbsentNode,
+  VoidNode,
   MissingNode,
   AtomValue,
   TsonDocument,
   MapEntry as TreeMapEntry,
 } from './tree/nodes.js';
 export {
-  ABSENT,
+  VOID,
   tsonDocument,
   recordNode,
   mapNode,
   arrayNode,
   tupleNode,
   atomNode,
-  absentNode,
+  voidNode,
   missingNode,
 } from './tree/nodes.js';
 export * from './tree/accessors.js';

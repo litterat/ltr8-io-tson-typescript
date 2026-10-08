@@ -1,5 +1,5 @@
 /**
- * Test-only helpers for the Revision 37 Stage 2 repair tests: load a schema through the public
+ * Test-only helpers for the schema-reading tests: load a schema through the public
  * front door and read a document with the text reader and the JSON reader, so a rule both
  * encodings read is held to the same answer.
  */
@@ -13,7 +13,7 @@ let counter = 0;
 
 /** A schema document around `body`, with a fresh `!!id`. */
 export function schemaSource(body: string, header = ''): Uint8Array {
-  const source = `!!id:"https://example.test/repair${String(counter++)}.tn"\n!!meta:"https://tson.io/2026/37/m/meta.tn"\n!!import:"https://tson.io/2026/37/m/core.tn"\n${header}\n{\n${body}\n}\n`;
+  const source = `!!id:"https://example.test/schema${String(counter++)}.tn"\n!!meta:"https://tson.io/2026/37/m/meta.tn"\n!!import:"https://tson.io/2026/37/m/core.tn"\n${header}\n{\n${body}\n}\n`;
   return new TextEncoder().encode(source);
 }
 

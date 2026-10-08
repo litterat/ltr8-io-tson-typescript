@@ -72,7 +72,7 @@ describe('schemalessTreeReader -- built-in vocabulary leaves (§5, TypeRefCheck 
   it('reports ATOM_FORM_INVALID and reads as absent when the token is not shaped like the atom at all', () => {
     const { value, diagnostics } = readCollect('!uuid "not-a-uuid"');
     expect(diagnostics.map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
-    expect(value).toEqual({ kind: 'absent', typeRef: 'uuid', annotations: { values: [] } });
+    expect(value).toEqual({ kind: 'void', typeRef: 'uuid', annotations: { values: [] } });
   });
 
   it('reports TYPE_MISMATCH (TypeRefCheck rule: built-ins are scalar) when a built-in name sits on a container, but still reads the container structurally', () => {
@@ -236,10 +236,10 @@ describe('schemalessTreeReader -- name identity is NFC identity (§2.5, §2.6)',
 describe('schemalessTreeReader -- the void sentinel is not a map key (§2.9)', () => {
   it('rejects an absent key, which no grammar rule and no schema can refuse first', () => {
     const { diagnostics } = readCollect('{ _ => 1 }');
-    expect(diagnostics.map((d) => d.code)).toEqual(['ABSENT_MAP_KEY']);
+    expect(diagnostics.map((d) => d.code)).toEqual(['VOID_MAP_KEY']);
   });
 
-  it('accepts an absent entry value, which states a present entry carrying nothing', () => {
+  it('accepts a void entry value, which states a present entry carrying nothing', () => {
     const { diagnostics } = readCollect('{ a => _ }');
     expect(diagnostics).toEqual([]);
   });

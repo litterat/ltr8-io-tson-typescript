@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ABSENT,
+  VOID,
   arrayNode,
   atomNode,
   mapNode,
@@ -148,14 +148,14 @@ describe('a missing node carries the pointer of the step that failed, and it sti
 });
 
 describe('absent and missing are distinct kinds (§2.9)', () => {
-  it('absent is a written sentinel; missing is a navigation artifact', () => {
-    expect(ABSENT.kind).toBe('absent');
+  it('void is a written sentinel; missing is a navigation artifact', () => {
+    expect(VOID.kind).toBe('void');
     expect(missingNode('/x').kind).toBe('missing');
   });
 
-  it('an absent element still occupies its positional slot in an array', () => {
-    const array = arrayNode([atomNode(1n), ABSENT, atomNode(3n)]);
-    expect(get(array, 1).kind).toBe('absent');
+  it('a void element still occupies its positional slot in an array', () => {
+    const array = arrayNode([atomNode(1n), VOID, atomNode(3n)]);
+    expect(get(array, 1).kind).toBe('void');
     expect(asLong(get(array, 2))).toBe(3n);
   });
 });
@@ -226,7 +226,7 @@ describe('asInt/asLong/asDouble convert exactly or give up', () => {
   it('a non-atom, and a missing node, convert to undefined rather than throwing', () => {
     expect(asInt(sample())).toBeUndefined();
     expect(asLong(get(sample(), 'nope'))).toBeUndefined();
-    expect(asDouble(ABSENT)).toBeUndefined();
+    expect(asDouble(VOID)).toBeUndefined();
   });
 
   it('rounds a decimal to the nearest double, printed-form exact for 0.1', () => {

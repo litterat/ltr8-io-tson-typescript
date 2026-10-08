@@ -305,7 +305,7 @@ describe('defaultAnnotationValueEncoder', () => {
   });
 
   it('encodes null/undefined as the void sentinel', () => {
-    expect(defaultAnnotationValueEncoder(undefined).coreValue).toEqual({ kind: 'absent' });
+    expect(defaultAnnotationValueEncoder(undefined).coreValue).toEqual({ kind: 'void' });
   });
 
   it('throws for a shape it has no wire spelling for', () => {

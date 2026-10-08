@@ -138,7 +138,7 @@ export interface Emitter {
 
   // ── Leaf tokens ─────────────────────────────────────────────────────────────────────────────
   /** `_`, the void sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
-  absentValue(): void;
+  voidValue(): void;
   booleanValue(value: boolean): void;
   /**
    * Writes `text` as-is, unquoted -- the caller is responsible for `text` already being valid
@@ -414,7 +414,7 @@ export function createEmitter(sink: TextSink): Emitter {
       emit(name);
       emit(' ');
     },
-    absentValue: () => {
+    voidValue: () => {
       startCoreValue();
       emit('_');
     },

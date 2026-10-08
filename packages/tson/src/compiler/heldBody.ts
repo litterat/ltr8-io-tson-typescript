@@ -183,7 +183,7 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       }
       return;
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return;
   }
 }
@@ -215,7 +215,7 @@ function collectApplications(value: CoreValue, into: TypeRef[]): void {
       return;
     case 'token':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return;
   }
 }

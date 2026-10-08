@@ -2435,7 +2435,7 @@ function annotationsOf(
 }
 
 /** The `_` a bare annotation stands for (§6), read against the annotation's type like a written one. */
-const VOID_SENTINEL: DataValue = { annotations: [], coreValue: { kind: 'absent' } };
+const VOID_SENTINEL: DataValue = { annotations: [], coreValue: { kind: 'void' } };
 
 /** §3.3.3's one hop missed: `annotationName` is not an entry of the governing meta-schema's own namespace. */
 function unresolvedAnnotation(

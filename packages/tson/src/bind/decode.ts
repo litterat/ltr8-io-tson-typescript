@@ -347,7 +347,7 @@ export function fromCoreValue<T>(
       // is exactly how [TSON-SCHEMA] §7.8 spells "every type this schema declares"
       // (`schemas: { uri => _ }`).
       const elements: ArrayValue['elements'] | undefined =
-        value.kind === 'empty-brace' || value.kind === 'absent'
+        value.kind === 'empty-brace' || value.kind === 'void'
           ? []
           : value.kind === 'array'
             ? value.elements
