@@ -698,8 +698,8 @@ function collectNames(ref: TypeRef, into: Set<string>): void {
   }
 }
 
-/** Every name an entry's body mentions, for {@link checkOpenEntryUsesEveryParameter}. */
-function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void {
+/** Every name an entry's body mentions: for {@link checkOpenEntryUsesEveryParameter}, and for finding the declaration that wrote a minted entry's name (`recordExtension.ts`). */
+export function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void {
   if (!('kind' in body)) {
     // The one question a held body answers without being resolved, and it answers it about
     // tokens rather than references -- the same rule substitution follows when deciding what to

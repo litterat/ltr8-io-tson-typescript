@@ -56,6 +56,12 @@ function stubMaterialiser(
     setParameterKinds(): void {
       // not exercised by this test
     },
+    checkApplication(): void {
+      // not exercised by this test
+    },
+    recheckEarly(): void {
+      // not exercised by this test
+    },
     closedFormName,
   };
 }

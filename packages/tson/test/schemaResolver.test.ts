@@ -853,12 +853,11 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       expect(dogBody.fields.map((f) => f.name)).toEqual(['type', 'pet', 'breed']);
       expect(fieldTypeOf(schema, 'dog', 'type').name).toBe('text');
       expect(fieldTypeOf(schema, 'dog', 'pet').name).toBe('text');
-      // §5.7 "Open modifiers": `type: text = N` in `pet`'s held body is bound to the literal
-      // "dog" the moment this operand's own parameters close, exactly as it would were `pet<N,
-      // T>` named whole at a type position -- "the name mark supplied by the closing" is owed
-      // here too, one fixation shared by both paths (`templates.ts`'s `fixRoutedValues`).
+      // §5.7 "Open modifiers": `type: text = N` in `pet`'s held body is a marker, and binds to the
+      // literal "dog" the moment this operand's own parameters close with the name mark the
+      // author wrote -- unmarked, so a document states `type` (§3.2 item 33).
       const typeField = dogBody.fields.find((f) => f.name === 'type');
-      expect(typeField?.optional).toBe(true);
+      expect(typeField?.optional).toBe(false);
       expect(typeField?.role).toBe('FIXED');
       expect(typeField?.value).toEqual({ text: 'dog', form: 'SINGLE_LINE_QUOTED' });
       // No instantiation entry was minted for `pet<"dog", text>` -- `pet` and `dog` are the whole
@@ -869,8 +868,8 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
 
   it(
     'an outer parameter riding through the operand ("<S> pet<S, text> & { extra: text }") ' +
-      "defers fixation to the enclosing template's own closing, rather than firing the moment " +
-      'the named template\'s own parameters bind (§5.7 "Open modifiers", §5.8)',
+      'binds the value when the enclosing template closes, leaving the name mark as the author ' +
+      'wrote it (§5.7 "Open modifiers", §5.8)',
     () => {
       const doc = document(
         'pet => <N, T> { type: text = N  pet: T } ' +
@@ -879,15 +878,13 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       );
       const schema = resolveSchema(doc, richDeps());
       // `w` stays open while resolving the composition operand (its own `S` is unbound): the
-      // routed field's substituted value is `S` itself, not a concrete argument, so §5.7's
-      // fixation has nothing to fire on yet -- `w`'s own held wire must not mark `type`
-      // `optional` ahead of time (a held body has exactly one spelling, §5.10, and this would
-      // change it).
+      // routed field's substituted value is `S` itself, and the held wire states the name mark
+      // the author wrote.
       expect(heldFieldOptional(schema, 'w', 'type')).toBe(false);
-      // Once `w<"dog">` itself closes, `S` becomes concrete and the deferred fixation applies
-      // then, exactly the outcome a fully-bound operand reaches directly (the test above).
+      // Once `w<"dog">` itself closes, `S` becomes concrete: the field is the marker the
+      // fully-bound operand reaches directly (the test above).
       const usedType = recordBodyOf(schema, 'used').fields.find((f) => f.name === 'type');
-      expect(usedType?.optional).toBe(true);
+      expect(usedType?.optional).toBe(false);
       expect(usedType?.role).toBe('FIXED');
       expect(usedType?.value).toEqual({ text: 'dog', form: 'SINGLE_LINE_QUOTED' });
     },

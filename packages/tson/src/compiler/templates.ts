@@ -80,6 +80,8 @@
  * the chain that grew rather than repeated, a caller can report, never as a host stack overflow.
  */
 import {
+  TsonAtomParseError,
+  TsonAtomValidationError,
   TsonInternalError,
   TsonLimitRefusedError,
   TsonNotImplementedError,
@@ -88,17 +90,20 @@ import {
 } from '../core/errors.js';
 import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '../core/limits.js';
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
-import type { TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
+import type { Token, TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
+import { isDataBody } from '../link/bodyKind.js';
 import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
 import type { RecordBody } from '../schema/meta/bodies.js';
 import { checkAtomCoherence, isAtom } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
-import { FIELDS, NAME, VALUE, field, isApplication, rescope, typeRefOf } from './wireForm.js';
+import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
-import { inferOne, type Kind } from './parameterTypes.js';
+import { inferOne, kindOf, readsInStructure, type Kind } from './parameterTypes.js';
 import { terminal } from '../link/referenceChain.js';
+import { atomParserFor, isScalarBody } from '../atom/forType.js';
+import { lexerFormOfMeta } from './tokenForms.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -173,6 +178,12 @@ export interface TemplateMaterialiserDeps {
    * gets that behaviour throughout — the ordinary shape for a hand-built test.
    */
   readonly metaTypes?: DefinitionGetter;
+
+  /**
+   * The local declaration resolution is inside, or `undefined` outside resolution — who an early
+   * argument check answers to ({@link TemplateMaterialiser.recheckEarly}).
+   */
+  readonly resolving?: () => string | undefined;
 }
 
 /** Where an application this pass cannot close is reported, entry by entry. */
@@ -206,6 +217,14 @@ export interface TemplateMaterialiser {
    * application closed here and the same one met later in a field land on one entry.
    */
   closeApplication(application: TypeRef): string;
+
+  /**
+   * The argument check of {@link closeApplication} for an application that denotes no entry — a
+   * composition operand (§5.8) — so a bound or a value type holds there as it does at a field.
+   * Throws the same `TsonSchemaValidationError`; does nothing for a head that is not a template
+   * or an arity that does not match, which the position reports.
+   */
+  checkApplication(application: TypeRef): void;
 
   /**
    * §8.2's "a declaration whose body denotes a type is that type's entry": closes `application`
@@ -263,6 +282,15 @@ export interface TemplateMaterialiser {
    * module's own `byParameterKind`.
    */
   setParameterKinds(kinds: ReadonlyMap<string, ReadonlyMap<string, Kind>>): void;
+
+  /**
+   * Replays every argument check that could not be judged before the parameters were stamped
+   * (§5.10). An application closed during resolution — a declaration naming it, a composition
+   * operand, a refinement source, or an argument nested in one — meets a local template whose
+   * parameters carry no written or inherited bound yet. One verdict per declaration: the first
+   * failing application of each is reported, against the declaration whose resolution closed it.
+   */
+  recheckEarly(report: (declaration: string, error: TsonSchemaValidationError) => void): void;
 
   /**
    * The name `head`'s binding record derives once every application inside `fields` is closed —
@@ -335,6 +363,15 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   let parameterKinds: ReadonlyMap<string, ReadonlyMap<string, Kind>> = new Map();
 
+  /** Whether {@link TemplateMaterialiser.setParameterKinds} has run, after which every check sees stamped parameters. */
+  let stamped = false;
+
+  /**
+   * The applications closed during resolution, whose argument checks wait for stamped parameters
+   * ({@link TemplateMaterialiser.recheckEarly}), in the order they were met.
+   */
+  const early: { declaration: string; head: string; args: readonly TypeArgument[] }[] = [];
+
   /**
    * The same question answered one template at a time, for an application closed before the
    * batch pass could run — a composition supertype or a refinement source, both of which close
@@ -363,6 +400,24 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * position to refuse.
    */
   function byParameterKind(
+    head: string,
+    template: TypeDefinition,
+    parameters: readonly string[],
+    args: readonly TypeArgument[],
+  ): readonly TypeArgument[] {
+    if (!stamped) {
+      const declaration = deps.resolving?.();
+      if (declaration !== undefined) {
+        early.push({ declaration, head, args });
+      }
+      return classify(head, template, parameters, args);
+    }
+    const classified = classify(head, template, parameters, args);
+    checkArguments(head, template, classified);
+    return classified;
+  }
+
+  function classify(
     head: string,
     template: TypeDefinition,
     parameters: readonly string[],
@@ -426,6 +481,127 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         ? argument
         : { kind: 'ref', ref: { name, arguments: [], annotations: argument.ref.annotations } };
     });
+  }
+
+  /** A name in the schema's namespace first, then in the governing meta's: a slot type is the meta's. */
+  function lookup(name: string): TypeDefinition | undefined {
+    return deps.namespaceDefinitions(name) ?? deps.metaTypes?.(name);
+  }
+
+  /**
+   * Each argument against the parameter it binds (`template_param`, §5.10): a type argument must
+   * name a type that IS-A the parameter's `bound`, and a value argument must be a value of the
+   * parameter's `type` (or of the type an earlier parameter's argument names, where the type is
+   * that parameter). What makes a wrong argument a verdict at the application, wherever it stands,
+   * rather than inside a substituted body where it would read as an ordinary field.
+   *
+   * An argument this cannot judge is left to the position after substitution: an application as an
+   * argument (its entry is not closed yet), a name nothing declares (the linker's verdict), and a
+   * parameter whose type has no scalar reading.
+   */
+  function checkArguments(
+    head: string,
+    template: TypeDefinition,
+    args: readonly TypeArgument[],
+  ): void {
+    if (!isTemplateBody(template.body) || template.body.parameters.length !== args.length) {
+      return;
+    }
+    const parameters = template.body.parameters;
+    parameters.forEach((parameter, i) => {
+      const argument = args[i];
+      if (argument === undefined) return;
+      if (kindOf(parameter.type) === 'TYPE') {
+        if (
+          parameter.bound !== undefined &&
+          argument.kind === 'ref' &&
+          argument.ref.arguments.length === 0
+        ) {
+          checkBound(head, parameter.name, argument.ref.name, parameter.bound.name);
+        }
+      } else if (argument.kind === 'value') {
+        checkValue(
+          head,
+          parameter.name,
+          argument.value,
+          valueType(parameters, args, parameter.type.name),
+          readsInStructure(template, (n) => deps.namespaceDefinitions(n)),
+        );
+      }
+    });
+  }
+
+  function checkBound(head: string, parameter: string, argument: string, bound: string): void {
+    const argumentTerminal = terminal(argument, lookup);
+    const target = lookup(argumentTerminal);
+    if (target === undefined) {
+      return; // an unresolved argument -- the linker's verdict
+    }
+    // By name, so a core type and the kernel original it copies are one bound, as they are at the declaration.
+    const boundTerminal = terminal(bound, lookup);
+    const admitted =
+      argumentTerminal === boundTerminal ||
+      target.supertypes.includes(boundTerminal) ||
+      target.supertypes.includes(bound);
+    if (!admitted) {
+      throw new TsonSchemaValidationError(
+        `'${head}<...>' binds '${parameter}' to '${argument}', which is not a type that IS-A ${bound} -- ` +
+          `'${head}' declares '${parameter}: ${bound}' (§5.10)`,
+      );
+    }
+  }
+
+  /** The type a value parameter's argument is read as, following a type that names an earlier parameter. */
+  function valueType(
+    parameters: readonly { readonly name: string }[],
+    args: readonly TypeArgument[],
+    type: string,
+  ): string | undefined {
+    const index = parameters.findIndex((p) => p.name === type);
+    if (index < 0) return type;
+    const named = args[index];
+    return named?.kind === 'ref' && named.ref.arguments.length === 0 ? named.ref.name : undefined;
+  }
+
+  /**
+   * `argument` as a value of `type`, read in the structure namespace where the template applies a
+   * meta constructor ({@link readsInStructure}) -- so a schema's own entry under a meta type's name
+   * never stands in for the type the constructor's slot declares -- and in the schema's otherwise.
+   */
+  function checkValue(
+    head: string,
+    parameter: string,
+    argument: Token,
+    type: string | undefined,
+    structural: boolean,
+  ): void {
+    if (type === undefined) return;
+    const resolve: DefinitionGetter = structural ? (n) => deps.metaTypes?.(n) : (n) => lookup(n);
+    const name = terminal(type, resolve);
+    const definition = resolve(name);
+    const body = definition?.body;
+    if (
+      body === undefined ||
+      !('kind' in body) ||
+      isDataBody(body) ||
+      body.kind === 'reference' ||
+      // An IRI is judged by the schema_identity's own parser, which is the URI grammar's today.
+      body.kind === 'iri_type' ||
+      !isScalarBody(body)
+    ) {
+      return; // no scalar reading -- the substituted body's own position judges it
+    }
+    const parser = atomParserFor(name, body);
+    if (parser === undefined) return;
+    try {
+      parser.read({ text: argument.text, form: lexerFormOfMeta(argument.form) });
+    } catch (e: unknown) {
+      if (!(e instanceof TsonAtomParseError || e instanceof TsonAtomValidationError)) throw e;
+      throw new TsonSchemaValidationError(
+        `'${head}<...>' binds '${parameter}' to '${argument.text}', which is not a value of ${type}: ` +
+          `${e.message} (§5.10)`,
+      );
+    }
   }
 
   /** Each parameter of the applied signature against the argument applied for it, in order. */
@@ -577,6 +753,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           template.body,
           args,
           bind(parameters, args),
+          false,
         );
         materialised.set(name, instantiation);
         deps.publish(name, instantiation);
@@ -678,13 +855,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     open: HeldBody,
     args: readonly TypeArgument[],
     bindings: ReadonlyMap<string, TypeArgument>,
+    declared: boolean,
   ): TypeDefinition {
     const closed = closeHeld(head, open, bindings);
-    const parametricNames = parametricFieldNames(open.application.coreValue, open.parameterNames);
-    const body = fixRoutedValues(closed.body, parametricNames);
+    const body = closeFamilyClaims(closed.body);
     return {
       source: { name: head, arguments: args, annotations: [] },
-      supertypes: instantiationSupertypes(head, template, body),
+      supertypes: instantiationSupertypes(head, template, body, declared),
       subtypes: template.subtypes,
       body,
       annotations: [],
@@ -694,7 +871,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   /**
    * §8.1's "Entry shape": an instantiation entry's `supertypes` is "the template's supertypes,
    * plus the closed parent an open `record.supertypes` application named (§5.8) and, where the
-   * template is a family base, the template itself (§5.10)". `template.supertypes` is the OPEN
+   * template is a family base, the template itself (§5.10)" — the last **only where a declaration
+   * names the application** (`declared`): an application written at a use site is a type read
+   * where it is written and no member of the template's family (§5.10, §8.2). `template.supertypes` is the OPEN
    * template's own, pre-closing value, which never carries the IS-A edge an open composition
    * operand (`ok => <T> result<T> & { ... }`) only gains once its parameter closes: `result<T>`
    * substitutes to `result<text>` and closes to a bare reference inside `body`'s own (now-closed)
@@ -707,6 +886,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     head: string,
     template: TypeDefinition,
     body: Top,
+    declared: boolean,
   ): readonly string[] {
     const result: string[] = [...template.supertypes];
     const seen = new Set(result);
@@ -725,7 +905,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         }
       }
     }
-    if (isTemplateBody(template.body) && template.body.extension === 'ABSTRACT') {
+    if (declared && isTemplateBody(template.body) && template.body.extension === 'ABSTRACT') {
       addOne(head);
     }
     return result;
@@ -847,6 +1027,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     closeApplication(application: TypeRef): string {
       return close(application).name;
     },
+    checkApplication(application: TypeRef): void {
+      const template = deps.namespaceDefinitions(application.name);
+      if (template === undefined) return;
+      const parameters = typeParameters(template);
+      if (parameters.length === 0 || parameters.length !== application.arguments.length) return;
+      byParameterKind(application.name, template, parameters, application.arguments);
+    },
     closeApplicationAs(name: string, application: TypeRef): TypeDefinition | undefined {
       const head = application.name;
       const template = deps.namespaceDefinitions(head);
@@ -887,6 +1074,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           template.body,
           canonical,
           bindings,
+          true,
         );
         materialised.set(name, instantiation);
         deps.publish(name, instantiation);
@@ -936,6 +1124,32 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     },
     setParameterKinds(kinds: ReadonlyMap<string, ReadonlyMap<string, Kind>>): void {
       parameterKinds = kinds;
+      stamped = true;
+    },
+    recheckEarly(report): void {
+      const refused = new Set<string>();
+      for (const check of early) {
+        const template = deps.namespaceDefinitions(check.head);
+        if (
+          refused.has(check.declaration) ||
+          template === undefined ||
+          !isTemplateBody(template.body)
+        ) {
+          continue;
+        }
+        try {
+          checkArguments(
+            check.head,
+            template,
+            classify(check.head, template, typeParameters(template), check.args),
+          );
+        } catch (e: unknown) {
+          if (!(e instanceof TsonSchemaValidationError)) throw e;
+          refused.add(check.declaration);
+          report(check.declaration, e);
+        }
+      }
+      early.length = 0;
     },
     closedFormName(head: string, fields: readonly RecordField[]): string {
       const wire = closeApplications({ kind: 'record', fields });
@@ -962,77 +1176,31 @@ function isRecordTop(body: Top): body is RecordBody {
 }
 
 /**
- * §5.7's fixation, applied where the section says it happens: "fixation happens at
- * materialisation, where values are concrete". §5.7 describes the field itself as held required
- * and FREE while its entry stays open, the parameter riding the ordinary `value` slot with no
- * label distinguishing it from a literal. This port's held wire resolves `role` to
- * `FIXED`/`DEFAULT` from the modifier's own spelling (`fieldModifiers.ts`'s `resolveFieldMarks`,
- * the same call a literal `= v`/`~ v` goes through) at the point the body is first read, ahead of
- * substitution -- `value` already holds the parameter token at that point, so `role` and `value`
- * agree with each other throughout the held phase, and only `optional` still waits. Once
- * substitution has made the value concrete, the one fact closing still owes the field is the mark
- * this function applies: `optional` becomes `true`, "the name mark supplied by the closing".
+ * What closing a record leaves of its template's own claims about a family (§5.7, §5.10). A
+ * parametric modifier takes the name mark its literal spelling takes, so there is no presence fact
+ * left to supply here: `w?: T ~ N` closes to an optional default, `w?: T = N` to an optional pin and
+ * `w: T = N` to a required marker, with `optional` and `role` as the declaration wrote them.
  *
- * `parametricNames` is exactly the set of field names whose *pre-substitution* value was one of
- * the template's own parameters ({@link parametricFieldNames}) -- computed before substitution
- * runs, since afterwards a promoted field and an ordinary unmarked marker (`a: T = "2.0"`, never
- * promoted) are indistinguishable by value alone. It is what tells the promotable fields apart
- * from an ordinary unmarked marker of the template's own -- `role` alone cannot, both already
- * carrying `FIXED`/`DEFAULT` before substitution runs.
+ * What does not travel to a member is **dispatch on members**. ABSTRACT is a claim about the
+ * marked type alone and holds of every instantiation identically, but `discriminators` names the
+ * fields a base's members pin; the instantiation that closes the template has pinned them, or is
+ * itself a member that states none of its own. So a closed body names no selector and a base that
+ * dispatches on members closes to OPEN rather than carrying its abstractness into every member.
  *
- * **Exported and shared with `definitionResolver.ts`'s `openOperand`.** §5.7 ties fixation to the
- * field's *value* becoming concrete, not to which call closes the named template's own
- * parameters: at a named type position closing an instantiation entry the value is always
- * concrete by definition, but at a composition or refinement operand "subsumed where it stands"
- * (§5.8) it need not be -- an outer parameter can ride straight through (`<S> pet<S, text>`),
- * leaving the routed field's substituted value itself a parameter. `openOperand` applies this
- * only once its own operand is fully bound (its `namesOwnParameter` false); while the operand
- * still names the enclosing declaration's own parameter, the field is left alone here and the
- * later closing of that declaration applies it instead, once the value is actually concrete. One
- * fixation, called from both places under that one condition, rather than two copies that could
- * drift or a condition duplicated.
+ * Exported and shared with `definitionResolver.ts`'s `openOperand`, so a composition operand and a
+ * named type position close one way.
  */
-export function fixRoutedValues(body: Top, parametricNames: ReadonlySet<string>): Top {
+export function closeFamilyClaims(body: Top): Top {
   // `'fields' in body`, not `body.kind === 'record'`: see `mapBodyRefs`'s own note on why a
   // `Data` body's bare-`string` `kind` cannot be excluded by a literal comparison.
   if (!('fields' in body)) {
     return body;
   }
-  return {
-    ...body,
-    fields: body.fields.map((field) =>
-      parametricNames.has(field.name) ? { ...field, optional: true } : field,
-    ),
-  };
-}
-
-/**
- * The names of every field in the *held* (pre-substitution) wire form whose `value` slot is a
- * bare unquoted token naming one of `parameters` -- see {@link fixRoutedValues}.
- */
-export function parametricFieldNames(
-  preSubstitution: CoreValue,
-  parameters: readonly string[],
-): ReadonlySet<string> {
-  const names = new Set<string>();
-  if (preSubstitution.kind !== 'record') return names;
-  const fieldsValue = field(preSubstitution, FIELDS);
-  if (fieldsValue?.kind !== 'array') return names;
-  for (const element of fieldsValue.elements) {
-    const fieldRecord = element.value.coreValue;
-    if (fieldRecord.kind !== 'record') continue;
-    const nameToken = field(fieldRecord, NAME);
-    const valueToken = field(fieldRecord, VALUE);
-    if (
-      nameToken?.kind === 'token' &&
-      valueToken?.kind === 'token' &&
-      valueToken.form === 'unquoted' &&
-      parameters.includes(valueToken.text)
-    ) {
-      names.add(nameToken.text);
-    }
+  const { discriminators, ...rest } = body;
+  if (discriminators === undefined || discriminators.length === 0) {
+    return body;
   }
-  return names;
+  return rest.extension === 'ABSTRACT' ? { ...rest, extension: 'OPEN' } : rest;
 }
 
 /**

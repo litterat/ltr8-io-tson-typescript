@@ -190,6 +190,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   });
   checkRecordExtension(merged, localNames, {
     schemaId: schema.id,
+    origins,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkDisjointAssertions(merged, localNames, {

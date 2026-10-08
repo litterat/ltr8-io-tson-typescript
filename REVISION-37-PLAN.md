@@ -262,6 +262,9 @@ supplementary-character vectors in `schema/` and `validate/`.
   `allow_relative` and `allow_fragment` narrow as permissions. Java: `tson-net/.../IriGrammar.java`
   and `Iri.java`, `atom/parser/UriParser.java` and `IriParser.java`. The IRI recognizer is
   hand-written, one function per ABNF rule, with no `RegExp`.
+- **Remove WP2B's IRI shim.** `compiler/templates.ts`'s call-site value check skips `iri_type`
+  because nothing parsed an IRI yet. Once one does, delete the skip, and
+  `an-extern-of-names-an-iri-identity` must stay green.
 - **A directive argument is an IRI-reference** (Part 1 §2.2.1, §3.3). An identity without a host
   has an absolute path. `extern_of` and `scoped.schemas` keys are `schema_identity`, so a fragment
   is refused.
@@ -388,6 +391,10 @@ the reference's tson-json diff.
 
 ## To report upstream
 
+- **§8.1's ingest has no implementation on either side.** "Ingest verifies a recorded parameter type
+  and re-runs the family checks over the closure", but neither the reference nor this port reads
+  resolved output back as a schema. The change log's §6 item 4 says so for the reference. The
+  family checks here run over the merged closure, ready for such a path.
 - **Removing a group's other options leaves the member's voidability alone (§5.11 Removal).** The
   Java's `dissolveInto` sets a surviving sole member's `voidable` from the group's `optional`. The
   spec says "the field's own voidability is unchanged", and this port follows the spec.

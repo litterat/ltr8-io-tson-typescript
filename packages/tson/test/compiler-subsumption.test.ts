@@ -404,10 +404,10 @@ describe(
     });
 
     it(
-      'a missing selector is a required-field error even though the closed member’s own copy ' +
-        'of the field is optional (§5.7’s fixation) -- dispatch is decided by what is written, ' +
-        'never by what a member would inject (§7.2), and nothing else about the record is ' +
-        'inspected once that refusal fires',
+      'a missing selector is a required-field error: `type: text = N` is a marker every ' +
+        'document writes (§5.7), dispatch is decided by what is written, never by what a member ' +
+        'would inject (§7.2), and nothing else about the record is inspected once that refusal ' +
+        'fires',
       () => {
         const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n" } }`);
         expect(result.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);

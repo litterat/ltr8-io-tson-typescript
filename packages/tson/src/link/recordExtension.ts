@@ -43,6 +43,7 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import { isAtom } from '../compiler/atomChecks.js';
 import { buildAtomReader } from '../compiler/atomBuilder.js';
 import { terminal, terminalDefinition } from './referenceChain.js';
+import { collectBodyNames } from './referenceValidation.js';
 import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
@@ -65,6 +66,11 @@ export interface CheckRecordExtensionOptions {
   /** This schema's own canonical identity, stamped on every diagnostic. */
   readonly schemaId: string;
   /**
+   * The schema each entry of `merged` was declared by, as `LinkedSchema.origins` states it. A
+   * family judged over the closure names where two colliding members came from (§3.3.4).
+   */
+  readonly origins?: ReadonlyMap<string, string>;
+  /**
    * Where a failing family is reported, letting every other one still be checked. Omitted means
    * fail-fast: the first {@link TsonSchemaValidationError} propagates.
    */
@@ -76,13 +82,11 @@ export interface CheckRecordExtensionOptions {
  * `discriminators` — imported and local alike, since a member added by *this* schema can break a
  * family whose base an import declared.
  *
- * **Re-judged only where some part of the family is local.** A family entirely inherited from an
- * import was already judged, in full, when that import's own schema linked — re-running the same
- * verdict over unchanged entries would find nothing new and cost a pass over the whole namespace
- * for no reason. A base declared here, or a member composing onto an imported base from here,
- * both count as "local" for this purpose (`isFamilyLocal`), matching §5.2's own "the family is
- * re-judged whenever any part of it is local ... in the importing schema, which is the schema
- * that broke it".
+ * **A family is judged over the closure that holds it (§3.3.4).** Two members brought together
+ * only by an import merge are the importing schema's error, so every family is judged here, not
+ * only one with a part declared in this schema; a collision between two imported members is
+ * reported against the schema itself, naming where each came from. And a record a use site minted
+ * that composes onto another is refused, since a family member is declared (§5.2, §8.2).
  *
  * Must run after reference validation, so an unresolved selector type is already reported and
  * never re-diagnosed as "not an atom or enum". Does **not** depend on
@@ -95,28 +99,92 @@ export function checkRecordExtension(
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
 ): void {
+  for (const name of localNames) {
+    const def = merged.get(name);
+    if (def !== undefined && isUndeclaredMember(def)) {
+      checkDeclared(name, def, merged, localNames, options);
+    }
+  }
+  // Every family in the closure is judged, not only one with a part declared here (§3.3.4): two
+  // schemas that each link cleanly can each add a member to one imported family, and the schema
+  // importing both holds a family neither did.
   for (const [name, def] of merged) {
     const body = def.body;
-    if (!isRecordBody(body) || body.discriminators === undefined) {
-      continue;
+    if (isRecordBody(body) && body.discriminators !== undefined) {
+      checkFamily(name, body, merged, localNames, options);
     }
-    if (!isFamilyLocal(name, merged, localNames)) {
-      continue;
-    }
-    checkFamily(name, body, merged, localNames, options);
   }
 }
 
-// ── Locality gate ────────────────────────────────────────────────────────────────────────────
+// ── A family member is declared (§5.2, §8.2) ─────────────────────────────────────────────────
 
-/** Whether `baseName`'s declaration, or any of its direct members, is local to this schema. */
-function isFamilyLocal(
-  baseName: string,
+/**
+ * Whether `def` is an entry a use site minted from a template application: it has no position
+ * (nothing declared it) and its `source` is an application. Such an entry is a type read where it
+ * is written, never a member of a family.
+ */
+export function isMintedApplication(def: TypeDefinition): boolean {
+  return def.position === undefined && def.source !== undefined && def.source.arguments.length > 0;
+}
+
+/**
+ * A record a use-site template application minted that composes onto another: a family member
+ * with no declared name. A constructor (`top` in its chain) is no member of anything.
+ */
+function isUndeclaredMember(def: TypeDefinition): boolean {
+  return (
+    isMintedApplication(def) &&
+    isRecordBody(def.body) &&
+    def.supertypes.length > 0 &&
+    !def.supertypes.includes('top')
+  );
+}
+
+/** `name` as the author wrote it: a minted entry as the application that produced it. */
+function shown(name: string, merged: ReadonlyMap<string, TypeDefinition>): string {
+  const def = merged.get(name);
+  const source = def?.source;
+  if (def === undefined || source === undefined || !isMintedApplication(def)) return name;
+  const args = source.arguments.map((argument) =>
+    argument.kind === 'ref' ? shown(argument.ref.name, merged) : argument.value.text,
+  );
+  return `${source.name}<${args.join(', ')}>`;
+}
+
+/**
+ * Reports a member minted at a use site against the declaration that wrote the application — the
+ * first local declared entry whose body names it, or the one whose closing minted it, which is the
+ * declaration naming the template whose held body wrote it (§8.2). Names the fix.
+ */
+function checkDeclared(
+  name: string,
+  def: TypeDefinition,
   merged: ReadonlyMap<string, TypeDefinition>,
   localNames: ReadonlySet<string>,
-): boolean {
-  if (localNames.has(baseName)) return true;
-  return directMembers(baseName, merged).some((member) => localNames.has(member.name));
+  options: CheckRecordExtensionOptions,
+): void {
+  const base = def.supertypes[0] ?? '';
+  let writer: string | undefined;
+  for (const candidate of localNames) {
+    const entry = merged.get(candidate);
+    if (entry === undefined || candidate === name) continue;
+    const mentioned = new Set<string>();
+    collectBodyNames(entry.body, mentioned);
+    if (mentioned.has(name)) {
+      writer = candidate;
+      // A declared entry is the author's own line; a minted one is a closing, so keep looking.
+      if (entry.position !== undefined) break;
+    }
+  }
+  fail(
+    options,
+    `'${shown(name, merged)}' composes onto '${shown(base, merged)}', so it is a member of that ` +
+      'family, and a member is declared: a read reports the member it selects, a tag names it and ' +
+      'a binding maps it, all by a name an application at a use site does not have (§3.3.4, §8.2). ' +
+      `Declare it -- 'my_name => ${shown(name, merged)}' -- and use that name in place of the ` +
+      'application',
+    writer ?? name,
+  );
 }
 
 // ── Direct membership ────────────────────────────────────────────────────────────────────────
@@ -162,6 +230,8 @@ export function directMembers(
     if (candidateName === baseName) continue;
     const candidateBody = candidate.body;
     if (!isRecordBody(candidateBody)) continue;
+    // An application minted at a use site is a type read where it is written and no member.
+    if (isMintedApplication(candidate)) continue;
     const direct =
       (candidate.source !== undefined && terminal(candidate.source.name, lookup) === baseName) ||
       candidateBody.supertypes.some((ref) => terminal(ref.name, lookup) === baseName);
@@ -216,15 +286,20 @@ function checkFamily(
           discriminators.length > 1 ? `discriminators (${tuple})` : `discriminator '${tuple}'`;
         // Blamed against whichever of the two colliding members this schema itself declares --
         // an importing schema that adds a member colliding with one it imported broke the
-        // family, not the schema that declared the other side of the collision (this file's own
-        // top note, and §5.2's "in the importing schema, which is the schema that broke it").
-        // Falls back to the base only when neither colliding member is local, which happens only
-        // when the base itself is what made this family local to begin with.
-        const blame = localNames.has(a.name) ? a.name : localNames.has(b.name) ? b.name : baseName;
+        // family, not the schema that declared the other side of the collision (§5.2, "in the
+        // importing schema, which is the schema that broke it"). Where neither is local the merge
+        // is what put them in one family, and the schema itself is blamed, naming both origins.
+        const blame = localNames.has(a.name) ? a.name : localNames.has(b.name) ? b.name : undefined;
+        const origins = options.origins;
+        const merge =
+          blame === undefined && origins !== undefined
+            ? ` Each is declared by a schema this one imports ('${origins.get(a.name) ?? '?'}' and ` +
+              `'${origins.get(b.name) ?? '?'}'), and importing both is what puts them in one family (§3.3.4).`
+            : '';
         fail(
           options,
           `'${a.name}' and '${b.name}' both pin '${baseName}''s ${named} to the same value -- the ` +
-            'pins of a sealed family must be pairwise distinct (§5.2)',
+            `pins of a sealed family must be pairwise distinct (§5.2).${merge}`,
           blame,
         );
       }
@@ -337,7 +412,11 @@ function checkSelectorType(
 
 // ── Reporting ────────────────────────────────────────────────────────────────────────────────
 
-function fail(options: CheckRecordExtensionOptions, message: string, pointerName: string): void {
+function fail(
+  options: CheckRecordExtensionOptions,
+  message: string,
+  pointerName: string | undefined,
+): void {
   const { schemaId, receiver } = options;
   if (receiver === undefined) {
     throw new TsonSchemaValidationError(message);
@@ -346,6 +425,6 @@ function fail(options: CheckRecordExtensionOptions, message: string, pointerName
     code: 'SCHEMA_ERROR',
     message,
     schemaId,
-    schemaPointer: `/${pointerName}`,
+    ...(pointerName === undefined ? {} : { schemaPointer: `/${pointerName}` }),
   });
 }

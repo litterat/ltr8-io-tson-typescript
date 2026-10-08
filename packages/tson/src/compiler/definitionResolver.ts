@@ -110,6 +110,7 @@ import { toNfc } from '../unicode/nfc.js';
 import type { TsonDecimal } from '../value/types.js';
 import type {
   AnnotationValueReader,
+  ApplicationChecker,
   ApplicationCloser,
   DeclaredApplicationCloser,
   DefinitionGetter,
@@ -135,7 +136,6 @@ import {
   typeRefOf,
 } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
-import { fixRoutedValues, parametricFieldNames } from './templates.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
 import { terminal, terminalDefinition } from '../link/referenceChain.js';
@@ -154,6 +154,7 @@ export interface DefinitionResolverDeps {
   readonly metaDefinitions: DefinitionGetter;
   readonly namespaceDefinitions: DefinitionGetter;
   readonly applicationCloser?: ApplicationCloser;
+  readonly applicationChecker?: ApplicationChecker;
   readonly declaredApplicationCloser?: DeclaredApplicationCloser;
   readonly encodeSourceBody?: SourceBodyEncoder;
 }
@@ -1777,18 +1778,10 @@ interface OpenOperand {
  * are types, and its fields arrive with them via {@link substitute}.
  *
  * `held.parameters` (the *named template's own* parameters, `pet`'s `N`/`T`, never `name`'s) are
- * bound the moment this runs, whether or not `name` itself stays open — but §5.7's "Open
- * modifiers" ties fixation (the name mark, `optional: true`) to the *value* becoming concrete,
- * not to this one substitution: with an outer parameter riding through in one of
- * `application.args` (`<S> pet<S, text>`), the routed field's value substitutes to `S`, still a
- * parameter, so it stays required and FREE here, exactly as the spec's own held form does, and
- * {@link fixRoutedValues} is skipped. `namesOwnParameter` is what tells the two cases apart, and
- * a later closing sees the deferred field for what it is: `parametricFieldNames` reads the still
- * -unfixed `S` token straight off `name`'s own held wire once `name<...>` itself closes, so the
- * fixation the open case defers here is the one the outer closing applies, never a lost one. Only
- * a fully-bound operand fixates here, with the same {@link fixRoutedValues} a named type position
- * closes an instantiation with (`templates.ts`'s own `closeHeldInstantiation`), never a second
- * copy.
+ * bound the moment this runs, whether or not `name` itself stays open. A parametric modifier takes
+ * the name mark its literal spelling takes (§5.7), so substitution leaves each absorbed field with
+ * the `optional` and `role` its declaration wrote and nothing is left to fix when the value
+ * becomes concrete.
  */
 function openOperand(
   deps: DefinitionResolverDeps,
@@ -1821,6 +1814,9 @@ function openOperand(
   held.parameterNames.forEach((parameter, i) => {
     bindings.set(parameter, typeArgument(deps, at(application.args, i, 'openOperand')));
   });
+  if (deps.applicationChecker !== undefined && !namesOwnParameter(application, typeParams)) {
+    deps.applicationChecker({ name: head, arguments: [...bindings.values()], annotations: [] });
+  }
   const substituted = substitute(held.application.coreValue, head, held.parameterNames, bindings);
   const absorbedValue: DataValue = {
     annotations: held.application.annotations,
@@ -1834,22 +1830,7 @@ function openOperand(
         "vocabulary, so there is nothing to compose with (§5.8, and §5.7's vocabulary-body rule read across)",
     );
   }
-  if (namesOwnParameter(application, typeParams)) {
-    // `name` itself stays open through this operand (an outer parameter rides one of
-    // `application.args`): a routed field's substituted value is still a parameter, not a
-    // concrete one, so §5.7's fixation does not fire yet. Deferred to `name<...>`'s own closing,
-    // which rediscovers it via `parametricFieldNames` over `name`'s own held wire.
-    return { ancestors: template.supertypes, body: absorbed };
-  }
-  const parametricNames = parametricFieldNames(held.application.coreValue, held.parameterNames);
-  const fixed = fixRoutedValues(absorbed, parametricNames);
-  if (!isRecordBody(fixed)) {
-    throw new TsonInternalError(
-      `'${name}': ${position} '${head}<...>' stopped being a record body after fixation -- ` +
-        'fixRoutedValues only ever maps a record body’s own field list',
-    );
-  }
-  return { ancestors: template.supertypes, body: fixed };
+  return { ancestors: template.supertypes, body: absorbed };
 }
 
 /** A fully-bound application at one of the two field-absorbing positions, closed to the entry it denotes. */
@@ -2230,13 +2211,7 @@ function resolveFieldEntry(
   }
   const voidable = field.type !== undefined ? field.type.voidable : (inherited?.voidable ?? false);
 
-  const resolved = resolveFieldMarks(
-    field.name,
-    field.optional,
-    voidable,
-    field.modifier,
-    parameters,
-  );
+  const resolved = resolveFieldMarks(field.name, field.optional, voidable, field.modifier);
   return {
     field: {
       name: field.name,

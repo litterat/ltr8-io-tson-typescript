@@ -368,7 +368,7 @@ function typeDefPass(typeDef: TypeDef, context: DesugarContext): TypeDef {
 function structuralTypeDefPass(typeDef: StructuralTypeDef, context: DesugarContext): TypeDef {
   const body = structuralDefPass(typeDef.body, context);
   if (typeDef.typeParams.length > 0 && body.kind === 'recordDef') {
-    return instanceOf(recordBinding(body, context.currentParameters), typeDef.typeParams);
+    return instanceOf(recordBinding(body), typeDef.typeParams);
   }
   return body === typeDef.body ? typeDef : { ...typeDef, body };
 }
@@ -733,7 +733,7 @@ function choiceBinding(variants: readonly TypeRef[]): Binding {
  * false`/`role: FREE` is the `record_field` constructor's own default, so it is never stated —
  * the same economy {@link arrayBinding} makes with an unmarked element's `voidable`.
  */
-function recordBinding(record: RecordDef, parameters: readonly string[]): Binding {
+function recordBinding(record: RecordDef): Binding {
   const fields: ScopedValue[] = [];
   const groups: ScopedValue[] = [];
   const discriminators: string[] = [];
@@ -741,7 +741,7 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
   for (const entry of record.entries) {
     if (entry.kind === 'fieldDef') {
       requireFieldNameUnseen(entry.name, seen, 'this body declares it twice');
-      const field = recordFieldValue(entry, parameters);
+      const field = recordFieldValue(entry);
       fields.push(field.value);
       if (field.selector) discriminators.push(entry.name);
       continue;
@@ -812,7 +812,7 @@ interface RecordFieldValue {
  * the author's marks say something the constructor's own defaults do not (§5.2's
  * `resolveFieldMarks` table, `fieldModifiers.ts`).
  */
-function recordFieldValue(field: FieldDef, parameters: readonly string[]): RecordFieldValue {
+function recordFieldValue(field: FieldDef): RecordFieldValue {
   if (field.type === undefined) {
     throw new TsonSchemaValidationError(
       `field '${field.name}' states only a modifier and no type-ref, but names no inherited ` +
@@ -826,7 +826,6 @@ function recordFieldValue(field: FieldDef, parameters: readonly string[]): Recor
     field.optional,
     field.type.voidable,
     field.modifier,
-    parameters,
   );
   const members: RecordField[] = [
     nameField(NAME, field.name),

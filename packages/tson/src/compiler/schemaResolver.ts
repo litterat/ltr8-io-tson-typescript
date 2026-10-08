@@ -266,6 +266,7 @@ export function resolveSchema(
   // through field references never enters it. `resolverBox` breaks the construction cycle
   // between this getter and the `DefinitionResolver` that needs it as its own `namespaceDefinitions`.
   const resolving = new Set<string>();
+  const failed = new Set<string>();
   const resolverBox: { current?: DefinitionResolver } = {};
 
   const namespaceGetter: DefinitionGetter = (name) => {
@@ -305,6 +306,7 @@ export function resolveSchema(
       }
       const position = positionOf(declaration, positions);
       receiver.report(schemaProblem(id, name, e, position));
+      failed.add(name);
       const placeholder = unresolvedPlaceholder(position, typeParamsOfDeclaration(declaration));
       namespace.set(name, placeholder);
       return placeholder;
@@ -324,6 +326,7 @@ export function resolveSchema(
     definitionMetaReader: deps.definitionMetaReader,
     generatedNames: generated,
     metaTypes: deps.metaDefinitions,
+    resolving: () => [...resolving].at(-1),
   });
 
   resolverBox.current = createDefinitionResolver({
@@ -331,6 +334,9 @@ export function resolveSchema(
     metaDefinitions: deps.metaDefinitions,
     namespaceDefinitions: namespaceGetter,
     applicationCloser: (application) => materialiser.closeApplication(application),
+    applicationChecker: (application) => {
+      materialiser.checkApplication(application);
+    },
     declaredApplicationCloser: (declaredName, application) =>
       materialiser.closeApplicationAs(declaredName, application),
     ...(deps.annotationValueReader === undefined
@@ -387,6 +393,20 @@ export function resolveSchema(
   );
   stampParameters(declaredParameters, [beforeMaterialise, namespace]);
   materialiser.setParameterKinds(parameterKindsOf(declaredParameters));
+  // An application closed during the driving loop was checked against parameters carrying no
+  // bound yet, so its check runs again now that they are stamped (§5.10). A declaration that
+  // already failed has its verdict, so a replayed check is not a second one.
+  materialiser.recheckEarly((name, error) => {
+    if (receiver === undefined) {
+      throw error;
+    }
+    if (failed.has(name)) return;
+    failed.add(name);
+    const declaration = declarations.get(name);
+    receiver.report(
+      schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
+    );
+  });
   // Condemned on the same terms as a declaration that failed to resolve: the verdict is in, and
   // closing an application of a template whose parameters cannot be classified only reports the
   // consequence -- the substituted body failing its constructor's vocabulary -- against whichever
@@ -412,6 +432,13 @@ export function resolveSchema(
   const materialised = materialiser.materialise(beforeMaterialise, materialiseReporter);
   const resolvedLocals = new Map(materialised.entries);
   const instantiations = new Map(materialised.materialised);
+  // A declaration naming an application is that application's entry (§8.2): the materialiser built
+  // it without knowing where it was written, and a position is what tells a declared member from
+  // one a use site minted.
+  for (const [name, definition] of instantiations) {
+    const position = declarations.has(name) ? resolvedLocals.get(name)?.position : undefined;
+    if (position !== undefined) instantiations.set(name, { ...definition, position });
+  }
   const mintedSynthetic = materialised.synthetics;
   for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
   for (const [name, definition] of instantiations) namespace.set(name, definition);
