@@ -399,9 +399,25 @@ the reference's tson-json diff.
   `source` through enum refinements, and through a template's held body, to the constructor that
   pins `type`. The Java stops at the first hop. §7.4 says a pinned `type` resolves in the governing
   meta but does not say how far the pin is inherited.
-- **Enum members are judged as names under the default profile** in both implementations, not
-  under the label type's own profile. §7.4 says "each member is a value of" the `type`, which reads
-  as the type's own profile.
+- **NFKC_CASEFOLD below the NFC floor (Unicode D147; change log §8.2 item 8).** The Java's
+  `NfkcCasefold` maps code point by code point without decomposing first, so two NFC-equal keys can
+  fold apart (`Á` + U+0345 in composed and decomposed spellings). This port applies
+  `toNFKC_Casefold(NFD(X))` as D147 defines it.
+- **A pin on a marked name is not a selector (§5.10, §3.2 item 33).** §5.10 makes "a field pinned
+  to a value parameter on an unmarked name" the family selector. The Java's
+  `SchemaDesugarer.parametricallyPinned` also takes `type?: text = N`, which item 33 makes an
+  injected pin, and then demands the optional field. This port follows §5.10.
+- **§5.11's declaration rules over a `!record` literal.** Both implementations apply them only to
+  the `( … | … )` sugar, in the schema parser. A group written as `!record { groups: [ … ] }`
+  escapes all of them. This port applies them to the resolved group, whatever the spelling.
+- **A template parameter's `type` naming a later parameter.** §5.10 says the parameter named must
+  be declared before; both implementations admit a later one. This port refuses it.
+- **Enum members are judged under the label type's profile (§7.4).** Each member "is a value of"
+  `type`, so a profile's own additions are exempt for a member as they are for a value at a
+  position typed by it. The Java judges members under the default profile.
+- **Corpus: `a-refinement-that-moves-an-identifier-profile` passes for the wrong reason.** Its
+  subject refines `!identifier`, which only the kernel declares, so a processor refuses an
+  unresolved name before it reaches the profile rule. The rule itself is unit-tested here.
 - **Removing a group's other options leaves the member's voidability alone (§5.11 Removal).** The
   Java's `dissolveInto` sets a surviving sole member's `voidable` from the group's `optional`. The
   spec says "the field's own voidability is unchanged", and this port follows the spec.
