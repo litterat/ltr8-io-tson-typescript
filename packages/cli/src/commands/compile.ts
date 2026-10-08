@@ -21,13 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { TsonNameHygieneRefusedError, type LinkedSchema, type Tson } from '@ltr8/tson';
 import { outcomeOfFiles, type Outcome } from '../outcome.js';
 import { isInvalidSchemaError } from '../problem.js';
-import {
-  limitsPolicyOf,
-  processorPolicyOf,
-  type LimitsPolicy,
-  type PolicyOptions,
-  type ProcessorPolicy,
-} from '../policyOptions.js';
+import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
 export interface CompileFileResult {
@@ -61,8 +55,6 @@ export interface CompileRun {
   readonly outcome: Outcome;
   /** Stated once for the run, never per file -- mirrors `commands/validate.ts`'s own `ValidateRun.policy`. */
   readonly policy: ProcessorPolicy;
-  /** [TSON-DATA] §9.1's resource-limits policy this run was judged under -- reported beside {@link policy} on the same terms §9.1 states for it. */
-  readonly limits: LimitsPolicy;
   readonly files: readonly CompileFileResult[];
 }
 
@@ -79,7 +71,6 @@ export async function runCompile(
   return {
     outcome: outcomeOfFiles(results.map((r) => r.outcome)),
     policy: processorPolicyOf(policy),
-    limits: limitsPolicyOf(),
     files: results,
   };
 }

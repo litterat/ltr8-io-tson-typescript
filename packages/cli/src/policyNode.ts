@@ -1,85 +1,38 @@
 /**
  * Renders a {@link ProcessorPolicy} -- `tson policy`'s own output, and the `policy` field every
- * `validate`/`compile` run carries once (`commands/policy.ts`, `render.ts`). Mirrors the
- * reference implementation's `CliPolicy`/`CliPolicy.CliUnicodePolicy` wire shape: two surfaces
- * (`identifier_policy`, `token_policy`), each a `level`/`per_segment`/`permitting` triple, plus
- * `unicode_data_version`.
+ * `validate`/`compile` run carries once (`commands/policy.ts`, `render.ts`). The machine formats
+ * are `policy.tn`'s `policy` type (spec/m/policy.tn): `identifier_policy` (`level`, `per_segment`,
+ * `skeleton_distinctness`, `permitting`), `token_policy` (`level`, `permitting`),
+ * `unicode_data_version`, and `limits` (`max_depth`). A report is therefore valid data under that
+ * type, which `policyNode.test.ts` checks by reading one against it.
  *
- * **`permitting` now carries every admitted combination**, `@ltr8/tson`'s `IdentifierPolicy`/
- * `ScriptPolicy` (`unicode/policy.ts`) having gained `permittedScripts` -- each combination
- * resolved back from its `ScriptId`s to script names via `@ltr8/tson`'s `scriptName`, in the
- * order `--identifier-scripts`/`--token-scripts` added them.
+ * **`permitting` carries every admitted combination**, each resolved from its `ScriptId`s to the
+ * script's UAX #24 Script property value alias (`Latin`, `Old_Italic`, `SignWriting`) via
+ * `@ltr8/tson`'s `scriptName`, in the order `--identifier-scripts`/`--token-scripts` added them.
  *
- * **`token_policy.per_segment` is always `false`.** `@ltr8/tson`'s `ScriptPolicy` has no
- * per-segment axis at all (`unicode/policy.ts`'s own doc: "`_`/`-` are ordinary characters in a
- * value, not word separators"), unlike the reference implementation's `TsonUnicodePolicy`, which
- * both surfaces share. Stating it here keeps the two surfaces' wire shape symmetric rather than
- * omitting the field on one of them.
+ * **`limits` states the one limit `policy.tn` declares**, `max_depth`: the nesting depth this
+ * processor enforces. `Tson.processorPolicy.limits` also carries the fixed schema-side values of
+ * [TSON-SCHEMA] §11.5, which `policy.tn` has no member for and which no flag configures, so they
+ * are not reported.
  */
 import { arrayNode, atomNode, recordNode, scriptName, type Value } from '@ltr8/tson';
-import type { LimitsPolicy, ProcessorPolicy } from './policyOptions.js';
+import type { ProcessorPolicy } from './policyOptions.js';
 
-interface UnicodePolicyJson {
+interface ScriptPolicyJson {
   readonly level: string;
-  readonly per_segment: boolean;
   readonly permitting: readonly (readonly string[])[];
 }
 
+interface IdentifierPolicyJson extends ScriptPolicyJson {
+  readonly per_segment: boolean;
+  readonly skeleton_distinctness: boolean;
+}
+
 export interface PolicyJson {
-  readonly identifier_policy: UnicodePolicyJson;
-  readonly token_policy: UnicodePolicyJson;
+  readonly identifier_policy: IdentifierPolicyJson;
+  readonly token_policy: ScriptPolicyJson;
   readonly unicode_data_version: string;
-}
-
-/**
- * {@link LimitsPolicy} rendered for `--format json`/`tson` -- [TSON-DATA] §9.1's resource limits
- * this run enforces, `snake_case` throughout to match {@link PolicyJson}'s own convention.
- */
-export interface LimitsPolicyJson {
-  readonly max_nesting_depth: number;
-  readonly max_import_closure: number;
-  readonly max_schema_entries: number;
-  readonly max_reference_chain: number;
-  readonly max_supertype_chain: number;
-  readonly max_materialisation_depth: number;
-}
-
-/** {@link LimitsPolicy} rendered for `--format json`. */
-export function limitsPolicyJson(limits: LimitsPolicy): LimitsPolicyJson {
-  return {
-    max_nesting_depth: limits.maxNestingDepth,
-    max_import_closure: limits.maxImportClosure,
-    max_schema_entries: limits.maxSchemaEntries,
-    max_reference_chain: limits.maxReferenceChain,
-    max_supertype_chain: limits.maxSupertypeChain,
-    max_materialisation_depth: limits.maxMaterialisationDepth,
-  };
-}
-
-/** {@link LimitsPolicy} rendered for `--format tson`, as a `tree/nodes.ts` {@link Value} record. */
-export function limitsPolicyNode(limits: LimitsPolicy): Value {
-  return recordNode(
-    new Map<string, Value>([
-      ['max_nesting_depth', atomNode(BigInt(limits.maxNestingDepth))],
-      ['max_import_closure', atomNode(BigInt(limits.maxImportClosure))],
-      ['max_schema_entries', atomNode(BigInt(limits.maxSchemaEntries))],
-      ['max_reference_chain', atomNode(BigInt(limits.maxReferenceChain))],
-      ['max_supertype_chain', atomNode(BigInt(limits.maxSupertypeChain))],
-      ['max_materialisation_depth', atomNode(BigInt(limits.maxMaterialisationDepth))],
-    ]),
-  );
-}
-
-/** One line: `nesting depth 64, import closure 64, schema entries 65536, reference chain 64, supertype chain 64, materialisation depth 64` -- `tson policy`'s own `--format text` for the limits half of the report. */
-export function limitsPolicyText(limits: LimitsPolicy): string {
-  return (
-    `nesting depth ${String(limits.maxNestingDepth)}, ` +
-    `import closure ${String(limits.maxImportClosure)}, ` +
-    `schema entries ${String(limits.maxSchemaEntries)}, ` +
-    `reference chain ${String(limits.maxReferenceChain)}, ` +
-    `supertype chain ${String(limits.maxSupertypeChain)}, ` +
-    `materialisation depth ${String(limits.maxMaterialisationDepth)}`
-  );
+  readonly limits: { readonly max_depth: number };
 }
 
 /** One `permittedScripts` combination, resolved from `ScriptId`s back to the names `scriptNamed` accepts. */
@@ -94,71 +47,63 @@ function permittingNames(
   return permittedScripts.map(combinationNames);
 }
 
-function unicodePolicyJson(
-  level: string,
-  perSegment: boolean,
-  permitting: readonly (readonly string[])[],
-): UnicodePolicyJson {
-  return { level, per_segment: perSegment, permitting };
-}
-
 /** {@link ProcessorPolicy} rendered for `--format json`. */
 export function policyJson(policy: ProcessorPolicy): PolicyJson {
+  const { identifierPolicy, tokenPolicy } = policy;
   return {
-    identifier_policy: unicodePolicyJson(
-      policy.identifierPolicy.restrictionLevel,
-      policy.identifierPolicy.perSegment,
-      permittingNames(policy.identifierPolicy.permittedScripts),
-    ),
-    token_policy: unicodePolicyJson(
-      policy.tokenPolicy.restrictionLevel,
-      false,
-      permittingNames(policy.tokenPolicy.permittedScripts),
-    ),
+    identifier_policy: {
+      level: identifierPolicy.restrictionLevel,
+      per_segment: identifierPolicy.perSegment,
+      skeleton_distinctness: identifierPolicy.skeletonDistinctness,
+      permitting: permittingNames(identifierPolicy.permittedScripts),
+    },
+    token_policy: {
+      level: tokenPolicy.restrictionLevel,
+      permitting: permittingNames(tokenPolicy.permittedScripts),
+    },
     unicode_data_version: policy.unicodeDataVersion,
+    limits: { max_depth: policy.limits.maxNestingDepth },
   };
 }
 
-function unicodePolicyNode(
-  level: string,
-  perSegment: boolean,
-  permitting: readonly (readonly string[])[],
-): Value {
-  return recordNode(
-    new Map<string, Value>([
-      ['level', atomNode(level)],
-      ['per_segment', atomNode(perSegment)],
-      [
-        'permitting',
-        arrayNode(
-          permitting.map((combination) => arrayNode(combination.map((name) => atomNode(name)))),
-        ),
-      ],
-    ]),
+function permittingNode(permitting: readonly (readonly string[])[]): Value {
+  return arrayNode(
+    permitting.map((combination) => arrayNode(combination.map((name) => atomNode(name)))),
   );
 }
 
 /** {@link ProcessorPolicy} rendered for `--format tson`, as a `tree/nodes.ts` {@link Value} record. */
 export function policyNode(policy: ProcessorPolicy): Value {
+  const { identifierPolicy, tokenPolicy } = policy;
   return recordNode(
     new Map<string, Value>([
       [
         'identifier_policy',
-        unicodePolicyNode(
-          policy.identifierPolicy.restrictionLevel,
-          policy.identifierPolicy.perSegment,
-          permittingNames(policy.identifierPolicy.permittedScripts),
+        recordNode(
+          new Map<string, Value>([
+            ['level', atomNode(identifierPolicy.restrictionLevel)],
+            ['per_segment', atomNode(identifierPolicy.perSegment)],
+            ['skeleton_distinctness', atomNode(identifierPolicy.skeletonDistinctness)],
+            ['permitting', permittingNode(permittingNames(identifierPolicy.permittedScripts))],
+          ]),
         ),
       ],
       [
         'token_policy',
-        unicodePolicyNode(
-          policy.tokenPolicy.restrictionLevel,
-          false,
-          permittingNames(policy.tokenPolicy.permittedScripts),
+        recordNode(
+          new Map<string, Value>([
+            ['level', atomNode(tokenPolicy.restrictionLevel)],
+            ['permitting', permittingNode(permittingNames(tokenPolicy.permittedScripts))],
+          ]),
         ),
       ],
       ['unicode_data_version', atomNode(policy.unicodeDataVersion)],
+      [
+        'limits',
+        recordNode(
+          new Map<string, Value>([['max_depth', atomNode(BigInt(policy.limits.maxNestingDepth))]]),
+        ),
+      ],
     ]),
   );
 }
@@ -168,47 +113,51 @@ function combinationText(combination: readonly string[]): string {
   return combination.join('+');
 }
 
-function unicodePolicySummary(
+function scriptPolicySummary(
   level: string,
-  perSegment: boolean,
   permitting: readonly (readonly string[])[],
+  extra: readonly string[] = [],
 ): string {
-  const parts = [level];
-  if (perSegment) parts.push('per segment');
+  const parts = [level, ...extra];
   if (permitting.length > 0) parts.push(`permitting ${permitting.map(combinationText).join(', ')}`);
   return parts.join(' ');
 }
 
-/** One line per surface: what differs between two deployments that disagree about one name -- `tson policy`'s own `--format text`. */
+function identifierSummary(policy: ProcessorPolicy): string {
+  const { identifierPolicy } = policy;
+  const summary = scriptPolicySummary(
+    identifierPolicy.restrictionLevel,
+    permittingNames(identifierPolicy.permittedScripts),
+    identifierPolicy.perSegment ? ['per segment'] : [],
+  );
+  return identifierPolicy.skeletonDistinctness
+    ? summary
+    : `${summary} without skeleton distinctness`;
+}
+
+function tokenSummary(policy: ProcessorPolicy): string {
+  return scriptPolicySummary(
+    policy.tokenPolicy.restrictionLevel,
+    permittingNames(policy.tokenPolicy.permittedScripts),
+  );
+}
+
+/** One line per surface, then the data version and depth limit: what differs between two deployments that disagree about one name -- `tson policy`'s own `--format text`. */
 export function policyText(policy: ProcessorPolicy): string {
   return [
-    `identifier policy: ${unicodePolicySummary(
-      policy.identifierPolicy.restrictionLevel,
-      policy.identifierPolicy.perSegment,
-      permittingNames(policy.identifierPolicy.permittedScripts),
-    )}`,
-    `token policy:      ${unicodePolicySummary(
-      policy.tokenPolicy.restrictionLevel,
-      false,
-      permittingNames(policy.tokenPolicy.permittedScripts),
-    )}`,
+    `identifier policy: ${identifierSummary(policy)}`,
+    `token policy:      ${tokenSummary(policy)}`,
     `unicode data:      ${policy.unicodeDataVersion}`,
+    `max depth:         ${String(policy.limits.maxNestingDepth)}`,
   ].join('\n');
 }
 
-/** Policy summary embedded in a `validate`/`compile` text run, one line: `identifier policy X, token policy Y, Unicode Z`. */
+/** Policy summary embedded in a `validate`/`compile` text run, one line: `identifier policy X, token policy Y, Unicode Z, max depth N`. */
 export function policySummary(policy: ProcessorPolicy): string {
-  const identifier = unicodePolicySummary(
-    policy.identifierPolicy.restrictionLevel,
-    policy.identifierPolicy.perSegment,
-    permittingNames(policy.identifierPolicy.permittedScripts),
+  return (
+    `identifier policy ${identifierSummary(policy)}, token policy ${tokenSummary(policy)}, ` +
+    `Unicode ${policy.unicodeDataVersion}, max depth ${String(policy.limits.maxNestingDepth)}`
   );
-  const token = unicodePolicySummary(
-    policy.tokenPolicy.restrictionLevel,
-    false,
-    permittingNames(policy.tokenPolicy.permittedScripts),
-  );
-  return `identifier policy ${identifier}, token policy ${token}, Unicode ${policy.unicodeDataVersion}`;
 }
 
 /** §8.2's own defaults -- what a run configures by giving no policy flags at all. */
@@ -216,6 +165,7 @@ export function isDefaultPolicy(policy: ProcessorPolicy): boolean {
   return (
     policy.identifierPolicy.restrictionLevel === 'HIGHLY_RESTRICTIVE' &&
     !policy.identifierPolicy.perSegment &&
+    policy.identifierPolicy.skeletonDistinctness &&
     policy.identifierPolicy.permittedScripts.length === 0 &&
     policy.tokenPolicy.restrictionLevel === 'UNRESTRICTED' &&
     policy.tokenPolicy.permittedScripts.length === 0

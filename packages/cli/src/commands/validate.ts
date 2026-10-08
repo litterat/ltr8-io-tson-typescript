@@ -76,13 +76,7 @@ import { compileJsonSchema, validateJsonAsync, type JsonCompiledSchema } from '@
 import { UsageError } from '../exit.js';
 import { outcomeOfDiagnostics, outcomeOfFiles, type Outcome } from '../outcome.js';
 import { classifyReadError, isInvalidSchemaError } from '../problem.js';
-import {
-  limitsPolicyOf,
-  processorPolicyOf,
-  type LimitsPolicy,
-  type PolicyOptions,
-  type ProcessorPolicy,
-} from '../policyOptions.js';
+import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
 /** Which encoding an input is read as. */
@@ -107,8 +101,6 @@ export interface ValidateRun {
   readonly outcome: Outcome;
   /** Stated once for the run, never per file -- [TSON-DATA] §8.2's own verdict cannot differ between two files of one invocation. Mirrors the reference implementation's `ValidationRun.policy`. */
   readonly policy: ProcessorPolicy;
-  /** §9.1's resource-limits policy this run was judged under -- reported beside {@link policy} on the same terms §9.1 states for it. */
-  readonly limits: LimitsPolicy;
   readonly files: readonly ValidateFileResult[];
 }
 
@@ -402,7 +394,6 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
   }
 
   const policy = processorPolicyOf(options.policy);
-  const limits = limitsPolicyOf();
 
   let context: SchemaContext | undefined;
   if (schemaLocation !== undefined && root !== undefined) {
@@ -423,7 +414,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
         outcome: outcomeOfDiagnostics([diagnostic]),
         diagnostics: [diagnostic],
       }));
-      return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, limits, files };
+      return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, files };
     }
     if (!linked.entries.has(root)) {
       throw new UsageError(`validate: '${root}' is not declared in schema '${schemaLocation}'`);
@@ -442,5 +433,5 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
     const kind = kinds.get(file) ?? 'tson'; // every file was classified above; the fallback is unreachable
     files.push(await validateOne(file, kind, context, options.policy));
   }
-  return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, limits, files };
+  return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, files };
 }

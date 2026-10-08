@@ -74,6 +74,7 @@ export * from './facade/write.js';
 export * from './config.js';
 export { bootstrapMetaKernel } from './schema/bootstrap.js';
 export type { Schema } from './compiler/schemaResolver.js';
+export { stripSchema, stripSchemaKeepingDocs } from './compiler/strip.js';
 export { linkSchema } from './link/link.js';
 export type { LinkedSchema, LinkDeps } from './link/link.js';
 

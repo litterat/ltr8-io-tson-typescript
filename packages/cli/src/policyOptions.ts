@@ -208,6 +208,7 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
   let identifierLevel: RestrictionLevel | undefined;
   let tokenLevel: RestrictionLevel | undefined;
   let identifierPerSegment = false;
+  let allowLookAlikes = false;
   const identifierScripts: (readonly ScriptId[])[] = [];
   const tokenScripts: (readonly ScriptId[])[] = [];
   const rest: string[] = [];
@@ -224,6 +225,9 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
         break;
       case '--identifier-per-segment':
         identifierPerSegment = true;
+        break;
+      case '--identifier-allow-look-alikes':
+        allowLookAlikes = true;
         break;
       case '--identifier-scripts':
         identifierScripts.push(
@@ -264,9 +268,9 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
   return {
     policy: {
       identifierPolicy: {
-        // §8.2's own default for the mechanism this CLI exposes no flag for: skeleton distinctness
-        // stays enforced regardless of what the level/unit flags above say.
-        skeletonDistinctness: true,
+        // Skeleton distinctness is no part of the level and means the same under every one, so it
+        // is neither implied nor refused by the level/unit flags; only its own flag turns it off.
+        skeletonDistinctness: !allowLookAlikes,
         restrictionLevel: resolvedIdentifierLevel,
         perSegment: identifierPerSegment,
         permittedScripts: identifierScripts,
@@ -293,25 +297,4 @@ export function processorPolicyOf(options: PolicyOptions): ProcessorPolicy {
     identifierPolicy: options.identifierPolicy,
     tokenPolicy: options.tokenPolicy,
   }).processorPolicy;
-}
-
-/**
- * [TSON-DATA] §9.1's resource-limits policy ([TSON-SCHEMA] §11.5 for the work resolving a schema
- * adds on top) -- `Tson.limitsPolicy`'s own type, named here the same way {@link ProcessorPolicy}
- * is. §9.1 asks that the limits policy be "reported beside the identifier and token policies of
- * §8.2, on the same terms: with any report that carries a refusal, and SHOULD be reachable with
- * no document in hand" -- {@link limitsPolicyOf} is exactly that reachability, this CLI's
- * counterpart to {@link processorPolicyOf}.
- */
-export type LimitsPolicy = Tson['processorPolicy']['limits'];
-
-/**
- * The {@link LimitsPolicy} this CLI applies, read back through a real, ephemeral `createTson`
- * instance for the same reason {@link processorPolicyOf} does. Takes no `PolicyOptions`, unlike
- * that function: this CLI exposes no flag for any of the six limits (`@ltr8/tson`'s own
- * `core/limits.ts` -- only `maxNestingDepth` is configurable per instance today, and this CLI
- * does not thread it through), so every run is judged under the library's own defaults.
- */
-export function limitsPolicyOf(): LimitsPolicy {
-  return createTson({}).processorPolicy.limits;
 }
