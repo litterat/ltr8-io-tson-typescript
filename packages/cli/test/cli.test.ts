@@ -67,6 +67,20 @@ describe('top-level dispatch', () => {
 });
 
 describe('validate (schemaless)', () => {
+  it('Part 1 §9.1: a document past the nesting-depth limit is NOT_CHECKED and exits 1, not INVALID', async () => {
+    const file = join(dir, 'deep.tn');
+    await writeFile(file, '['.repeat(200) + ']'.repeat(200) + '\n', 'utf8');
+    const text = captureOutput();
+    const code = await main(['validate', file]);
+    expect(code).toBe(EXIT.INVALID);
+    expect(text.stdout()).toContain('LIMIT_REFUSED');
+    expect(text.stdout().split('\n')).toContain('not checked');
+    expect(text.stdout().split('\n')).not.toContain('invalid');
+    const json = captureOutput();
+    await main(['validate', '--format', 'json', file]);
+    expect((JSON.parse(json.stdout()) as { outcome: string }).outcome).toBe('NOT_CHECKED');
+  });
+
   it('a well-formed document is valid, exit 0', async () => {
     const file = join(dir, 'ok.tn');
     await writeFile(file, '{ a: 1  b: "two" }\n', 'utf8');

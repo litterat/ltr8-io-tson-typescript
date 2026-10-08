@@ -433,7 +433,7 @@ work package: it is this port's ongoing defence against the two stacks drifting 
 not the trigger for unifying them — that trigger is still the shared module above, now with three
 named candidate pairs waiting for it rather than one.
 
-## 10. Diagnostic code names and verdicts are held to the Java's, with three known departures
+## 10. Diagnostic code names and verdicts are held to the Java's, with two known departures
 
 The public names for the void sentinel follow the reference's own (`TsonVoid`, `VoidValue`,
 `VoidEvent`, `VoidTreeReader`): `VoidNode`/`voidNode`/`VOID`, `VoidValue`, `VoidEvent`, the
@@ -445,15 +445,12 @@ Three places differ from the reference's closed `Diagnostic.Code` set and are he
 
 - `VOID_MAP_KEY` has no counterpart: the Java's set carries no code for a void key in a map.
 - `LIMIT_REFUSED` is the Java's `LIMIT_EXCEEDED`: the same §9.1 outcome under a different name.
-- `isVerdict('LIMIT_REFUSED')` answers `true` where the Java's `Code.verdict()` answers `false`.
-  The Java groups §9.1's limit with the name refusals as "this processor declined under its own
-  policy"; this port's `core/diagnostic.ts` keeps it a verdict because the processor counted a
-  property of the document itself. Which reading §8.1 means is open (`REVISION-37-PLAN.md`, "To
-  report upstream").
 
-**Trigger.** The reference's `Diagnostic.Code` set settles, or §8.1 states which outcomes a limit
-refusal belongs to. A rename is then one identifier per code, and the verdict is one line in
-`NON_VERDICT`.
+`isVerdict('LIMIT_REFUSED')` answers `false`, as the Java's `Code.verdict()` does: Part 1 §9.1 says
+a limit refusal is not a verdict, and `isRefusal` groups it with the §8.2 name refusals.
+
+**Trigger.** The reference's `Diagnostic.Code` set settles. A rename is then one identifier per
+code.
 
 ## Summary
 

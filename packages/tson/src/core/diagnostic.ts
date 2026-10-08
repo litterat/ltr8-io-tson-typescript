@@ -18,7 +18,7 @@ import type { Position } from './position.js';
  * new code is an API change rather than a new string appearing in a message.
  */
 export type DiagnosticCode =
-  /** A resource limit was exceeded ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5) -- §8.1's fifth outcome, naming the limit and the threshold it was checked against. */
+  /** A resource limit was exceeded ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5) -- a refusal ({@link isRefusal}), §8.1's fifth outcome and not a verdict, naming the limit and the threshold it was checked against. */
   | 'LIMIT_REFUSED'
   /** A required field was absent from the data. */
   | 'FIELD_REQUIRED'
@@ -245,11 +245,24 @@ export function isNameRefusal(code: DiagnosticCode): boolean {
   );
 }
 
+/**
+ * Whether `code` is a §8.1 refusal: this processor declined the document under its own policy,
+ * data version or limits -- a §8.2 name refusal ({@link isNameRefusal}) or a §9.1 limit refusal
+ * (`LIMIT_REFUSED`). The same bytes may be accepted in full by a processor configured otherwise,
+ * so a refusal is not a verdict ({@link isVerdict}) and is never reported under one of §8.1's four
+ * categories. The five `SCHEMA_*` fetch codes are the other kind of non-verdict -- no schema was
+ * obtained -- and are not refusals.
+ */
+export function isRefusal(code: DiagnosticCode): boolean {
+  return isNameRefusal(code) || code === 'LIMIT_REFUSED';
+}
+
 /** The codes that assert nothing about the document -- see {@link isVerdict}. */
 const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
   'CONFUSABLE_NAMES',
   'RESTRICTED_CHARACTER',
   'RESTRICTED_SCRIPT',
+  'LIMIT_REFUSED',
   'NOT_IMPLEMENTED',
   'BIND_MISMATCH',
   'SCHEMA_NOT_PERMITTED',
@@ -264,17 +277,16 @@ const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
  * check this library could not run at all.
  *
  * **A `false` answer means the document was not judged**, §8.1's "fifth outcome, not a verdict".
- * Two groups answer `false`. A §8.2 name refusal ({@link isNameRefusal}) says this processor's
- * policy declined the document, which asserts nothing about its validity: another deployment's
- * policy may accept the same bytes. The rest say no rule ran: `NOT_IMPLEMENTED` that this library
+ * Two groups answer `false`. A refusal ({@link isRefusal}) says this processor declined under its
+ * own policy, data version or limits -- a §8.2 name refusal, or a §9.1 limit refusal -- which
+ * asserts nothing about validity: "the document may be well-formed, valid and accepted in full by
+ * the next processor along" (§9.1). The rest say no rule ran: `NOT_IMPLEMENTED` that this library
  * could not check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five
- * `SCHEMA_*` codes that no schema was obtained to check against (§10.1). A limit refusal
- * (`LIMIT_REFUSED`) is still a verdict: the processor counted the nesting and declined on a
- * property of the document itself.
+ * `SCHEMA_*` codes that no schema was obtained to check against (§10.1).
  *
  * A consumer that asks whether a document was *rejected* rather than *judged* asks
- * {@link isNameRefusal} beside this: the CLI reports a refused file as `NOT_CHECKED` and still
- * exits 1, since the sender holds the fix.
+ * {@link isRefusal} beside this: the CLI reports a refused file as `NOT_CHECKED` and still exits
+ * 1, since the sender holds the fix.
  *
  * Stated here so no consumer keeps its own copy of the set. Two already would -- the CLI's exit
  * code and its report outcome -- and a private copy each is how two consumers come to disagree

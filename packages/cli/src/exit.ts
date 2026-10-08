@@ -16,9 +16,10 @@ import { isVerdict, type Diagnostic, type DiagnosticCode } from '@ltr8/tson';
  * diagnostic was not a verdict (`isVerdict`): nothing here judged the document, so this run has no
  * more grounds to call the data invalid than a `NOT_IMPLEMENTED` gap does.
  *
- * A §8.2 name-hygiene refusal is **not** among them. It is exit 1, the same code as any other
- * rejection, although its report outcome is `NOT_CHECKED` (it is not a verdict, `isVerdict`): what
- * a caller does next is edit the document, here by renaming something. What is portability-
+ * A refusal (`isRefusal`: a §8.2 name-hygiene refusal or a §9.1 limit refusal) is **not** among
+ * them. It is exit 1, the same code as any other rejection, although its report outcome is
+ * `NOT_CHECKED` (it is not a verdict, `isVerdict`): what a caller does next is edit the document,
+ * here by renaming something or sending less. What is portability-
  * sensitive, that another deployment's policy might accept the same document, is carried by the
  * diagnostic's own code and the report's policy, not by the exit code.
  */
@@ -82,7 +83,7 @@ export function exitCodeFor(diagnostics: readonly Diagnostic[]): ExitCode {
  * Whether every diagnostic in `diagnostics` is a verdict on the document -- so a run carrying any
  * of them has genuinely been checked and rejected, rather than not checked at all.
  *
- * A §8.2 name refusal is not a verdict, so it answers `false`. Defers to the library's own
+ * A refusal (§8.2 name, §9.1 limit) is not a verdict, so it answers `false`. Defers to the library's own
  * {@link isVerdict} rather than keeping a second copy of the set here,
  * which is how two consumers come to disagree about one diagnostic.
  */

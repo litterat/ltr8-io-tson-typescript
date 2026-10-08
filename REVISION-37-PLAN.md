@@ -440,10 +440,8 @@ test file is named for what it tests, not for the pass that wrote it.
   into the value model and compares `TypeDefinition` objects where both forms arrive as one
   `ArrayBody`. This port names the applied constructor from the entry's `source` and compares
   written form. A §8.1 conformance gap in the Java.
-- **A limit refusal is not a verdict in the Java, and is one here (§8.1, §9.1).** The Java's
-  `Code.verdict()` groups `LIMIT_EXCEEDED` with the name refusals and the fetch codes; this port's
-  `isVerdict('LIMIT_REFUSED')` answers `true`. §8.1 does not say which outcome a limit refusal
-  belongs to. The port-side question is recorded in `IDIOM-DEBT.md` item 10.
+- **A limit refusal is not a verdict (§9.1) -- resolved.** §9.1 says so explicitly; the port's
+  `isVerdict('LIMIT_REFUSED')` answers `false` and `isRefusal` groups it with the name refusals.
 - **`extern_of`/`extern_type` never narrowed (Stage 4).** Template substitution skipped map keys
   and values, and a binding's canonical form rendered every map as `?`, so entries differing only
   in `schemas` merged. Fixed here in both encodings. Worth checking the Java for the same.

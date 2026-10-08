@@ -77,9 +77,8 @@ export function classifyReadError(error: unknown): Problem {
   if (error instanceof TsonNameHygieneRefusedError) {
     return { kind: 'invalid', diagnostic: diagnosticOfNameRefusal(error) };
   }
-  // A limit refusal is not one of the four categories, but it *is* a verdict (`isVerdict`) --
-  // this processor counted a property of the document and declined it, and the sender holds the
-  // fix. A §8.2 name refusal is the opposite: it is not a verdict and reports `NOT_CHECKED`.
+  // A §9.1 limit refusal is the same kind as a name refusal (`isRefusal`): not a verdict, so the
+  // run reports `NOT_CHECKED`, and still exit 1 since the sender holds the fix.
   if (error instanceof TsonLimitRefusedError) {
     return {
       kind: 'invalid',

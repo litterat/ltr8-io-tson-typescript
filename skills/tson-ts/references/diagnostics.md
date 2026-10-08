@@ -9,9 +9,9 @@ judged: [TSON-DATA] §8.1's fifth outcome, "not a verdict". Two groups answer `f
 **name refusal** (`isNameRefusal`) says this processor's policy declined the document, which asserts
 nothing about its validity. The rest say no rule ran: `NOT_IMPLEMENTED` that this library could not
 check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five `SCHEMA_*` codes
-that no schema was obtained. `LIMIT_REFUSED` stays a verdict here, since the processor counted the
-nesting of the document itself. See `core/diagnostic.ts`'s own `isVerdict` TSDoc for the reasoning in
-full.
+that no schema was obtained. `LIMIT_REFUSED` (§9.1) is a refusal too: `isRefusal(code)` is true for
+it and for the three name codes, and `isVerdict` is `false`, since another processor may accept the
+same document in full. The CLI reports it `NOT_CHECKED` and exits 1.
 
 | Code                        | Means                                                                                                                                                                                                                                                                                                                                                                                                               |         `isVerdict`          |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------: |

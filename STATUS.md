@@ -180,7 +180,7 @@ day it does not match is the day it matters.
       `skeletonDistinctness`), a token policy, §9.1's limits and the UTS #39 data version, held in
       one `ProcessorPolicy`. `policy.tn` is the fourth bundled schema, served by identity; nothing
       loads a policy document and no document selects its own policy. A name refusal
-      (`CONFUSABLE_NAMES`/`RESTRICTED_*`) is not a verdict (`isNameRefusal`), and a schema-load
+      (`CONFUSABLE_NAMES`/`RESTRICTED_*`) and a §9.1 limit refusal (`LIMIT_REFUSED`) are not verdicts (`isRefusal`), and a schema-load
       refusal carries its §8.2 code and a pointer to the refused key
 - [x] Resolved output names the applied constructor (§8.1) — `enum_set` writes `!set_type { … }`
       as the fixture does, from the entry's `source`; the three bundled fixtures compare equal in

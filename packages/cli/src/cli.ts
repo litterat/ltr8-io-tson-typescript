@@ -80,7 +80,7 @@ a mistyped flag is not something to try to open.
 
 Exit codes:
   0  checked, and nothing to report
-  1  checked and rejected -- includes a [TSON-DATA] §8.2 name-hygiene refusal
+  1  checked and rejected -- includes a [TSON-DATA] §8.2 name-hygiene or §9.1 limit refusal
   2  usage error
  69  a schema permanently unavailable -- refused by policy, absent, or too large
  75  a schema temporarily unavailable -- unreachable, or it did not answer in time

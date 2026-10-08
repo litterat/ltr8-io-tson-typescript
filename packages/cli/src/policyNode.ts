@@ -172,11 +172,12 @@ export function isDefaultPolicy(policy: ProcessorPolicy): boolean {
   );
 }
 
-/** [TSON-DATA] §8.2's three name-hygiene codes -- the outcomes {@link ProcessorPolicy} explains. */
-const NAME_HYGIENE_CODES: ReadonlySet<string> = new Set([
+/** The refusals {@link ProcessorPolicy} explains: [TSON-DATA] §8.2's name codes and §9.1's limit. */
+const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'CONFUSABLE_NAMES',
   'RESTRICTED_CHARACTER',
   'RESTRICTED_SCRIPT',
+  'LIMIT_REFUSED',
 ]);
 
 /**
@@ -191,7 +192,7 @@ const NAME_HYGIENE_CODES: ReadonlySet<string> = new Set([
  * one shape.
  */
 export function policyNote(policy: ProcessorPolicy, codes: readonly string[]): string {
-  const refused = codes.some((code) => NAME_HYGIENE_CODES.has(code));
+  const refused = codes.some((code) => REFUSAL_CODES.has(code));
   if (!refused && isDefaultPolicy(policy)) return '';
   return (
     `note: ${refused ? 'refused' : 'judged'} under ${policySummary(policy)} -- this processor's ` +
