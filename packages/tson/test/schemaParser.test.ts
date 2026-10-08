@@ -650,6 +650,55 @@ describe('field groups (§5.11, §12.1)', () => {
   });
 });
 
+describe('the shapes a field group may take (§5.11)', () => {
+  const refused = (group: string): void => {
+    expect(thrownBy(`${META} { x => { ${group} } }`)).toBeInstanceOf(TsonParseError);
+  };
+  const accepted = (group: string): void => {
+    expect(() => parse(`${META} { x => { ${group} } }`)).not.toThrow();
+  };
+
+  it('a second mark after ")" is a parse error, whichever order (§5.11)', () => {
+    refused('(a: text | b: text)+?');
+    refused('(a: text | b: text)?+');
+    refused('(a: text | b: text)??');
+  });
+
+  it('a modifier of any kind on a member is a parse error (§5.11)', () => {
+    refused('(a: text = "x" | b: text)');
+    refused('(a: text =? | b: text)');
+  });
+
+  it("the only member of an option takes no '?' (§5.11)", () => {
+    refused('(a?: text | b: text)');
+    accepted('(a: text | b: text)');
+  });
+
+  it('a bare group of one option is plain fields, or the + group when all are marked (§5.11)', () => {
+    refused('(a: text  b?: text)');
+    refused('(a?: text  b?: text)');
+  });
+
+  it('a group of one option is admitted only as `?` with two members, one unmarked (§5.11)', () => {
+    accepted('(b: text  a?: text)?');
+    accepted('(a: text  b: text)?');
+    refused('(a?: text  b?: text)?');
+    refused('(a: text)?');
+  });
+
+  it('`+` takes at least two options of one unmarked member each (§5.11)', () => {
+    accepted('(a: text | b: text)+');
+    refused('(a: text  b: text | c: text)+');
+    refused('(a?: text | b: text)+');
+    refused('(a: text)+');
+  });
+
+  it('a group of several options may hold marked members in an option of several (§5.11)', () => {
+    accepted('(include: text | name?: text  type?: text)');
+    accepted('(host: text  port?: text | socket: text)');
+  });
+});
+
 describe('a field name is an identifier in the schema grammar too (§2.5, §5.2, §5.11, §7.7)', () => {
   it('rejects a quoted, non-identifier record field name', () => {
     expect(thrownBy(`${META} { x => { "first name": text } }`)).toBeInstanceOf(TsonParseError);

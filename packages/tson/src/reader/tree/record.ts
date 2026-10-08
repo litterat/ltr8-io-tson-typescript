@@ -22,10 +22,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import {
   fieldOmission,
-  atLeastOne,
-  describeGroup,
-  describeViolation,
-  groupViolations,
+  groupRefusals,
   isGroupMember,
   type FieldGroup,
   type RecordBody,
@@ -383,30 +380,8 @@ export function recordTreeReader(
       return idx !== undefined && seen[idx] === true;
     };
     for (const group of groups) {
-      for (const violation of groupViolations(group, isPresent)) {
-        const message = `'${displayName}': ${describeViolation(group, violation, isPresent)}`;
-        if (violation.kind === 'MEMBER_MISSING') {
-          ctx.report(
-            'FIELD_REQUIRED',
-            message,
-            `every unmarked member of the chosen option of (${describeGroup(group)})`,
-            `missing ${violation.missing.join(', ')}`,
-          );
-        } else if (violation.kind === 'SEVERAL_CHOSEN') {
-          ctx.report(
-            'TYPE_MISMATCH',
-            message,
-            group.optional ? 'at most one option' : 'exactly one option',
-            `${String(violation.options.length)} options chosen`,
-          );
-        } else {
-          ctx.report(
-            'FIELD_REQUIRED',
-            message,
-            atLeastOne(group) ? 'at least one option' : 'exactly one option',
-            'none present',
-          );
-        }
+      for (const refusal of groupRefusals(group, isPresent, displayName)) {
+        ctx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
       }
     }
   }

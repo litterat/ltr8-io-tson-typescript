@@ -46,9 +46,7 @@ import type { Task } from '../../io/bytes.js';
 import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
-  atLeastOne,
-  describeViolation,
-  groupViolations,
+  groupRefusals,
   isGroupMember,
   type FieldGroup,
   type FieldOmission,
@@ -609,30 +607,8 @@ function validateGroups(ctx: JsonReadContext, plan: RecordPlan, slots: readonly 
     return at !== undefined && slots[at] !== undefined;
   };
   for (const group of plan.groups) {
-    for (const violation of groupViolations(group, isPresent)) {
-      const message = describeViolation(group, violation, isPresent);
-      if (violation.kind === 'MEMBER_MISSING') {
-        ctx.report(
-          'FIELD_REQUIRED',
-          message,
-          'every unmarked member of the chosen option',
-          `missing ${violation.missing.join(', ')}`,
-        );
-      } else if (violation.kind === 'SEVERAL_CHOSEN') {
-        ctx.report(
-          'TYPE_MISMATCH',
-          message,
-          group.optional ? 'at most one option' : 'exactly one option',
-          String(violation.options.length),
-        );
-      } else {
-        ctx.report(
-          'FIELD_REQUIRED',
-          message,
-          atLeastOne(group) ? 'at least one option' : 'exactly one option',
-          'none',
-        );
-      }
+    for (const refusal of groupRefusals(group, isPresent, plan.displayName)) {
+      ctx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
     }
   }
 }

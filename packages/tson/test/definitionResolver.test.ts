@@ -1790,3 +1790,89 @@ describe('invariant violations (bugs in this library, never a verdict on the sch
     expect(thrownBy(() => resolveOne(resolver, doc, 'bad'))).toBeInstanceOf(TsonInternalError);
   });
 });
+
+// ── Removal and restatement of field groups (§5.9 rule 7, §5.11) ─────────────────────────────
+
+describe('removing a field-group member (§5.9 rule 7, §5.11 Removal)', () => {
+  function resolveBody(source: string, name: string): RecordBody {
+    const doc = parse(source);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const resolved = resolveOne(resolver, doc, name);
+    if (!isRecordBody(resolved.body)) throw new Error('unreachable');
+    return resolved.body;
+  }
+
+  it('a member leaves its option, and an option left with several members stays (§5.11)', () => {
+    const body = resolveBody(
+      `base => { (host: token  port: token  extra?: token | socket: token) }
+       thin => base - { extra }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([{ members: [['host', 'port'], ['socket']], optional: false }]);
+    expect(body.fields.map((f) => f.name)).toEqual(['host', 'port', 'socket']);
+  });
+
+  it('an emptied option leaves the group, and the group left with one single-member option dissolves into the plain field (§5.11)', () => {
+    const body = resolveBody(
+      `base => { (a: token | b: token) }
+       thin => base - { b }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    const a = fieldNamed(body, 'a');
+    expect(a.optional).toBe(false);
+    expect(a.role).toBe('FREE');
+  });
+
+  it("a dissolved optional group's survivor takes `?` on its name and keeps its own voidability (§5.11)", () => {
+    const body = resolveBody(
+      `base => { (a: token? | b: token)? }
+       thin => base - { b }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    const a = fieldNamed(body, 'a');
+    expect(a.optional).toBe(true);
+    expect(a.voidable).toBe(true);
+  });
+
+  it('a bare group reduced to one option with an unmarked member becomes plain fields, marked members optional (§5.11)', () => {
+    const body = resolveBody(
+      `base => { (a: token  b?: token | c: token) }
+       thin => base - { c }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    expect(fieldNamed(body, 'a').optional).toBe(false);
+    expect(fieldNamed(body, 'b').optional).toBe(true);
+  });
+
+  it('removal leaves a `+` group that keeps two members, and dissolves one that falls to one (§5.11)', () => {
+    const three = resolveBody(
+      `base => { (a: token | b: token | c: token)+ }
+       thin => base - { c }`,
+      'thin',
+    );
+    expect(three.groups).toEqual([
+      { members: [['a', 'b']], optionalMembers: ['a', 'b'], optional: false },
+    ]);
+    const two = resolveBody(
+      `base => { (a: token | b: token)+ }
+       thin => base - { b }`,
+      'thin',
+    );
+    expect(two.groups).toEqual([]);
+    expect(fieldNamed(two, 'a').optional).toBe(false);
+  });
+
+  it('removing every member drops the group with them (§5.11)', () => {
+    const body = resolveBody(
+      `base => { keep: token  (a: token | b: token) }
+       thin => base - { a b }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    expect(body.fields.map((f) => f.name)).toEqual(['keep']);
+  });
+});

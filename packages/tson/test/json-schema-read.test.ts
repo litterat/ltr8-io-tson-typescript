@@ -517,32 +517,30 @@ describe('§6.1 records', () => {
 
   it('a required group takes exactly one member (§6.1.4)', () => {
     expect(read('bounded', '{"value": 1, "min": 0}').diagnostics).toEqual([]);
-    expect(refusal('bounded', '{"value": 1}').code).toBe('FIELD_REQUIRED');
-    expect(refusal('bounded', '{"value": 1, "min": 0, "max": 9}').code).toBe('TYPE_MISMATCH');
+    expect(refusal('bounded', '{"value": 1}').code).toBe('FIELD_GROUP');
+    expect(refusal('bounded', '{"value": 1, "min": 0, "max": 9}').code).toBe('FIELD_GROUP');
   });
 
   it('an optional group takes at most one member', () => {
     expect(read('flagged', '{"value": 1}').diagnostics).toEqual([]);
     expect(read('flagged', '{"value": 1, "cleared": 3}').diagnostics).toEqual([]);
-    expect(refusal('flagged', '{"value": 1, "cleared": 3, "pending": 4}').code).toBe(
-      'TYPE_MISMATCH',
-    );
+    expect(refusal('flagged', '{"value": 1, "cleared": 3, "pending": 4}').code).toBe('FIELD_GROUP');
   });
 
   it('an option holds several fields, chosen whole: its unmarked members present, its marked ones free (§5.11, §6.1.4)', () => {
     expect(read('endpoint', '{"host": "h", "port": 80}').diagnostics).toEqual([]);
     expect(read('endpoint', '{"host": "h"}').diagnostics).toEqual([]);
     expect(read('endpoint', '{"socket": "s"}').diagnostics).toEqual([]);
-    expect(refusal('endpoint', '{"port": 80}').code).toBe('FIELD_REQUIRED');
-    expect(refusal('endpoint', '{"host": "h", "socket": "s"}').code).toBe('TYPE_MISMATCH');
-    expect(refusal('endpoint', '{}').code).toBe('FIELD_REQUIRED');
+    expect(refusal('endpoint', '{"port": 80}').code).toBe('FIELD_GROUP');
+    expect(refusal('endpoint', '{"host": "h", "socket": "s"}').code).toBe('FIELD_GROUP');
+    expect(refusal('endpoint', '{}').code).toBe('FIELD_GROUP');
   });
 
   it('the at-least-one group takes any non-empty subset of its members (§5.11)', () => {
     expect(read('reachable', '{"email": "e"}').diagnostics).toEqual([]);
     expect(read('reachable', '{"phone": "p"}').diagnostics).toEqual([]);
     expect(read('reachable', '{"email": "e", "phone": "p"}').diagnostics).toEqual([]);
-    expect(refusal('reachable', '{}').code).toBe('FIELD_REQUIRED');
+    expect(refusal('reachable', '{}').code).toBe('FIELD_GROUP');
   });
 
   it('a problem inside a nested record names both ends', () => {

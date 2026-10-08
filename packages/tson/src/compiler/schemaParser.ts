@@ -560,6 +560,7 @@ function* parseFieldModifier(state: CursorState): Task<FieldModifier> {
  * a record body's entries are. The mark after `)` is `?` or `+`, never both, and touches the `)`.
  */
 function* parseGroupDef(state: CursorState, annotations: readonly Annotation[]): Task<GroupDef> {
+  const start = (yield* peekToken(state)).start;
   yield* expect(state, 'lparen', "a field group's opening '('");
   const options: [GroupMember, ...GroupMember[]][] = [yield* parseGroupOption(state)];
   while (yield* check(state, 'pipe')) {
@@ -585,7 +586,72 @@ function* parseGroupDef(state: CursorState, annotations: readonly Annotation[]):
       );
     }
   }
-  return { kind: 'groupDef', annotations, options, quantifier };
+  const group: GroupDef = { kind: 'groupDef', annotations, options, quantifier };
+  checkGroupShape(group, start);
+  return group;
+}
+
+/**
+ * The shapes a group may take (§5.11), each refused with the spelling it restates, so that every
+ * presence rule has one spelling:
+ *
+ * - the only member of an option takes no `?`, being present exactly when its option is chosen;
+ * - `+` takes options of one field each, at least two of them;
+ * - a group of one option is `?`, with at least two members and one of them unmarked. A bare one
+ *   is plain fields, or with every member marked the `+` group; a `?` one with a single member, or
+ *   with every member marked, is plain optional fields.
+ */
+function checkGroupShape(group: GroupDef, start: Position): void {
+  for (const option of group.options) {
+    const only = option[0];
+    if (option.length === 1 && only.omittable) {
+      throw new TsonParseError(
+        `'${only.name}' is the only member of its option, so the '?' on its name changes nothing ` +
+          '-- it is present exactly when its option is chosen (§5.11); write it without the ' +
+          "'?'",
+        start,
+      );
+    }
+  }
+  const members = group.options.flat();
+  const names = members.map((member) => member.name);
+  if (group.quantifier === 'AT_LEAST_ONE') {
+    if (group.options.some((option) => option.length > 1)) {
+      throw new TsonParseError(
+        "a '+' group's options are single fields, at least one of them present -- an option " +
+          "holding several fields belongs to a bare or '?' group (§5.11)",
+        start,
+      );
+    }
+    if (members.length < 2) {
+      throw new TsonParseError(
+        "a '+' group needs at least two members -- at least one of a single field is that " +
+          'field, required (§5.11)',
+        start,
+      );
+    }
+    return;
+  }
+  if (group.options.length > 1) return;
+  const anyUnmarked = members.some((member) => !member.omittable);
+  if (group.quantifier === 'EXACTLY_ONE') {
+    throw new TsonParseError(
+      anyUnmarked
+        ? 'a bare group of one option states plain fields -- its option is always chosen, so its ' +
+            `unmarked members are required and its marked ones optional; declare (${names.join(', ')}) ` +
+            'as fields (§5.11)'
+        : 'a bare group of one option whose members are all marked admits at least one of them -- ' +
+            `write it with '+', each member its own option: (${names.join(' | ')})+ (§5.11)`,
+      start,
+    );
+  }
+  if (members.length < 2 || !anyUnmarked) {
+    throw new TsonParseError(
+      `a '?' group of one option ${members.length < 2 ? 'and one member' : 'whose members are all marked'} ` +
+        `admits each member independently -- declare (${names.join(', ')}) as optional fields (§5.11)`,
+      start,
+    );
+  }
 }
 
 function* parseGroupOption(state: CursorState): Task<[GroupMember, ...GroupMember[]]> {
@@ -611,6 +677,15 @@ function* parseGroupMember(state: CursorState): Task<GroupMember> {
   yield* expect(state, 'colon', "a field group member's ':'");
   const typeRef = yield* parseTypeRef(state);
   const voidable = yield* consumeAdjacentQuestion(state);
+  if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
+    // §5.11: a member's presence is the group's and a group never injects, so `~`, `=` and `=?`
+    // are refused here by name rather than as a malformed group.
+    throw parseError(
+      yield* peekToken(state),
+      "a field group member takes no value modifier -- §5.11 gives the group a member's " +
+        "presence, so none of them takes a default, a pin, or the discriminator mark '=?'",
+    );
+  }
   return { annotations, name: name.text, omittable, typeRef, voidable };
 }
 

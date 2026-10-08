@@ -792,3 +792,95 @@ describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT r
     }).toThrow(/'dog' can never be satisfied/u);
   });
 });
+
+describe('checkEveryEntryIsInhabited: chosen options (§5.10.1, §5.11)', () => {
+  const void_: TypeDefinition = def({ kind: 'void_type' });
+  const recordOf = (
+    fields: RecordField[],
+    groups: { members: string[][]; optionalMembers?: string[]; optional: boolean }[],
+  ): TypeDefinition => def({ kind: 'record', supertypes: [], fields, groups, extension: 'OPEN' });
+  const group = (
+    fields: RecordField[],
+    members: string[][],
+    optionalMembers?: string[],
+  ): ReadonlyMap<string, TypeDefinition> =>
+    new Map<string, TypeDefinition>([
+      ['void', void_],
+      ['text', text],
+      [
+        'r',
+        recordOf(fields, [
+          {
+            members,
+            ...(optionalMembers === undefined ? {} : { optionalMembers }),
+            optional: false,
+          },
+        ]),
+      ],
+    ]);
+  const optionalField = (name: string, type: string, marks = {}): RecordField =>
+    field(name, ref(type), { optional: true, ...marks });
+
+  it('a group is productive when one option is choosable (§5.11)', () => {
+    expect(() => {
+      check(group([optionalField('a', 'void'), optionalField('b', 'text')], [['a'], ['b']]));
+    }).not.toThrow();
+  });
+
+  it('an unmarked member narrowed to void makes its option unchoosable, and a group with no choosable option is unsatisfiable (§5.11)', () => {
+    expect(() => {
+      check(group([optionalField('a', 'void'), optionalField('b', 'void')], [['a'], ['b']]));
+    }).toThrow(/'r' can never be satisfied/u);
+  });
+
+  it('a marked member narrowed to void drops out of its option, which stays choosable by the others (§5.11)', () => {
+    expect(() => {
+      check(
+        group(
+          [optionalField('a', 'text'), optionalField('b', 'void'), optionalField('c', 'void')],
+          [['a', 'b'], ['c']],
+          ['b'],
+        ),
+      );
+    }).not.toThrow();
+  });
+
+  it('an option whose members are all marked and all void can be chosen by nothing (§5.11)', () => {
+    expect(() => {
+      check(
+        group([optionalField('a', 'void'), optionalField('b', 'void')], [['a', 'b']], ['a', 'b']),
+      );
+    }).toThrow(/can never be satisfied/u);
+  });
+
+  it('a voidable member narrowed to void? is present as `_` and chooses its option (§5.11)', () => {
+    expect(() => {
+      check(
+        group(
+          [optionalField('a', 'void', { voidable: true }), optionalField('b', 'void')],
+          [['a'], ['b']],
+        ),
+      );
+    }).not.toThrow();
+  });
+
+  it('a map whose values may be void is productive when its keys are (§5.10.1)', () => {
+    const merged = new Map<string, TypeDefinition>([
+      ['text', text],
+      [
+        'm',
+        def({
+          kind: 'map',
+          keyType: ref('text'),
+          valueType: ref('m'),
+          voidable: true,
+          ordered: false,
+          minItems: 1n,
+        }),
+      ],
+    ]);
+    expect(() => {
+      check(merged);
+    }).not.toThrow();
+  });
+});

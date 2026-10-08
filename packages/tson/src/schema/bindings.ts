@@ -807,6 +807,34 @@ const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   },
 });
 
+/**
+ * `field_group.members` is `[[field_name; 1..]; 1..]` and `optional_members` is `[field_name; 1..]`
+ * (§5.11, §8.1): a group has an option, an option has a member, and an absent `optional_members`
+ * is the one spelling of "no member marked". An empty list at any of the three is refused where it
+ * is read, so a group that is present is never degenerate for any consumer.
+ */
+function nonEmptyGroupLists(
+  members: readonly (readonly string[])[],
+  optionalMembers: readonly string[] | undefined,
+): Pick<FieldGroup, 'members' | 'optionalMembers'> {
+  const refuse = (what: string): never => {
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message: `a field group's ${what} (min_items: 1)`,
+    });
+  };
+  if (members.length === 0) refuse("'members' must hold at least one option");
+  if (members.some((option) => option.length === 0)) {
+    refuse(
+      'options must each hold at least one field name -- an option holding no field can never be chosen',
+    );
+  }
+  if (optionalMembers?.length === 0) {
+    refuse("'optional_members' must hold at least one field name -- absent, not empty, names none");
+  }
+  return { members, ...(optionalMembers === undefined ? {} : { optionalMembers }) };
+}
+
 const fieldGroupBinding: RecordBinding<FieldGroup> = record<FieldGroup>({
   fields: [
     field<FieldGroup, 'members'>(
@@ -830,8 +858,7 @@ const fieldGroupBinding: RecordBinding<FieldGroup> = record<FieldGroup>({
       boolean,
     ];
     return {
-      members,
-      ...(optionalMembers === undefined ? {} : { optionalMembers }),
+      ...nonEmptyGroupLists(members, optionalMembers),
       optional: optionalFlag,
     };
   },

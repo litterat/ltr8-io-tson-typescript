@@ -5,7 +5,7 @@ import {
   describeGroup,
   groupMemberNames,
   groupViolations,
-  describeViolation,
+  groupRefusals,
   isGroupMember,
   type FieldGroup,
 } from '../src/schema/meta/bodies.js';
@@ -96,30 +96,41 @@ describe('groupViolations (§5.11, §7.6)', () => {
   });
 });
 
-describe("describeViolation -- the message fits the group's quantifier (§5.11 Validation)", () => {
+describe('groupRefusals -- FIELD_GROUP, in the reference messages and order (§5.11 Validation)', () => {
   const say = (group: FieldGroup, ...present: string[]): string[] =>
-    groupViolations(group, over(...present)).map((v) =>
-      describeViolation(group, v, over(...present)),
-    );
+    groupRefusals(group, over(...present), 'r').map((r) => `${r.code}: ${r.message}`);
 
   it('a bare group says exactly one, both when none and when several are chosen', () => {
-    expect(say(ONE_OF)).toEqual(['none of (a | b) is present; exactly one is required']);
-    expect(say(ONE_OF, 'a', 'b')).toEqual(['(a) and (b) choose 2 options; exactly one is allowed']);
+    expect(say(ONE_OF)).toEqual([
+      "FIELD_GROUP: exactly one option of (a | b) must be chosen for 'r', found none",
+    ]);
+    expect(say(ONE_OF, 'a', 'b')).toEqual([
+      "FIELD_GROUP: exactly one option of (a | b) must be chosen for 'r', found 2",
+    ]);
   });
 
   it('an optional group says at most one', () => {
     expect(say(AT_MOST_ONE, 'a', 'b')).toEqual([
-      '(a) and (b) choose 2 options; at most one is allowed',
+      "FIELD_GROUP: at most one option of (a | b) may be chosen for 'r', found 2",
     ]);
   });
 
   it('an at-least-one group says at least one', () => {
     expect(say(AT_LEAST_ONE)).toEqual([
-      'none of (email | phone) is present; at least one is required',
+      "FIELD_GROUP: at least one of (email | phone) must be present for 'r'",
     ]);
   });
 
-  it('a chosen option names what it needs', () => {
-    expect(say(OPTIONS, 'port')).toEqual(['(port) chose its option, which needs host']);
+  it('a chosen option names the member that chose it and what it needs', () => {
+    expect(say(OPTIONS, 'port')).toEqual([
+      "FIELD_GROUP: 'port' chose (host port) on 'r', which needs 'host'",
+    ]);
+  });
+
+  it("reports each chosen option's missing members before the count", () => {
+    const refusals = say(OPTIONS, 'port', 'socket');
+    expect(refusals).toHaveLength(2);
+    expect(refusals[0]).toContain('which needs');
+    expect(refusals[1]).toContain('found 2');
   });
 });

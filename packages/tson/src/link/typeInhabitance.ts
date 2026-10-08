@@ -164,7 +164,7 @@ function isInhabited(
       return (
         isEmptyAllowed(body.minItems) ||
         (refInhabited(body.keyType, namespace, inhabited) &&
-          refInhabited(body.valueType, namespace, inhabited))
+          (body.voidable || refInhabited(body.valueType, namespace, inhabited)))
       );
     case 'tuple':
       return body.elements.every((element) => positionInhabited(element, namespace, inhabited));
@@ -219,10 +219,7 @@ function recordInhabited(
     if (group.optional) {
       continue;
     }
-    const any = group.members.some(
-      (option) => unsatisfiedMember(record, group, option, namespace, inhabited) === undefined,
-    );
-    if (!any) {
+    if (!group.members.some((option) => choosable(option, group, record, namespace, inhabited))) {
       return false;
     }
   }
@@ -230,25 +227,54 @@ function recordInhabited(
 }
 
 /**
- * The type name of the first member of `option` that chosen would leave unsatisfied — a member
- * the option demands (not named by the group's `optionalMembers`) whose field is missing or whose
- * type nothing inhabits — or `undefined` when choosing `option` is satisfiable (§5.10.1).
+ * Whether some document can choose `option` (§5.10.1, §5.11): it states every member the group
+ * does not mark `?`, and at least one member, so an option whose members are all marked needs one
+ * of them. A member is stated when its field is voidable (written `_`, which is present and chooses
+ * its option) or has a value of its own type; a member narrowed to `void` and not voidable can be
+ * stated by nothing, so an unmarked one makes the option unchoosable and a marked one drops out of
+ * it. A group that must be chosen is productive when one option is choosable, and a group left
+ * with none is unsatisfiable.
  */
-function unsatisfiedMember(
-  record: RecordBody,
-  group: FieldGroup,
+function choosable(
   option: readonly string[],
+  group: FieldGroup,
+  record: RecordBody,
   namespace: ReadonlyMap<string, TypeDefinition>,
   inhabited: ReadonlySet<string>,
-): string | undefined {
+): boolean {
   const optionalMembers = group.optionalMembers ?? [];
+  let anyStated = false;
   for (const member of option) {
-    if (optionalMembers.includes(member)) continue;
-    const field = record.fields.find((f) => f.name === member);
-    if (field === undefined) return member;
-    if (!refInhabited(field.type, namespace, inhabited)) return field.type.name;
+    const stated = memberStatable(member, record, namespace, inhabited);
+    if (!stated && !optionalMembers.includes(member)) return false;
+    anyStated ||= stated;
   }
-  return undefined;
+  return anyStated;
+}
+
+/** Whether the member's field can be stated; a member naming no field is the linker's to report, and counts as stated. */
+function memberStatable(
+  member: string,
+  record: RecordBody,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  inhabited: ReadonlySet<string>,
+): boolean {
+  const field = record.fields.find((f) => f.name === member);
+  return field === undefined || statable(field, namespace, inhabited);
+}
+
+/**
+ * Whether some document can state `field`: as `_` where it is voidable, else with a value of its
+ * type. `void`'s only value is `_`, so a `void` field that is not voidable can be stated by
+ * nothing — `a: void` empties its record, where `a?: void` empties only the field.
+ */
+function statable(
+  field: RecordField,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  inhabited: ReadonlySet<string>,
+): boolean {
+  if (field.voidable) return true;
+  return !refIsVoid(field.type, namespace) && refInhabited(field.type, namespace, inhabited);
 }
 
 /**
@@ -259,7 +285,7 @@ function unsatisfiedMember(
  * type nothing can satisfy does not exist either.
  */
 function isOptionalField(field: RecordField): boolean {
-  return field.optional || field.voidable;
+  return field.voidable || (field.optional && field.value === undefined);
 }
 
 function positionInhabited(
@@ -362,14 +388,13 @@ function recordDependency(
     }
   }
   for (const group of record.groups) {
-    if (group.optional) {
+    if (group.optional) continue;
+    if (group.members.some((option) => choosable(option, group, record, namespace, inhabited))) {
       continue;
     }
-    const unsatisfied = group.members.map((option) =>
-      unsatisfiedMember(record, group, option, namespace, inhabited),
-    );
-    if (unsatisfied.every((member) => member !== undefined)) {
-      return unsatisfied[0];
+    for (const member of group.members.flat()) {
+      const field = record.fields.find((f) => f.name === member);
+      if (field !== undefined && !statable(field, namespace, inhabited)) return field.type.name;
     }
   }
   return undefined;

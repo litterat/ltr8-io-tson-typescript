@@ -177,33 +177,78 @@ export function groupViolations(
 }
 
 /**
- * A {@link GroupViolation} in the group's own terms (§5.11): a chosen option names what it needs,
- * two chosen options name both and the quantifier the group allows (exactly one, or at most one
- * under `?`), and an unchosen group that must be chosen says how many options it needs (exactly
- * one, or at least one for the `+` form). `isPresent` is the predicate {@link groupViolations}
- * was asked, used to name the members that chose each option.
+ * One refusal a record's group judgement yields (§5.11, §7.6), in the shape both encodings'
+ * readers report: the code is always `FIELD_GROUP`, the one code for everything a group decides, so
+ * a consumer repairs a group as one thing rather than as separate field and type problems.
  */
-export function describeViolation(
+export interface GroupRefusal {
+  readonly code: 'FIELD_GROUP';
+  readonly message: string;
+  readonly expected: string;
+  readonly found: string;
+}
+
+/**
+ * Every refusal `group` yields over the members `isPresent` reports (§5.11), in the group's own
+ * terms and in {@link groupViolations}' order: each chosen option's missing members first, one
+ * refusal per member, and then the count of chosen options — exactly one, at most one under `?`,
+ * at least one for the `+` form. `typeName` names the record in the message. Both encodings' readers
+ * report through this one function, so a document draws the same refusals from either.
+ */
+export function groupRefusals(
   group: FieldGroup,
-  violation: GroupViolation,
   isPresent: (member: string) => boolean,
-): string {
-  const chosenBy = (index: number): string =>
-    `(${(group.members[index] ?? []).filter(isPresent).join(', ')})`;
-  switch (violation.kind) {
-    case 'MEMBER_MISSING':
-      return `${chosenBy(violation.option)} chose its option, which needs ${violation.missing.join(', ')}`;
-    case 'SEVERAL_CHOSEN':
-      return (
-        `${violation.options.map(chosenBy).join(' and ')} choose ${String(violation.options.length)} options; ` +
-        (group.optional ? 'at most one is allowed' : 'exactly one is allowed')
-      );
-    case 'NONE_CHOSEN':
-      return (
-        `none of (${describeGroup(group)}) is present; ` +
-        (atLeastOne(group) ? 'at least one is required' : 'exactly one is required')
-      );
+  typeName: string,
+): readonly GroupRefusal[] {
+  const refusals: GroupRefusal[] = [];
+  const options = describeGroup(group);
+  for (const violation of groupViolations(group, isPresent)) {
+    switch (violation.kind) {
+      case 'MEMBER_MISSING': {
+        const option = group.members[violation.option] ?? [];
+        const chosenBy = option.find(isPresent) ?? '';
+        for (const missing of violation.missing) {
+          refusals.push({
+            code: 'FIELD_GROUP',
+            message: `'${chosenBy}' chose (${option.join(' ')}) on '${typeName}', which needs '${missing}'`,
+            expected: `'${missing}' beside '${chosenBy}'`,
+            found: 'missing',
+          });
+        }
+        break;
+      }
+      case 'SEVERAL_CHOSEN': {
+        const chosen = violation.options.length;
+        refusals.push({
+          code: 'FIELD_GROUP',
+          message: group.optional
+            ? `at most one option of (${options}) may be chosen for '${typeName}', found ${String(chosen)}`
+            : `exactly one option of (${options}) must be chosen for '${typeName}', found ${String(chosen)}`,
+          expected: `${group.optional ? 'at most' : 'exactly'} one option of (${options})`,
+          found: `${String(chosen)} chosen`,
+        });
+        break;
+      }
+      case 'NONE_CHOSEN':
+        refusals.push(
+          atLeastOne(group)
+            ? {
+                code: 'FIELD_GROUP',
+                message: `at least one of (${options}) must be present for '${typeName}'`,
+                expected: `at least one of (${options})`,
+                found: 'none present',
+              }
+            : {
+                code: 'FIELD_GROUP',
+                message: `exactly one option of (${options}) must be chosen for '${typeName}', found none`,
+                expected: `exactly one option of (${options})`,
+                found: 'none chosen',
+              },
+        );
+        break;
+    }
   }
+  return refusals;
 }
 
 /**

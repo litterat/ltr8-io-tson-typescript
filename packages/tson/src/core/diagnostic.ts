@@ -20,6 +20,14 @@ export type DiagnosticCode =
   /** A field the schema fixes carried a different value. */
   | 'FIELD_FIXED'
   /**
+   * A field group's presence rule broken ([TSON-SCHEMA] §5.11): no option chosen where the group
+   * needs one, more chosen than it admits, or a chosen option missing a member its group does not
+   * mark optional. One code for everything a group decides, so a consumer repairs the group as one
+   * thing rather than as separate field and type problems; a field outside any group keeps
+   * {@link FIELD_REQUIRED}.
+   */
+  | 'FIELD_GROUP'
+  /**
    * The value's type is not one the position takes. Covers a written type annotation naming a
    * type the position does not admit ([TSON-SCHEMA] §7.2's subsumption rule, a choice's variant
    * membership, a union's alike) and a position where a selector is *required* and absent, since

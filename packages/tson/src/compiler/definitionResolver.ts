@@ -1474,7 +1474,8 @@ function keepsOneOption(
  * §5.11: a group reduced to one option it may not keep becomes the plain fields it equals. In a
  * group that is not optional the option is always chosen, so its unmarked members are required and
  * its marked ones optional; in an optional group every member is optional. A sole member takes the
- * group's own `optional` for both its marks.
+ * group's own `optional` as its own: an unmarked name where the group had to be chosen, `?` on the
+ * name where it was optional. The field's own voidability is unchanged.
  */
 function dissolveInto(
   fields: RecordField[],
@@ -1488,7 +1489,6 @@ function dissolveInto(
     fields[index] = {
       ...field,
       optional: omittable,
-      voidable: option.length === 1 ? omittable : field.voidable,
       role: 'FREE',
     };
   });

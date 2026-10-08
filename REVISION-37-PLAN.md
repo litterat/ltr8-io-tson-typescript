@@ -388,6 +388,15 @@ the reference's tson-json diff.
 
 ## To report upstream
 
+- **Removing a group's other options leaves the member's voidability alone (§5.11 Removal).** The
+  Java's `dissolveInto` sets a surviving sole member's `voidable` from the group's `optional`. The
+  spec says "the field's own voidability is unchanged", and this port follows the spec.
+- **A map's elements may be void (§5.10.1).** The Java's inhabitance check ignores a map's
+  `voidable`. This port reads it: a map is inhabited when its key is, and its value is either
+  voidable or inhabited.
+- **A group-shape refusal is a parse error in both implementations**, raised by the schema parser
+  (Java `checkGroupShape`), although §5.11 states the rules as the resolver's. The vectors assert
+  only `resolver`, the category of a schema that fails to load, so neither reading is tested.
 - **`policy.tn` is outside `strip`'s shortening.** The reference shortens `meta-kernel`, `meta` and
   `core` and leaves `policy` its full URL. That may be deliberate, since nothing imports policy as a
   schema, but it is unstated.

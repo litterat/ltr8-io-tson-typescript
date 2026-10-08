@@ -277,16 +277,16 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
     expect(diagnostics.diagnostics).toEqual([]);
   });
 
-  it('zero members present reports FIELD_REQUIRED', () => {
+  it('zero members present reports FIELD_GROUP', () => {
     const { ctx, diagnostics } = collectingContextOver('{}');
     runSync(groupedReader().read(ctx));
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_GROUP']);
   });
 
-  it('members of more than one option present report TYPE_MISMATCH', () => {
+  it('members of more than one option present report FIELD_GROUP', () => {
     const { ctx, diagnostics } = collectingContextOver('{ a: "x" b: "y" }');
     runSync(groupedReader().read(ctx));
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_GROUP']);
   });
 
   /**
@@ -311,7 +311,7 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
     const { ctx, diagnostics } = collectingContextOver('{}');
     const value = runSync(pinnedMemberReader().read(ctx));
     expect(value).toBeUndefined();
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_GROUP']);
   });
 
   it('a pinned member satisfies the group when the other member is written, without also injecting the pin', () => {
@@ -363,18 +363,18 @@ describe('recordTreeReader -- field group options (§5.11, §7.6)', () => {
     expect(codesFor('{ socket: "s" }')).toEqual([]);
   });
 
-  it('a chosen option missing an unmarked member reports FIELD_REQUIRED', () => {
-    expect(codesFor('{ port: "1" }')).toEqual(['FIELD_REQUIRED']);
+  it('a chosen option missing an unmarked member reports FIELD_GROUP', () => {
+    expect(codesFor('{ port: "1" }')).toEqual(['FIELD_GROUP']);
   });
 
-  it('members of two options at once report TYPE_MISMATCH, and no option chosen reports FIELD_REQUIRED', () => {
-    expect(codesFor('{ host: "h" socket: "s" }')).toEqual(['TYPE_MISMATCH']);
-    expect(codesFor('{}')).toEqual(['FIELD_REQUIRED']);
+  it('members of two options at once report FIELD_GROUP, and no option chosen reports FIELD_GROUP', () => {
+    expect(codesFor('{ host: "h" socket: "s" }')).toEqual(['FIELD_GROUP']);
+    expect(codesFor('{}')).toEqual(['FIELD_GROUP']);
   });
 
   it('an optional group admits no option chosen, and still at most one', () => {
     expect(codesFor('{}', true)).toEqual([]);
-    expect(codesFor('{ host: "h" socket: "s" }', true)).toEqual(['TYPE_MISMATCH']);
+    expect(codesFor('{ host: "h" socket: "s" }', true)).toEqual(['FIELD_GROUP']);
   });
 
   it('the at-least-one form admits any non-empty subset of its members (§5.11)', () => {
@@ -390,7 +390,7 @@ describe('recordTreeReader -- field group options (§5.11, §7.6)', () => {
     expect(codes('{ email: "e" }')).toEqual([]);
     expect(codes('{ phone: "p" }')).toEqual([]);
     expect(codes('{ email: "e" phone: "p" }')).toEqual([]);
-    expect(codes('{}')).toEqual(['FIELD_REQUIRED']);
+    expect(codes('{}')).toEqual(['FIELD_GROUP']);
   });
 });
 

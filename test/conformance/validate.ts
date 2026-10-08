@@ -28,6 +28,7 @@ import type { Class2Layer, Vector } from './vectors.js';
 const VALIDATION_CODES: ReadonlySet<DiagnosticCode> = new Set([
   'FIELD_REQUIRED',
   'FIELD_FIXED',
+  'FIELD_GROUP',
   'TYPE_MISMATCH',
   'WRONG_ARITY',
   'UNRECOGNIZED_FIELD',
