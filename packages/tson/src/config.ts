@@ -36,8 +36,8 @@
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
  * tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/36/m/meta.tn',
- *   'https://tson.io/2026/36/m/core.tn',
+ *   'https://tson.io/2026/37/m/meta.tn',
+ *   'https://tson.io/2026/37/m/core.tn',
  * ]);
  * ```
  *
