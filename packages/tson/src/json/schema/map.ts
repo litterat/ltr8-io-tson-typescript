@@ -23,7 +23,9 @@ import type { Atom } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
 import { jsonArray, jsonNull, jsonObject, type JsonValue } from '../tree.js';
-import { describeEvent, fieldValueParser, type FieldValueParser } from './atoms.js';
+import { describeEvent, enumFormOf, fieldValueParser, type FieldValueParser } from './atoms.js';
+import { reportConfusablePair, valueNameRefuses } from './nameHygiene.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { tokenHygieneRefuses } from './tokenHygiene.js';
@@ -52,7 +54,7 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
   if (body.kind === 'value_type' || body.kind === 'void_type') return undefined; // no content grammar
   if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/scoped/Data
   try {
-    return fieldValueParser(terminalName, body as Atom);
+    return fieldValueParser(terminalName, body as Atom, enumFormOf(ctx.linkedSchema, terminalName));
   } catch {
     return undefined;
   }
@@ -124,6 +126,13 @@ export function buildMapReader(
       );
 }
 
+/**
+ * An object-form map's keys. Where the key type is an identifier family the keys are names
+ * ([TSON-DATA] §8.2): each is judged under the family's profile, and they are one naming scope
+ * ([TSON-SCHEMA] §11.4), so a key reading alike with an earlier one is reported at its own member
+ * (`CONFUSABLE_NAMES`) and its entry read normally. A key whose reading reported -- its policy
+ * refusal included -- is no name of the scope, for the reason it is not in the duplicate check.
+ */
 function objectFormReader(
   name: string,
   schemaLocation: SchemaLocation,
@@ -145,6 +154,10 @@ function objectFormReader(
       const names: string[] = [];
       const values: Slot[] = [];
       const byIdentity = new Map<string, number>();
+      const scope =
+        keyParser.profile !== undefined && readCtx.identifierPolicy().skeletonDistinctness
+          ? createConfusableScope()
+          : undefined;
       let count = 0;
 
       for (;;) {
@@ -181,6 +194,14 @@ function objectFormReader(
           yield* entryValue(at, valueReader, optionalValues, event.name);
           continue;
         }
+        if (
+          keyParser.profile !== undefined &&
+          typeof hostKey === 'string' &&
+          valueNameRefuses(at, hostKey, keyParser.profile)
+        ) {
+          yield* entryValue(at, valueReader, optionalValues, event.name);
+          continue;
+        }
         const entry = yield* entryValue(at, valueReader, optionalValues, event.name);
         const identity = identityOfHost(hostKey);
         const slot = byIdentity.get(identity);
@@ -195,6 +216,10 @@ function objectFormReader(
           continue;
         }
         byIdentity.set(identity, names.length);
+        if (scope !== undefined && typeof hostKey === 'string') {
+          const collision = scope.add(hostKey);
+          if (collision !== undefined) reportConfusablePair(at, collision, 'keys');
+        }
         names.push(event.name);
         values.push(entry);
       }

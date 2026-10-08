@@ -102,8 +102,12 @@ describe('discriminationClassOf (§5.4)', () => {
       ['ports', def({ kind: 'enum', members: ['80', '443'], type: 'text' })],
       ['bools', def({ kind: 'enum', members: ['true', 'false'], type: 'text' })],
     ]);
-    expect(discriminationClassOf('ports', ns)).toBe('STRING');
-    expect(discriminationClassOf('bools', ns)).toBe('STRING');
+    // Linking decides which enums are text enums -- `type` resolves in a namespace the body cannot
+    // see -- and records them in `textEnums`; the class is read from that, never from the name.
+    const textEnums = new Set(['ports', 'bools']);
+    expect(discriminationClassOf('ports', ns, textEnums)).toBe('STRING');
+    expect(discriminationClassOf('bools', ns, textEnums)).toBe('STRING');
+    expect(discriminationClassOf('ports', ns)).toBe('NUMBER');
   });
 
   // ── §5.4's no-class list gains two straddling kinds (#17) ───────────────────────────────────

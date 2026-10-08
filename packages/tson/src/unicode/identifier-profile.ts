@@ -1,6 +1,9 @@
-import { joiningControlsSatisfied } from './joining-controls.js';
+import type { IdentifierBase, IdentifierType, Normalization } from '../schema/meta/atoms-text.js';
+import { isJoiningControlPermitted, joiningControlsSatisfied } from './joining-controls.js';
 import { isNfc } from './nfc.js';
-import { isXidContinue, isXidStart } from './xid.js';
+import { holdsNormalization } from './normalization.js';
+import { identifierStatusAllowed } from './uts39.js';
+import { isIdContinue, isIdStart, isXidContinue, isXidStart } from './xid.js';
 
 /**
  * The identifier grammar (§7.7): the profile a name — a field name, type name, annotation name,
@@ -97,4 +100,251 @@ export function isIdentifierText(text: string): boolean {
     }
   }
   return joiningControlsSatisfied(text);
+}
+
+// ── Profiles as data (§5.5, §7.7) ─────────────────────────────────────────────────────────────
+
+/**
+ * A UAX #31 identifier profile, built from the kernel's `identifier_type` facets ([TSON-SCHEMA]
+ * §5.5): the shape UAX #31's R1 default identifier syntax takes, each set drawn from a Unicode
+ * property and adjusted.
+ *
+ * ```
+ * identifier := Start Continue* (Medial Continue+)*
+ * Start      := (start base    ∪ start_add)    − exclude
+ * Continue   := (continue base ∪ continue_add) − exclude
+ * Medial     := medial
+ * ```
+ *
+ * A medial character stands only between two others, and never beside another medial; the set is
+ * disjoint from Start and Continue, or the rule could not tell which one a character is using
+ * ({@link profileIncoherence}). The text the profile judges is the family's **value**, already in
+ * the profile's `normalization` form: {@link checkIdentifier} refuses text not in the form rather
+ * than normalising it, so the stored name equals the compared name for every caller.
+ *
+ * {@link NAME_PROFILE} is §7.7's: `XID_Start`, `XID_Continue ∪ { - }`, NFC. Every profile applies
+ * §7.7 rule 2's join-control contexts, an invisible joiner being as much a spoofing surface in an
+ * outside system's names as in the series' own.
+ */
+export interface IdentifierProfile {
+  readonly start: IdentifierBase;
+  readonly continueBase: IdentifierBase;
+  /** Sorted, distinct code points: order and repetition of the facet's text mean nothing. */
+  readonly startAdd: readonly number[];
+  readonly continueAdd: readonly number[];
+  readonly medial: readonly number[];
+  readonly exclude: readonly number[];
+  readonly normalization: Normalization;
+}
+
+/** The set of code points `text` holds, sorted and distinct. */
+export function codePointSet(text: string | undefined): readonly number[] {
+  if (text === undefined) return [];
+  const set = new Set<number>();
+  for (const character of text) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined) set.add(codePoint);
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+/** The profile an `identifier_type` body's facets make. Build once per reader, not per read. */
+export function identifierProfileOf(
+  body: Pick<
+    IdentifierType,
+    'start' | 'continue' | 'startAdd' | 'continueAdd' | 'medial' | 'exclude' | 'normalization'
+  >,
+): IdentifierProfile {
+  return {
+    start: body.start,
+    continueBase: body.continue,
+    startAdd: codePointSet(body.startAdd),
+    continueAdd: codePointSet(body.continueAdd),
+    medial: codePointSet(body.medial),
+    exclude: codePointSet(body.exclude),
+    normalization: body.normalization,
+  };
+}
+
+/** [TSON-DATA] §7.7's profile: `XID_Start`, `XID_Continue ∪ { - }`, NFC. */
+export const NAME_PROFILE: IdentifierProfile = {
+  start: 'XID',
+  continueBase: 'XID',
+  startAdd: [],
+  continueAdd: [HYPHEN_MINUS],
+  medial: [],
+  exclude: [],
+  normalization: 'NFC',
+};
+
+const ZWNJ = 0x200c;
+const ZWJ = 0x200d;
+
+function has(set: readonly number[], codePoint: number): boolean {
+  if (set.length === 0) return false;
+  let low = 0;
+  let high = set.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const at = set[mid] ?? 0;
+    if (at === codePoint) return true;
+    if (at < codePoint) low = mid + 1;
+    else high = mid - 1;
+  }
+  return false;
+}
+
+function inBase(base: IdentifierBase, codePoint: number, start: boolean): boolean {
+  switch (base) {
+    case 'XID':
+      return start ? isXidStart(codePoint) : isXidContinue(codePoint);
+    case 'ID':
+      return start ? isIdStart(codePoint) : isIdContinue(codePoint);
+    case 'NONE':
+      return false;
+  }
+}
+
+function profileStart(profile: IdentifierProfile, codePoint: number): boolean {
+  return (
+    (inBase(profile.start, codePoint, true) || has(profile.startAdd, codePoint)) &&
+    !has(profile.exclude, codePoint)
+  );
+}
+
+function profileContinue(profile: IdentifierProfile, codePoint: number): boolean {
+  return (
+    (inBase(profile.continueBase, codePoint, false) || has(profile.continueAdd, codePoint)) &&
+    !has(profile.exclude, codePoint)
+  );
+}
+
+function added(profile: IdentifierProfile, codePoint: number): boolean {
+  return (
+    has(profile.startAdd, codePoint) ||
+    has(profile.continueAdd, codePoint) ||
+    has(profile.medial, codePoint)
+  );
+}
+
+/** Names the offending code point rather than printing it -- much of what a profile rejects is invisible. */
+function at(text: string, codePoint: number, index: number): string {
+  const hex = codePoint.toString(16).toUpperCase().padStart(4, '0');
+  return `'${text}': U+${hex} at index ${String(index)}`;
+}
+
+/**
+ * `profile` over `text` (§7.7, §5.5): the violation, or `undefined` when `text` is an identifier
+ * under it. `text` is the **value** -- already in the profile's `normalization` form -- and a
+ * failure here is a grammar violation whatever the family's other facets say, so a `pattern` or
+ * `members` is only ever asked of a well-formed name.
+ *
+ * Reports a violation rather than throwing one, so the same check serves a caller that owes a
+ * parse error and one that owes a diagnostic. Indexes are UTF-16 offsets into `text`, as
+ * `joining-controls.ts` addresses it; every judgement is by code point.
+ */
+export function checkIdentifier(profile: IdentifierProfile, text: string): string | undefined {
+  if (text.length === 0) return 'an identifier may not be empty';
+  if (!holdsNormalization(profile.normalization, text)) {
+    return `'${text}' is not in ${profile.normalization} form`;
+  }
+  const first = text.codePointAt(0) ?? 0;
+  if (!profileStart(profile, first)) {
+    const signOrDigit =
+      (first >= 0x30 && first <= 0x39) || first === 0x2d || first === 0x2b || first === 0x2e;
+    return (
+      `${at(text, first, 0)} cannot start an identifier` +
+      (signOrDigit ? ' -- an identifier never begins with a digit or a sign' : '')
+    );
+  }
+  let afterMedial = false;
+  let lastIndex = 0;
+  let lastCodePoint = first;
+  for (let i = first > 0xffff ? 2 : 1; i < text.length;) {
+    const codePoint = text.codePointAt(i) ?? 0;
+    if (profileContinue(profile, codePoint)) {
+      if ((codePoint === ZWNJ || codePoint === ZWJ) && !isJoiningControlPermitted(text, i)) {
+        return (
+          `${at(text, codePoint, i)} is a join control outside the contexts UTS #39 §3.1.1.1 ` +
+          'permits -- it has no shaping effect here, so it is invisible'
+        );
+      }
+      afterMedial = false;
+    } else if (has(profile.medial, codePoint)) {
+      if (afterMedial) return `${at(text, codePoint, i)} follows another medial character`;
+      afterMedial = true;
+    } else {
+      return `${at(text, codePoint, i)} cannot appear in an identifier`;
+    }
+    lastIndex = i;
+    lastCodePoint = codePoint;
+    i += codePoint > 0xffff ? 2 : 1;
+  }
+  if (afterMedial) {
+    return `${at(text, lastCodePoint, lastIndex)} is a medial character and cannot end an identifier`;
+  }
+  return undefined;
+}
+
+/**
+ * What makes `profile` admit no identifier, or admit one ambiguously: empty when there is nothing
+ * (§5.5). A Start set left empty admits nothing at all; a medial character that is also Start or
+ * Continue could be read as either, which the grammar's placement rule cannot decide.
+ */
+export function profileIncoherence(profile: IdentifierProfile): string[] {
+  const problems: string[] = [];
+  if (profile.start === 'NONE' && profile.startAdd.every((c) => has(profile.exclude, c))) {
+    problems.push('the Start set is empty, so no text is an identifier');
+  }
+  for (const codePoint of profile.medial) {
+    if (profileStart(profile, codePoint) || profileContinue(profile, codePoint)) {
+      problems.push(
+        `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')} is medial and also Start or Continue`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * [TSON-DATA] §8.2's restricted-character rule alone, over a name `profile` admits: the violation,
+ * or `undefined`. Every character must be `Identifier_Status=Allowed` (UTS #39 §3.1).
+ *
+ * Some characters are the grammar's rather than this rule's, though the table may restrict them. A
+ * character the profile adds -- `start_add`, `continue_add` or `medial`, as {@link NAME_PROFILE}
+ * adds `-` -- is the profile's own extension, which §8.2 says carries no `Identifier_Status` and
+ * participates in no name-hygiene rule: a profile that admits `$` has decided `$` belongs in its
+ * names. ZWNJ and ZWJ are `Identifier_Status=Restricted`, and §7.7 rule 2 carves the exception UTS
+ * #39 §3.1.1.1 defines, which makes their admission a question of *form* and so
+ * {@link checkIdentifier}'s: a joiner outside those contexts is not an identifier at all, where a
+ * restricted character is an identifier this processor declines to accept.
+ */
+export function restrictedCharacterViolation(
+  profile: IdentifierProfile,
+  text: string,
+): string | undefined {
+  for (let i = 0; i < text.length;) {
+    const codePoint = text.codePointAt(i) ?? 0;
+    if (
+      codePoint !== ZWNJ &&
+      codePoint !== ZWJ &&
+      !identifierStatusAllowed(codePoint) &&
+      !added(profile, codePoint)
+    ) {
+      return `${at(text, codePoint, i)} is Identifier_Status=Restricted (UTS #39)`;
+    }
+    i += codePoint > 0xffff ? 2 : 1;
+  }
+  return undefined;
+}
+
+/**
+ * Whether `codePoint` divides a name under `profile` into the segments a per-segment restriction
+ * level judges one at a time ([TSON-DATA] §8.2's unit): `_`, and every character the profile adds
+ * that is not `XID_Continue` -- {@link NAME_PROFILE}'s `-`, which makes §8.2's `_`/`-` exactly this
+ * profile's answer, and another profile's `$` or medial `.`. Such a character is the profile's own
+ * punctuation, so a script change across it sits between words, where a homograph cannot.
+ */
+export function profileSeparates(profile: IdentifierProfile, codePoint: number): boolean {
+  return codePoint === 0x5f || (added(profile, codePoint) && !isXidContinue(codePoint));
 }

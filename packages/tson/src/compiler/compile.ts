@@ -62,7 +62,8 @@ import { choiceTreeReader } from './choiceReader.js';
 import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
-import { resolvesToScoped } from '../link/referenceChain.js';
+import { resolvesToScoped, terminalDefinition } from '../link/referenceChain.js';
+import { DEFAULT_NAME_POLICY, type NamePolicy } from '../unicode/policy.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
 
@@ -155,6 +156,14 @@ export type ForeignSchemas = (uri: string) => LinkedSchema | undefined;
 /** {@link compile}'s own dependencies -- currently the one seam a `scoped` position needs (§7.8). */
 export interface CompileDeps {
   readonly foreignSchemas?: ForeignSchemas;
+  /**
+   * [TSON-DATA] §8.2's name-hygiene policy over a value of an identifier family: a name wherever
+   * it stands, so the per-name mechanisms reach it under the family's own profile, and the keys of
+   * a map keyed by one and the elements of a set of them are look-alike scopes (§11.4). Defaults
+   * to {@link DEFAULT_NAME_POLICY}. Stated once per compile, as a relaxation is a code decision
+   * and never ambient.
+   */
+  readonly identifierPolicy?: NamePolicy;
 }
 
 /**
@@ -172,8 +181,20 @@ function buildReader(
   resolve: (name: string) => TypeReader<Value>,
   compileForeign: (uri: string) => CompiledSchema | undefined,
   foreignSchemasConfigured: boolean,
+  policy: NamePolicy,
 ): TypeReader<Value> {
   const body = definition.body;
+  // Whether `typeName` is an identifier family (§8.3 followed to its constructor): a name wherever
+  // a value of it stands, so a scope of them meets skeleton distinctness when the policy asks.
+  const isNameType = (typeName: string): boolean => {
+    if (!policy.skeletonDistinctness) return false;
+    const terminalBody = terminalDefinition(typeName, (n) => schema.entries.get(n))?.body;
+    return (
+      terminalBody !== undefined &&
+      'kind' in terminalBody &&
+      terminalBody.kind === 'identifier_type'
+    );
+  };
   const location = (): SchemaLocation => locationOf(schema, name);
   // §7.8's typed-position restriction, derived structurally: whether `typeName` resolves (§8.3)
   // to a `scoped` instance at all -- a container consults this to decide whether a nested
@@ -226,11 +247,27 @@ function buildReader(
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isArrayBody(body)) {
-    const built = arrayTreeReader(name, name, body, resolve, location(), isScopedType);
+    const built = arrayTreeReader(
+      name,
+      name,
+      body,
+      resolve,
+      location(),
+      isScopedType,
+      body.uniqueItems && isNameType(body.elementType.name),
+    );
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isMapBody(body)) {
-    const built = mapTreeReader(name, name, body, resolve, location(), isScopedType);
+    const built = mapTreeReader(
+      name,
+      name,
+      body,
+      resolve,
+      location(),
+      isScopedType,
+      isNameType(body.keyType.name),
+    );
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   if (isTupleBody(body)) {
@@ -246,6 +283,7 @@ function buildReader(
       location(),
       choiceDisjoint(definition) === true,
       schema.entries,
+      schema.textEnums,
     );
   }
   if (isReference(body)) {
@@ -265,7 +303,11 @@ function buildReader(
     );
   }
   if (isAtom(body)) {
-    const built = buildAtomReader(name, body);
+    const enumForm = schema.enumForms.get(name);
+    const built = buildAtomReader(name, body, {
+      identifierPolicy: policy,
+      ...(enumForm === undefined ? {} : { enumForm }),
+    });
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
   // A `DATA`-kind entry (meta-schema vocabulary, not a data type, §4.1) named where a type is
@@ -463,6 +505,7 @@ function buildScopedReader(
  */
 export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledSchema {
   const cache = new Map<string, TypeReader<Value>>();
+  const policy = deps.identifierPolicy ?? DEFAULT_NAME_POLICY;
   const foreignCompiled = new Map<string, CompiledSchema>();
 
   function compileForeign(uri: string): CompiledSchema | undefined {
@@ -518,6 +561,7 @@ export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledS
       resolve,
       compileForeign,
       deps.foreignSchemas !== undefined,
+      policy,
     );
     box.inner = inner;
     cache.set(name, inner); // supersede the placeholder for every caller from here on

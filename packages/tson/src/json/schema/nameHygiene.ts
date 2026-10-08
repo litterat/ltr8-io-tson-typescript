@@ -24,7 +24,9 @@
  * needing to be bypassed.
  */
 import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
-import { nameHygieneRefusal } from '../../unicode/policy.js';
+import type { IdentifierProfile } from '../../unicode/identifier-profile.js';
+import { judgeName, nameHygieneRefusal } from '../../unicode/policy.js';
+import type { ConfusableCollision } from '../../unicode/skeleton.js';
 import type { JsonReadContext } from '../readContext.js';
 
 /**
@@ -42,4 +44,46 @@ export function nameHygieneRefuses(ctx: JsonReadContext, name: string): boolean 
     `'${name}'`,
   );
   return true;
+}
+
+/**
+ * §8.2's per-name rules over a **value** of an identifier family ([TSON-SCHEMA] §11.4): a name
+ * wherever it stands, judged under the family's own `profile` — a character the profile adds is its
+ * own — and this read's policy. `name` is the decoded value, in the family's form. Reports every
+ * rule it fails, each under its own code, and answers whether it refused anything, so a caller
+ * leaves a refused value out of the duplicate and look-alike checks: there is no name to compare.
+ */
+export function valueNameRefuses(
+  ctx: JsonReadContext,
+  name: string,
+  profile: IdentifierProfile,
+): boolean {
+  const violations = judgeName(name, profile, ctx.identifierPolicy());
+  for (const violation of violations) {
+    ctx.report(
+      diagnosticCodeForMechanism(violation.mechanism),
+      `the name ${violation.detail}`,
+      'a name this processor will accept',
+      `'${name}'`,
+    );
+  }
+  return violations.length > 0;
+}
+
+/**
+ * Reports a look-alike pair at the second name, as §8.2 places a refused pair. `scope` names it:
+ * "keys", "elements".
+ */
+export function reportConfusablePair(
+  ctx: JsonReadContext,
+  collision: ConfusableCollision,
+  scope: string,
+): void {
+  ctx.report(
+    diagnosticCodeForMechanism('skeleton-distinctness'),
+    `'${collision.second}' is confusable with '${collision.first}' -- two ${scope} that read ` +
+      'alike (UTS #39 skeleton), so one of them must be renamed',
+    `${scope} §8.2 can tell apart`,
+    `'${collision.second}'`,
+  );
 }

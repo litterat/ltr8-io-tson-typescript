@@ -200,6 +200,11 @@ function satisfiesLevelOverUnit(
  * leading, trailing, or doubled separator) — a leading/trailing/doubled separator is not itself
  * a script-mixing problem this mechanism exists to catch.
  *
+ * `separates` (default `_` and `-`) names the characters that divide a name into segments: an
+ * identifier profile supplies its own (`identifier-profile.ts`'s `profileSeparates`), since a
+ * character the profile adds is its punctuation and the profile, not the policy, knows which they
+ * are.
+ *
  * `permittedScripts` (default {@link NO_PERMITTED_SCRIPTS}) is `NamePolicy`/`TokenPolicy`'s own
  * script-combination admission (§8.2 mechanism 3's relaxation device): a mixed-script unit whose
  * scripts are contained in any one of these combinations satisfies `level` regardless of what
@@ -210,6 +215,7 @@ export function satisfiesRestrictionLevel(
   level: RestrictionLevel = DEFAULT_RESTRICTION_LEVEL,
   unit: RestrictionUnit = DEFAULT_RESTRICTION_UNIT,
   permittedScripts: readonly ScriptCombination[] = NO_PERMITTED_SCRIPTS,
+  separates: (codePoint: number) => boolean = isDefaultSeparator,
 ): boolean {
   if (level === 'MINIMALLY_RESTRICTIVE' || level === 'UNRESTRICTED') return true;
 
@@ -218,18 +224,23 @@ export function satisfiesRestrictionLevel(
   }
 
   let start = 0;
-  for (let i = 0; i <= text.length; i++) {
-    if (
-      i < text.length &&
-      text.charCodeAt(i) !== 0x5f /* _ */ &&
-      text.charCodeAt(i) !== 0x2d /* - */
-    ) {
+  for (let i = 0; i <= text.length;) {
+    const codePoint = i < text.length ? (text.codePointAt(i) ?? -1) : -1;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (codePoint !== -1 && !separates(codePoint)) {
+      i += width;
       continue;
     }
     if (i > start && !satisfiesLevelOverUnit(text.slice(start, i), level, permittedScripts)) {
       return false;
     }
-    start = i + 1;
+    i += width;
+    start = i;
   }
   return true;
+}
+
+/** `_` and `-`: the separators of §8.2's per-segment unit when no identifier profile says otherwise. */
+function isDefaultSeparator(codePoint: number): boolean {
+  return codePoint === 0x5f /* _ */ || codePoint === 0x2d; /* - */
 }

@@ -103,6 +103,7 @@ import { substitute } from './templateSubstitution.js';
 import { inferOne, kindOf, readsInStructure, type Kind } from './parameterTypes.js';
 import { terminal } from '../link/referenceChain.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
+import { enumLabelForm } from '../link/enumLabels.js';
 import { lexerFormOfMeta } from './tokenForms.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
@@ -591,7 +592,17 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     ) {
       return; // no scalar reading -- the substituted body's own position judges it
     }
-    const parser = atomParserFor(name, body);
+    // An enum matches in its label type's form (§7.4, §5.5), so `Content-Type` binds to the member
+    // written `content-type` under a case-folding type.
+    const form =
+      definition === undefined
+        ? 'NONE'
+        : enumLabelForm(
+            definition,
+            (n) => deps.namespaceDefinitions(n) ?? deps.metaTypes?.(n),
+            deps.metaTypes,
+          );
+    const parser = atomParserFor(name, body, form);
     if (parser === undefined) return;
     try {
       parser.read({ text: argument.text, form: lexerFormOfMeta(argument.form) });

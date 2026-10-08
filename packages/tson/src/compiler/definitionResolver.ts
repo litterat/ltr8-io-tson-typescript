@@ -63,7 +63,12 @@ import {
   TsonNotImplementedError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import { TsonBindMismatchError, TsonMissingBindingError, TsonReadError } from '../core/errors.js';
+import {
+  TsonBindMismatchError,
+  TsonMissingBindingError,
+  TsonReadError,
+  TsonRefusedError,
+} from '../core/errors.js';
 import { DEFAULT_MAX_SUPERTYPE_CHAIN, supertypeChainLimitRefusal } from '../core/limits.js';
 import type { DataValue, RecordValue } from '../ast/value.js';
 import type { Annotation as WrittenAnnotation } from '../ast/value.js';
@@ -2397,6 +2402,9 @@ function bindAnnotationValue(
   try {
     return deps.annotationValueReader?.(annotationName, value);
   } catch (e) {
+    // A refusal under §8.2's name-hygiene policy says this processor declined the value, not that
+    // the schema is wrong: it reaches the caller as the fifth outcome, unwrapped.
+    if (e instanceof TsonRefusedError) throw e;
     if (e instanceof TsonReadError) {
       throw new TsonSchemaValidationError(
         `'${declaration}': the value of annotation '@${annotationName}' is not valid data for the type ` +

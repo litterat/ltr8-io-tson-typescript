@@ -22,7 +22,9 @@ import {
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
+import { reportConfusablePair } from './refusal.js';
 import { abandonedValue, type TreeTypeResolver } from './support.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
 
 type Shape = 'entries' | 'empty' | 'mismatch';
 
@@ -36,6 +38,13 @@ function keySegmentFor(e: TsonEvent): string {
  * value types' own readers, once, at construction; `isScopedType` answers §7.8's typed-position
  * question for the value type at that same step -- a map key is a plain `data-value`, never a
  * `scoped-value` (§2.6), so it never carries a nested `!!schema` for this to guard.
+ *
+ * `keysAreNames` is true when the key type is an identifier family: its keys are then one naming
+ * scope (§11.4), and a key reading alike with an earlier one is reported (`CONFUSABLE_NAMES`) at
+ * its own position, as §8.2 places a refused pair, and its entry read normally. A key whose reading
+ * reported -- its policy refusal included -- is no name of the scope, for the reason it is not in
+ * the duplicate check. The caller passes it only where the read's policy applies skeleton
+ * distinctness.
  */
 export function mapTreeReader(
   name: string,
@@ -44,6 +53,7 @@ export function mapTreeReader(
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
   isScopedType: (typeName: string) => boolean,
+  keysAreNames = false,
 ): TypeReader<Value> {
   const keyParser = resolveType(body.keyType.name);
   const valueParser = resolveType(body.valueType.name);
@@ -94,6 +104,7 @@ export function mapTreeReader(
   function* readInto(ctx: ReadContext, sink: (key: Value, value: Value) => void): Task<void> {
     let count = 0;
     const seenKeys: Value[] = [];
+    const names = keysAreNames ? createConfusableScope() : undefined;
     for (;;) {
       const keyPeek = yield* ctx.peek();
       if (keyPeek.kind === 'map-end') break;
@@ -125,6 +136,12 @@ export function mapTreeReader(
             );
         } else {
           seenKeys.push(key);
+          if (names !== undefined && key.kind === 'atom' && typeof key.value === 'string') {
+            const collision = names.add(key.value);
+            if (collision !== undefined) {
+              reportConfusablePair(ctx.field(keySegment), collision, 'keys');
+            }
+          }
         }
       }
       yield* ctx.next(); // map-arrow

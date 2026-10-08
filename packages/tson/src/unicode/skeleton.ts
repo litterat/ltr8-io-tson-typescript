@@ -67,3 +67,32 @@ export function firstConfusableCollision(names: Iterable<string>): ConfusableCol
   }
   return undefined;
 }
+
+/**
+ * One naming scope filled a name at a time, for a reader that meets the names as it goes -- the
+ * keys of a map keyed by an identifier family, the elements of a set of them ([TSON-SCHEMA] §11.4)
+ * -- and reports a pair at the second name's own position, as §8.2's detection rule asks.
+ *
+ * {@link ConfusableScope.add} answers the earlier name the new one reads alike with, or
+ * `undefined`. A name equal to one already added collides with nothing: a repeat is a duplicate,
+ * which is another rule's to report.
+ */
+export interface ConfusableScope {
+  add(name: string): ConfusableCollision | undefined;
+}
+
+/** An empty {@link ConfusableScope}. */
+export function createConfusableScope(): ConfusableScope {
+  const bySkeleton = new Map<string, string>();
+  return {
+    add(name: string): ConfusableCollision | undefined {
+      const key = skeleton(name);
+      const previous = bySkeleton.get(key);
+      if (previous === undefined) {
+        bySkeleton.set(key, name);
+        return undefined;
+      }
+      return previous === name ? undefined : { first: previous, second: name };
+    },
+  };
+}

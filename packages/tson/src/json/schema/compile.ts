@@ -41,7 +41,7 @@ import type { JsonReadContext } from '../readContext.js';
 import {
   atomReader,
   enumReader,
-  identifierReader,
+  enumFormOf,
   treeAtomReader,
   valuePositionReader,
   voidReader,
@@ -250,13 +250,8 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
           linkedSchema.entries,
           treeAtomReader(valuePositionReader(name, location)),
         );
-      case 'identifier_type': {
-        const raw = identifierReader(name, location);
-        atomReaders.set(name, raw);
-        return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
-      }
       case 'enum': {
-        const raw = enumReader(name, constructorBody, location);
+        const raw = enumReader(name, constructorBody, location, enumFormOf(linkedSchema, name));
         atomReaders.set(name, raw);
         return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
       }

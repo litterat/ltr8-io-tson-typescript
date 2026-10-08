@@ -62,10 +62,14 @@ import {
   type NamePolicy,
 } from '../unicode/policy.js';
 import { UTS39_VERSION } from '../unicode/uts39.js';
+import { identifierProfileOf } from '../unicode/identifier-profile.js';
+import { applyNormalization } from '../unicode/normalization.js';
+import { judgeName } from '../unicode/policy.js';
 import { isDataBody } from './bodyKind.js';
 import type { SourcePosition } from '../schema/meta/position.js';
-import type { TypeDefinition } from '../schema/meta/typedef.js';
+import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
 import { typeParameters } from '../schema/meta/typedef.js';
+import { terminalDefinition } from './referenceChain.js';
 
 /** Dependencies {@link checkNameHygiene} needs beyond the merged namespace itself. */
 export interface CheckNameHygieneOptions {
@@ -85,6 +89,16 @@ export interface CheckNameHygieneOptions {
    * one of §8.1's four categories).
    */
   readonly receiver?: DiagnosticsReceiver;
+  /**
+   * The enums whose `type` is not an identifier family (`LinkedSchema.textEnums`, [TSON-SCHEMA]
+   * §7.4): their members are values rather than names, so only mechanism 1 reaches them.
+   */
+  readonly textEnums?: ReadonlySet<string>;
+  /**
+   * The enums whose members linking has already refused as not values of their `type`: judging
+   * those members as names too would report the one mistake twice.
+   */
+  readonly refusedEnums?: ReadonlySet<string>;
 }
 
 /**
@@ -112,8 +126,11 @@ export function checkNameHygiene(
     reportOrThrow(namespaceRefusal, message, schemaId, at, merged.get(at)?.position, receiver);
   }
 
+  const textEnums = options.textEnums ?? new Set<string>();
+  const refusedEnums = options.refusedEnums ?? new Set<string>();
+
   for (const [name, def] of merged) {
-    const scope = entryScope(def);
+    const scope = entryScope(def, textEnums.has(name), refusedEnums.has(name));
     if (scope !== undefined) {
       const scopePolicy = scope.textProfile
         ? textProfileScopePolicy(identifierPolicy)
@@ -127,6 +144,7 @@ export function checkNameHygiene(
         reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
       }
     }
+    checkFieldValues(name, def, merged, identifierPolicy, schemaId, receiver);
     const parameters = typeParameters(def);
     if (parameters.length > 0) {
       const refusal = nameHygieneRefusal(parameters, identifierPolicy);
@@ -157,6 +175,8 @@ function textProfileScopePolicy(base: NamePolicy): NamePolicy {
 /** One entry's own §11.4 scope — its record field names or its enum members — or `undefined` for every other body shape, which declares no scope of its own. */
 function entryScope(
   def: TypeDefinition,
+  isTextEnum: boolean,
+  isRefused: boolean,
 ):
   | { readonly names: readonly string[]; readonly noun: string; readonly textProfile: boolean }
   | undefined {
@@ -176,9 +196,58 @@ function entryScope(
         textProfile: false,
       };
     case 'enum':
-      return { names: body.members, noun: 'enum members', textProfile: body.type !== 'identifier' };
+      return {
+        names: isRefused ? [] : body.members,
+        noun: 'enum members',
+        textProfile: isTextEnum,
+      };
     default:
       return undefined;
+  }
+}
+
+/**
+ * §8.2's per-name rules over the values a schema supplies for its data: a field's default or fixed
+ * value, where the field's type is an identifier family. Such a value is a name, as the same token
+ * written in a document is -- and a default reaches every document that omits the field, so a value
+ * the reader would refuse if the document wrote it must not be one the reader injects. Judged under
+ * the family's own profile, as a read judges it: over the value, the text in the family's
+ * normalization form. Every rule the value fails is reported (a throw reports the first).
+ */
+function checkFieldValues(
+  entry: string,
+  def: TypeDefinition,
+  merged: ReadonlyMap<string, TypeDefinition>,
+  policy: NamePolicy,
+  schemaId: string,
+  receiver: DiagnosticsReceiver | undefined,
+): void {
+  const body: Top = def.body;
+  if (!('kind' in body) || isDataBody(body) || body.kind !== 'record') return;
+  for (const field of body.fields) {
+    if (field.value === undefined) continue;
+    const family = terminalDefinition(field.type.name, (n) => merged.get(n))?.body;
+    if (
+      family === undefined ||
+      !('kind' in family) ||
+      isDataBody(family) ||
+      family.kind !== 'identifier_type'
+    ) {
+      continue;
+    }
+    const value = applyNormalization(family.normalization, field.value.text);
+    const what = field.role === 'FIXED' ? 'a fixed value' : 'a default';
+    for (const violation of judgeName(value, identifierProfileOf(family), policy)) {
+      const refusal: NameHygieneRefusal = {
+        mechanism: violation.mechanism,
+        names: [value],
+        detail: violation.detail,
+      };
+      const message =
+        `'${entry}' has ${what} for '${field.name}' where ${violation.detail} (refused under ` +
+        `[TSON-DATA] §8.2's name-hygiene policy; computed against UTS #39 version ${UTS39_VERSION})`;
+      reportOrThrow(refusal, message, schemaId, entry, def.position, receiver);
+    }
   }
 }
 

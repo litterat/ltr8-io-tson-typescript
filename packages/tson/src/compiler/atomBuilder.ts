@@ -21,13 +21,14 @@
  * reasonably expects back, not the literal strings `"true"`/`"false"`. Recognising the exact
  * `{true, false}` member set and narrowing to a real host `boolean` is this module's own
  * documented reading of that same ambiguity, applied narrowly (a three-member enum that happens
- * to include `true` stays string-valued) rather than guessed at every enum.
+ * to include `true` stays string-valued) rather than guessed at every enum (`atom/enum.ts`).
+ *
+ * **A value of an identifier family is a name** (§8.2), so it meets the per-name mechanisms under
+ * the family's own profile, with the policy this compile was given ({@link AtomReaderOptions}).
  */
-import { TsonAtomValidationError } from '../core/errors.js';
 import type { AtomToken, AtomType } from '../atom/contract.js';
 import type { Atom } from '../schema/meta/typedef.js';
-import type { EnumBody } from '../schema/meta/bodies.js';
-import type { IdentifierType, RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { AtomValue, Value } from '../tree/nodes.js';
 import { atomNode } from '../tree/nodes.js';
 import type { Task } from '../io/bytes.js';
@@ -48,6 +49,11 @@ import { createRationalParser } from '../atom/numeric/rational.js';
 import { createComplexParser } from '../atom/numeric/complex.js';
 import { createBinaryParser } from '../atom/numeric/binary.js';
 import { createMembershipCheck, createPatternCheck, createTextParser } from '../atom/text/text.js';
+import { createIdentifierParser } from '../atom/text/identifier.js';
+import { createEnumParser } from '../atom/enum.js';
+import { identifierProfileOf } from '../unicode/identifier-profile.js';
+import { DEFAULT_NAME_POLICY, judgeName, type NamePolicy } from '../unicode/policy.js';
+import { reportNameViolations } from '../reader/tree/refusal.js';
 import { createUuidParser } from '../atom/network/uuid.js';
 import { createUriParser } from '../atom/network/uri.js';
 import { createEmailParser } from '../atom/network/email.js';
@@ -65,32 +71,6 @@ import { createPeriodParser } from '../atom/temporal/period.js';
 /** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every atom family but `void` and `value`. */
 function wrap<T extends AtomValue>(atomType: AtomType<T>, typeRef: string): TypeReader<Value> {
   return atomTreeReader(atomTypeReader(atomType, typeRef), typeRef);
-}
-
-// ── enum ─────────────────────────────────────────────────────────────────────────────────────
-
-/** See this module's own top note on the `{true, false}` special case. */
-function buildEnumAtomType(typeRef: string, body: EnumBody): AtomType<string | boolean> {
-  const members = body.members;
-  const memberSet = new Set(members);
-  const isBoolean = members.length === 2 && memberSet.has('true') && memberSet.has('false');
-  const membership = `one of (${members.join(', ')})`;
-
-  return {
-    read(token: AtomToken): string | boolean {
-      if (!memberSet.has(token.text)) {
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${token.text}' is not a member of '${typeRef}' -- expected ${membership}`,
-          membership,
-        );
-      }
-      return isBoolean ? token.text === 'true' : token.text;
-    },
-    write(value: string | boolean): string {
-      return typeof value === 'boolean' ? (value ? 'true' : 'false') : value;
-    },
-  };
 }
 
 // ── value, void ──────────────────────────────────────────────────────────────────────────────
@@ -166,7 +146,7 @@ function valueTreeReader(displayName: string): TypeReader<Value> {
  * absent field must stay absent rather than become an explicit `undefined`) rather than widening
  * `createTextParser`'s own signature to accept either discriminant.
  */
-function asTextConstraints(atom: RegexType | IdentifierType): TextType {
+function asTextConstraints(atom: RegexType): TextType {
   const { minLength, maxLength, length, pattern, members, normalization } = atom;
   return {
     kind: 'text_type',
@@ -212,26 +192,49 @@ function withTextFacets(
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────────────────────
 
+/** What a compile knows about an atom position beyond its body. */
+export interface AtomReaderOptions {
+  /** The `normalization` of an enum's label type (§7.4), recorded by linking (`LinkedSchema.enumForms`); `NONE` when absent. */
+  readonly enumForm?: Normalization;
+  /** [TSON-DATA] §8.2's name-hygiene policy over the values of identifier families; {@link DEFAULT_NAME_POLICY} when absent. */
+  readonly identifierPolicy?: NamePolicy;
+}
+
 /**
  * Builds the compiled reader for one resolved {@link Atom} body, under its own compiled entry
  * name `name` -- `compile.ts`'s one call into this module. Exhaustive over {@link Atom}'s own
  * closed union with no `default`, so a new atom family lands here as a type error, not a silent
  * `NOT_IMPLEMENTED` at read time.
  */
-export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
+export function buildAtomReader(
+  name: string,
+  atom: Atom,
+  options: AtomReaderOptions = {},
+): TypeReader<Value> {
   switch (atom.kind) {
     case 'value_type':
       return valueTreeReader(name);
     case 'void_type':
       return absentTreeReader(name);
     case 'enum':
-      return wrap(buildEnumAtomType(name, atom), name);
+      return wrap(createEnumParser(name, atom, options.enumForm), name);
     case 'integer_type':
       return wrap(createIntegerParser(name, atom), name);
     case 'text_type':
       return wrap(createTextParser(name, atom), name);
-    case 'identifier_type':
-      return wrap(createTextParser(name, asTextConstraints(atom)), name);
+    case 'identifier_type': {
+      const profile = identifierProfileOf(atom);
+      const policy = options.identifierPolicy ?? DEFAULT_NAME_POLICY;
+      return atomTreeReader(
+        atomTypeReader(createIdentifierParser(name, atom), name, (ctx, value) => {
+          const violations = judgeName(value, profile, policy);
+          if (violations.length === 0) return false;
+          reportNameViolations(ctx, value, violations);
+          return true;
+        }),
+        name,
+      );
+    }
     case 'uri_type':
     case 'iri_type':
       return wrap(

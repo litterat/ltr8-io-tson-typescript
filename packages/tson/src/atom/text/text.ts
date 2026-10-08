@@ -16,6 +16,11 @@
  * on an unquoted token simply keeps that token's own text rather than letting §4's boolean and
  * number checks reinterpret it). What `text_type` narrows is length and pattern, not shape.
  *
+ * **The value is the token's text put into the type's `normalization` form** (§5.5), and every facet
+ * judges that value: under `NFKC_CASEFOLD`, `Content-Type` reads as `content-type` and matches a
+ * member written either way. A refusal quotes the token as written and then the value it was read
+ * as (`describeToken`), since the written spelling is what a reader of the message has to find.
+ *
  * **Length is counted in Unicode code points**, matching the kernel's own `text_type` doc
  * ("Lengths count code points") -- `Array.from` iterates a string by code point, not by UTF-16
  * code unit, the same convention `compiler/atomChecks.ts`'s own `textMemberCoherence` already
@@ -35,45 +40,23 @@
 import { TsonAtomValidationError } from '../../core/errors.js';
 import type { TextType } from '../../schema/meta/atoms-text.js';
 import type { AtomToken, AtomType } from '../contract.js';
-import { toNfc } from '../../unicode/nfc.js';
+import { applyNormalization, describeToken, nfcFloor } from '../../unicode/normalization.js';
 import { parseRegex } from '../../regex/index.js';
 
 /**
  * Builds the `AtomType` for one fully-parameterised `text_type` instance -- `text =>
- * !text_type {}` is the unconstrained case, `createTextParser('text', { kind: 'text_type' })`.
- * See `integer.ts`'s `createIntegerParser` for why `typeRef` is required explicitly.
+ * !text_type {}` is the unconstrained case, `createTextParser('text', { kind: 'text_type',
+ * normalization: 'NONE' })`. See `integer.ts`'s `createIntegerParser` for why `typeRef` is
+ * required explicitly.
  */
 export function createTextParser(typeRef: string, constraints: TextType): AtomType<string> {
-  const checkMembership = createMembershipCheck(typeRef, constraints.members);
-  const checkPattern = createPatternCheck(typeRef, constraints.pattern);
+  const form = constraints.normalization;
+  const facets = createTextFacets(typeRef, constraints);
 
   function read(token: AtomToken): string {
-    const text = token.text;
-    const length = BigInt(Array.from(text).length);
-    if (constraints.length !== undefined && length !== constraints.length) {
-      throw new TsonAtomValidationError(
-        typeRef,
-        `'${text}' is ${length.toString()} characters, expected exactly ${constraints.length.toString()}`,
-        `exactly ${constraints.length.toString()} characters`,
-      );
-    }
-    if (constraints.minLength !== undefined && length < constraints.minLength) {
-      throw new TsonAtomValidationError(
-        typeRef,
-        `'${text}' is ${length.toString()} characters, less than the minimum ${constraints.minLength.toString()}`,
-        `at least ${constraints.minLength.toString()} characters`,
-      );
-    }
-    if (constraints.maxLength !== undefined && length > constraints.maxLength) {
-      throw new TsonAtomValidationError(
-        typeRef,
-        `'${text}' is ${length.toString()} characters, more than the maximum ${constraints.maxLength.toString()}`,
-        `at most ${constraints.maxLength.toString()} characters`,
-      );
-    }
-    checkPattern?.(text);
-    checkMembership?.(text);
-    return text;
+    const value = applyNormalization(form, token.text);
+    facets(value, describeToken(token.text, value, form));
+    return value;
   }
 
   function write(value: string): string {
@@ -84,29 +67,86 @@ export function createTextParser(typeRef: string, constraints: TextType): AtomTy
 }
 
 /**
+ * `text_type`'s facets over a value already in the type's `normalization` form: the three length
+ * facets, then `pattern`, then `members`, a refusal naming the token as `subject`. Shared by every
+ * family that composes them, `identifier_type` among them -- whose profile judges the value first,
+ * so a facet is only ever asked of a well-formed name.
+ *
+ * `members` goes last, as on the numeric tiers: a member set names the whole value space, so where
+ * it is present the other facets hold vacuously and their messages are the less useful of the two.
+ */
+export function createTextFacets(
+  typeRef: string,
+  constraints: Pick<TextType, 'length' | 'minLength' | 'maxLength' | 'pattern' | 'members'> & {
+    readonly normalization: TextType['normalization'];
+  },
+): (value: string, subject: string) => void {
+  const checkMembership = createMembershipCheck(
+    typeRef,
+    constraints.members,
+    constraints.normalization,
+  );
+  const checkPattern = createPatternCheck(typeRef, constraints.pattern);
+
+  return (value: string, subject: string): void => {
+    if (
+      constraints.length !== undefined ||
+      constraints.minLength !== undefined ||
+      constraints.maxLength !== undefined
+    ) {
+      const length = BigInt(Array.from(value).length);
+      if (constraints.length !== undefined && length !== constraints.length) {
+        throw new TsonAtomValidationError(
+          typeRef,
+          `${subject} is ${length.toString()} characters, expected exactly ${constraints.length.toString()}`,
+          `exactly ${constraints.length.toString()} characters`,
+        );
+      }
+      if (constraints.minLength !== undefined && length < constraints.minLength) {
+        throw new TsonAtomValidationError(
+          typeRef,
+          `${subject} is ${length.toString()} characters, less than the minimum ${constraints.minLength.toString()}`,
+          `at least ${constraints.minLength.toString()} characters`,
+        );
+      }
+      if (constraints.maxLength !== undefined && length > constraints.maxLength) {
+        throw new TsonAtomValidationError(
+          typeRef,
+          `${subject} is ${length.toString()} characters, more than the maximum ${constraints.maxLength.toString()}`,
+          `at most ${constraints.maxLength.toString()} characters`,
+        );
+      }
+    }
+    checkPattern?.(value, subject);
+    checkMembership?.(value, subject);
+  };
+}
+
+/**
  * Builds the read-time membership check for `text_type.members` (§7.4, §5.7, #22) — the sparse
  * case on the text tier, as `integer_type.members`/`decimal_type.members` are on the numeric ones.
  * `undefined` when `members` is absent, so a caller may compose it unconditionally.
  *
  * Reached by `text_type` itself and, through `compiler/atomBuilder.ts`'s own dispatch, by
- * `regex_type`, `uri_type` and `email_type` alike — the four families that compose `text_type`'s
- * `members` facet (§9) — so the check lives here once rather than once per family. **Members are
- * compared as text, NFC** (§7.4): both the declared member and the candidate value are
- * NFC-normalised before comparison, matching identifier equality's own rule (§7.7) even though a
- * `TEXT`-profile member need not itself be a name.
+ * `regex_type`, `uri_type`, `email_type` and `identifier_type` alike — the families that compose
+ * `text_type`'s `members` facet (§9) — so the check lives here once rather than once per family.
+ * **A member is a value of the type** (§5.5): each is put into the type's `normalization` `form`
+ * as the candidate was, and the two compare in NFC, the floor no text comparison goes below, so a
+ * decomposed spelling of a member is the member. The candidate is a value, already in the form.
  */
 export function createMembershipCheck(
   typeRef: string,
   members: readonly string[] | undefined,
-): ((text: string) => void) | undefined {
+  form: TextType['normalization'] = 'NONE',
+): ((text: string, subject?: string) => void) | undefined {
   if (members === undefined) return undefined;
-  const normalized = new Set(members.map(toNfc));
+  const values = new Set(members.map((member) => nfcFloor(applyNormalization(form, member))));
   const membership = `one of (${members.join(', ')})`;
-  return (text: string): void => {
-    if (!normalized.has(toNfc(text))) {
+  return (text: string, subject = `'${text}'`): void => {
+    if (!values.has(nfcFloor(text))) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is not a member of '${typeRef}' -- expected ${membership}`,
+        `${subject} is not a member of '${typeRef}' -- expected ${membership}`,
         membership,
       );
     }
@@ -130,14 +170,14 @@ export function createMembershipCheck(
 export function createPatternCheck(
   typeRef: string,
   pattern: string | undefined,
-): ((text: string) => void) | undefined {
+): ((text: string, subject?: string) => void) | undefined {
   if (pattern === undefined) return undefined;
   const regex = parseRegex(pattern);
-  return (text: string): void => {
+  return (text: string, subject = `'${text}'`): void => {
     if (!regex.matches(text)) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' does not match '${typeRef}'’s pattern '${pattern}' (RFC 9485)`,
+        `${subject} does not match '${typeRef}'’s pattern '${pattern}' (RFC 9485)`,
         `text matching '${pattern}'`,
       );
     }

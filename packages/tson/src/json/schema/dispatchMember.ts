@@ -35,7 +35,7 @@ import { admitting, selfNames } from '../../link/referenceChain.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { lookingAhead, type JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
-import { contentOf, describeEvent, fieldValueParser, type AtomForm } from './atoms.js';
+import { contentOf, describeEvent, enumFormOf, fieldValueParser, type AtomForm } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
@@ -88,7 +88,11 @@ function selectorsOf(
   return discriminators.map((fieldName) => {
     const typeName = fieldTypeOf(fieldName, baseFields, members);
     const body = resolveFieldBody(ctx, typeName);
-    const { form, parse } = fieldValueParser(typeName, body);
+    const { form, parse } = fieldValueParser(
+      typeName,
+      body,
+      enumFormOf(ctx.linkedSchema, typeName),
+    );
     return { name: toNfc(fieldName), form, parse };
   });
 }

@@ -228,8 +228,11 @@ export interface Config extends NestingLimitOptions {
    * It governs both layers this instance reaches: §8.2's one Part 1 scope, a record's own field
    * names, on a schemaless read; and [TSON-SCHEMA] §11.4's schema-layer scopes when a schema is
    * resolved through {@link Tson.resolveSchema} or {@link Tson.preload}. A schema-governed *read*
-   * consults it for neither -- a data field name under a schema inherits the declaration's own
-   * verdict (§8.2), which the schema's own linking already reached.
+   * consults it for neither of those: a data field name under a schema inherits the declaration's
+   * own verdict (§8.2), which the schema's own linking already reached. It does govern the
+   * *values* of identifier families, which are names wherever they stand -- a field's value, a
+   * map's keys, a set's elements -- for every reader {@link Tson.compile} builds, and an annotation
+   * value read while a schema resolves.
    *
    * The meta-kernel's own bootstrap is deliberately outside its reach: that link is pinned to the
    * default, so relaxing a policy here can never change whether the kernel itself loads.
@@ -371,6 +374,8 @@ function importedFrom(schema: LinkedSchema): ImportedSchema {
   return {
     entries: schema.entries,
     originOf: (name) => schema.origins.get(name) ?? schema.id,
+    textEnums: schema.textEnums,
+    enumForms: schema.enumForms,
   };
 }
 
@@ -379,13 +384,22 @@ function importedFrom(schema: LinkedSchema): ImportedSchema {
  * by one needs the same compiled readers and compiling is not free. Keyed by identity in a
  * `WeakMap`: a linked schema nobody holds any more takes its compiled form with it.
  */
-const compiledMetas = new WeakMap<LinkedSchema, CompiledSchema>();
+const compiledMetas = new WeakMap<LinkedSchema, Map<NamePolicy | undefined, CompiledSchema>>();
 
-function compiledMetaFor(meta: LinkedSchema): CompiledSchema {
-  const already = compiledMetas.get(meta);
+/**
+ * The compiled readers of `meta` under `identifierPolicy` (§8.2): the policy decides what a value
+ * of an identifier family may be, so two instances configured differently never share a compile.
+ */
+function compiledMetaFor(
+  meta: LinkedSchema,
+  identifierPolicy: NamePolicy | undefined,
+): CompiledSchema {
+  const byPolicy = compiledMetas.get(meta) ?? new Map<NamePolicy | undefined, CompiledSchema>();
+  compiledMetas.set(meta, byPolicy);
+  const already = byPolicy.get(identifierPolicy);
   if (already !== undefined) return already;
-  const compiled = compileCore(meta);
-  compiledMetas.set(meta, compiled);
+  const compiled = compileCore(meta, identifierPolicy === undefined ? {} : { identifierPolicy });
+  byPolicy.set(identifierPolicy, compiled);
   return compiled;
 }
 
@@ -447,7 +461,9 @@ function resolveAgainstRegistry(
     // name ordinary entries of the governing meta, and their values are read through that
     // schema's own compiled readers. Without this every key annotation resolved name-only, so a
     // resolved schema lost the documentation the author wrote on it.
-    annotationValueReader: createAnnotationValueReader(compiledMetaFor(governingMeta)),
+    annotationValueReader: createAnnotationValueReader(
+      compiledMetaFor(governingMeta, identifierPolicy),
+    ),
     metaDefinitions,
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
@@ -606,7 +622,12 @@ export function createTson(config: Config = {}): Tson {
   }
 
   function compileMethod(schema: LinkedSchema): CompiledSchema {
-    return compileCore(schema, { foreignSchemas: foreignSchema });
+    return compileCore(schema, {
+      foreignSchemas: foreignSchema,
+      ...(config.identifierPolicy === undefined
+        ? {}
+        : { identifierPolicy: config.identifierPolicy }),
+    });
   }
 
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {

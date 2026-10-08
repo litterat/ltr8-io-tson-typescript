@@ -50,6 +50,7 @@ import { diagnosticCodeForFetch } from '../core/diagnostic.js';
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
+import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { TemplateParam } from '../schema/meta/bodies.js';
 import type { Annotations, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
 import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
@@ -119,6 +120,14 @@ export interface ImportedSchema {
    * declaring one name is an error (different origins). Called only for a name `entries` holds.
    */
   readonly originOf: (name: string) => string;
+  /**
+   * The names among `entries` whose enum members are texts rather than names -- linking's
+   * `LinkedSchema.textEnums`, carried so an importer classifies an imported enum as its own schema
+   * did ([TSON-SCHEMA] §7.4). Absent means none.
+   */
+  readonly textEnums?: ReadonlySet<string>;
+  /** Each enum among `entries` that matches in a form other than `NONE`, by name -- `LinkedSchema.enumForms`. Absent means none. */
+  readonly enumForms?: ReadonlyMap<string, Normalization>;
 }
 
 /** Resolves one `!!import` directive's URI to the namespace it contributes. */

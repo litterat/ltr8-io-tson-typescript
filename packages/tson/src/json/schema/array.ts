@@ -17,7 +17,10 @@ import { jsonArray, jsonNull, type JsonValue } from '../tree.js';
 import { describeEvent, reportUnreadable, treeAtomKeyedReader } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import type { JsonTypeReader } from './types.js';
+import { reportConfusablePair } from './nameHygiene.js';
 import { identityOfNode, isIdentified } from './valueIdentity.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
+import { terminalDefinition } from '../../link/referenceChain.js';
 
 const ABSENT = Symbol('json.array.absent');
 const REFUSED = Symbol('json.array.refused');
@@ -44,6 +47,16 @@ export function buildArrayReader(
   const rawElementReader = unique ? ctx.rawAtomReader(body.elementType.name) : undefined;
   const keyedReader: JsonTypeReader =
     rawElementReader !== undefined ? treeAtomKeyedReader(rawElementReader) : elementReader;
+  // A unique array of an identifier family is a naming scope ([TSON-SCHEMA] §11.4): its elements
+  // are names ([TSON-DATA] §8.2), and two that read alike are refused at the second.
+  const elementsAreNames =
+    unique &&
+    (() => {
+      const element = terminalDefinition(body.elementType.name, (n) =>
+        ctx.linkedSchema.entries.get(n),
+      )?.body;
+      return element !== undefined && 'kind' in element && element.kind === 'identifier_type';
+    })();
 
   return {
     *read(readCtx: JsonReadContext): Task<JsonValue | undefined> {
@@ -64,6 +77,10 @@ export function buildArrayReader(
       const reportedBefore = outer.reported();
       const elements: Slot[] = [];
       const seen = unique ? new Map<string, number>() : undefined;
+      const scope =
+        elementsAreNames && readCtx.identifierPolicy().skeletonDistinctness
+          ? createConfusableScope()
+          : undefined;
 
       for (;;) {
         const peeked = yield* outer.peek();
@@ -101,6 +118,10 @@ export function buildArrayReader(
             );
           } else {
             seen.set(identity, index);
+            if (scope !== undefined && isIdentified(value) && typeof value.value === 'string') {
+              const collision = scope.add(value.value);
+              if (collision !== undefined) reportConfusablePair(at, collision, 'elements');
+            }
           }
           elements.push(node);
           continue;

@@ -27,6 +27,8 @@ import { toBigDecimal, type JsonValue } from '../tree.js';
 export interface Identified {
   readonly node: JsonValue;
   readonly identity: string;
+  /** The decoded host value the identity was taken from, for a caller that needs more of it than its identity (a name's text, for [TSON-DATA] §8.2's look-alike scope). */
+  readonly value?: unknown;
 }
 
 /** Whether `value` is a tree-mode atom's own {@link Identified} pair, rather than a plain `JsonValue` a compound reader produced directly. */

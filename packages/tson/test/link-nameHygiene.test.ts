@@ -131,16 +131,45 @@ function choiceOf(variants: readonly TypeRef[]): Top {
   return { kind: 'choice', variants };
 }
 
+/**
+ * The two label types an enum's `type` names (§7.4): `identifier`, which makes its members names,
+ * and `text`, which makes them values. A schema declaring an enum declares the type it draws from,
+ * so the helper adds each unless the test states its own.
+ */
+const LABEL_TYPES: readonly (readonly [string, TypeDefinition])[] = [
+  [
+    'identifier',
+    def({
+      kind: 'identifier_type',
+      spec: 'https://www.unicode.org/reports/tr31/',
+      normalization: 'NFC',
+      start: 'XID',
+      continue: 'XID',
+      continueAdd: '-',
+    }),
+  ],
+  ['text', def({ kind: 'text_type', normalization: 'NONE' })],
+];
+
 function schema(
   id: string,
   entries: Iterable<readonly [string, TypeDefinition]>,
   imports: readonly string[] = [],
 ): Schema {
+  const own = new Map(entries);
+  for (const [name, label] of LABEL_TYPES) {
+    if (
+      !own.has(name) &&
+      [...own.values()].some((d) => 'kind' in d.body && d.body.kind === 'enum')
+    ) {
+      own.set(name, label);
+    }
+  }
   return {
     id,
     meta: 'https://tson.io/2026/37/m/meta-kernel.tn',
     imports,
-    entries: new Map(entries),
+    entries: own,
     keyAnnotations: new Map(),
     bootstrap: false,
   };

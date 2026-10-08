@@ -24,12 +24,21 @@ import {
   skipCoreValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
+import { reportConfusablePair } from './refusal.js';
 import { abandonedValue, renderValue, type TreeTypeResolver } from './support.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
 
 /**
  * Builds an `array` tree reader for one compiled schema entry. `resolveType` resolves the element
  * type's own reader once, at construction; `isScopedType` answers §7.8's typed-position question
  * for that same element type, at the same step.
+ *
+ * `elementsAreNames` is true when the array is unique (a set, or any `unique_items` array) and its
+ * element type is an identifier family: its elements are then one naming scope (§11.4), and an
+ * element reading alike with an earlier one is reported (`CONFUSABLE_NAMES`) at its own index, as
+ * §8.2 places a refused pair; a duplicate is the duplicate it is and nothing else. An element that
+ * failed to read is no member of either check, there being no value to compare. The caller passes
+ * it only where the read's policy applies skeleton distinctness.
  */
 export function arrayTreeReader(
   name: string,
@@ -38,6 +47,7 @@ export function arrayTreeReader(
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
   isScopedType: (typeName: string) => boolean,
+  elementsAreNames = false,
 ): TypeReader<Value> {
   const elementParser = resolveType(body.elementType.name);
   const scopedElement = isScopedType(body.elementType.name);
@@ -81,6 +91,7 @@ export function arrayTreeReader(
 
   function* readInto(ctx: ReadContext, sink: (decoded: Value) => void): Task<void> {
     const seen: Value[] | undefined = body.uniqueItems ? [] : undefined;
+    const names = elementsAreNames && seen !== undefined ? createConfusableScope() : undefined;
     let index = 0;
     for (;;) {
       const peeked = yield* ctx.peek();
@@ -124,6 +135,12 @@ export function arrayTreeReader(
             );
         } else {
           seen.push(decoded);
+          if (names !== undefined && decoded.kind === 'atom' && typeof decoded.value === 'string') {
+            const collision = names.add(decoded.value);
+            if (collision !== undefined) {
+              reportConfusablePair(ctx.index(index), collision, 'elements');
+            }
+          }
         }
       }
       sink(decoded);

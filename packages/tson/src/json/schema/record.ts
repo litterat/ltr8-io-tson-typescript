@@ -70,7 +70,7 @@ import {
   describeEvent,
   enumReader,
   fieldValueParser,
-  identifierReader,
+  enumFormOf,
   type AtomForm,
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
@@ -167,7 +167,11 @@ export function fieldValueOf(
   token: { readonly text: string },
 ): FieldValue {
   const body = resolveFieldBody(ctx, fieldTypeName);
-  const { form, parse, write } = fieldValueParser(fieldTypeName, body);
+  const { form, parse, write } = fieldValueParser(
+    fieldTypeName,
+    body,
+    enumFormOf(ctx.linkedSchema, fieldTypeName),
+  );
   const hostValue = parse(token.text);
   const text = write === undefined ? token.text : write(hostValue);
   return { hostValue, node: fieldValueNode(form, hostValue, text) };
@@ -180,7 +184,7 @@ export function fieldValueOf(
  * node cannot answer that (it is the document's own *spelling*, exactly the thing §6.1.3 says a
  * FIXED comparison must not go by). Built from the same chain walk {@link fieldValueOf} uses, and
  * dispatched the same way `json/schema/compile.ts`'s own `build` dispatches an atom-kind entry —
- * `atomReader`/`enumReader`/`identifierReader` are exactly its non-composite cases, minus the
+ * `atomReader`/`enumReader` are exactly its non-composite cases, minus the
  * `void`/`value` branches §5.2 already rules out for a stated `~`/`=` value (`fieldValueParser`'s
  * own top note).
  */
@@ -190,9 +194,13 @@ function fixedFieldReader(
   schemaLocation: SchemaLocation,
 ): JsonTypeReader {
   const body = resolveFieldBody(ctx, fieldTypeName);
-  if (body.kind === 'enum') return enumReader(fieldTypeName, body, schemaLocation);
-  if (body.kind === 'identifier_type') {
-    return identifierReader(fieldTypeName, schemaLocation);
+  if (body.kind === 'enum') {
+    return enumReader(
+      fieldTypeName,
+      body,
+      schemaLocation,
+      enumFormOf(ctx.linkedSchema, fieldTypeName),
+    );
   }
   return atomReader(fieldTypeName, body, schemaLocation);
 }

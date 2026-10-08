@@ -45,7 +45,13 @@ import type {
 import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type } from '../schema/meta/atoms-network.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
-import type { EmailType, IriType, UriType } from '../schema/meta/atoms-text.js';
+import type {
+  EmailType,
+  IdentifierType,
+  IriType,
+  Normalization,
+  UriType,
+} from '../schema/meta/atoms-text.js';
 import { parseNetworkBlock, whyNoValue } from '../atom/network/cidrParsing.js';
 import { parseIpv4Octets } from '../atom/network/ipv4.js';
 import { parseIpv6Bytes } from '../atom/network/ipv6.js';
@@ -69,7 +75,13 @@ import {
   tighterLower,
   tighterUpper,
 } from './atomNarrowing.js';
-import { isIdentifierText } from '../unicode/identifier-profile.js';
+import {
+  checkIdentifier,
+  codePointSet,
+  identifierProfileOf,
+  profileIncoherence,
+} from '../unicode/identifier-profile.js';
+import { applyNormalization } from '../unicode/normalization.js';
 import { toNfc } from '../unicode/nfc.js';
 import { parseRegex } from '../regex/index.js';
 import {
@@ -496,6 +508,7 @@ interface TextConstraints {
   readonly length?: bigint;
   readonly pattern?: string;
   readonly members?: readonly string[];
+  readonly normalization: Normalization;
 }
 
 function effectiveMinLength(t: TextConstraints): bigint | undefined {
@@ -517,6 +530,38 @@ function sameMembers(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   const normalized = new Set(a.map(toNfc));
   return b.every((value) => normalized.has(toNfc(value)));
+}
+
+/**
+ * A **fixed-at-construction** facet (§5.7's facet kind): a refinement restates it or leaves it,
+ * and never moves it. `text_type.normalization` and `identifier_type`'s profile facets are this
+ * kind. Setting `normalization` on a source that left it at `NONE` would not narrow the source's
+ * values but change what a token means -- `Content-Type` would be one value under the source and
+ * another under the refinement -- and an addition set cannot follow the settable-once rule,
+ * because setting `start_add` on a source that left it unset widens the profile, the one direction
+ * a refinement never goes. `equals` compares what the facet admits, so a set facet compares as a
+ * set however its text was spelled. A new constructor application is the way to a different one.
+ */
+function checkFixed<T>(
+  out: string[],
+  facet: string,
+  source: T,
+  refined: T,
+  render: (value: T) => string,
+  equals: (a: T, b: T) => boolean = (a, b) => a === b,
+): void {
+  if (!equals(source, refined)) {
+    out.push(
+      `changes '${facet}' from ${render(source)} to ${render(refined)} -- a ${facet} is fixed where ` +
+        'the type is constructed, and a refinement only restates it',
+    );
+  }
+}
+
+function sameCodePoints(a: string | undefined, b: string | undefined): boolean {
+  const left = codePointSet(a);
+  const right = codePointSet(b);
+  return left.length === right.length && left.every((codePoint, i) => codePoint === right[i]);
 }
 
 /**
@@ -546,6 +591,29 @@ function textNarrows(source: TextConstraints, refined: TextConstraints): string[
     sameMembers,
     'members and pattern share one position and pattern cannot be narrowed',
   );
+  checkFixed(out, 'normalization', source.normalization, refined.normalization, String);
+  return out;
+}
+
+/**
+ * `identifier_type`'s narrowing: the text facets, then **the profile does not move at all** -- a
+ * refinement restates each profile facet or leaves it, since narrowing a profile has no use a
+ * fresh `!identifier_type` does not serve better (§5.7). The sets compare as sets.
+ */
+function identifierNarrows(source: IdentifierType, refined: IdentifierType): string[] {
+  const out = textNarrows(source, refined);
+  checkFixed(out, 'start', source.start, refined.start, String);
+  checkFixed(out, 'continue', source.continue, refined.continue, String);
+  for (const facet of ['startAdd', 'continueAdd', 'medial', 'exclude'] as const) {
+    checkFixed(
+      out,
+      facet === 'startAdd' ? 'start_add' : facet === 'continueAdd' ? 'continue_add' : facet,
+      source[facet],
+      refined[facet],
+      (value) => `"${value ?? ''}"`,
+      sameCodePoints,
+    );
+  }
   return out;
 }
 
@@ -559,21 +627,24 @@ function textNarrows(source: TextConstraints, refined: TextConstraints): string[
  * equality's own rule, §7.7), so two members that are one NFC-normalised string are one member
  * stated twice, not two.
  */
-function textUniqueMembers(members: readonly string[]): string[] {
+function textUniqueMembers(members: readonly string[], form: Normalization = 'NONE'): string[] {
   const out: string[] = [];
   if (members.length === 0) {
     return ["'members' is empty, so the body admits no value -- a member set states at least one"];
   }
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   for (const member of members) {
-    const normalized = toNfc(member);
-    if (seen.has(normalized)) {
+    // A member is a value of the type (§5.5): put into its form, compared in NFC.
+    const identity = toNfc(applyNormalization(form, member));
+    const earlier = seen.get(identity);
+    if (earlier !== undefined) {
       out.push(
-        `members states '${member}' more than once -- members are compared as text, NFC, so two ` +
-          'spellings of one string are one member',
+        `members '${earlier}' and '${member}' are one value under ${form}` +
+          (form === 'NONE' || form === 'NFC' ? ' -- members are compared as text, NFC' : ''),
       );
+    } else {
+      seen.set(identity, member);
     }
-    seen.add(normalized);
   }
   return out;
 }
@@ -601,11 +672,13 @@ function textMemberCoherence(
 ): string[] {
   const out: string[] = [];
   if (t.members === undefined) return out;
-  out.push(...textUniqueMembers(t.members));
+  out.push(...textUniqueMembers(t.members, t.normalization));
   const fixedLength = t.length;
   const minLength = effectiveMinLength(t);
   const maxLength = effectiveMaxLength(t);
-  for (const member of t.members) {
+  for (const written of t.members) {
+    // Judged as the value it is, in the type's form (§5.5).
+    const member = applyNormalization(t.normalization, written);
     const codePoints = BigInt(Array.from(member).length);
     if (fixedLength !== undefined && codePoints !== fixedLength) {
       out.push(
@@ -658,6 +731,25 @@ function textCoherence(t: TextConstraints): string[] {
     }
   }
   out.push(...textMemberCoherence(t, pattern));
+  return out;
+}
+
+/**
+ * `identifier_type`'s coherence: the text facets' (a `pattern`, lengths, a member set judged in the
+ * profile's form), the profile's own ({@link profileIncoherence}: a Start set left empty admits
+ * nothing, and a medial character that is also Start or Continue could be read as either), and one
+ * rule joining them (§5.5): every member, as the value it is in `normalization`'s form, is an
+ * identifier under the profile. A member the profile refuses is one no value can ever be, since a
+ * value is refused by the profile before a facet is asked, so it is refused here with the rest.
+ */
+function identifierCoherence(t: IdentifierType): string[] {
+  const out = textCoherence(t);
+  const profile = identifierProfileOf(t);
+  out.push(...profileIncoherence(profile));
+  for (const member of t.members ?? []) {
+    const why = checkIdentifier(profile, applyNormalization(t.normalization, member));
+    if (why !== undefined) out.push(`member '${member}' is not an identifier: ${why}`);
+  }
   return out;
 }
 
@@ -1065,31 +1157,15 @@ function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: bigint): string[] {
 // ── enum ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * An enum states at least one member, each stated once (§9). `enum.members` is typed `enum_set`
- * (`!set_type { element_type: text  min_items: 1 }`), whose `unique_items` is pinned `true`, so
- * `!enum []` and `!enum [OPEN OPEN]` both describe a body contradicting its own declared shape and
- * are refused at schema load rather than left to fail against every document —
- * {@link textUniqueMembers} states the same obligation for `text_member_set` and is reused here
- * rather than restated, since the two sets share one contract.
- *
- * **Where `type` is `identifier`, every member MUST match [TSON-DATA] §7.7's identifier grammar**
- * (§7.4) — `enum_set`'s element type is `text`, so nothing below this check makes a member a name;
- * a member that is not one is the body contradicting its own declaration, in the family of
- * coherence errors §7.2 makes a schema-load concern rather than data validation. For any other
- * `type` a member is a value of that text family, which is not judged here.
+ * An enum's own coherence: its member set is non-empty and states no member twice as text (NFC).
+ * What `type` obliges -- that it names a text family, that each member is a value of it, and that no
+ * two members are one value under its equality -- needs `type`'s own definition, which lives in a
+ * namespace this body cannot see, so it is checked at linking (`link/enumLabels.ts`, [TSON-SCHEMA]
+ * §7.4) rather than here. `enum_set`'s element type is `text`, so nothing below that check makes a
+ * member a name.
  */
 function enumCoherence(t: EnumBody): string[] {
-  const out = [...textUniqueMembers(t.members)];
-  if (t.type !== 'identifier') return out;
-  for (const member of t.members) {
-    if (!isIdentifierText(member)) {
-      out.push(
-        `member '${member}' is not a well-formed identifier ([TSON-DATA] §7.7) -- an enum whose ` +
-          "members are not names is a '!text_enum'",
-      );
-    }
-  }
-  return out;
+  return textUniqueMembers(t.members);
 }
 
 /**
@@ -1180,7 +1256,7 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
         : mismatch('an iri', refined);
     case 'identifier_type':
       return refined.kind === 'identifier_type'
-        ? textNarrows(source, refined)
+        ? identifierNarrows(source, refined)
         : mismatch('an identifier', refined);
     case 'email_type':
       return refined.kind === 'email_type'
@@ -1308,7 +1384,7 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'regex_type':
       return [...textCoherence(atom), ...regexMemberSyntaxCoherence(atom.members)];
     case 'identifier_type':
-      return textCoherence(atom);
+      return identifierCoherence(atom);
     case 'uri_type':
     case 'iri_type':
       return [...textCoherence(atom), ...uriMemberCoherence(atom)];

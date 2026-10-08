@@ -20,10 +20,8 @@
  * one caller this module exists for today. A caller that needs to tell the two `undefined` cases apart consults {@link
  * isScalarBody} first, exactly as {@link atomParserFor}'s own caller does.
  */
-import type { AtomToken, AtomType } from './contract.js';
-import { TsonAtomValidationError } from '../core/errors.js';
-import type { EnumBody } from '../schema/meta/bodies.js';
-import type { IdentifierType, RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type { AtomToken } from './contract.js';
+import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { Product, Sum } from '../schema/meta/algebra.js';
 import type { Atom, Reference } from '../schema/meta/typedef.js';
 
@@ -34,6 +32,8 @@ import { createRationalParser } from './numeric/rational.js';
 import { createComplexParser } from './numeric/complex.js';
 import { createBinaryParser } from './numeric/binary.js';
 import { createTextParser } from './text/text.js';
+import { createIdentifierParser } from './text/identifier.js';
+import { createEnumParser } from './enum.js';
 import { createUuidParser } from './network/uuid.js';
 import { createUriParser } from './network/uri.js';
 import { createEmailParser } from './network/email.js';
@@ -105,38 +105,6 @@ export function isScalarBody(body: ScalarCandidate): boolean {
   }
 }
 
-// ── enum ─────────────────────────────────────────────────────────────────────────────────────
-
-/**
- * `boolean => !enum [true false]` narrows to a real host `boolean`; every other enum reads its
- * member text verbatim. Mirrors `compiler/atomBuilder.ts`'s own `buildEnumAtomType` exactly --
- * duplicated rather than shared for the reason this module's own top note gives for the whole
- * dispatch: that one hands back a `TypeReader<Value>` wired through the tree/reader machinery,
- * and this one a bare token parser, and the two callers reach this rule at different layers.
- */
-function buildEnumParser(typeRef: string, body: EnumBody): AtomType<string | boolean> {
-  const members = body.members;
-  const memberSet = new Set(members);
-  const isBoolean = members.length === 2 && memberSet.has('true') && memberSet.has('false');
-  const membership = `one of (${members.join(', ')})`;
-
-  return {
-    read(token: AtomToken): string | boolean {
-      if (!memberSet.has(token.text)) {
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${token.text}' is not a member of '${typeRef}' -- expected ${membership}`,
-          membership,
-        );
-      }
-      return isBoolean ? token.text === 'true' : token.text;
-    },
-    write(value: string | boolean): string {
-      return typeof value === 'boolean' ? (value ? 'true' : 'false') : value;
-    },
-  };
-}
-
 // ── regex_type ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -145,11 +113,10 @@ function buildEnumParser(typeRef: string, body: EnumBody): AtomType<string | boo
  * with a `kind: 'regex_type'` discriminant `TextType` itself does not accept. Rebuilds the
  * `text_type`-shaped subset by hand (`exactOptionalPropertyTypes` forbids simply spreading the
  * optional fields across) rather than widening `createTextParser`'s own signature -- the same
- * choice `compiler/atomBuilder.ts`'s own `asTextConstraints` makes, duplicated here for the same
- * reason as {@link buildEnumParser} above.
+ * choice `compiler/atomBuilder.ts`'s own `asTextConstraints` makes.
  */
-function asTextConstraints(atom: RegexType | IdentifierType): TextType {
-  const { minLength, maxLength, length, pattern, normalization } = atom;
+function asTextConstraints(atom: RegexType): TextType {
+  const { minLength, maxLength, length, pattern, members, normalization } = atom;
   return {
     kind: 'text_type',
     normalization,
@@ -157,6 +124,7 @@ function asTextConstraints(atom: RegexType | IdentifierType): TextType {
     ...(maxLength === undefined ? {} : { maxLength }),
     ...(length === undefined ? {} : { length }),
     ...(pattern === undefined ? {} : { pattern }),
+    ...(members === undefined ? {} : { members }),
   };
 }
 
@@ -170,16 +138,17 @@ function asTextConstraints(atom: RegexType | IdentifierType): TextType {
 export function atomParserFor(
   declaredName: string,
   body: ScalarCandidate,
+  enumForm: Normalization = 'NONE',
 ): ScalarParser | undefined {
   switch (body.kind) {
     case 'enum':
-      return buildEnumParser(declaredName, body);
+      return createEnumParser(declaredName, body, enumForm);
     case 'integer_type':
       return createIntegerParser(declaredName, body);
     case 'text_type':
       return createTextParser(declaredName, body);
     case 'identifier_type':
-      return createTextParser(declaredName, asTextConstraints(body));
+      return createIdentifierParser(declaredName, body);
     case 'uri_type':
     case 'iri_type':
       return createUriParser(declaredName, body);

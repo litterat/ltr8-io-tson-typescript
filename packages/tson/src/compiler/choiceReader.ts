@@ -104,7 +104,7 @@ function classifyEvent(event: TsonEvent): DiscriminationClass | undefined {
   }
 }
 
-/** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
+/** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries and `textEnums` its enums whose members are texts, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
 export function choiceTreeReader(
   name: string,
   displayName: string,
@@ -113,6 +113,7 @@ export function choiceTreeReader(
   schemaLocation: SchemaLocation,
   disjoint: boolean,
   namespace: ReadonlyMap<string, TypeDefinition>,
+  textEnums: ReadonlySet<string> = new Set(),
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
     name: variant.name,
@@ -143,7 +144,7 @@ export function choiceTreeReader(
   if (disjoint) {
     byClass = new Map();
     for (const variant of variants) {
-      const variantClass = discriminationClassOf(variant.name, namespace);
+      const variantClass = discriminationClassOf(variant.name, namespace, textEnums);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass = undefined;
         break;

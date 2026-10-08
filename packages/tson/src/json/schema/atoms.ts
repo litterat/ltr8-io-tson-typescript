@@ -12,16 +12,20 @@
  * `ATOM_FORM_INVALID` and `TsonAtomValidationError` to `ATOM_CONSTRAINT_VIOLATION` — §5.1's split,
  * applied by the same function that applies it for TSON text.
  *
- * **`void`, `value` and `identifier`** are dispatched on the resolved body's constructor
- * (§4.2), never on a declared name: {@link voidReader} for `void_type` (§5.7 — the void sentinel's
- * own type, admitting JSON null and nothing else), {@link valuePositionReader} for `value_type`
- * (§5.7 — the escape hatch, classifying a JSON value by its own grammar with no
- * base-type-resolution detour), and {@link identifierReader} for `identifier_type` (this
- * encoding's own reading: the shared `unicode/identifier-profile.ts` grammar over a JSON string's
- * content). An alias of any of them reaches the same reader by [TSON-SCHEMA] §8.3's
- * reference-collapse, since `json/schema/compile.ts` resolves a closed reference to its target's
- * reader once, at compile time, by name — the same collapse an alias of `boolean` (an `enum`
- * body) reaches below.
+ * **`void` and `value`** are dispatched on the resolved body's constructor (§4.2), never on a
+ * declared name: {@link voidReader} for `void_type` (§5.7 — the void sentinel's own type,
+ * admitting JSON null and nothing else) and {@link valuePositionReader} for `value_type` (§5.7 —
+ * the escape hatch, classifying a JSON value by its own grammar with no base-type-resolution
+ * detour). An alias of either reaches the same reader by [TSON-SCHEMA] §8.3's reference-collapse,
+ * since `json/schema/compile.ts` resolves a closed reference to its target's reader once, at
+ * compile time, by name — the same collapse an alias of `boolean` (an `enum` body) reaches below.
+ *
+ * **An `identifier_type` is an ordinary atom** whose parser is the shared one
+ * (`atom/text/identifier.ts`): the value is a JSON string's content put into the family's
+ * `normalization` form and judged by the family's own profile, exactly as a TSON token's text is,
+ * so the two encodings cannot disagree about whether a string is a name under any profile. What
+ * this encoding adds is [TSON-DATA] §8.2's name hygiene over the *value* ({@link
+ * valueNameRefuses}): a value of an identifier family is a name wherever it stands.
  *
  * **§5.2's enum rule is applied uniformly, `boolean` included**: `boolean` is the kernel's own
  * `!enum [true false]`, and {@link enumReader} special-cases it (by declared name) only for the
@@ -43,22 +47,25 @@
  */
 import type { AtomToken } from '../../atom/contract.js';
 import { atomParserFor, type ScalarParser } from '../../atom/forType.js';
+import { createEnumParser } from '../../atom/enum.js';
 import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import { toExactDecimal, toExactInteger } from '../../base/numberNarrowing.js';
 import { isHexFloat, tryParseNumber } from '../../base/numberGrammar.js';
-import { isIdentifierText } from '../../unicode/identifier-profile.js';
+import { identifierProfileOf, type IdentifierProfile } from '../../unicode/identifier-profile.js';
+import type { Normalization } from '../../schema/meta/atoms-text.js';
 import type { EnumBody } from '../../schema/meta/bodies.js';
 import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { selfNames } from '../../link/referenceChain.js';
+import type { LinkedSchema } from '../../link/link.js';
+import { selfNames, terminal } from '../../link/referenceChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonEvent } from '../stream.js';
 import { jsonBoolean, jsonNull, jsonNumber, jsonString, type JsonValue } from '../tree.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
-import { nameHygieneRefuses } from './nameHygiene.js';
+import { nameHygieneRefuses, valueNameRefuses } from './nameHygiene.js';
 import { lead as leadOf, leadPresent, readWrapped, SCHEMA, TYPE } from './reservedMembers.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost, type Identified } from './valueIdentity.js';
@@ -311,7 +318,12 @@ export function withAnnotationObject(
   };
 }
 
-/** The atom-position reader for an ordinary (non-`value_type`, non-`void_type`, non-`identifier_type`, non-`enum`) family: §5's table, then `atomParserFor`'s own parser. */
+/**
+ * The atom-position reader for an ordinary (non-`value_type`, non-`void_type`, non-`enum`) family:
+ * §5's table, then `atomParserFor`'s own parser. An identifier family's value is then judged as a
+ * name under the family's profile and this read's policy (§8.2); a value the policy refuses is
+ * reported apart from §8.1's four categories and yields no value.
+ */
 export function atomReader(
   displayName: string,
   body: Atom,
@@ -319,12 +331,21 @@ export function atomReader(
 ): AtomReader {
   const form = atomFormOf(body);
   const parser: ScalarParser | undefined = atomParserFor(displayName, body);
-  return makeAtomReader(displayName, form, schemaLocation, (content) => {
-    if (parser === undefined) {
-      throw new Error(`'${displayName}' is an atom body with no parser -- this is a library bug`);
-    }
-    return parser.read(tokenOf(content));
-  });
+  const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;
+  return makeAtomReader(
+    displayName,
+    form,
+    schemaLocation,
+    (content) => {
+      if (parser === undefined) {
+        throw new Error(`'${displayName}' is an atom body with no parser -- this is a library bug`);
+      }
+      return parser.read(tokenOf(content));
+    },
+    profile === undefined
+      ? undefined
+      : (ctx, value) => typeof value === 'string' && valueNameRefuses(ctx, value, profile),
+  );
 }
 
 /**
@@ -337,6 +358,7 @@ export function enumReader(
   displayName: string,
   body: EnumBody,
   schemaLocation: SchemaLocation,
+  labelForm: Normalization = 'NONE',
 ): AtomReader {
   const members = body.members;
   const memberSet = new Set(members);
@@ -346,17 +368,25 @@ export function enumReader(
     memberSet.has('true') &&
     memberSet.has('false');
   const form: AtomForm = isBooleanFamily ? 'boolean' : 'enum';
-  const membership = `one of (${members.join(', ')})`;
-  return makeAtomReader(displayName, form, schemaLocation, (content) => {
-    if (!memberSet.has(content)) {
-      throw new TsonAtomValidationError(
-        displayName,
-        `'${content}' is not a member of '${displayName}' -- expected ${membership}`,
-        membership,
-      );
-    }
-    return isBooleanFamily ? content === 'true' : content;
-  });
+  const parser = createEnumParser(displayName, body, labelForm);
+  return makeAtomReader(displayName, form, schemaLocation, (content) =>
+    enumValue(parser.read(tokenOf(content)), isBooleanFamily),
+  );
+}
+
+/** The enum parser's value for this encoding: a real boolean only for the `boolean` family itself. */
+function enumValue(value: string | boolean, isBooleanFamily: boolean): string | boolean {
+  return typeof value === 'boolean' && !isBooleanFamily ? String(value) : value;
+}
+
+/**
+ * The form the enum `typeName` (an alias followed to its enum) matches its members in — its label
+ * type's `normalization`, as linking recorded it ([TSON-SCHEMA] §5.5, §7.4); `NONE` for any other
+ * type.
+ */
+export function enumFormOf(schema: LinkedSchema, typeName: string): Normalization {
+  const entries = schema.entries;
+  return schema.enumForms.get(terminal(typeName, (name) => entries.get(name))) ?? 'NONE';
 }
 
 /**
@@ -371,47 +401,28 @@ export function enumReader(
 export interface FieldValueParser {
   readonly form: AtomForm;
   readonly parse: (content: string) => unknown;
+  /** The family's profile, present only for an `identifier_type`: a value of it is a name (§8.2). */
+  readonly profile?: IdentifierProfile;
   /** `read`'s inverse, present only for the general `atomParserFor` branch — see this function's own use of it below. */
   readonly write?: (value: unknown) => string;
 }
 
-export function fieldValueParser(displayName: string, body: Atom): FieldValueParser {
+export function fieldValueParser(
+  displayName: string,
+  body: Atom,
+  enumForm: Normalization = 'NONE',
+): FieldValueParser {
   if (body.kind === 'enum') {
-    const members = body.members;
-    const memberSet = new Set(members);
+    const members = new Set(body.members);
     const isBooleanFamily =
       displayName === 'boolean' &&
-      members.length === 2 &&
-      memberSet.has('true') &&
-      memberSet.has('false');
-    const membership = `one of (${members.join(', ')})`;
+      members.size === 2 &&
+      members.has('true') &&
+      members.has('false');
+    const parser = createEnumParser(displayName, body, enumForm);
     return {
       form: isBooleanFamily ? 'boolean' : 'enum',
-      parse: (content: string) => {
-        if (!memberSet.has(content)) {
-          throw new TsonAtomValidationError(
-            displayName,
-            `'${content}' is not a member of '${displayName}' -- expected ${membership}`,
-            membership,
-          );
-        }
-        return isBooleanFamily ? content === 'true' : content;
-      },
-    };
-  }
-  if (body.kind === 'identifier_type') {
-    return {
-      form: 'string',
-      parse: (content: string) => {
-        if (!isIdentifierText(content)) {
-          throw new TsonAtomParseError(
-            displayName,
-            `'${content}' is not a well-formed identifier (§7.7)`,
-            'an identifier',
-          );
-        }
-        return content;
-      },
+      parse: (content: string) => enumValue(parser.read(tokenOf(content)), isBooleanFamily),
     };
   }
   const parser = atomParserFor(displayName, body) as
@@ -426,6 +437,7 @@ export function fieldValueParser(displayName: string, body: Atom): FieldValuePar
     form: atomFormOf(body),
     parse: (content: string) => parser.read(tokenOf(content)),
     write: (value: unknown) => parser.write(value),
+    ...(body.kind === 'identifier_type' ? { profile: identifierProfileOf(body) } : {}),
   };
 }
 
@@ -434,6 +446,7 @@ function makeAtomReader(
   form: AtomForm,
   schemaLocation: SchemaLocation,
   parse: (content: string) => unknown,
+  refuses?: (ctx: JsonReadContext, value: unknown) => boolean,
 ): AtomReader {
   return {
     isAtomReader: true,
@@ -468,7 +481,10 @@ function makeAtomReader(
         return undefined;
       }
       try {
-        return parse(content);
+        const value = parse(content);
+        // A value the processor declines under its name-hygiene policy (§8.2) has been reported,
+        // apart from §8.1's four categories, and is no value of the document.
+        return refuses?.(ctx, value) === true ? undefined : value;
       } catch (error) {
         if (error instanceof TsonAtomParseError || error instanceof TsonAtomValidationError) {
           ctx.report(diagnosticCodeForAtomError(error), error.message, error.expected, content);
@@ -563,20 +579,6 @@ export function valuePositionReader(
   };
 }
 
-/** This encoding's own reading of an identifier family: a JSON string whose content is a well-formed identifier (§7.7). */
-export function identifierReader(displayName: string, schemaLocation: SchemaLocation): AtomReader {
-  return makeAtomReader(displayName, 'string', schemaLocation, (content) => {
-    if (!isIdentifierText(content)) {
-      throw new TsonAtomParseError(
-        displayName,
-        `'${content}' is not a well-formed identifier (§7.7)`,
-        'an identifier',
-      );
-    }
-    return content;
-  });
-}
-
 // ---------------------------------------------------------------------------------------------
 // Tree mode's wrapping -- the JSON node the document carried, validated but not decoded
 // ---------------------------------------------------------------------------------------------
@@ -627,7 +629,7 @@ export function treeAtomKeyedReader(delegate: JsonTypeReader): JsonTypeReader<Id
       const before = ctx.reported();
       const value = yield* delegate.read(ctx);
       if (node === undefined || ctx.reported() > before) return undefined;
-      return { node, identity: identityOfHost(value) };
+      return { node, identity: identityOfHost(value), value };
     },
   };
 }

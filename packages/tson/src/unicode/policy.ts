@@ -1,3 +1,8 @@
+import {
+  profileSeparates,
+  restrictedCharacterViolation,
+  type IdentifierProfile,
+} from './identifier-profile.js';
 import { firstConfusableCollision } from './skeleton.js';
 import {
   DEFAULT_RESTRICTION_LEVEL,
@@ -433,4 +438,57 @@ export function processorPolicy(
   tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): ProcessorPolicy {
   return { identifierPolicy, tokenPolicy, unicodeDataVersion: UTS39_VERSION };
+}
+
+// -------------------------------------------------------------------------------------------
+// A name judged under its family's profile
+// -------------------------------------------------------------------------------------------
+
+/** One per-name rule a name failed (§8.2): which mechanism, and why -- the detail opens with the name or unit refused. */
+export interface NameViolation {
+  readonly mechanism: 'identifier-status' | 'restriction-level';
+  readonly detail: string;
+}
+
+/**
+ * §8.2's two per-name rules over `name` under `profile`: **every** rule it fails, the
+ * restricted-character rule first, or an empty list. A name may fail both, and each wants its own
+ * fix -- a character to change, a script to relax -- so each is reported under its own mechanism.
+ *
+ * A name is judged under its family's profile as well as the policy. The profile says what the
+ * name's own characters are: one it adds -- §7.7's `-`, a profile's `$` -- meets no
+ * restricted-character rule, and one it adds that is not `XID_Continue` divides the name into
+ * segments ({@link profileSeparates}). The policy is the deployment's and the profile the schema's,
+ * and neither stands in for the other: §8.2 forbids a schema to carry a policy, and a profile only
+ * ever decides what is a name. Skeleton distinctness is a relation over a scope and is judged
+ * where a scope is enumerated, not here.
+ */
+export function judgeName(
+  name: string,
+  profile: IdentifierProfile,
+  policy: NamePolicy,
+): readonly NameViolation[] {
+  const violations: NameViolation[] = [];
+  if (appliesIdentifierProfile(policy)) {
+    const detail = restrictedCharacterViolation(profile, name);
+    if (detail !== undefined) violations.push({ mechanism: 'identifier-status', detail });
+  }
+  if (
+    !satisfiesRestrictionLevel(
+      name,
+      policy.restrictionLevel,
+      policy.restrictionUnit,
+      policy.permittedScripts,
+      (codePoint) => profileSeparates(profile, codePoint),
+    )
+  ) {
+    const unit = policy.restrictionUnit === 'PER_SEGMENT' ? 'each segment of' : 'the whole of';
+    violations.push({
+      mechanism: 'restriction-level',
+      detail:
+        `'${name}' does not satisfy UTS #39 §5.2's ${policy.restrictionLevel} restriction ` +
+        `level, applied to ${unit} the name`,
+    });
+  }
+  return violations;
 }

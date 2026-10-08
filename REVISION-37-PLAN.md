@@ -395,6 +395,13 @@ the reference's tson-json diff.
   and re-runs the family checks over the closure", but neither the reference nor this port reads
   resolved output back as a schema. The change log's §6 item 4 says so for the reference. The
   family checks here run over the merged closure, ready for such a path.
+- **An enum's pinned `type` through more than one hop.** This port follows an enum entry's
+  `source` through enum refinements, and through a template's held body, to the constructor that
+  pins `type`. The Java stops at the first hop. §7.4 says a pinned `type` resolves in the governing
+  meta but does not say how far the pin is inherited.
+- **Enum members are judged as names under the default profile** in both implementations, not
+  under the label type's own profile. §7.4 says "each member is a value of" the `type`, which reads
+  as the type's own profile.
 - **Removing a group's other options leaves the member's voidability alone (§5.11 Removal).** The
   Java's `dissolveInto` sets a surviving sole member's `voidable` from the group's `optional`. The
   spec says "the field's own voidability is unchanged", and this port follows the spec.
