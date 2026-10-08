@@ -164,16 +164,17 @@ in conversation rather than silently picking.
   where the Java is deliberately stricter than the JDK; read it before writing any atom parser, since
   those checks are the behaviour, not the JDK's.
 
-- Resolved-output writing cannot name the applied constructor. §8.1 says a closed definition's
-  body is "a binding record headed by the applied constructor", and `spec/m/*-resolved.tn` writes
-  `enum_set`'s body as `!set_type { element_type: text  min_items: 1 }`. Both this port and the reference write
-  `!array { … unordered: true unique_items: true }`: `set_type` is a refinement of `array` sharing
-  its shape, so the applied name is not recoverable from the value being written, though it is recorded
-  one level up in the same entry's `source`. The reference's own fixture test cannot see this — it
-  binds the fixture into the value model and compares `TypeDefinition` objects, where both forms
-  arrive as one `ArrayBody`. This port compares written form and does see it. Worth reporting
-  upstream as a §8.1 conformance gap in both implementations, or as a modelling gap in the resolved
-  value model, depending on which side the spec means to fix.
+- Resolved-output writing names the applied constructor from the entry's `source`. §8.1 says a
+  closed definition's body is "a binding record headed by the applied constructor", and
+  `spec/m/*-resolved.tn` writes `enum_set`'s body as `!set_type { element_type: text  min_items: 1 }`.
+  `set_type` restates `array`'s fields and adds none, and `enum`, `text_enum` and `enum_type` share one
+  body shape, so the head cannot be recovered from the body: it is the constructor recorded in the
+  same entry's `source`, never a guess from the body's shape. A body with no `source` is written under
+  its base constructor (`array`, `enum_type`). A field the head pins (`set_type`'s `ordered`, `enum`'s
+  `type`, a FIXED `spec`) is left out at its pinned value. The Java still writes `!array { … }` here,
+  and its fixture test cannot see it, since it binds the fixture into the value model and compares
+  `TypeDefinition` objects where both forms arrive as one `ArrayBody`. This port compares written form.
+  Worth reporting upstream as a §8.1 conformance gap in the Java.
 
 - **Name hygiene is policy, not validity** (§8.2, and §11.4 for the schema-layer scopes). The three
   UTS #39 mechanisms — skeleton distinctness, `Identifier_Status`, restriction level — are

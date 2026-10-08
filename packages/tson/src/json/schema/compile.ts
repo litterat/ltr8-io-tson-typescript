@@ -237,32 +237,24 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
     const constructorBody = nonData;
 
     switch (constructorBody.kind) {
-      case 'unit':
-        switch (name) {
-          case 'void':
-            return withAnnotationObject(name, linkedSchema.entries, voidReader(name, location));
-          case 'value':
-            // Tree-mode-wrapped like every other atom position, so a `value`-typed record field
-            // or container element stores the `JsonValue` node this package's containers expect
-            // rather than the bare host scalar `valuePositionReader` itself produces (its own
-            // classification is still what validates the position -- `treeAtomReader` discards
-            // the classified value and keeps the node, exactly as it does for every other atom).
-            return withAnnotationObject(
-              name,
-              linkedSchema.entries,
-              treeAtomReader(valuePositionReader(name, location)),
-            );
-          case 'identifier': {
-            const raw = identifierReader(name, location);
-            atomReaders.set(name, raw);
-            return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
-          }
-          default:
-            return notImplementedReader(
-              name,
-              "a 'unit' instance with no content grammar of its own",
-            );
-        }
+      case 'void_type':
+        return withAnnotationObject(name, linkedSchema.entries, voidReader(name, location));
+      case 'value_type':
+        // Tree-mode-wrapped like every other atom position, so a `value`-typed record field
+        // or container element stores the `JsonValue` node this package's containers expect
+        // rather than the bare host scalar `valuePositionReader` itself produces (its own
+        // classification is still what validates the position -- `treeAtomReader` discards
+        // the classified value and keeps the node, exactly as it does for every other atom).
+        return withAnnotationObject(
+          name,
+          linkedSchema.entries,
+          treeAtomReader(valuePositionReader(name, location)),
+        );
+      case 'identifier_type': {
+        const raw = identifierReader(name, location);
+        atomReaders.set(name, raw);
+        return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
+      }
       case 'enum': {
         const raw = enumReader(name, constructorBody, location);
         atomReaders.set(name, raw);
@@ -270,7 +262,7 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
       }
       case 'record':
         if (constructorBody.extension === 'ABSTRACT') {
-          return constructorBody.discriminators.length > 0
+          return constructorBody.discriminators !== undefined
             ? buildMemberDispatcher({
                 name,
                 displayName: name,

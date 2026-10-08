@@ -63,6 +63,7 @@ const CATALOG_SCHEMA = `
 !!import:"${CORE_ID}"
 {
   reading => { id: uuid label: non_empty_text }
+  non_empty_text => !text ^ { min_length: 1 }
 }
 `;
 
@@ -106,7 +107,7 @@ describe('createTson: registry primitives', () => {
     const kernel = linkSchema(bootstrapMetaKernel(KERNEL_BYTES));
     expect(kernel.id).toBe(KERNEL_ID);
     tson.register(kernel);
-    expect(tson.schemas.get('tson.io/2026/36/m/meta-kernel.tn')).toBe(kernel);
+    expect(tson.schemas.get('tson.io/2026/37/m/meta-kernel.tn')).toBe(kernel);
   });
 
   it('resolveSchema refuses a schema whose governing !!meta is not registered', () => {
@@ -119,7 +120,7 @@ describe('createTson: registry primitives', () => {
     tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
     const meta = tson.resolveSchema(META_BYTES);
     expect(meta.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/36/m/meta.tn')).toBe(meta);
+    expect(tson.schemas.get('tson.io/2026/37/m/meta.tn')).toBe(meta);
 
     const core = tson.resolveSchema(CORE_BYTES);
     expect(core.id).toBe(CORE_ID);
@@ -182,8 +183,8 @@ describe('createTson: preload against a configured schemaSource', () => {
 
     await tson.preload([META_ID, CORE_ID]);
 
-    expect(tson.schemas.get('tson.io/2026/36/m/meta.tn')?.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/36/m/core.tn')?.id).toBe(CORE_ID);
+    expect(tson.schemas.get('tson.io/2026/37/m/meta.tn')?.id).toBe(META_ID);
+    expect(tson.schemas.get('tson.io/2026/37/m/core.tn')?.id).toBe(CORE_ID);
 
     // Idempotent: a second preload of the same references touches the source again but adds
     // nothing new and does not throw (already registered, so resolution is skipped entirely).

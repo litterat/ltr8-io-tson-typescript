@@ -14,11 +14,11 @@
  * ```text
  * [T]              !array { element_type: T }
  * [T; N..M]        !array { element_type: T  min_items: N  max_items: M }
- * [T?; ...]        the corresponding form with state: OPTIONAL bound directly
+ * [T?; ...]        the corresponding form with voidable: true bound directly
  * [T, U]           !tuple { elements: [{ element_type: T } { element_type: U }] }
  * (A | B)          !choice { variants: [A B] }
  * {K => V}         !map   { key_type: K  value_type: V }
- * {K => V?}        !map   { key_type: K  value_type: V  state: OPTIONAL }
+ * {K => V?}        !map   { key_type: K  value_type: V  voidable: true }
  * {K => V; N..M}   the same, with min_items/max_items
  * { x: T }         !record { fields: [{ name: x  type: T }] } -- only inside a *template* (§5.2);
  *                  a non-template record body stays a plain record definition
@@ -84,21 +84,21 @@ import type { ElementType, GenericRef, TypeArg, TypeRef } from '../ast/schema/ty
 import type { CoreValue, RecordField, RecordValue, ScopedValue } from '../ast/value.js';
 import { canonicalBinding, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
+import { groupMembers, lowerGroup } from './groupLowering.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import {
   ARGUMENTS,
   DISCRIMINATORS,
   FIELDS,
   GROUPS,
-  MEMBERS,
   NAME,
   OPTIONAL,
   RECORD,
   ROLE,
-  STATE,
   TYPE,
   VALUE,
   VOIDABLE,
+  groupValue,
   nameField,
   scoped,
   tokenValue,
@@ -291,6 +291,9 @@ function desugarOrReport(declaration: Declaration, context: DesugarContext): Dec
       name: declaration.name,
       typeDefAnnotations: declaration.typeDefAnnotations,
       typeDef: absorbed(declaration),
+      ...(declaration.parameterTypes === undefined
+        ? {}
+        : { parameterTypes: declaration.parameterTypes }),
     };
   }
 }
@@ -436,8 +439,11 @@ function recordEntryPass(entry: RecordEntry, context: DesugarContext): RecordEnt
   if (entry.kind === 'fieldDef') {
     return fieldDefPass(entry, context);
   }
-  const members = mapShared(entry.members, (member) => groupMemberPass(member, context));
-  return members === entry.members ? entry : { ...entry, members: members as GroupDef['members'] };
+  const options = mapShared(entry.options, (option) => {
+    const members = mapShared(option, (member) => groupMemberPass(member, context));
+    return members === option ? option : (members as GroupDef['options'][number]);
+  });
+  return options === entry.options ? entry : { ...entry, options };
 }
 
 function fieldDefPass(field: FieldDef, context: DesugarContext): FieldDef {
@@ -563,7 +569,7 @@ function bindingOf(ref: TypeRef, context: DesugarContext): Binding | undefined {
     case 'arrayRef':
       return arrayBinding(
         elementRefOf(ref.elementType, context),
-        ref.elementType.optional,
+        ref.elementType.voidable,
         ref.size,
         shownElement(ref.elementType),
       );
@@ -571,14 +577,14 @@ function bindingOf(ref: TypeRef, context: DesugarContext): Binding | undefined {
       return mapBinding(
         typeRefPass(ref.keyType, context),
         elementRefOf(ref.valueType, context),
-        ref.valueType.optional,
+        ref.valueType.voidable,
         ref.size,
       );
     case 'tupleRef':
       return tupleBinding(
         ref.elementTypes.map((element) => ({
           typeRef: elementRefOf(element, context),
-          optional: element.optional,
+          voidable: element.voidable,
         })),
       );
     case 'choiceRef':
@@ -588,10 +594,10 @@ function bindingOf(ref: TypeRef, context: DesugarContext): Binding | undefined {
   }
 }
 
-/** One position of a tuple after expansion: the type it names, and whether it is marked OPTIONAL. */
+/** One position of a tuple after expansion: the type it names, and whether it is marked voidable. */
 interface TuplePosition {
   readonly typeRef: TypeRef;
-  readonly optional: boolean;
+  readonly voidable: boolean;
 }
 
 /**
@@ -604,16 +610,16 @@ function isReference(ref: TypeRef): boolean {
 }
 
 /**
- * `!array { element_type: T [state: OPTIONAL] [min_items: N] [max_items: M] }` — the whole array
+ * `!array { element_type: T [voidable: true] [min_items: N] [max_items: M] }` — the whole array
  * row of the desugar table, the unsized and sized spellings alike.
  *
- * The element `?` binds `state` directly, alongside the bounds rather than through them: §5.3's
- * `[T?; 3]` states both at once and both land on the one record. An unmarked element states
- * nothing at all and lets §5.2's REQUIRED default supply it.
+ * The element `?` binds `voidable` directly, alongside the bounds rather than through them:
+ * §5.3's `[T?; 3]` states both at once and both land on the one record. An unmarked element states
+ * nothing at all and lets the kernel's `voidable ~ false` default supply it.
  */
 function arrayBinding(
   element: TypeRef,
-  optional: boolean,
+  voidable: boolean,
   size: SizeSpec | undefined,
   shown: string,
 ): Binding | undefined {
@@ -623,8 +629,8 @@ function arrayBinding(
   const fields: RecordField[] = [];
   const applicationSlots = new Map<string, TypeRef>();
   refSlot(ELEMENT_TYPE, element, fields, applicationSlots);
-  if (optional) {
-    fields.push(nameField(STATE, 'OPTIONAL'));
+  if (voidable) {
+    fields.push(nameField(VOIDABLE, 'true'));
   }
   if (size !== undefined) {
     fields.push(...sizeFields(size, `[${shown}; 0..]`));
@@ -634,15 +640,15 @@ function arrayBinding(
 }
 
 /**
- * `!map { key_type: K  value_type: V [state: OPTIONAL] [min_items: N] [max_items: M] }` — the map
- * row. `state` governs the entry value, as `array`'s governs the element: `{K => V?}` binds
- * `OPTIONAL` and admits the absent sentinel there (§5.3, §7.6). The key side carries none — an
- * absent key is already a Part 1 resolver error.
+ * `!map { key_type: K  value_type: V [voidable: true] [min_items: N] [max_items: M] }` — the map
+ * row. `voidable` governs the entry value, as `array`'s governs the element: `{K => V?}`
+ * binds `voidable: true` and admits the void sentinel there (§5.3, §7.6). The key side carries
+ * none — a void key is already a Part 1 resolver error.
  */
 function mapBinding(
   key: TypeRef,
   value: TypeRef,
-  valueOptional: boolean,
+  valueVoidable: boolean,
   size: SizeSpec | undefined,
 ): Binding | undefined {
   if (!isReference(key) || !isReference(value)) {
@@ -652,8 +658,8 @@ function mapBinding(
   const applicationSlots = new Map<string, TypeRef>();
   refSlot(KEY_TYPE, key, fields, applicationSlots);
   refSlot(VALUE_TYPE, value, fields, applicationSlots);
-  if (valueOptional) {
-    fields.push(nameField(STATE, 'OPTIONAL'));
+  if (valueVoidable) {
+    fields.push(nameField(VOIDABLE, 'true'));
   }
   if (size !== undefined) {
     fields.push(...sizeFields(size, `{${shownRef(key)} => ${shownRef(value)}; 0..}`));
@@ -688,8 +694,8 @@ function tupleBinding(positions: readonly TuplePosition[]): Binding {
     const members: RecordField[] = [
       { name: ELEMENT_TYPE, value: scoped(refValueOf(position.typeRef)) },
     ];
-    if (position.optional) {
-      members.push(nameField(STATE, 'OPTIONAL'));
+    if (position.voidable) {
+      members.push(nameField(VOIDABLE, 'true'));
     }
     return scoped(recordValue(members));
   });
@@ -725,7 +731,7 @@ function choiceBinding(variants: readonly TypeRef[]): Binding {
  *
  * **Only what the author wrote is written.** A field's unmarked `optional: false`/`voidable:
  * false`/`role: FREE` is the `record_field` constructor's own default, so it is never stated —
- * the same economy {@link arrayBinding} makes with an unmarked element's `state`.
+ * the same economy {@link arrayBinding} makes with an unmarked element's `voidable`.
  */
 function recordBinding(record: RecordDef, parameters: readonly string[]): Binding {
   const fields: ScopedValue[] = [];
@@ -740,16 +746,15 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
       if (field.selector) discriminators.push(entry.name);
       continue;
     }
-    const members: ScopedValue[] = [];
-    for (const member of entry.members) {
+    for (const member of groupMembers(entry)) {
       requireFieldNameUnseen(
         member.name,
         seen,
         "a group member repeats it -- member labels share the enclosing record's field namespace",
       );
       // A group's members lower to ordinary fields with `optional: true` (plus `voidable` for a
-      // `T?` member); the group itself records only their names and its own state (§5.11,
-      // `spec/m/meta-kernel-resolved.tn`).
+      // `T?` member); the group itself records only their names, which are optional within their
+      // option, and whether it is optional (§5.11, `spec/m/meta-kernel-resolved.tn`).
       const memberFields: RecordField[] = [
         nameField(NAME, member.name),
         { name: TYPE, value: scoped(refValueOf(member.typeRef)) },
@@ -759,13 +764,8 @@ function recordBinding(record: RecordDef, parameters: readonly string[]): Bindin
         memberFields.push(nameField(VOIDABLE, 'true'));
       }
       fields.push(scoped(recordValue(memberFields), member.annotations));
-      members.push(scoped(tokenValue(member.name, 'unquoted')));
     }
-    const groupFields: RecordField[] = [{ name: MEMBERS, value: scoped(arrayValue(members)) }];
-    if (entry.optional) {
-      groupFields.push(nameField(STATE, 'OPTIONAL'));
-    }
-    groups.push(scoped(recordValue(groupFields), entry.annotations));
+    groups.push(groupValue(lowerGroup(entry), entry.annotations));
   }
   const binding: RecordField[] = [{ name: FIELDS, value: scoped(arrayValue(fields)) }];
   if (groups.length > 0) {

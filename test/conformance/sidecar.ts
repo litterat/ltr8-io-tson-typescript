@@ -336,7 +336,7 @@ function tokenText(dv: DataValue, what: string): string {
   return core.text;
 }
 
-/** Whether `dv`'s core-value is the absent sentinel `_`. */
+/** Whether `dv`'s core-value is the void sentinel `_`. */
 function isAbsent(dv: DataValue): boolean {
   return dv.coreValue.kind === 'absent';
 }
@@ -368,7 +368,7 @@ function boolText(dv: DataValue, what: string): boolean {
 }
 
 /**
- * A REQUIRED field group (§5.11): exactly one of `candidates` is present among `fields`, and its
+ * A field group that must be chosen (§5.11): exactly one of `candidates` is present among `fields`, and its
  * name *is* the thing the group states (an outcome, a core-value kind, a base-value kind, …).
  * Every group in these five schemas reduces through this one function.
  */
@@ -1047,7 +1047,7 @@ export function parseLinkSidecar(raw: Uint8Array): LinkSidecar {
 // ── Class 2: validate layer (`schemas/validate-sidecar.tn`) ─────────────────────────────────
 
 export interface ValidateSidecar extends CommonSidecarFields {
-  readonly outcome: 'valid' | 'error';
+  readonly outcome: 'valid' | 'error' | 'refused';
   /** Present iff `outcome === 'error'`. */
   readonly category?: Category;
   /**
@@ -1055,15 +1055,20 @@ export interface ValidateSidecar extends CommonSidecarFields {
    * pointer) is a stated claim, distinct from omission -- see `validate-sidecar.tn`'s own doc.
    */
   readonly path?: string;
+  /** Present iff `outcome === 'refused'` -- §8.1's fifth outcome, distinct from `error`. */
+  readonly refused?: ExpectedRefusal;
 }
 
 /** Parses a class2/validate-layer sidecar (`schemas/validate-sidecar.tn`). `valid` carries nothing (written `_`). */
 export function parseValidateSidecar(raw: Uint8Array): ValidateSidecar {
   const fields = parseSidecarBody(raw);
   const common = toCommonFields(fields);
-  const { outcome, payload } = outcomeMember(fields, ['valid', 'error']);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error', 'refused']);
   if (outcome === 'valid') {
     return { ...common, outcome };
+  }
+  if (outcome === 'refused') {
+    return { ...common, outcome, refused: toExpectedRefusal(payload, 'validate sidecar.refused') };
   }
   const payloadFields = recordFields(payload, 'validate sidecar.error');
   const path = optionalText(payloadFields, 'path');
@@ -1106,7 +1111,7 @@ export interface SidecarSummary {
  * applies here too); it just doesn't reduce the layer-specific payload.
  *
  * Presence, not group membership, decides the outcome: at every layer but the resolver's,
- * `valid`/`error`/`schema-document` is a REQUIRED field group and exactly one is present; at the
+ * `valid`/`error`/`schema-document` is a field group that must be chosen and exactly one is present; at the
  * resolver layer `valid` is a plain REQUIRED field (`parseResolverSidecar`'s own note) and the
  * other two never occur at all. A direct presence check is correct either way.
  */

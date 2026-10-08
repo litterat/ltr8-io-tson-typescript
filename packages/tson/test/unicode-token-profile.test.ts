@@ -25,7 +25,7 @@ describe('isUnquotedTokenStart (§7.1)', () => {
 
   it('rejects underscore, reserved to the absent sentinel at token-initial position', () => {
     // §7.1: "Underscore (U+005F) is in XID_Continue but not XID_Start ... Token-initial
-    // underscore is reserved to the format and occupied by the absent sentinel _."
+    // underscore is reserved to the format and occupied by the void sentinel _."
     expect(isUnquotedTokenStart(0x5f)).toBe(false);
   });
 

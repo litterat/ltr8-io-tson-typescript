@@ -7,7 +7,7 @@ import {
 import { createHeldBody } from '../src/compiler/heldBody.js';
 import { heldRecord, refValue } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
-import { inferAll } from '../src/compiler/parameterKinds.js';
+import { inferAll, kinds as parameterKindsOf } from '../src/compiler/parameterTypes.js';
 import {
   TsonLimitRefusedError,
   TsonNotImplementedError,
@@ -141,7 +141,6 @@ function testMetaReader(type: string, value: DataValue): Top {
       fields,
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     };
     return body;
   }
@@ -150,8 +149,8 @@ function testMetaReader(type: string, value: DataValue): Top {
     return {
       kind: 'array',
       elementType,
-      state: 'REQUIRED',
-      unordered: false,
+      voidable: false,
+      ordered: true,
       uniqueItems: false,
     };
   }
@@ -219,7 +218,7 @@ function stubConstructor(name: string): TypeDefinition | undefined {
         ? ['sum', 'top']
         : name === 'data'
           ? ['data', 'top']
-          : name === 'unit' || name === 'enum' || name.endsWith('_type')
+          : name === 'enum' || name.endsWith('_type')
             ? ['atom', 'top']
             : name === 'reference' || name === 'template'
               ? ['top']
@@ -234,7 +233,6 @@ function stubConstructor(name: string): TypeDefinition | undefined {
       fields: [],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     },
     annotations: [],
   };
@@ -264,7 +262,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -292,7 +289,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -322,7 +318,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('n', { name: 'integer', arguments: [], annotations: [] })],
       }),
     );
@@ -357,7 +352,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         fields: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
       },
       annotations: [],
     });
@@ -374,7 +368,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -407,7 +400,6 @@ describe('a record template closes to the instantiation entry itself', () => {
       fields: [],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     };
     namespace.set('uuid_refined', {
       supertypes: ['uuid', 'atom', 'top'],
@@ -428,7 +420,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -454,7 +445,6 @@ describe('a record template closes to the instantiation entry itself', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );
@@ -616,7 +606,6 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [
           field('first', { name: 'A', arguments: [], annotations: [] }),
           field('second', { name: 'B', arguments: [], annotations: [] }),
@@ -835,7 +824,6 @@ describe('recursion (§5.10)', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [
           field('value', { name: 'T', arguments: [], annotations: [] }),
           field('child', {
@@ -868,7 +856,6 @@ describe('recursion (§5.10)', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'X', arguments: [], annotations: [] })],
       }),
     );
@@ -879,7 +866,6 @@ describe('recursion (§5.10)', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [
           field('next', {
             name: 'grow',
@@ -925,7 +911,6 @@ describe('declaration-time checks (§5.10)', () => {
         fields: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
       },
       annotations: [],
     });
@@ -945,7 +930,6 @@ describe('declaration-time checks (§5.10)', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [
           field('first', { name: 'A', arguments: [], annotations: [] }),
           field('second', { name: 'B', arguments: [], annotations: [] }),
@@ -1090,7 +1074,6 @@ describe('materialise (the whole-schema batch pass)', () => {
       supertypes: [],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
       fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
     });
   }
@@ -1271,7 +1254,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         members.push((element.value.coreValue as TokenValue).text);
       }
     }
-    return { kind: 'enum', members, profile: 'IDENTIFIER' } satisfies EnumBody;
+    return { kind: 'enum', members, type: 'identifier' } satisfies EnumBody;
   }
 
   /** Just enough of the governing meta's own vocabulary for `enum.members` to resolve to a set of `identifier`. */
@@ -1285,7 +1268,6 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: fields.map((f) => field(f.name, { name: f.type, arguments: [], annotations: [] })),
       },
       annotations: [],
@@ -1300,8 +1282,8 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
           body: {
             kind: 'array',
             elementType: { name: 'identifier', arguments: [], annotations: [] },
-            state: 'REQUIRED',
-            unordered: false,
+            voidable: false,
+            ordered: true,
             uniqueItems: false,
           },
           annotations: [],
@@ -1312,7 +1294,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         {
           supertypes: ['atom', 'top'],
           subtypes: [],
-          body: { kind: 'unit' },
+          body: { kind: 'text_type', normalization: 'NONE' },
           annotations: [],
         },
       ],
@@ -1353,11 +1335,13 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
     });
     namespace.set('e', enumTemplate());
     materialiser.setParameterKinds(
-      inferAll(namespace, new Set(namespace.keys()), metaTypesFor(), {
-        report(name): void {
-          throw new Error(`unexpected report for '${name}'`);
-        },
-      }),
+      parameterKindsOf(
+        inferAll(namespace, new Set(namespace.keys()), new Map(), metaTypesFor(), {
+          report(name): void {
+            throw new Error(`unexpected report for '${name}'`);
+          },
+        }),
+      ),
     );
     const name = materialiser.closeApplication({
       name: 'e',
@@ -1424,7 +1408,6 @@ describe('closedFormName', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
       }),
     );

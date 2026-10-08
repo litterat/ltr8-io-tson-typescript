@@ -207,11 +207,11 @@ describe('the array sugar ([T] and the sized forms, §5.3)', () => {
     ).toBe('3');
   });
 
-  it('states state: OPTIONAL only for a marked element, letting the default supply REQUIRED', () => {
-    expect(tokenText(requiredField(instanceOf(desugarDoc('a => [text?]'), 'a'), 'state'))).toBe(
-      'OPTIONAL',
+  it('states voidable: true only for a marked element, letting the default supply false (§5.3)', () => {
+    expect(tokenText(requiredField(instanceOf(desugarDoc('a => [text?]'), 'a'), 'voidable'))).toBe(
+      'true',
     );
-    expect(optionalField(instanceOf(desugarDoc('a => [text]'), 'a'), 'state')).toBeUndefined();
+    expect(optionalField(instanceOf(desugarDoc('a => [text]'), 'a'), 'voidable')).toBeUndefined();
   });
 
   it('rejects an incoherent size range (min > max), §5.3', () => {
@@ -248,11 +248,11 @@ describe('the map sugar ({K => V}, §5.3)', () => {
     expect(document.body.declarations.size).toBe(1);
   });
 
-  it('takes the same size specifier as an array, binding neither side a state', () => {
+  it('takes the same size specifier as an array, binding neither side voidable', () => {
     const instance = instanceOf(desugarDoc('bounded => {text => integer; 1..5}'), 'bounded');
     expect(tokenText(requiredField(instance, 'min_items'))).toBe('1');
     expect(tokenText(requiredField(instance, 'max_items'))).toBe('5');
-    expect(optionalField(instance, 'state')).toBeUndefined();
+    expect(optionalField(instance, 'voidable')).toBeUndefined();
   });
 
   it('rejects an incoherent size range the same way an array does', () => {
@@ -274,12 +274,12 @@ describe('the tuple sugar ([T, U], §5.3)', () => {
     expect(firstFieldType(document, 'holder')).toBe(injected.name);
   });
 
-  it("marks only an optional position's state, leaving a required one to the default", () => {
+  it('marks only a voidable position as voidable, leaving the other to the default (§5.3)', () => {
     const instance = instanceOf(desugarDoc('pair => [integer?, text]'), 'pair');
     const elements = requiredField(instance, 'elements');
     const first = elementAt(elements, 0);
     const second = elementAt(elements, 1);
-    expect(fieldNames(first)).toEqual(['element_type', 'state']);
+    expect(fieldNames(first)).toEqual(['element_type', 'voidable']);
     expect(fieldNames(second)).toEqual(['element_type']);
   });
 });
@@ -396,10 +396,47 @@ describe("a template's bare record body (§5.2)", () => {
     );
   });
 
-  it('folds a field group into ordinary OPTIONAL fields plus a group entry', () => {
+  it('folds a field group into ordinary optional fields plus a group entry (§5.11)', () => {
     const instance = instanceOf(desugarDoc('box => <T> { (a: T | b: text) }'), 'box');
     expect(arrayElements(requiredField(instance, 'fields'))).toHaveLength(2);
     expect(arrayElements(requiredField(instance, 'groups'))).toHaveLength(1);
+  });
+
+  /** The `index`th group of `box => <T> { ... }`'s held `groups`, as the wire record it is written as. */
+  function groupOf(source: string, index = 0): CoreValue {
+    return elementAt(requiredField(instanceOf(desugarDoc(source), 'box'), 'groups'), index);
+  }
+
+  function present(value: CoreValue | undefined): CoreValue {
+    if (value === undefined) throw new Error('expected the field to be present');
+    return value;
+  }
+
+  /** The tokens of an array-of-names core value, as text. */
+  function names(value: CoreValue | undefined): string[] {
+    if (value === undefined) throw new Error('expected a list of names');
+    return arrayElements(value).map((element) => tokenText(element.value.coreValue));
+  }
+
+  it('writes a group as its options, the members marked optional within them, and its own mark (§5.11)', () => {
+    const plain = groupOf('box => <T> { (a: T  b?: text | c: text) }');
+    expect(fieldNames(plain)).toEqual(['members', 'optional_members']);
+    const options = namedField(plain, 'members');
+    expect(options === undefined ? [] : arrayElements(options)).toHaveLength(2);
+    expect(names(namedField(plain, 'optional_members'))).toEqual(['b']);
+
+    const optional = groupOf('box => <T> { (a: T | b: text)? }');
+    expect(fieldNames(optional)).toEqual(['members', 'optional']);
+    expect(tokenText(present(namedField(optional, 'optional')))).toBe('true');
+  });
+
+  it('lowers "+" to one option holding every member, each marked optional, on a group that is not optional (§5.11)', () => {
+    const group = groupOf('box => <T> { (a: T | b: text)+ }');
+    const options = namedField(group, 'members');
+    expect(options === undefined ? [] : arrayElements(options)).toHaveLength(1);
+    expect(names(elementAt(present(options), 0))).toEqual(['a', 'b']);
+    expect(names(namedField(group, 'optional_members'))).toEqual(['a', 'b']);
+    expect(namedField(group, 'optional')).toBeUndefined();
   });
 });
 

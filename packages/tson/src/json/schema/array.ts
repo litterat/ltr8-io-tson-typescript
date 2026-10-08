@@ -1,12 +1,12 @@
 /**
  * Arrays and sets as a JSON array ([TSON-JSON] §6.2): elements at the element type's own reader,
- * in order, an element-optional array (`[T?]`) admitting JSON null at any slot as the absent
+ * in order, a voidable-element array (`[T?]`) admitting JSON null at any slot as the void
  * element — the slot exists and counts ([TSON-DATA] §2.9) — and a set's duplicates judged on the
  * element's own value identity ([TSON-SCHEMA] §7.5), never on its spelling. Size facets validate
  * the slot count.
  *
  * A set-typed position shares this exact reader: `schema/meta/bodies.ts`'s own `ArrayBody` backs
- * both `array` and `set` (a refinement of `array`, never a shape of its own), and `unordered`/
+ * both `array` and `set` (a refinement of `array`, never a shape of its own), and `ordered`/
  * `uniqueItems` are what tell them apart.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
@@ -29,7 +29,7 @@ export function buildArrayReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader<JsonValue> {
-  const optionalElements = body.state === 'OPTIONAL';
+  const optionalElements = body.voidable;
   const unique = body.uniqueItems;
   const minItems = body.minItems;
   const maxItems = body.maxItems;

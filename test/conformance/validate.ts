@@ -13,7 +13,11 @@ import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
 import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
 import { parseDocument } from '../../packages/tson/src/compiler/dataParser.js';
 import type { Diagnostic, DiagnosticCode } from '../../packages/tson/src/core/diagnostic.js';
-import { isVerdict } from '../../packages/tson/src/core/diagnostic.js';
+import {
+  diagnosticCodeForMechanism,
+  isNameRefusal,
+  isVerdict,
+} from '../../packages/tson/src/core/diagnostic.js';
 
 import { resolveBundledSchemaId } from './bundled-ids.js';
 import { newClass2Tson } from './class2Tson.js';
@@ -42,13 +46,6 @@ const RESOLVER_CODES: ReadonlySet<DiagnosticCode> = new Set([
   'ATOM_FORM_INVALID',
 ] satisfies DiagnosticCode[]);
 
-/** §8.2's three name-hygiene codes -- never one of §8.1's four categories (RUNNER.md rule 3d). */
-const REFUSAL_CODES: ReadonlySet<DiagnosticCode> = new Set([
-  'CONFUSABLE_NAMES',
-  'RESTRICTED_CHARACTER',
-  'RESTRICTED_SCRIPT',
-] satisfies DiagnosticCode[]);
-
 /**
  * `diagnostic`'s §8.1 category, per the mapping the Java reference implementation's own
  * `Class2ConformanceSuiteTest.categoryOf` states -- and, per RUNNER.md rule 3c, a hard failure
@@ -62,7 +59,7 @@ function categoryOf(vector: Vector<Class2Layer>, diagnostic: Diagnostic): Catego
         `(it says this could not be checked, not that it is invalid): ${diagnostic.message}`,
     );
   }
-  if (REFUSAL_CODES.has(diagnostic.code)) {
+  if (isNameRefusal(diagnostic.code)) {
     throw new Error(
       `${vector.name}: §8.2 name hygiene ('${diagnostic.code}') is a policy refusal, which §8.1 ` +
         `says MUST NOT be reported in any of the four categories: ${diagnostic.message}`,
@@ -93,7 +90,7 @@ export function checkValidateVector(
   if (sidecar.schema === undefined) {
     throw new Error(`${vector.name}: a class2/validate vector must name its governing schema`);
   }
-  const tson = newClass2Tson();
+  const tson = newClass2Tson(subject);
   const schemaId = resolveBundledSchemaId(sidecar.schema);
   const linked = tson.schemas.get(canonicalizeIdentity(schemaId));
   if (linked === undefined) {
@@ -106,6 +103,34 @@ export function checkValidateVector(
   const result = tson.validate(subject, { schema: compiled, root });
 
   switch (sidecar.outcome) {
+    case 'refused': {
+      // RUNNER.md rule 3d: both halves -- something was refused, under the mechanism the vector
+      // names, and nothing was also reported under one of §8.1's four categories.
+      if (sidecar.refused === undefined) {
+        throw new Error(
+          `${vector.name}: a 'refused' class2/validate vector must declare its mechanism`,
+        );
+      }
+      const expected = diagnosticCodeForMechanism(sidecar.refused.mechanism);
+      if (!result.diagnostics.some((d) => d.code === expected)) {
+        throw new Error(
+          `${vector.name}: expected a ${expected} refusal; got ` +
+            (result.diagnostics.length === 0
+              ? 'no diagnostics'
+              : result.diagnostics.map((d) => d.code).join(', ')),
+        );
+      }
+      const categorised = result.diagnostics.filter(
+        (d) => isVerdict(d.code) && !isNameRefusal(d.code),
+      );
+      if (categorised.length > 0) {
+        throw new Error(
+          `${vector.name}: a refusal must not also be reported in one of §8.1's four categories; ` +
+            `got ${categorised.map((d) => `${d.code} ${d.message}`).join('; ')}`,
+        );
+      }
+      return;
+    }
     case 'valid':
       if (result.diagnostics.length !== 0) {
         throw new Error(

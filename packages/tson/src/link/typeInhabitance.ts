@@ -29,9 +29,9 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { terminal } from './referenceChain.js';
+import { resolvesToConstructor } from './referenceChain.js';
 import { isDataBody } from './bodyKind.js';
-import type { RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
+import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ function isInhabited(
       return recordInhabited(body, namespace, inhabited);
     case 'array':
       return (
-        body.state === 'OPTIONAL' ||
+        body.voidable ||
         isEmptyAllowed(body.minItems) ||
         refInhabited(body.elementType, namespace, inhabited)
       );
@@ -180,13 +180,14 @@ function isInhabited(
 }
 
 /**
- * A record needs every part it cannot do without, and one member of every group it must choose
- * from.
+ * A record needs every part it cannot do without, and one satisfiable option of every group it
+ * must choose from (§5.10.1).
  *
  * **The groups are walked separately because their members hide from the field walk**: §5.11
- * makes a group's members uniformly OPTIONAL in `fields`, with the requirement carried by the
- * group's own state. Reading only the field list would find nothing required and call every
- * group satisfied.
+ * makes a group's members uniformly optional in `fields`, with the requirement carried by the
+ * group itself. Reading only the field list would find nothing required and call every group
+ * satisfied. A group that is not optional is satisfied by any option whose unmarked members are
+ * all inhabited — a member marked `?` within its option is not demanded once the option is chosen.
  */
 function recordInhabited(
   record: RecordBody,
@@ -195,7 +196,7 @@ function recordInhabited(
 ): boolean {
   const grouped = new Set<string>();
   for (const group of record.groups) {
-    for (const member of group.members) grouped.add(member);
+    for (const member of group.members.flat()) grouped.add(member);
   }
   for (const field of record.fields) {
     if (grouped.has(field.name) || isOptionalField(field)) {
@@ -215,19 +216,39 @@ function recordInhabited(
     }
   }
   for (const group of record.groups) {
-    if (group.state !== 'REQUIRED') {
+    if (group.optional) {
       continue;
     }
-    const any = group.members.some((member) =>
-      record.fields.some(
-        (field) => field.name === member && refInhabited(field.type, namespace, inhabited),
-      ),
+    const any = group.members.some(
+      (option) => unsatisfiedMember(record, group, option, namespace, inhabited) === undefined,
     );
     if (!any) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * The type name of the first member of `option` that chosen would leave unsatisfied — a member
+ * the option demands (not named by the group's `optionalMembers`) whose field is missing or whose
+ * type nothing inhabits — or `undefined` when choosing `option` is satisfiable (§5.10.1).
+ */
+function unsatisfiedMember(
+  record: RecordBody,
+  group: FieldGroup,
+  option: readonly string[],
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  inhabited: ReadonlySet<string>,
+): string | undefined {
+  const optionalMembers = group.optionalMembers ?? [];
+  for (const member of option) {
+    if (optionalMembers.includes(member)) continue;
+    const field = record.fields.find((f) => f.name === member);
+    if (field === undefined) return member;
+    if (!refInhabited(field.type, namespace, inhabited)) return field.type.name;
+  }
+  return undefined;
 }
 
 /**
@@ -246,7 +267,7 @@ function positionInhabited(
   namespace: ReadonlyMap<string, TypeDefinition>,
   inhabited: ReadonlySet<string>,
 ): boolean {
-  return element.state === 'OPTIONAL' || refInhabited(element.elementType, namespace, inhabited);
+  return element.voidable || refInhabited(element.elementType, namespace, inhabited);
 }
 
 /**
@@ -277,11 +298,11 @@ function refInhabited(
  * `void` -- what a required, non-voidable field's own `a: void` refusal (§5.10.1, §5.2) must ask
  * rather than comparing `ref.name` by spelling, since a rename (`nothing => void`) is the same
  * type under another name and `void` itself is otherwise an ordinary, trivially satisfiable
- * `unit` atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
+ * atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
  * one position-specific exemption from it, not a fact `void`'s own entry carries.
  */
 function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, TypeDefinition>): boolean {
-  return terminal(ref.name, (n) => namespace.get(n)) === 'void';
+  return resolvesToConstructor(ref.name, (n) => namespace.get(n), 'void_type');
 }
 
 // ── The diagnostic chain ─────────────────────────────────────────────────────────────────────
@@ -329,7 +350,7 @@ function recordDependency(
 ): string | undefined {
   const grouped = new Set<string>();
   for (const group of record.groups) {
-    for (const member of group.members) grouped.add(member);
+    for (const member of group.members.flat()) grouped.add(member);
   }
   for (const field of record.fields) {
     if (
@@ -341,14 +362,14 @@ function recordDependency(
     }
   }
   for (const group of record.groups) {
-    if (group.state !== 'REQUIRED') {
+    if (group.optional) {
       continue;
     }
-    for (const member of group.members) {
-      const field = record.fields.find((f) => f.name === member);
-      if (field !== undefined && !refInhabited(field.type, namespace, inhabited)) {
-        return field.type.name;
-      }
+    const unsatisfied = group.members.map((option) =>
+      unsatisfiedMember(record, group, option, namespace, inhabited),
+    );
+    if (unsatisfied.every((member) => member !== undefined)) {
+      return unsatisfied[0];
     }
   }
   return undefined;

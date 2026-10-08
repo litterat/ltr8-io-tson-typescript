@@ -32,14 +32,14 @@ function def(
   };
 }
 
-const text = def({ kind: 'text_type' });
+const text = def({ kind: 'text_type', normalization: 'NONE' });
 const int32 = def({ kind: 'integer_type', size: { bits: 32, signed: true } } as never);
 const record = def({ kind: 'record', supertypes: [], fields: [], groups: [] });
 const arr = def({
   kind: 'array',
   elementType: { name: 'text', arguments: [], annotations: [] },
-  state: 'REQUIRED',
-  unordered: false,
+  voidable: false,
+  ordered: true,
   uniqueItems: false,
 });
 const alias = def({ kind: 'reference', target: { name: 'text', arguments: [], annotations: [] } });
@@ -81,8 +81,8 @@ describe('discriminationClassOf (§5.4)', () => {
 
   it('classifies a boolean-shaped enum as BOOLEAN and a mixed enum as undefined', () => {
     const ns = new Map<string, TypeDefinition>([
-      ['boolean', def({ kind: 'enum', members: ['true', 'false'] })],
-      ['mixed', def({ kind: 'enum', members: ['true', '1'] })],
+      ['boolean', def({ kind: 'enum', type: 'identifier', members: ['true', 'false'] })],
+      ['mixed', def({ kind: 'enum', type: 'identifier', members: ['true', '1'] })],
     ]);
     expect(discriminationClassOf('boolean', ns)).toBe('BOOLEAN');
     expect(discriminationClassOf('mixed', ns)).toBeUndefined();
@@ -97,10 +97,10 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('op', ns)).toBeUndefined();
   });
 
-  it('a TEXT-profile enum is always STRING, whatever its members spell (§7.4, #21)', () => {
+  it('an enum whose type is not an identifier family is always STRING, whatever its members spell (§7.4)', () => {
     const ns = new Map<string, TypeDefinition>([
-      ['ports', def({ kind: 'enum', members: ['80', '443'], profile: 'TEXT' })],
-      ['bools', def({ kind: 'enum', members: ['true', 'false'], profile: 'TEXT' })],
+      ['ports', def({ kind: 'enum', members: ['80', '443'], type: 'text' })],
+      ['bools', def({ kind: 'enum', members: ['true', 'false'], type: 'text' })],
     ]);
     expect(discriminationClassOf('ports', ns)).toBe('STRING');
     expect(discriminationClassOf('bools', ns)).toBe('STRING');
@@ -139,7 +139,8 @@ describe('discriminationClassOf (§5.4)', () => {
       kind: 'map',
       keyType: { name: keyName, arguments: [], annotations: [] },
       valueType: { name: 'text', arguments: [], annotations: [] },
-      state: 'REQUIRED',
+      voidable: false,
+      ordered: false,
     });
   }
 
@@ -147,7 +148,7 @@ describe('discriminationClassOf (§5.4)', () => {
     const ns = new Map<string, TypeDefinition>([
       ['text', text],
       ['byText', withKeyType('text')],
-      ['status', def({ kind: 'enum', members: ['UP', 'DOWN'], profile: 'IDENTIFIER' })],
+      ['status', def({ kind: 'enum', members: ['UP', 'DOWN'], type: 'identifier' })],
       ['byEnum', withKeyType('status')],
     ]);
     expect(discriminationClassOf('byText', ns)).toBe('BRACE');
@@ -166,10 +167,10 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('byMap', ns)).toBeUndefined();
   });
 
-  it("a map keyed by the kernel's `value` or `void` has no class -- excepted even though both are structurally `unit` atoms (§5.4)", () => {
+  it('a map keyed by a `value_type` or `void_type` instance has no class, whatever the instance is named (§4.2, §5.4)', () => {
     const ns = new Map<string, TypeDefinition>([
-      ['value', def({ kind: 'unit' })],
-      ['void', def({ kind: 'unit' })],
+      ['value', def({ kind: 'value_type' })],
+      ['void', def({ kind: 'void_type' })],
       ['byValue', withKeyType('value')],
       ['byVoid', withKeyType('void')],
     ]);
@@ -177,12 +178,41 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('byVoid', ns)).toBeUndefined();
   });
 
-  it('a map keyed by any other `unit`-kind instance is treated as scalar content, like `token` (§5.4 excepts only `value`/`void`)', () => {
+  it('a map keyed by an identifier family is keyed by scalar content (§5.4, §7.7)', () => {
     const ns = new Map<string, TypeDefinition>([
-      ['token', def({ kind: 'unit' })],
-      ['byToken', withKeyType('token')],
+      [
+        'name',
+        def({
+          kind: 'identifier_type',
+          spec: 'https://www.unicode.org/reports/tr31/',
+          normalization: 'NFC',
+          start: 'XID',
+          continue: 'XID',
+          continueAdd: '-',
+        }),
+      ],
+      ['byName', withKeyType('name')],
     ]);
-    expect(discriminationClassOf('byToken', ns)).toBe('BRACE');
+    expect(discriminationClassOf('byName', ns)).toBe('BRACE');
+  });
+
+  it('an identifier family is string-class, so a choice of it and an integer is disjoint (§5.4)', () => {
+    const ns = new Map<string, TypeDefinition>([
+      [
+        'name',
+        def({
+          kind: 'identifier_type',
+          spec: 'https://www.unicode.org/reports/tr31/',
+          normalization: 'NFC',
+          start: 'XID',
+          continue: 'XID',
+          continueAdd: '-',
+        }),
+      ],
+      ['int32', int32],
+    ]);
+    expect(discriminationClassOf('name', ns)).toBe('STRING');
+    expect(isChoiceDisjoint([{ name: 'name' }, { name: 'int32' }], ns)).toBe(true);
   });
 
   it('a choice over an approximate float and text is not disjoint in text either -- the straddling kind needs a tag (§5.4, #17)', () => {
@@ -216,7 +246,7 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
     // §5.4: "MUST NOT prove more (value-set separation... does not make a choice disjoint)".
     const namespace = new Map<string, TypeDefinition>([
       ['text', text],
-      ['other_text', def({ kind: 'text_type' })],
+      ['other_text', def({ kind: 'text_type', normalization: 'NONE' })],
     ]);
     expect(isChoiceDisjoint([{ name: 'text' }, { name: 'other_text' }], namespace)).toBe(false);
   });

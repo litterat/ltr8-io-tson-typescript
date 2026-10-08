@@ -73,10 +73,11 @@ describe('readTree/validate: schemaless (Class 1)', () => {
 describe('readTree/validate: schema-governed', () => {
   const SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   reading => { id: uuid label: non_empty_text }
+  non_empty_text => !text ^ { min_length: 1 }
 }
 `;
   const linked: LinkedSchema = resolveUserSchema(SCHEMA);

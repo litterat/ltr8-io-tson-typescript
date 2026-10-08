@@ -84,7 +84,7 @@ type Lookahead = { readonly typeRefName: string } | { readonly firstEvent: TsonE
 /**
  * The peeked event's own discrimination class ([TSON-DATA] §4 base type resolution for a token,
  * the brace/bracket delimiter for a container) -- or `undefined` for an event no class recovers
- * (the absent sentinel `_`: §5.4's classes partition *values*, and an omitted value has none to
+ * (the void sentinel `_`: §5.4's classes partition *values*, and an omitted value has none to
  * classify). `empty-brace` (§2.8's `{}`) is `BRACE`: record and map share the class precisely
  * because `{}` cannot yet say which, and the dispatched variant's own reader resolves that the
  * same way it would for a tagged `!record {}` / `!map {}`.

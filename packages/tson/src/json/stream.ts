@@ -21,8 +21,8 @@
  * past the root value**, and so what rejects trailing content — `[1] 2` is refused there and
  * nowhere else, the same trap `facade/` keeps under `requireDocumentEnd` for the text encoding.
  *
- * **`null` is a value at this layer**, not the absent sentinel: [TSON-JSON] §7 makes JSON `null`
- * the absent sentinel's spelling *at a typed position*, and this layer has none — settling it here
+ * **`null` is a value at this layer**, not the void sentinel: [TSON-JSON] §7 makes JSON `null`
+ * the void sentinel's spelling *at a typed position*, and this layer has none — settling it here
  * would impose a schema's answer on a layer that has no schema. That reading belongs to the
  * schema-directed decode of §5–§8, layered above this event source rather than inside it.
  *
@@ -122,7 +122,7 @@ export interface JsonBooleanEvent {
   readonly position: Position;
 }
 
-/** `null` — a JSON value here; the absent sentinel only once a typed position reads it (§7). */
+/** `null` — a JSON value here; the void sentinel only once a typed position reads it (§7). */
 export interface JsonNullEvent {
   readonly kind: 'null';
   readonly position: Position;

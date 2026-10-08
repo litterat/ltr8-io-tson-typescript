@@ -88,7 +88,7 @@ export interface CompiledSchema {
    * problem. Throws {@link TsonNotImplementedError} for a well-formed entry this compiler has no
    * reader for yet (an unmaterialised `TemplateBody`, or a `DATA`-kind entry named where a type
    * is expected) -- see this module's own top note and `atomBuilder.ts`'s for the two atom-level
-   * cases (`unit`'s unnamed instances aside, every one of those is fully covered).
+   * cases (every one of those is fully covered).
    */
   reader(name: string): TypeReader<Value>;
 }

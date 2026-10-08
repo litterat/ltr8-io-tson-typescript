@@ -4,6 +4,7 @@ import { TsonParseError } from '../src/core/errors.js';
 import { fromString, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
+import type { GroupDef } from '../src/ast/schema/fields.js';
 import type { TypeDef } from '../src/ast/schema/typedef.js';
 
 /** Parses a complete schema document over already-complete input. */
@@ -560,60 +561,89 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
   });
 });
 
-describe('field groups (§5.11)', () => {
-  it('a group requires at least two members, separated by "|"', () => {
-    const def = typeDefOf('{ (email_addr: email | phone_num: phone) }');
-    if (def.kind !== 'structuralTypeDef' || def.body.kind !== 'recordDef') {
-      throw new Error('expected a record body');
-    }
-    expect(def.body.entries).toEqual([
-      {
-        kind: 'groupDef',
-        annotations: [],
-        members: [
-          {
-            annotations: [],
-            name: 'email_addr',
-            typeRef: { kind: 'simpleRef', name: 'email' },
-            voidable: false,
-          },
-          {
-            annotations: [],
-            name: 'phone_num',
-            typeRef: { kind: 'simpleRef', name: 'phone' },
-            voidable: false,
-          },
-        ],
-        optional: false,
-      },
-    ]);
-  });
-
-  it('a trailing "?" makes the group optional', () => {
-    const def = typeDefOf('{ (a: text | b: text)? }');
-    if (def.kind !== 'structuralTypeDef' || def.body.kind !== 'recordDef') {
-      throw new Error('expected a record body');
-    }
-    expect(def.body.entries[0]).toMatchObject({ optional: true });
-  });
-
-  it('rejects a group with only one member', () => {
-    expect(thrownBy(`${META} { x => { (a: text) } }`)).toBeInstanceOf(TsonParseError);
-  });
-
-  it("a member's own type may carry '?', making it voidable (§5.11) -- no '?' on the member's name and no modifier", () => {
-    const def = typeDefOf('{ (a: text? | b: text) }');
+describe('field groups (§5.11, §12.1)', () => {
+  /** The first record entry of `typeDefOf(source)`, narrowed to a group. */
+  function groupOf(source: string): GroupDef {
+    const def = typeDefOf(source);
     if (def.kind !== 'structuralTypeDef' || def.body.kind !== 'recordDef') {
       throw new Error('expected a record body');
     }
     const [group] = def.body.entries;
     if (group?.kind !== 'groupDef') throw new Error('expected a groupDef');
-    expect(group.members[0]).toMatchObject({ name: 'a', voidable: true });
-    expect(group.members[1]).toMatchObject({ name: 'b', voidable: false });
+    return group;
+  }
+
+  it('options are separated by "|", each holding the members written between the bars', () => {
+    expect(groupOf('{ (email_addr: email | phone_num: phone) }')).toEqual({
+      kind: 'groupDef',
+      annotations: [],
+      options: [
+        [
+          {
+            annotations: [],
+            name: 'email_addr',
+            omittable: false,
+            typeRef: { kind: 'simpleRef', name: 'email' },
+            voidable: false,
+          },
+        ],
+        [
+          {
+            annotations: [],
+            name: 'phone_num',
+            omittable: false,
+            typeRef: { kind: 'simpleRef', name: 'phone' },
+            voidable: false,
+          },
+        ],
+      ],
+      quantifier: 'EXACTLY_ONE',
+    });
   });
 
-  it("rejects '?' on a member's own name, and a modifier on a member (§5.11)", () => {
-    expect(thrownBy(`${META} { x => { (a?: text | b: text) } }`)).toBeInstanceOf(TsonParseError);
+  it('an option holds several members, separated as a record body separates its entries', () => {
+    const group = groupOf('{ (host: text  port: int32 | socket: text) }');
+    expect(group.options.map((option) => option.map((member) => member.name))).toEqual([
+      ['host', 'port'],
+      ['socket'],
+    ]);
+    const comma = groupOf('{ (host: text, port: int32 | socket: text) }');
+    expect(comma.options.map((option) => option.map((member) => member.name))).toEqual([
+      ['host', 'port'],
+      ['socket'],
+    ]);
+  });
+
+  it('a "?" on a member name makes it optional within its option, and is independent of the type\'s "?"', () => {
+    const [option] = groupOf('{ (host: text  port?: int32? | socket: text) }').options;
+    expect(option?.[0]).toMatchObject({ name: 'host', omittable: false, voidable: false });
+    expect(option?.[1]).toMatchObject({ name: 'port', omittable: true, voidable: true });
+  });
+
+  it('a trailing "?" makes the group optional', () => {
+    expect(groupOf('{ (a: text | b: text)? }').quantifier).toBe('AT_MOST_ONE');
+  });
+
+  it('a trailing "+" makes the group at-least-one', () => {
+    expect(groupOf('{ (a: text | b: text)+ }').quantifier).toBe('AT_LEAST_ONE');
+  });
+
+  it('the mark after ")" must touch it, and a group takes one mark', () => {
+    expect(thrownBy(`${META} { x => { (a: text | b: text) + } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`${META} { x => { (a: text | b: text)?+ } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it('a group with no member is not a group', () => {
+    expect(thrownBy(`${META} { x => { () } }`)).toBeInstanceOf(TsonParseError);
+  });
+
+  it("a member's own type may carry '?', making it voidable (§5.11)", () => {
+    const group = groupOf('{ (a: text? | b: text) }');
+    expect(group.options[0]?.[0]).toMatchObject({ name: 'a', voidable: true });
+    expect(group.options[1]?.[0]).toMatchObject({ name: 'b', voidable: false });
+  });
+
+  it('a modifier on a member is a parse error: a group never supplies a member (§5.11)', () => {
     expect(thrownBy(`${META} { x => { (a: text ~ "x" | b: text) } }`)).toBeInstanceOf(
       TsonParseError,
     );
@@ -655,7 +685,7 @@ describe('bracket forms: array and tuple (§5.3)', () => {
       typeParams: [],
       ref: {
         kind: 'arrayRef',
-        elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, optional: false },
+        elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
       },
     });
   });
@@ -693,8 +723,8 @@ describe('bracket forms: array and tuple (§5.3)', () => {
     if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'tupleRef')
       throw new Error('expected a tuple ref');
     expect(def.ref.elementTypes).toEqual([
-      { typeRef: { kind: 'simpleRef', name: 'text' }, optional: false },
-      { typeRef: { kind: 'simpleRef', name: 'integer' }, optional: true },
+      { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+      { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: true },
     ]);
   });
 
@@ -704,7 +734,7 @@ describe('bracket forms: array and tuple (§5.3)', () => {
       throw new Error('expected an array ref');
     expect(def.ref.elementType.typeRef).toEqual({
       kind: 'arrayRef',
-      elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, optional: false },
+      elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
       size: { kind: 'exact', bound: '2' },
     });
   });
@@ -718,7 +748,7 @@ describe('map sugar (§5.3)', () => {
       ref: {
         kind: 'mapRef',
         keyType: { kind: 'simpleRef', name: 'text' },
-        valueType: { typeRef: { kind: 'simpleRef', name: 'integer' }, optional: false },
+        valueType: { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: false },
       },
     });
   });
@@ -750,7 +780,7 @@ describe('map sugar (§5.3)', () => {
     if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapRef') {
       throw new Error('unreachable');
     }
-    expect(def.ref.valueType.optional).toBe(true);
+    expect(def.ref.valueType.voidable).toBe(true);
   });
 
   it('rejects a second entry: a map type is a single key => value entry', () => {
@@ -802,7 +832,7 @@ describe('type arguments (§12.1, §5.10)', () => {
       kind: 'ref',
       ref: {
         kind: 'arrayRef',
-        elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, optional: false },
+        elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
       },
     });
   });
@@ -811,6 +841,43 @@ describe('type arguments (§12.1, §5.10)', () => {
 describe('type names (§12.1)', () => {
   it('rejects a numeric type parameter name', () => {
     expect(thrownBy(`${META} { x => <42> map<text, 42> }`)).toBeInstanceOf(TsonParseError);
+  });
+});
+
+describe('a type parameter may write its type (§5.10, §12.1)', () => {
+  /** The declaration `x`'s written parameter types, as the parameter name and the type spelled. */
+  function written(source: string): Record<string, unknown> {
+    const declaration = parse(`${META} { x => ${source} }`).body.declarations.get('x');
+    return Object.fromEntries(declaration?.parameterTypes ?? []);
+  }
+
+  it('records the type after ":" under the parameter name and leaves the name list alone', () => {
+    const doc = parse(`${META} { box => <T: text, N: int8> { v: T  n: N } }`);
+    const declaration = doc.body.declarations.get('box');
+    expect(declaration?.typeDef).toMatchObject({ typeParams: ['T', 'N'] });
+    expect(Object.fromEntries(declaration?.parameterTypes ?? [])).toEqual({
+      T: { kind: 'simpleRef', name: 'text' },
+      N: { kind: 'simpleRef', name: 'int8' },
+    });
+  });
+
+  it('records only the parameters that wrote a type', () => {
+    expect(Object.keys(written('<T, N: int8> { v: T  n: N }'))).toEqual(['N']);
+  });
+
+  it('records nothing when no parameter wrote a type', () => {
+    const declaration = parse(`${META} { x => <T> { v: T } }`).body.declarations.get('x');
+    expect(declaration?.parameterTypes).toBeUndefined();
+  });
+
+  it('a written type may be an application', () => {
+    expect(written('<T: box<text>> { v: T }')).toMatchObject({
+      T: { kind: 'genericRef', name: 'box' },
+    });
+  });
+
+  it('a written type follows its name after ":", and a name alone is still a name', () => {
+    expect(thrownBy(`${META} { x => <T:> { v: T } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -866,19 +933,18 @@ describe("the spec's own worked example (§1.6)", () => {
     // refinement with bare-value bindings, which this parser cannot yet build (see the
     // "does not yet parse a real atom refinement's bare-value bindings" test and this session's
     // report: `AtomRefinement.bindings`'s frozen `RecordDef` type cannot represent it). Every
-    // other line is exactly as written in §1.6 (re-spelled under #23, Revision 36: `priority?:
-    // priority ~ 3`, `status?: status ~ OPEN`, `due?: date`, `tags?: [text]`, `history?: […]`;
-    // `flagged`'s own `priority: priority ~ N` stays unmarked, a parametric modifier written on
-    // an unmarked name, §5.7).
+    // other line is exactly as written in §1.6: `priority?: priority ~ 3`, `status?: status ~ OPEN`,
+    // `due?: date`, `tags?: [text]`, `history?: […]`, and `flagged`'s own `priority?: priority ~
+    // N`, a parametric default taking the name mark its literal spelling takes (§5.7).
     const doc = parse(`
 !!id:"https://example.com/task.tn"
 ${META}
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 @doc:"Task-tracking example schema."
 {
   priority => integer
   status   => !enum [OPEN ACTIVE DONE]
-  flagged  => <T, N> { entry: T  priority: priority ~ N }
+  flagged  => <T, N> { entry: T  priority?: priority ~ N }
   task => {
     id:        uuid
     title:     non_empty_text
@@ -908,7 +974,7 @@ ${META}
         typeRef: {
           kind: 'arrayRef',
           elementType: {
-            optional: false,
+            voidable: false,
             typeRef: {
               kind: 'genericRef',
               name: 'flagged',

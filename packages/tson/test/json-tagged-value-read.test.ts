@@ -14,8 +14,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/tagged-1.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person   => { name: text }
   employee => person & { department: text }

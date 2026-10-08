@@ -97,7 +97,7 @@ export function checkRecordExtension(
 ): void {
   for (const [name, def] of merged) {
     const body = def.body;
-    if (!isRecordBody(body) || body.discriminators.length === 0) {
+    if (!isRecordBody(body) || body.discriminators === undefined) {
       continue;
     }
     if (!isFamilyLocal(name, merged, localNames)) {
@@ -179,9 +179,10 @@ function checkFamily(
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
 ): void {
+  const discriminators = baseBody.discriminators ?? [];
   const fieldReaders = new Map<string, TypeReader<Value>>();
   let selectorsOk = true;
-  for (const fieldName of baseBody.discriminators) {
+  for (const fieldName of discriminators) {
     const fieldReader = checkSelectorType(baseName, fieldName, baseBody, merged, options);
     if (fieldReader === undefined) {
       selectorsOk = false;
@@ -200,7 +201,7 @@ function checkFamily(
   const members = directMembers(baseName, merged);
   const pinned: { readonly name: string; readonly values: readonly Value[] }[] = [];
   for (const member of members) {
-    const values = pinsFor(baseName, member, baseBody.discriminators, fieldReaders, options);
+    const values = pinsFor(baseName, member, discriminators, fieldReaders, options);
     if (values !== undefined) pinned.push({ name: member.name, values });
   }
 
@@ -210,11 +211,9 @@ function checkFamily(
       const b = pinned[j];
       if (a === undefined || b === undefined) continue; // array bounds; unreachable given the loop
       if (tuplesEqual(a.values, b.values)) {
-        const tuple = baseBody.discriminators.join(', ');
+        const tuple = discriminators.join(', ');
         const named =
-          baseBody.discriminators.length > 1
-            ? `discriminators (${tuple})`
-            : `discriminator '${tuple}'`;
+          discriminators.length > 1 ? `discriminators (${tuple})` : `discriminator '${tuple}'`;
         // Blamed against whichever of the two colliding members this schema itself declares --
         // an importing schema that adds a member colliding with one it imported broke the
         // family, not the schema that declared the other side of the collision (this file's own

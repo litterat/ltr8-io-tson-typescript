@@ -1,5 +1,5 @@
 /**
- * Tree mode's `void` reader -- reads the absent sentinel `_`, `void`'s one admitted spelling
+ * Tree mode's `void` reader -- reads the void sentinel `_`, `void`'s one admitted spelling
  * (§7.3), into an {@link AbsentNode}. The unquoted token `null` is not equivalent: it is an
  * ordinary string with no keyword status ([TSON-DATA] §4.4), so it lands on the mismatch branch
  * below like any other token. The port of `AbsentTreeReader`.

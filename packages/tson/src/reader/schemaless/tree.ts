@@ -758,7 +758,7 @@ function* readMap(
     if (next.kind === 'map-end') break;
     const key = yield* readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, depth + 1);
     if (key.kind === 'absent') {
-      // §2.9: the absent sentinel states that a position carries no value, and a map key is a
+      // §2.9: the void sentinel states that a position carries no value, and a map key is a
       // position that must. The map-entry production admits any value in key position, so this
       // is the reader's to refuse -- no grammar rule and no schema can see it first.
       ctx.report(
@@ -872,7 +872,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
 // compound one, and a leading `!text` or `@doc` is in neither.
 // ---------------------------------------------------------------------------------------------
 
-/** A unique stand-in for the absent sentinel `_` as a key identity -- distinct from every real decoded value, including the string `"null"` (quoted or not: base resolution's own `StringValue`, §4.4). */
+/** A unique stand-in for the void sentinel `_` as a key identity -- distinct from every real decoded value, including the string `"null"` (quoted or not: base resolution's own `StringValue`, §4.4). */
 const ABSENT_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-absent-key');
 
 /**

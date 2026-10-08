@@ -11,7 +11,7 @@
  *
  * **The read is all-or-nothing.** A position that reported anything -- a wrong-arity gap, or a
  * failed element read -- abandons the whole tuple (`support.ts`'s own `abandonedValue`), never a
- * partial one built around the gap. A slot legitimately absent (the sentinel `_` at an OPTIONAL
+ * partial one built around the gap. A slot legitimately absent (the sentinel `_` at a voidable
  * position) is the one case that produces a real {@link AbsentNode}.
  */
 import type { Task } from '../../io/bytes.js';
@@ -107,8 +107,8 @@ export function tupleTreeReader(
       yield* refuseUnscopedSchemaRef(slotCtx, slot.scoped, slot.schema.elementType.name);
       const elementPeek = yield* ctx.peek();
       if (elementPeek.kind === 'absent') {
-        yield* ctx.next(); // consume the absent event regardless of REQUIRED/OPTIONAL
-        if (slot.schema.state === 'REQUIRED') {
+        yield* ctx.next(); // consume the absent event regardless of voidability
+        if (!slot.schema.voidable) {
           slotCtx.report(
             'FIELD_REQUIRED',
             `'${displayName}' position [${String(index)}] is absent, but this position is required`,

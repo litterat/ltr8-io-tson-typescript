@@ -97,7 +97,7 @@ import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { FIELDS, NAME, VALUE, field, isApplication, rescope, typeRefOf } from './wireForm.js';
 import type { HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
-import { inferOne, type Kind } from './parameterKinds.js';
+import { inferOne, type Kind } from './parameterTypes.js';
 import { terminal } from '../link/referenceChain.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
@@ -161,7 +161,7 @@ export interface TemplateMaterialiserDeps {
 
   /**
    * The governing meta's own entries — where a slot's declared type is read from when
-   * classifying a template's parameters by use (§5.10, `parameterKinds.ts`). Needed only for the
+   * classifying a template's parameters by use (§5.10, `parameterTypes.ts`). Needed only for the
    * *on-demand* half of that classification: an application closed during resolution's own
    * driving loop (a composition supertype or a refinement source, before the batch pass in
    * `setParameterKinds` has run) infers its one template's kinds in isolation, memoised per head
@@ -255,7 +255,7 @@ export interface TemplateMaterialiser {
 
   /**
    * Supplies §5.10's parameter kinds for the whole namespace, once `schemaResolver.ts`'s own
-   * batch pass (`parameterKinds.ts`'s `inferAll`) has computed them — every declaration has
+   * batch pass (`parameterTypes.ts`'s `inferAll`) has computed them — every declaration has
    * resolved, so every slot's declared type is available, and nothing has closed yet. An
    * application closed *before* this is called (the on-demand half, reached from a composition
    * supertype or refinement source during resolution's own driving loop) classifies its own
@@ -615,7 +615,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // application a slot holds (`tree<p0>` becoming `tree<text>`), and a parameter inside a
     // collection are all the same thing here -- a token in a tree -- because the body was never
     // read against the constructor's vocabulary in the first place.
-    const substituted = substitute(open.application.coreValue, head, open.parameters, bindings);
+    const substituted = substitute(open.application.coreValue, head, open.parameterNames, bindings);
     const wire = closeApplications(substituted);
     if (deps.definitionMetaReader === undefined) {
       throw new TsonNotImplementedError(
@@ -680,7 +680,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     bindings: ReadonlyMap<string, TypeArgument>,
   ): TypeDefinition {
     const closed = closeHeld(head, open, bindings);
-    const parametricNames = parametricFieldNames(open.application.coreValue, open.parameters);
+    const parametricNames = parametricFieldNames(open.application.coreValue, open.parameterNames);
     const body = fixRoutedValues(closed.body, parametricNames);
     return {
       source: { name: head, arguments: args, annotations: [] },
@@ -791,7 +791,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     open: HeldBody,
     bindings: ReadonlyMap<string, TypeArgument>,
   ): string {
-    const substituted = substitute(open.application.coreValue, head, open.parameters, bindings);
+    const substituted = substitute(open.application.coreValue, head, open.parameterNames, bindings);
     const closed = closeApplications(substituted);
     const target = closed.kind === 'record' ? field(closed, 'target') : undefined;
     if (target?.kind !== 'token') {

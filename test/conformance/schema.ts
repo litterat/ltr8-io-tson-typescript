@@ -163,7 +163,7 @@ export function checkSchemaVector(
   subject: Uint8Array,
   sidecar: SchemaSidecar,
 ): void {
-  const tson = newClass2Tson();
+  const tson = newClass2Tson(subject);
   switch (sidecar.outcome) {
     case 'valid': {
       const linked = tson.resolveSchema(subject);

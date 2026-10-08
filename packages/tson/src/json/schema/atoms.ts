@@ -12,19 +12,16 @@
  * `ATOM_FORM_INVALID` and `TsonAtomValidationError` to `ATOM_CONSTRAINT_VIOLATION` — §5.1's split,
  * applied by the same function that applies it for TSON text.
  *
- * **`void`, `value` and `identifier`** are the kernel's three `unit` instances (§4.2 — "the atom
- * with no constraint vocabulary"), dispatched on the *declared name* rather than on the (identical)
- * resolved body, matching [TSON-SCHEMA] §4.2's own normative dispatch: {@link voidReader} (§5.7 —
- * the absent sentinel's own type, admitting JSON null and nothing else), {@link
- * valuePositionReader} (§5.7 — the escape hatch, classifying a JSON value by its own grammar with
- * no base-type-resolution detour), and {@link identifierReader} (this encoding's own reading: the
- * shared `unicode/identifier-profile.ts` grammar over a JSON string's content, since `atom/forType.ts`
- * offers no parser for `identifier` — its own top note: "neither does `unit`'s `value`/`token`
- * instance"). An alias of any of the three (`day => date` is not one of them, since `date` is a
- * `date_type` body and not `unit`) reaches the same reader by [TSON-SCHEMA] §8.3's
+ * **`void`, `value` and `identifier`** are dispatched on the resolved body's constructor
+ * (§4.2), never on a declared name: {@link voidReader} for `void_type` (§5.7 — the void sentinel's
+ * own type, admitting JSON null and nothing else), {@link valuePositionReader} for `value_type`
+ * (§5.7 — the escape hatch, classifying a JSON value by its own grammar with no
+ * base-type-resolution detour), and {@link identifierReader} for `identifier_type` (this
+ * encoding's own reading: the shared `unicode/identifier-profile.ts` grammar over a JSON string's
+ * content). An alias of any of them reaches the same reader by [TSON-SCHEMA] §8.3's
  * reference-collapse, since `json/schema/compile.ts` resolves a closed reference to its target's
  * reader once, at compile time, by name — the same collapse an alias of `boolean` (an `enum`
- * body, not `unit`) reaches below.
+ * body) reaches below.
  *
  * **§5.2's enum rule is applied uniformly, `boolean` included**: `boolean` is the kernel's own
  * `!enum [true false]`, and {@link enumReader} special-cases it (by declared name) only for the
@@ -40,7 +37,7 @@
  * cases with no exception for numbers; the worked example even shows a `TEXT`-profile member spelled
  * `80` decoding from the number `80`. `AtomForm.ENUM.contentOf` in the Java module (`tson-json`) does
  * not admit `JsonEvent.NumberValue` at all — an omission from the table this port does not carry
- * over, since Part 3 is the authority Revision 36's own front matter names ("Part 3 is the authority"
+ * over, since Part 3's own front matter names Part 3 as the authority ("Part 3 is the authority"
  * over the Java reference wherever the two disagree). Reported upstream as a §5.2 conformance gap in
  * the Java module.
  */
@@ -314,7 +311,7 @@ export function withAnnotationObject(
   };
 }
 
-/** The atom-position reader for an ordinary (non-`unit`, non-`enum`) family: §5's table, then `atomParserFor`'s own parser. */
+/** The atom-position reader for an ordinary (non-`value_type`, non-`void_type`, non-`identifier_type`, non-`enum`) family: §5's table, then `atomParserFor`'s own parser. */
 export function atomReader(
   displayName: string,
   body: Atom,
@@ -367,8 +364,8 @@ export function enumReader(
  * atomReader}/{@link enumReader} wrap with the read protocol, and what
  * `json/schema/record.ts`'s own `fieldValueOf` needs to resolve a schema-stated `~`/`=` token
  * (§5.2 confines one to an atom- or enum-typed field) into a host value and a spelling, with no
- * `JsonReadContext` in hand at compile time. `identifier` is the one case `atomParserFor` has no
- * parser for (this module's own top note); `void`/`value` carry no content grammar a stated token
+ * `JsonReadContext` in hand at compile time. `identifier_type` is the one case routed here rather than
+ * through `atomParserFor` (this module's own top note); `void`/`value` carry no content grammar a stated token
  * could denote at all, so §5.2's own confinement rules them out before this is ever reached.
  */
 export interface FieldValueParser {
@@ -402,7 +399,7 @@ export function fieldValueParser(displayName: string, body: Atom): FieldValuePar
       },
     };
   }
-  if (body.kind === 'unit' && displayName === 'identifier') {
+  if (body.kind === 'identifier_type') {
     return {
       form: 'string',
       parse: (content: string) => {
@@ -484,7 +481,7 @@ function makeAtomReader(
 }
 
 // ---------------------------------------------------------------------------------------------
-// void, value, identifier -- the kernel's three `unit` instances (§5.7), dispatched by name
+// void, value, identifier -- dispatched by constructor (§4.2, §5.7)
 // ---------------------------------------------------------------------------------------------
 
 /** §5.7: `void`'s sole value is absence, and JSON null is its one spelling. */
@@ -566,7 +563,7 @@ export function valuePositionReader(
   };
 }
 
-/** This encoding's own reading of `identifier`, since `atom/forType.ts` offers no parser for it (its own top note: "neither does `unit`'s `value`/`token` instance"): a JSON string whose content is a well-formed identifier (§7.7). */
+/** This encoding's own reading of an identifier family: a JSON string whose content is a well-formed identifier (§7.7). */
 export function identifierReader(displayName: string, schemaLocation: SchemaLocation): AtomReader {
   return makeAtomReader(displayName, 'string', schemaLocation, (content) => {
     if (!isIdentifierText(content)) {

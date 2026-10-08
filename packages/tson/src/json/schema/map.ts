@@ -49,7 +49,7 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
   const body = definition.body;
   if ('template' in body && 'parameters' in body) return undefined;
   if (body.kind === 'reference') return undefined;
-  if (body.kind === 'unit' && terminalName !== 'identifier') return undefined; // `value`/`void`: no content grammar
+  if (body.kind === 'value_type' || body.kind === 'void_type') return undefined; // no content grammar
   if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/scoped/Data
   try {
     return fieldValueParser(terminalName, body as Atom);
@@ -59,11 +59,14 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
 }
 
 const ATOM_KINDS: ReadonlySet<string> = new Set([
-  'unit',
+  'value_type',
+  'void_type',
   'enum',
   'integer_type',
   'text_type',
+  'identifier_type',
   'uri_type',
+  'iri_type',
   'regex_type',
   'decimal_type',
   'float_type',
@@ -94,7 +97,7 @@ export function buildMapReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader<JsonValue> {
-  const optionalValues = body.state === 'OPTIONAL';
+  const optionalValues = body.voidable;
   const minItems = body.minItems;
   const maxItems = body.maxItems;
   const valueReader = ctx.resolve(body.valueType.name);

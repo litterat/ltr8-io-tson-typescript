@@ -103,7 +103,6 @@ const RECORD: Top = {
   fields: [],
   groups: [],
   extension: 'OPEN',
-  discriminators: [],
 };
 
 function field(name: string, type: TypeRef): RecordField {
@@ -117,16 +116,15 @@ function record(fields: readonly RecordField[]): Top {
     fields,
     groups: [],
     extension: 'OPEN',
-    discriminators: [],
   };
 }
 
 function enumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members, profile: 'IDENTIFIER' };
+  return { kind: 'enum', members, type: 'identifier' };
 }
 
 function textEnumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members, profile: 'TEXT' };
+  return { kind: 'enum', members, type: 'text' };
 }
 
 function choiceOf(variants: readonly TypeRef[]): Top {
@@ -140,7 +138,7 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/36/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/37/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),

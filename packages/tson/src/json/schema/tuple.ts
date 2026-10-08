@@ -1,8 +1,8 @@
 /**
  * A tuple as a JSON array of exactly its declared length ([TSON-JSON] §6.3, [TSON-SCHEMA] §5.3):
- * each position decodes at its own element reader; an OPTIONAL position's absent value is JSON
- * null in its slot, and at a REQUIRED position null is a validation error (§7). Short or long
- * arrays are validation errors regardless of trailing-optional positions.
+ * each position decodes at its own element reader; a voidable position's void value is JSON
+ * null in its slot, and at a position that is not voidable null is a validation error (§7). Short
+ * or long arrays are validation errors regardless of trailing voidable positions.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
@@ -24,7 +24,7 @@ export function buildTupleReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader<JsonValue> {
-  const optional = body.elements.map((element) => element.state === 'OPTIONAL');
+  const optional = body.elements.map((element) => element.voidable);
   const slotReaders = body.elements.map((element) => ctx.resolve(element.elementType.name));
   const arity = slotReaders.length;
 

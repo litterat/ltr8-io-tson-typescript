@@ -22,6 +22,10 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import {
   fieldOmission,
+  atLeastOne,
+  describeGroup,
+  describeViolation,
+  groupViolations,
   isGroupMember,
   type FieldGroup,
   type RecordBody,
@@ -372,29 +376,37 @@ export function recordTreeReader(
     return seen;
   }
 
-  /** Field-group presence check (§5.11): a bare group needs exactly one member present, a `?` group at most one. */
+  /** Field-group presence check (§5.11, {@link groupViolations}): one option chosen, or at most one under `?`, and a chosen option holds every unmarked member. */
   function validateGroups(ctx: ReadContext, seen: readonly boolean[]): void {
+    const isPresent = (member: string): boolean => {
+      const idx = fieldIndex.get(member);
+      return idx !== undefined && seen[idx] === true;
+    };
     for (const group of groups) {
-      let present = 0;
-      for (const member of group.members) {
-        const idx = fieldIndex.get(member);
-        if (idx !== undefined && seen[idx]) present += 1;
-      }
-      const members = group.members.join(' | ');
-      if (present > 1) {
-        ctx.report(
-          'TYPE_MISMATCH',
-          `at most one of (${members}) may be present for '${displayName}', found ${String(present)}`,
-          `at most one of (${members})`,
-          `${String(present)} present`,
-        );
-      } else if (group.state === 'REQUIRED' && present === 0) {
-        ctx.report(
-          'FIELD_REQUIRED',
-          `exactly one of (${members}) must be present for '${displayName}'`,
-          `one of (${members})`,
-          'none present',
-        );
+      for (const violation of groupViolations(group, isPresent)) {
+        const message = `'${displayName}': ${describeViolation(group, violation, isPresent)}`;
+        if (violation.kind === 'MEMBER_MISSING') {
+          ctx.report(
+            'FIELD_REQUIRED',
+            message,
+            `every unmarked member of the chosen option of (${describeGroup(group)})`,
+            `missing ${violation.missing.join(', ')}`,
+          );
+        } else if (violation.kind === 'SEVERAL_CHOSEN') {
+          ctx.report(
+            'TYPE_MISMATCH',
+            message,
+            group.optional ? 'at most one option' : 'exactly one option',
+            `${String(violation.options.length)} options chosen`,
+          );
+        } else {
+          ctx.report(
+            'FIELD_REQUIRED',
+            message,
+            atLeastOne(group) ? 'at least one option' : 'exactly one option',
+            'none present',
+          );
+        }
       }
     }
   }

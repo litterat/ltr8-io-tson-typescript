@@ -11,7 +11,7 @@ import type {
 } from '../src/schema/meta/atoms-numeric.js';
 import type { BytesType } from '../src/schema/meta/atoms-bytes.js';
 import type { DurationType, PeriodType } from '../src/schema/meta/atoms-temporal.js';
-import type { TextType } from '../src/schema/meta/atoms-text.js';
+import type { IdentifierType, IriType, TextType, UriType } from '../src/schema/meta/atoms-text.js';
 import type { Cidr4Type, Ipv4Type } from '../src/schema/meta/atoms-network.js';
 import type { EnumBody } from '../src/schema/meta/bodies.js';
 
@@ -66,7 +66,7 @@ describe('integer_type narrowing (§5.7)', () => {
 
   it('reports a mismatched family rather than throwing', () => {
     const source: IntegerType = { kind: 'integer_type' };
-    const refined: TextType = { kind: 'text_type' };
+    const refined: TextType = { kind: 'text_type', normalization: 'NONE' };
     const violations = checkAtomNarrows(source, refined);
     expect(violations.length).toBe(1);
     expect(violations[0]).toContain('text_type');
@@ -207,57 +207,95 @@ describe('rational_type', () => {
 
 describe('text_type', () => {
   it('min_length may only rise and max_length may only fall', () => {
-    const source: TextType = { kind: 'text_type', minLength: 2n, maxLength: 10n };
-    expect(checkAtomNarrows(source, { kind: 'text_type', minLength: 4n, maxLength: 6n })).toEqual(
-      [],
-    );
-    expect(checkAtomNarrows(source, { kind: 'text_type', minLength: 1n }).length).toBeGreaterThan(
-      0,
-    );
-    expect(checkAtomNarrows(source, { kind: 'text_type', maxLength: 20n }).length).toBeGreaterThan(
-      0,
-    );
+    const source: TextType = {
+      kind: 'text_type',
+      normalization: 'NONE',
+      minLength: 2n,
+      maxLength: 10n,
+    };
+    expect(
+      checkAtomNarrows(source, {
+        kind: 'text_type',
+        normalization: 'NONE',
+        minLength: 4n,
+        maxLength: 6n,
+      }),
+    ).toEqual([]);
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', minLength: 1n }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', maxLength: 20n }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("`length` is checked against both the source's min and max (an exact length is both a floor and a ceiling)", () => {
-    const source: TextType = { kind: 'text_type', minLength: 2n, maxLength: 10n };
-    expect(checkAtomNarrows(source, { kind: 'text_type', length: 5n })).toEqual([]);
-    expect(checkAtomNarrows(source, { kind: 'text_type', length: 20n }).length).toBeGreaterThan(0);
+    const source: TextType = {
+      kind: 'text_type',
+      normalization: 'NONE',
+      minLength: 2n,
+      maxLength: 10n,
+    };
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', length: 5n }),
+    ).toEqual([]);
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', length: 20n }).length,
+    ).toBeGreaterThan(0);
   });
 
   it('coherence: min_length above max_length admits nothing', () => {
     expect(
-      checkAtomCoherence({ kind: 'text_type', minLength: 10n, maxLength: 3n }).length,
+      checkAtomCoherence({
+        kind: 'text_type',
+        normalization: 'NONE',
+        minLength: 10n,
+        maxLength: 3n,
+      }).length,
     ).toBeGreaterThan(0);
   });
 
   it('coherence leaves `pattern` narrowing unchecked (regex containment is undecidable), but a pattern alone with no `members` has nothing else to check', () => {
-    expect(checkAtomCoherence({ kind: 'text_type', pattern: '[a-z]+' })).toEqual([]);
+    expect(
+      checkAtomCoherence({ kind: 'text_type', normalization: 'NONE', pattern: '[a-z]+' }),
+    ).toEqual([]);
   });
 
   // ── §5.7's settable-once facets: `pattern` and `members` (#22) ───────────────────────────────
 
   it('pattern is settable once: unset -> set narrows, restated verbatim narrows, changed is refused', () => {
-    const unset: TextType = { kind: 'text_type' };
-    const source: TextType = { kind: 'text_type', pattern: '[A-Z]{2}' };
+    const unset: TextType = { kind: 'text_type', normalization: 'NONE' };
+    const source: TextType = { kind: 'text_type', normalization: 'NONE', pattern: '[A-Z]{2}' };
     expect(checkAtomNarrows(unset, source)).toEqual([]);
-    expect(checkAtomNarrows(source, { kind: 'text_type', pattern: '[A-Z]{2}' })).toEqual([]);
     expect(
-      checkAtomNarrows(source, { kind: 'text_type', pattern: '[a-z]{2}' }).length,
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', pattern: '[A-Z]{2}' }),
+    ).toEqual([]);
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', pattern: '[a-z]{2}' })
+        .length,
     ).toBeGreaterThan(0);
   });
 
   it('members is settable once, the same as pattern: unset -> set narrows, restated verbatim narrows, changed (even by shrinking) is refused', () => {
-    const unset: TextType = { kind: 'text_type' };
-    const source: TextType = { kind: 'text_type', members: ['SE', 'NO', 'DK'] };
+    const unset: TextType = { kind: 'text_type', normalization: 'NONE' };
+    const source: TextType = {
+      kind: 'text_type',
+      normalization: 'NONE',
+      members: ['SE', 'NO', 'DK'],
+    };
     expect(checkAtomNarrows(unset, source)).toEqual([]);
-    expect(checkAtomNarrows(source, { kind: 'text_type', members: ['SE', 'NO', 'DK'] })).toEqual(
-      [],
-    );
+    expect(
+      checkAtomNarrows(source, {
+        kind: 'text_type',
+        normalization: 'NONE',
+        members: ['SE', 'NO', 'DK'],
+      }),
+    ).toEqual([]);
     // A member set narrows a plain member-set facet (§7.4's numeric tiers) by shrinking, but
     // `text_type.members` is settable-once, not a member-set facet -- even a subset is a change.
     expect(
-      checkAtomNarrows(source, { kind: 'text_type', members: ['SE', 'NO'] }).length,
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', members: ['SE', 'NO'] })
+        .length,
     ).toBeGreaterThan(0);
   });
 
@@ -265,16 +303,27 @@ describe('text_type', () => {
 
   it('coherence: every member of `members` must satisfy min_length/max_length/length, counted in code points', () => {
     expect(
-      checkAtomCoherence({ kind: 'text_type', minLength: 2n, members: ['AU', 'A'] }).length,
+      checkAtomCoherence({
+        kind: 'text_type',
+        normalization: 'NONE',
+        minLength: 2n,
+        members: ['AU', 'A'],
+      }).length,
     ).toBeGreaterThan(0);
-    expect(checkAtomCoherence({ kind: 'text_type', length: 2n, members: ['AU', 'NZ'] })).toEqual(
-      [],
-    );
+    expect(
+      checkAtomCoherence({
+        kind: 'text_type',
+        normalization: 'NONE',
+        length: 2n,
+        members: ['AU', 'NZ'],
+      }),
+    ).toEqual([]);
   });
 
   it('coherence: every member of `members` must match `pattern` -- the one member check needing a regex match rather than a comparison', () => {
     const violations = checkAtomCoherence({
       kind: 'text_type',
+      normalization: 'NONE',
       pattern: '[A-Z]{2}',
       members: ['AU', 'nz'],
     });
@@ -283,17 +332,25 @@ describe('text_type', () => {
   });
 
   it('coherence: a member set with no facets beside it to violate is coherent', () => {
-    expect(checkAtomCoherence({ kind: 'text_type', members: ['a', 'b'] })).toEqual([]);
+    expect(
+      checkAtomCoherence({ kind: 'text_type', normalization: 'NONE', members: ['a', 'b'] }),
+    ).toEqual([]);
   });
 
   // ── `text_member_set`'s own non-emptiness and uniqueness (§7.4) ────────────────────────────
 
   it('coherence: an empty `members` admits no value, exactly as an empty numeric member set does', () => {
-    expect(checkAtomCoherence({ kind: 'text_type', members: [] }).length).toBeGreaterThan(0);
+    expect(
+      checkAtomCoherence({ kind: 'text_type', normalization: 'NONE', members: [] }).length,
+    ).toBeGreaterThan(0);
   });
 
   it('coherence: a member stated twice is refused -- text_member_set is unique_items: true (§7.4)', () => {
-    const violations = checkAtomCoherence({ kind: 'text_type', members: ['SE', 'SE'] });
+    const violations = checkAtomCoherence({
+      kind: 'text_type',
+      normalization: 'NONE',
+      members: ['SE', 'SE'],
+    });
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]).toContain('SE');
   });
@@ -302,7 +359,11 @@ describe('text_type', () => {
     const decomposedE = 'café'; // "café" spelled with a combining acute accent
     const precomposedE = 'café'; // "café" spelled precomposed
     expect(
-      checkAtomCoherence({ kind: 'text_type', members: [decomposedE, precomposedE] }).length,
+      checkAtomCoherence({
+        kind: 'text_type',
+        normalization: 'NONE',
+        members: [decomposedE, precomposedE],
+      }).length,
     ).toBeGreaterThan(0);
   });
 
@@ -311,6 +372,7 @@ describe('text_type', () => {
   it('coherence: a syntactically invalid pattern is itself a coherence violation, not a silently skipped member check', () => {
     const violations = checkAtomCoherence({
       kind: 'text_type',
+      normalization: 'NONE',
       pattern: '[',
       members: ['x'],
     });
@@ -321,8 +383,10 @@ describe('text_type', () => {
   // ── settable-once `members` narrows by NFC-compared set, not written order (§7.5, §7.4) ─────
 
   it('narrows: members restated in another order is a restatement, not a change -- §7.5 gives set element order no meaning', () => {
-    const source: TextType = { kind: 'text_type', members: ['SE', 'NO'] };
-    expect(checkAtomNarrows(source, { kind: 'text_type', members: ['NO', 'SE'] })).toEqual([]);
+    const source: TextType = { kind: 'text_type', normalization: 'NONE', members: ['SE', 'NO'] };
+    expect(
+      checkAtomNarrows(source, { kind: 'text_type', normalization: 'NONE', members: ['NO', 'SE'] }),
+    ).toEqual([]);
   });
 });
 
@@ -332,15 +396,25 @@ describe('regex_type', () => {
   const spec = 'https://www.rfc-editor.org/rfc/rfc9485';
 
   it("coherence: every member must itself parse as I-Regexp -- the family's own parsing contract still applies (§7.4)", () => {
-    const violations = checkAtomCoherence({ kind: 'regex_type', spec, members: ['[a-z]+', '['] });
+    const violations = checkAtomCoherence({
+      kind: 'regex_type',
+      normalization: 'NONE',
+      spec,
+      members: ['[a-z]+', '['],
+    });
     expect(violations.length).toBeGreaterThan(0);
     expect(violations.some((v) => v.includes('I-Regexp'))).toBe(true);
   });
 
   it('coherence: a member set of well-formed patterns is coherent', () => {
-    expect(checkAtomCoherence({ kind: 'regex_type', spec, members: ['[a-z]+', '[0-9]+'] })).toEqual(
-      [],
-    );
+    expect(
+      checkAtomCoherence({
+        kind: 'regex_type',
+        normalization: 'NONE',
+        spec,
+        members: ['[a-z]+', '[0-9]+'],
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -357,6 +431,9 @@ describe('uri_type', () => {
   it("coherence: every member must itself parse as a URI -- the family's own parsing contract still applies (§7.4)", () => {
     const violations = checkAtomCoherence({
       kind: 'uri_type',
+      allowRelative: true,
+      allowFragment: true,
+      normalization: 'NONE',
       spec,
       members: ['https://example.com', 'not a uri'],
     });
@@ -364,11 +441,14 @@ describe('uri_type', () => {
     expect(violations.some((v) => v.includes('not a uri'))).toBe(true);
   });
 
-  it('coherence: every member must satisfy `scheme` too, not merely parse as some URI', () => {
+  it('coherence: every member must satisfy `schemes` too, not merely parse as some URI', () => {
     const violations = checkAtomCoherence({
       kind: 'uri_type',
+      allowRelative: true,
+      allowFragment: true,
+      normalization: 'NONE',
       spec,
-      scheme: 'https',
+      schemes: ['https'],
       members: ['https://example.com', 'ftp://example.com'],
     });
     expect(violations.length).toBeGreaterThan(0);
@@ -379,11 +459,80 @@ describe('uri_type', () => {
     expect(
       checkAtomCoherence({
         kind: 'uri_type',
+        allowRelative: true,
+        allowFragment: true,
+        normalization: 'NONE',
         spec,
-        scheme: 'https',
+        schemes: ['https'],
         members: ['https://a.example', 'https://b.example'],
       }),
     ).toEqual([]);
+  });
+});
+
+describe('uri_type and iri_type narrowing (§5.7)', () => {
+  const uri: UriType = {
+    kind: 'uri_type',
+    spec: 'https://www.rfc-editor.org/rfc/rfc3986',
+    allowRelative: true,
+    allowFragment: true,
+    normalization: 'NONE',
+  };
+
+  it('schemes narrows as a set, compared with ASCII case folded', () => {
+    const source = { ...uri, schemes: ['http', 'https'] };
+    expect(checkAtomNarrows(source, { ...uri, schemes: ['HTTPS'] })).toEqual([]);
+    expect(checkAtomNarrows(source, { ...uri, schemes: ['ftp'] }).join(' ')).toContain('schemes');
+    // An unset source admits every scheme, so setting one narrows it.
+    expect(checkAtomNarrows(uri, { ...uri, schemes: ['https'] })).toEqual([]);
+  });
+
+  it('allow_relative and allow_fragment may be withdrawn and never granted back', () => {
+    expect(checkAtomNarrows(uri, { ...uri, allowRelative: false })).toEqual([]);
+    expect(checkAtomNarrows(uri, { ...uri, allowFragment: false })).toEqual([]);
+    expect(checkAtomNarrows({ ...uri, allowRelative: false }, uri).join(' ')).toContain(
+      'allow_relative',
+    );
+    expect(checkAtomNarrows({ ...uri, allowFragment: false }, uri).join(' ')).toContain(
+      'allow_fragment',
+    );
+  });
+
+  it('an iri_type narrows by the same rules, and refines only another iri_type', () => {
+    const iri: IriType = {
+      ...uri,
+      kind: 'iri_type',
+      spec: 'https://www.rfc-editor.org/rfc/rfc3987',
+    };
+    expect(checkAtomNarrows(iri, { ...iri, allowRelative: false })).toEqual([]);
+    expect(checkAtomNarrows(iri, { ...iri, schemes: ['https'] })).toEqual([]);
+    expect(checkAtomNarrows(iri, uri).join(' ')).toContain('refines an iri');
+  });
+});
+
+describe('identifier_type (§5.5, §7.7)', () => {
+  const identifier: IdentifierType = {
+    kind: 'identifier_type',
+    spec: 'https://www.unicode.org/reports/tr31/',
+    normalization: 'NFC',
+    start: 'XID',
+    continue: 'XID',
+    continueAdd: '-',
+  };
+
+  it('narrows by text_type facets: a length bound tightens, a looser one is refused', () => {
+    const source = { ...identifier, maxLength: 10n };
+    expect(checkAtomNarrows(source, { ...source, maxLength: 5n })).toEqual([]);
+    expect(checkAtomNarrows(source, { ...source, maxLength: 20n }).join(' ')).toContain(
+      'max_length',
+    );
+  });
+
+  it('is coherent when its length facets are, and incoherent when min_length exceeds max_length', () => {
+    expect(checkAtomCoherence(identifier)).toEqual([]);
+    expect(
+      checkAtomCoherence({ ...identifier, minLength: 5n, maxLength: 2n }).length,
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -393,6 +542,7 @@ describe('email_type', () => {
   it("coherence: every member must itself parse as an email address -- the family's own parsing contract still applies (§7.4)", () => {
     const violations = checkAtomCoherence({
       kind: 'email_type',
+      normalization: 'NONE',
       spec,
       members: ['a@example.com', 'not an address'],
     });
@@ -402,7 +552,12 @@ describe('email_type', () => {
 
   it('coherence: a member set of well-formed addresses is coherent', () => {
     expect(
-      checkAtomCoherence({ kind: 'email_type', spec, members: ['a@example.com', 'b@example.com'] }),
+      checkAtomCoherence({
+        kind: 'email_type',
+        normalization: 'NONE',
+        spec,
+        members: ['a@example.com', 'b@example.com'],
+      }),
     ).toEqual([]);
   });
 });
@@ -595,66 +750,65 @@ describe('date_type', () => {
 
 describe('enum', () => {
   it('members may only shrink under refinement', () => {
-    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], profile: 'IDENTIFIER' };
+    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], type: 'identifier' };
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], profile: 'IDENTIFIER' }),
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], type: 'identifier' }),
     ).toEqual([]);
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], profile: 'IDENTIFIER' })
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], type: 'identifier' })
         .length,
     ).toBeGreaterThan(0);
   });
 
-  // ── §7.4, §5.4, #21: an enum's profile ──────────────────────────────────────────────────────
+  // ── §7.4, §5.4: an enum's type ──────────────────────────────────────────────────────
 
-  it("coherence: under IDENTIFIER (the default), every member MUST match [TSON-DATA] §7.7's identifier grammar", () => {
+  it("coherence: where type is identifier, every member MUST match [TSON-DATA] §7.7's identifier grammar", () => {
     const vocabulary: EnumBody = {
       kind: 'enum',
       members: ['OPEN', 'ACTIVE'],
-      profile: 'IDENTIFIER',
+      type: 'identifier',
     };
     expect(checkAtomCoherence(vocabulary)).toEqual([]);
 
     const notAName: EnumBody = {
       kind: 'enum',
       members: ['sedentary', 'lightly active'],
-      profile: 'IDENTIFIER',
+      type: 'identifier',
     };
     const violations = checkAtomCoherence(notAName);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]).toContain('lightly active');
   });
 
-  it('coherence: under TEXT, any text is a member -- no identifier grammar applies', () => {
+  it('coherence: where type is text, any text is a member -- no identifier grammar applies', () => {
     const valueSet: EnumBody = {
       kind: 'enum',
       members: ['sedentary', 'lightly active'],
-      profile: 'TEXT',
+      type: 'text',
     };
     expect(checkAtomCoherence(valueSet)).toEqual([]);
   });
 
-  it('coherence: a member stated twice is refused, under either profile -- enum_set is unique_items: true (§9)', () => {
+  it('coherence: a member stated twice is refused, under either type -- enum_set is unique_items: true (§9)', () => {
     const identifierDup: EnumBody = {
       kind: 'enum',
       members: ['OPEN', 'OPEN'],
-      profile: 'IDENTIFIER',
+      type: 'identifier',
     };
     expect(checkAtomCoherence(identifierDup).length).toBeGreaterThan(0);
-    const textDup: EnumBody = { kind: 'enum', members: ['x', 'x'], profile: 'TEXT' };
+    const textDup: EnumBody = { kind: 'enum', members: ['x', 'x'], type: 'text' };
     expect(checkAtomCoherence(textDup).length).toBeGreaterThan(0);
   });
 
-  it('narrows: IDENTIFIER is inside TEXT, so a refinement may withdraw the latitude of TEXT and never grant it back (§5.7)', () => {
-    const identifier: EnumBody = { kind: 'enum', members: ['a', 'b'], profile: 'IDENTIFIER' };
-    const text: EnumBody = { kind: 'enum', members: ['a', 'b'], profile: 'TEXT' };
-    // TEXT -> IDENTIFIER narrows (withdraws latitude).
-    expect(checkAtomNarrows(text, identifier)).toEqual([]);
-    // IDENTIFIER -> TEXT widens and is refused.
-    expect(checkAtomNarrows(identifier, text).length).toBeGreaterThan(0);
-    // Restating the same profile is always vacuously fine.
+  it("narrows: an enum's type is fixed where it is constructed, so a refinement restates it and never changes it, in either direction (§5.7, §7.4)", () => {
+    const identifier: EnumBody = { kind: 'enum', members: ['a', 'b'], type: 'identifier' };
+    const text: EnumBody = { kind: 'enum', members: ['a', 'b'], type: 'text' };
+    // Restating the same type is always vacuously fine.
     expect(checkAtomNarrows(identifier, identifier)).toEqual([]);
     expect(checkAtomNarrows(text, text)).toEqual([]);
+    // Neither direction of change is a narrowing.
+    expect(checkAtomNarrows(text, identifier).join(' ')).toContain('fixed where it is constructed');
+    expect(checkAtomNarrows(identifier, text).join(' ')).toContain('fixed where it is constructed');
   });
 });
 
@@ -816,8 +970,8 @@ describe('period_type', () => {
 // ── Families with no orderable facet at all ─────────────────────────────────────────────────
 
 describe('families with nothing to narrow or contradict', () => {
-  it('unit/uuid_type always report clean', () => {
-    const cases: Atom[] = [{ kind: 'unit' }, { kind: 'uuid_type' }];
+  it('value_type/void_type/uuid_type always report clean', () => {
+    const cases: Atom[] = [{ kind: 'value_type' }, { kind: 'void_type' }, { kind: 'uuid_type' }];
     for (const atom of cases) {
       expect(checkAtomNarrows(atom, atom)).toEqual([]);
       expect(checkAtomCoherence(atom)).toEqual([]);
@@ -830,12 +984,36 @@ describe('families with nothing to narrow or contradict', () => {
 describe('isAtom', () => {
   it('recognises every Atom member and rejects every other Top shape', () => {
     expect(isAtom({ kind: 'integer_type' })).toBe(true);
-    expect(isAtom({ kind: 'unit' })).toBe(true);
+    expect(isAtom({ kind: 'value_type' })).toBe(true);
+    expect(isAtom({ kind: 'void_type' })).toBe(true);
+    expect(
+      isAtom({
+        kind: 'identifier_type',
+        spec: 's',
+        normalization: 'NFC',
+        start: 'XID',
+        continue: 'XID',
+      }),
+    ).toBe(true);
+    expect(
+      isAtom({
+        kind: 'iri_type',
+        spec: 's',
+        allowRelative: false,
+        allowFragment: true,
+        normalization: 'NONE',
+      }),
+    ).toBe(true);
     expect(isAtom({ kind: 'record', supertypes: [], fields: [], groups: [] })).toBe(false);
     expect(
       isAtom({ kind: 'reference', target: { name: 'x', arguments: [], annotations: [] } }),
     ).toBe(false);
     // A held template body: no `kind` tag at all (schema/meta's own contract).
-    expect(isAtom({ parameters: ['T'], template: '!record { fields: [] }' })).toBe(false);
+    expect(
+      isAtom({
+        parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+        template: '!record { fields: [] }',
+      }),
+    ).toBe(false);
   });
 });

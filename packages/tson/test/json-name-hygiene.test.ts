@@ -30,8 +30,8 @@ const POLICY = new Set(['CONFUSABLE_NAMES', 'RESTRICTED_CHARACTER', 'RESTRICTED_
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/hygiene-1.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   account => { password: text  note?: text? }
   circle  => { radius: float64 }

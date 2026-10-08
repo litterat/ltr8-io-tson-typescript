@@ -80,34 +80,42 @@ export interface FieldModifierSelector {
 }
 
 /**
- * `group-def = *annotation "(" ws group-member 1*(ws "|" ws group-member) ws ")" ["?"]`
- * (§12.1, §5.11) — a field group: mutually exclusive labelled members occupying one logical
- * record position. The field name is the discriminator; the wire form of instances is
- * unchanged by grouping.
+ * `group-def = *annotation "(" group-option *( "|" group-option ) ")" [ "?" / "+" ]`
+ * (§12.1, §5.11) — a field group: a presence rule over the fields its options hold. An option is
+ * chosen when any of its members is present, and a chosen option holds every member whose name is
+ * not marked `?`. A bare group admits exactly one chosen option, `?` at most one, and `+` at least
+ * one of its members, each option then being one field. The field names are the discriminator; the
+ * wire form of instances is unchanged by grouping.
  *
- * `members` has at least two elements by grammar — a declared group of one has a simpler
- * spelling (a plain field with the group's state), and the grammar refuses the noise — encoded
- * here as a non-empty (2+) tuple type. `optional`: a bare group is REQUIRED (exactly one
- * member MUST be present in conforming data); with a trailing `?`, OPTIONAL (at most one MAY
- * be present). These are the group's only two states — no default or fixed form in v1.
+ * This is the group as written. `options` holds at least one option and each option at least one
+ * member, in source order; the grammar's shape rules and the lowering to the kernel's
+ * `members`/`optional_members`/`optional` belong to later phases.
  */
 export interface GroupDef {
   readonly kind: 'groupDef';
   readonly annotations: readonly Annotation[];
-  readonly members: readonly [GroupMember, GroupMember, ...GroupMember[]];
-  readonly optional: boolean;
+  readonly options: readonly (readonly [GroupMember, ...GroupMember[]])[];
+  readonly quantifier: GroupQuantifier;
 }
 
 /**
- * `group-member = *annotation field-name ws ":" ws type-ref ["?"]` (§12.1, §5.11) — one labelled
- * alternative of a {@link GroupDef}. Deliberately bare on the name: no `?` on it and no `~`/`=`/
- * `=?` value modifier — selection belongs to the label, presence belongs to the group, and a
- * group never injects. The type's own `?` is admitted (`voidable`): a voidable member written
- * `_` is present and selects its alternative (§5.11).
+ * The mark after a group's closing `)` (§5.11): bare is `EXACTLY_ONE` (one option chosen), `?` is
+ * `AT_MOST_ONE`, and `+` is `AT_LEAST_ONE` (at least one member present, every option being one
+ * field).
+ */
+export type GroupQuantifier = 'EXACTLY_ONE' | 'AT_MOST_ONE' | 'AT_LEAST_ONE';
+
+/**
+ * `group-member = *annotation field-name ["?"] ws ":" ws type-ref ["?"]` (§12.1, §5.11) — one
+ * member of a {@link GroupDef} option. The name's `?` (`omittable`) makes the member optional once
+ * its option is chosen; the type's (`voidable`) admits `_`, and a voidable member written `_` is
+ * present and chooses its option. A member takes no `~`/`=`/`=?` value modifier, since a group
+ * never supplies a member.
  */
 export interface GroupMember {
   readonly annotations: readonly Annotation[];
   readonly name: string;
+  readonly omittable: boolean;
   readonly typeRef: TypeRef;
   readonly voidable: boolean;
 }

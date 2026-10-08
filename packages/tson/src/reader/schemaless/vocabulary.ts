@@ -147,7 +147,7 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
   types.set('rational', createRationalParser('rational', { kind: 'rational_type' }));
   types.set('complex', createComplexParser('complex'));
 
-  types.set('text', createTextParser('text', { kind: 'text_type' }));
+  types.set('text', createTextParser('text', { kind: 'text_type', normalization: 'NONE' }));
 
   types.set('bytes', createBinaryParser('bytes', { kind: 'bytes_type', encoding: 'BASE64' }));
 
@@ -158,8 +158,20 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
   types.set('period', createPeriodParser('period', { kind: 'period_type' }));
 
   types.set('uuid', createUuidParser('uuid', { kind: 'uuid_type' }));
-  types.set('uri', createUriParser('uri', { kind: 'uri_type', spec: RFC.uri }));
-  types.set('email', createEmailParser('email', { kind: 'email_type', spec: RFC.email }));
+  types.set(
+    'uri',
+    createUriParser('uri', {
+      kind: 'uri_type',
+      spec: RFC.uri,
+      allowRelative: false,
+      allowFragment: true,
+      normalization: 'NONE',
+    }),
+  );
+  types.set(
+    'email',
+    createEmailParser('email', { kind: 'email_type', spec: RFC.email, normalization: 'NONE' }),
+  );
   types.set('mac', createMacParser('mac', { kind: 'mac_type', spec: RFC.mac }));
   types.set(
     'ipv4',

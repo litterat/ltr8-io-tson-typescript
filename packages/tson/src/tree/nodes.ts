@@ -151,7 +151,7 @@ export interface AtomNode {
 }
 
 /**
- * The absent sentinel as a node (§2.9) — a position that was written but holds no value, spelled `_`,
+ * The void sentinel as a node (§2.9) — a position that was written but holds no value, spelled `_`,
  * the format's one spelling of absence. Distinct from {@link MissingNode} (no such node at all): this
  * one was written. Mirrors `TsonAbsent`.
  *

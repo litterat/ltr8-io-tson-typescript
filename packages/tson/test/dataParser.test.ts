@@ -446,3 +446,20 @@ describe('streaming: identical result whether input arrives whole or one byte at
     expect(chunked).toEqual(sync);
   });
 });
+
+describe('a bare "+" is a special token reserved by the schema grammar (§7.2.4, §7.2.5)', () => {
+  it('is a parse error in a data value, where it was a lexer error', () => {
+    expect(() => parse('+')).toThrow(TsonParseError);
+    expect(() => parse('{ a: + }')).toThrow(TsonParseError);
+    expect(() => parse('[1 + 2]')).toThrow(TsonParseError);
+  });
+
+  it('leaves a sign that begins an unquoted token alone: +5 and +0.5 read as before', () => {
+    const root = doc('[+5 +0.5]').root.coreValue;
+    if (root.kind !== 'array') throw new Error('expected an array');
+    expect(root.elements.map((element) => element.value.coreValue)).toEqual([
+      { kind: 'token', text: '+5', form: 'unquoted' },
+      { kind: 'token', text: '+0.5', form: 'unquoted' },
+    ]);
+  });
+});

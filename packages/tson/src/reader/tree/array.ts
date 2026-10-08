@@ -96,8 +96,8 @@ export function arrayTreeReader(
       // to `sink` so later indices stay accurate; the whole array is abandoned below regardless.
       let elementAbandoned: boolean;
       if (elementPeek.kind === 'absent') {
-        yield* ctx.next(); // consume the absent event regardless of REQUIRED/OPTIONAL
-        if (body.state === 'REQUIRED') {
+        yield* ctx.next(); // consume the absent event regardless of voidability
+        if (!body.voidable) {
           elementCtx.report(
             'FIELD_REQUIRED',
             `'${displayName}' element [${String(index)}] is absent, but elements are required`,

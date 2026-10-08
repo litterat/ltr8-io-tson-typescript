@@ -42,8 +42,8 @@ import { requireValue } from './reader-tree-helpers.js';
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   reading => {
     id: uuid
@@ -61,6 +61,7 @@ const USER_SCHEMA = `
   sample => (temperature | pressure)
   temperature => { celsius: float64 }
   pressure => { kilopascals: float64  gauge: boolean }
+  non_empty_text => !text ^ { min_length: 1 }
 }
 `;
 

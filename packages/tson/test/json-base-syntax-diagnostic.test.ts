@@ -42,8 +42,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-base-syntax.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person => { name: text  age: int32 }
 }

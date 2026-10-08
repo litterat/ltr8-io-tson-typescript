@@ -20,15 +20,8 @@ function token(text: string, form: Token['form'] = 'UNQUOTED'): Token {
   return { text, form };
 }
 
-function field(
-  name: string,
-  type: TypeRef,
-  state: 'REQUIRED' | 'REQUIRED_DEFAULT' | 'REQUIRED_FIXED',
-  value?: Token,
-): RecordField {
-  const role: RecordField['role'] =
-    state === 'REQUIRED_DEFAULT' ? 'DEFAULT' : state === 'REQUIRED_FIXED' ? 'FIXED' : 'FREE';
-  const optional = state === 'REQUIRED_DEFAULT';
+function field(name: string, type: TypeRef, role: RecordField['role'], value?: Token): RecordField {
+  const optional = role === 'DEFAULT';
   return {
     name,
     type,
@@ -66,7 +59,7 @@ function def(
   };
 }
 
-const text = def({ kind: 'text_type' });
+const text = def({ kind: 'text_type', normalization: 'NONE' });
 
 /**
  * `top`/`data` themselves, minimally, so a DATA-kind test entry's own `supertypes: ['data',
@@ -83,7 +76,6 @@ const DATA_KIND_FIXTURE: readonly (readonly [string, TypeDefinition])[] = [
       fields: [],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     }),
   ],
   [
@@ -95,7 +87,6 @@ const DATA_KIND_FIXTURE: readonly (readonly [string, TypeDefinition])[] = [
         fields: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
       },
       { supertypes: ['top'] },
     ),
@@ -123,7 +114,6 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
           ],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -152,7 +142,6 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
           ],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
       [
@@ -160,8 +149,8 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
         def({
           kind: 'array',
           elementType: ref('text'),
-          state: 'REQUIRED',
-          unordered: false,
+          voidable: false,
+          ordered: true,
           uniqueItems: false,
         }),
       ],
@@ -170,7 +159,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
         't',
         def({
           kind: 'tuple',
-          elements: [{ elementType: ref('text'), state: 'REQUIRED' }],
+          elements: [{ elementType: ref('text'), voidable: false }],
         }),
       ],
       ['al', def({ kind: 'reference', target: ref('text') })],
@@ -224,7 +213,6 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
             ],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -318,7 +306,6 @@ describe('validateReferences: arity (§5.10)', () => {
       ],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     },
     { parameters: ['T'] },
   );
@@ -386,7 +373,6 @@ describe('validateReferences: arity (§5.10)', () => {
             ],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -420,7 +406,7 @@ describe('validateReferences: choice variants (§5.4)', () => {
   it('rejects a variant that resolves to void', () => {
     const merged = new Map<string, TypeDefinition>([
       ['text', text],
-      ['void', def({ kind: 'unit' })],
+      ['void', def({ kind: 'void_type' })],
       ['c', def({ kind: 'choice', variants: [ref('text'), ref('void')] })],
     ]);
     expect(() => {
@@ -462,7 +448,6 @@ describe('validateReferences: parameter usage (§5.10)', () => {
             ],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -486,7 +471,6 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
             fields: [],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { supertypes: ['nowhere'] },
         ),
@@ -508,7 +492,6 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
             fields: [],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { subtypes: ['nowhere'] },
         ),
@@ -526,8 +509,8 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
         def({
           kind: 'array',
           elementType: ref('text'),
-          state: 'REQUIRED',
-          unordered: false,
+          voidable: false,
+          ordered: true,
           uniqueItems: false,
         }),
       ], // stands in for a constructor role
@@ -542,7 +525,6 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
             fields: [],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { source: ref('array') },
         ),
@@ -566,7 +548,6 @@ describe('validateReferences: field values (§5.2)', () => {
     fields: [],
     groups: [],
     extension: 'OPEN',
-    discriminators: [],
   });
   const status = def({ kind: 'enum', members: ['UP', 'DOWN'] });
   const int = def({ kind: 'integer_type' });
@@ -579,10 +560,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('p', ref('point'), 'REQUIRED_DEFAULT', token('3'))],
+          fields: [field('p', ref('point'), 'DEFAULT', token('3'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -599,8 +579,8 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'array',
           elementType: ref('text'),
-          state: 'REQUIRED',
-          unordered: false,
+          voidable: false,
+          ordered: true,
           uniqueItems: false,
         }),
       ],
@@ -609,10 +589,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('a', ref('arr'), 'REQUIRED_FIXED', token('x'))],
+          fields: [field('a', ref('arr'), 'FIXED', token('x'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -631,10 +610,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('c', ref('choice'), 'REQUIRED_DEFAULT', token('x'))],
+          fields: [field('c', ref('choice'), 'DEFAULT', token('x'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -651,10 +629,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('state', ref('status'), 'REQUIRED_DEFAULT', token('UP'))],
+          fields: [field('state', ref('status'), 'DEFAULT', token('UP'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -671,10 +648,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('state', ref('status'), 'REQUIRED_DEFAULT', token('SIDEWAYS'))],
+          fields: [field('state', ref('status'), 'DEFAULT', token('SIDEWAYS'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -691,10 +667,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('n', ref('int'), 'REQUIRED_FIXED', token('not-a-number'))],
+          fields: [field('n', ref('int'), 'FIXED', token('not-a-number'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -712,10 +687,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('not-a-number'))],
+          fields: [field('n', ref('count'), 'FIXED', token('not-a-number'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -735,10 +709,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('n', ref('count'), 'REQUIRED_FIXED', token('3'))],
+          fields: [field('n', ref('count'), 'FIXED', token('3'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -755,10 +728,9 @@ describe('validateReferences: field values (§5.2)', () => {
           {
             kind: 'record',
             supertypes: [],
-            fields: [field('v', ref('T'), 'REQUIRED_DEFAULT', token('T'))],
+            fields: [field('v', ref('T'), 'DEFAULT', token('T'))],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -777,10 +749,9 @@ describe('validateReferences: field values (§5.2)', () => {
           {
             kind: 'record',
             supertypes: [],
-            fields: [field('v', ref('T'), 'REQUIRED')],
+            fields: [field('v', ref('T'), 'FREE')],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           { parameters: ['T'] },
         ),
@@ -791,16 +762,10 @@ describe('validateReferences: field values (§5.2)', () => {
           kind: 'record',
           supertypes: [],
           fields: [
-            field(
-              'b',
-              ref('box', [{ kind: 'ref', ref: ref('text') }]),
-              'REQUIRED_DEFAULT',
-              token('x'),
-            ),
+            field('b', ref('box', [{ kind: 'ref', ref: ref('text') }]), 'DEFAULT', token('x')),
           ],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
       ['text', text],
@@ -812,16 +777,15 @@ describe('validateReferences: field values (§5.2)', () => {
 
   it("rejects a default on a field declared 'void' (unit's own non-scalar instance)", () => {
     const merged = new Map<string, TypeDefinition>([
-      ['void', def({ kind: 'unit' })],
+      ['void', def({ kind: 'void_type' })],
       [
         'widget',
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('v', ref('void'), 'REQUIRED_DEFAULT', token('x'))],
+          fields: [field('v', ref('void'), 'DEFAULT', token('x'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -832,16 +796,15 @@ describe('validateReferences: field values (§5.2)', () => {
 
   it("accepts a default on unit's scalar, non-'void' instance without checking the value’s shape", () => {
     const merged = new Map<string, TypeDefinition>([
-      ['token', def({ kind: 'unit' })],
+      ['token', def({ kind: 'value_type' })],
       [
         'widget',
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('t', ref('token'), 'REQUIRED_DEFAULT', token('anything at all'))],
+          fields: [field('t', ref('token'), 'DEFAULT', token('anything at all'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);
@@ -858,10 +821,9 @@ describe('validateReferences: field values (§5.2)', () => {
         def({
           kind: 'record',
           supertypes: [],
-          fields: [field('p', ref('point'), 'REQUIRED_DEFAULT', token('hi', 'SINGLE_LINE_QUOTED'))],
+          fields: [field('p', ref('point'), 'DEFAULT', token('hi', 'SINGLE_LINE_QUOTED'))],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);

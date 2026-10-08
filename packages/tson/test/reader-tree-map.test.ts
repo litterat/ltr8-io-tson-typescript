@@ -36,7 +36,8 @@ function reader(minItems?: bigint, maxItems?: bigint): TypeReader<Value> {
     kind: 'map',
     keyType: { name: 'text', arguments: [], annotations: [] },
     valueType: { name: 'int32', arguments: [], annotations: [] },
-    state: 'REQUIRED',
+    voidable: false,
+    ordered: false,
     ...(minItems !== undefined ? { minItems } : {}),
     ...(maxItems !== undefined ? { maxItems } : {}),
   };

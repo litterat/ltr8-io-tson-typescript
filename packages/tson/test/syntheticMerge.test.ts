@@ -216,7 +216,6 @@ describe('rewrite', () => {
             },
           ],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
       [
@@ -226,8 +225,8 @@ describe('rewrite', () => {
           {
             kind: 'array',
             elementType: refT('eager'),
-            state: 'REQUIRED',
-            unordered: false,
+            voidable: false,
+            ordered: true,
             uniqueItems: false,
           },
           refT('eager'),
@@ -264,7 +263,6 @@ describe('rewrite', () => {
             },
           ],
           extension: 'OPEN',
-          discriminators: [],
         }),
       ],
     ]);

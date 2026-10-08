@@ -30,8 +30,8 @@ import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.j
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   count      => int32
   exact      => number
@@ -41,7 +41,7 @@ const SCHEMA = resolveUserSchema(`
   day        => date
   blob       => bytes
   colour     => !enum [ RED GREEN BLUE ]
-  activity   => !enum { members: ["sedentary" "lightly active"]  profile: TEXT }
+  activity   => !text_enum ["sedentary" "lightly active"]
   country    => !text ^ { length: 2  members: ["AU" "NZ"] }
   flag       => boolean
   nothing    => void
@@ -71,6 +71,14 @@ const SCHEMA = resolveUserSchema(`
   flagged => {
     value: int32
     ( cleared: int32 | pending: int32 )?
+  }
+
+  endpoint => {
+    ( host: text  port?: int32 | socket: text )
+  }
+
+  reachable => {
+    ( email: text | phone: text )+
   }
 
   tags       => [text]
@@ -296,7 +304,7 @@ describe('§5 atoms', () => {
   });
 });
 
-// ── §5.7 `value`/`identifier`: the kernel's own two `unit` instances, only reachable by
+// ── §5.7 `value`/`identifier`: the kernel's own two atom-constructor instances, only reachable by
 // compiling `meta-kernel.tn` directly (core.tn re-declares only `void` -- JsonAtomReadTest's own
 // note in the Java module says the same) ───────────────────────────────────────────────────────
 
@@ -519,6 +527,22 @@ describe('§6.1 records', () => {
     expect(refusal('flagged', '{"value": 1, "cleared": 3, "pending": 4}').code).toBe(
       'TYPE_MISMATCH',
     );
+  });
+
+  it('an option holds several fields, chosen whole: its unmarked members present, its marked ones free (§5.11, §6.1.4)', () => {
+    expect(read('endpoint', '{"host": "h", "port": 80}').diagnostics).toEqual([]);
+    expect(read('endpoint', '{"host": "h"}').diagnostics).toEqual([]);
+    expect(read('endpoint', '{"socket": "s"}').diagnostics).toEqual([]);
+    expect(refusal('endpoint', '{"port": 80}').code).toBe('FIELD_REQUIRED');
+    expect(refusal('endpoint', '{"host": "h", "socket": "s"}').code).toBe('TYPE_MISMATCH');
+    expect(refusal('endpoint', '{}').code).toBe('FIELD_REQUIRED');
+  });
+
+  it('the at-least-one group takes any non-empty subset of its members (§5.11)', () => {
+    expect(read('reachable', '{"email": "e"}').diagnostics).toEqual([]);
+    expect(read('reachable', '{"phone": "p"}').diagnostics).toEqual([]);
+    expect(read('reachable', '{"email": "e", "phone": "p"}').diagnostics).toEqual([]);
+    expect(refusal('reachable', '{}').code).toBe('FIELD_REQUIRED');
   });
 
   it('a problem inside a nested record names both ends', () => {
@@ -806,7 +830,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const map = new Map(Object.entries(entries));
     return {
       id: 'test://json-schema-read/gaps.tn',
-      meta: 'https://tson.io/2026/36/m/meta.tn',
+      meta: 'https://tson.io/2026/37/m/meta.tn',
       imports: [],
       entries: map,
       keyAnnotations: new Map(),
@@ -826,8 +850,8 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it("a scoped position -- core.tn's own `dynamic` -- is a gap and not a verdict", () => {
     const gapSchema = resolveUserSchema(`
 !!id:"https://example.test/gaps-scoped.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   either => dynamic
 }
@@ -898,7 +922,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
         box: {
           supertypes: [],
           subtypes: [],
-          body: { parameters: ['T'], template: '[T]' },
+          body: {
+            parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+            template: '[T]',
+          },
           annotations: [],
         },
       }),
@@ -919,13 +946,16 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
         colour: {
           supertypes: ['top'],
           subtypes: [],
-          body: { kind: 'enum', members: ['RED', 'GREEN'], profile: 'IDENTIFIER' },
+          body: { kind: 'enum', members: ['RED', 'GREEN'], type: 'identifier' },
           annotations: [],
         },
         unreadable: {
           supertypes: [],
           subtypes: [],
-          body: { parameters: ['T'], template: '[T]' },
+          body: {
+            parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+            template: '[T]',
+          },
           annotations: [],
         },
       }),

@@ -46,7 +46,13 @@ export function stringSink(): { readonly sink: TextSink; readonly result: () => 
 }
 
 /** Directive arguments are URIs (§3.3); validated with the same grammar the reader enforces. */
-const DIRECTIVE_URI = createUriParser('uri', { kind: 'uri_type', spec: 'RFC 3986' });
+const DIRECTIVE_URI = createUriParser('uri', {
+  kind: 'uri_type',
+  spec: 'RFC 3986',
+  allowRelative: true,
+  allowFragment: true,
+  normalization: 'NONE',
+});
 
 /**
  * TSON's own grammar-level writing primitives -- delimiters, separators, escaping, and the
@@ -131,7 +137,7 @@ export interface Emitter {
   typeRef(name: string): void;
 
   // ── Leaf tokens ─────────────────────────────────────────────────────────────────────────────
-  /** `_`, the absent sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
+  /** `_`, the void sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
   absentValue(): void;
   booleanValue(value: boolean): void;
   /**

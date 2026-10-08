@@ -142,7 +142,6 @@ describe('heldRecord', () => {
       ],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     };
     const held = heldRecord(body);
     expect(held.typeRef).toBe('record');
@@ -175,7 +174,6 @@ describe('heldRecord', () => {
       fields: [],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     };
     const held = heldRecord(body);
     if (held.coreValue.kind !== 'record') throw new Error('unreachable');
@@ -225,7 +223,10 @@ describe('createHeldBody', () => {
     };
     const held = createHeldBody(application, ['T']);
     expect(held.names()).toEqual(new Set(['T']));
-    expect(held.parameters).toEqual(['T']);
+    expect(held.parameterNames).toEqual(['T']);
+    expect(held.parameters).toEqual([
+      { name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } },
+    ]);
   });
 
   it('applications() finds a type_ref record form without descending into its own arguments', () => {
@@ -278,7 +279,7 @@ describe('createHeldBody', () => {
       coreValue: { kind: 'record' as const, fields: [] },
     };
     const held = createHeldBody(value, ['T']);
-    expect(held.parameters).toEqual(['T']);
+    expect(held.parameterNames).toEqual(['T']);
     expect(typeof held.template).toBe('string');
     expect(held.template.length).toBeGreaterThan(0);
   });

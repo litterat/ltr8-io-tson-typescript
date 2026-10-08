@@ -13,7 +13,7 @@
  */
 import type { SourcePosition } from './position.js';
 import type { ChoiceBody, EnumBody, TemplateBody } from './bodies.js';
-import type { Product, Sum, Unit } from './algebra.js';
+import type { Product, Sum, ValueType, VoidType } from './algebra.js';
 import type {
   IntegerType,
   FloatType,
@@ -21,7 +21,15 @@ import type {
   RationalType,
   ComplexType,
 } from './atoms-numeric.js';
-import type { TextType, UriType, RegexType, EmailType, UuidType } from './atoms-text.js';
+import type {
+  TextType,
+  IdentifierType,
+  UriType,
+  IriType,
+  RegexType,
+  EmailType,
+  UuidType,
+} from './atoms-text.js';
 import type { BytesType } from './atoms-bytes.js';
 import type {
   DateType,
@@ -43,7 +51,7 @@ import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type, MacType } from './atoms-
  * additionally exposes lookup methods (`get`, `value`, `has`, ...), but `schema/meta`
  * depends on nothing but itself and `core/`, so only the shape those methods read travels
  * here. An absent `value` is the valueless form `@name`, distinct from a `value` holding the
- * absent sentinel `_`.
+ * void sentinel `_`.
  */
 export interface Annotation {
   readonly name: string;
@@ -121,7 +129,7 @@ export interface TypeRef {
 
 /**
  * One positional argument of a resolved {@link TypeRef} (§8.1, §9): the kernel's own
- * REQUIRED field *group* `{ (name: type_ref | value: value) }` — exactly one of a reference
+ * field *group* `{ (name: type_ref | value: value) }`, which must be chosen, — exactly one of a reference
  * or a literal is ever present (§5.11).
  *
  * Modelled as a discriminated union rather than a record with two optional fields: it is a
@@ -252,8 +260,8 @@ export interface Data {
 
 /**
  * The meta-kernel's `atom => top & {}` base kind (§4.1) — every ATOM-kind {@link Top}
- * variant. {@link Unit} backs `value`/`identifier`/`void` (the atom with no constraint
- * vocabulary, §4.2); {@link EnumBody} backs `boolean` and the kernel's other internal
+ * variant. {@link ValueType} and {@link VoidType} back `value` and `void` (the two atoms with no
+ * constraint vocabulary, §4.2); {@link EnumBody} backs `boolean` and the kernel's other internal
  * enumerations; every other member is an atom constraint-vocabulary family, one per
  * `*_type` constructor (§9).
  *
@@ -263,11 +271,14 @@ export interface Data {
  * later work package, not part of this value model.
  */
 export type Atom =
-  | Unit
+  | ValueType
+  | VoidType
   | EnumBody
   | IntegerType
   | TextType
+  | IdentifierType
   | UriType
+  | IriType
   | RegexType
   | DecimalType
   | FloatType
@@ -348,7 +359,7 @@ export function isConstructor(def: TypeDefinition): boolean {
  * cannot disagree.
  */
 export function typeParameters(def: TypeDefinition): readonly string[] {
-  return isTemplateBody(def.body) ? def.body.parameters : [];
+  return isTemplateBody(def.body) ? def.body.parameters.map((parameter) => parameter.name) : [];
 }
 
 /**

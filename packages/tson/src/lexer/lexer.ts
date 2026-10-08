@@ -598,13 +598,7 @@ function* lexSignOrUnquoted(state: LexerState, signCp: number): Task<TokenType> 
     const maxCodePoint = yield* scanUnquotedContinuation(state, buffer, signCp);
     return finishUnquoted(state, buffer, maxCodePoint);
   }
-  if (signCp === CP_HYPHEN) {
-    return finish(state, 'minus', '-');
-  }
-  throw errorAtTokenStart(
-    state,
-    `unexpected character '+': a bare '+' has no grammar role; write "+" (quoted) for a literal plus sign`,
-  );
+  return signCp === CP_HYPHEN ? finish(state, 'minus', '-') : finish(state, 'plus', '+');
 }
 
 // ── Special tokens (§7.2.5) ─────────────────────────────────────────────

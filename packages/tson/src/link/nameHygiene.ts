@@ -15,8 +15,8 @@
  *   §5.11's own resolution rule already flattens a group's members into the body's ordinary
  *   `fields` list before this module ever sees it, so no separate handling is needed) are each
  *   entry's own scope, checked once per entry in `merged`. **An enum's own scope is conditional on
- *   its `profile`** (§7.4, §11.4, #21): under `IDENTIFIER` (the default) every mechanism applies,
- *   as always; under `TEXT` the members are values, not names, so mechanisms 2
+ *   its `type`** (§7.4, §11.4): where `type` is an identifier family every mechanism applies,
+ *   as always; under any other type the members are values, not names, so mechanisms 2
  *   (`Identifier_Status`) and 3 (restriction level) do not reach them — only mechanism 1
  *   (skeleton distinctness) still relates two members that read alike, and `textProfileScopePolicy`
  *   is the one-line policy that drops the other two for exactly that scope's check.
@@ -176,7 +176,7 @@ function entryScope(
         textProfile: false,
       };
     case 'enum':
-      return { names: body.members, noun: 'enum members', textProfile: body.profile === 'TEXT' };
+      return { names: body.members, noun: 'enum members', textProfile: body.type !== 'identifier' };
     default:
       return undefined;
   }

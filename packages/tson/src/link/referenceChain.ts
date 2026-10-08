@@ -115,6 +115,23 @@ export function terminalDefinition(
   return stop.reached ? entries(stop.name) : undefined;
 }
 
+/**
+ * Whether `name`'s reference chain (§8.3) terminates at an instance of the atom constructor
+ * `constructor` (`void_type` or `value_type`, §4.2) -- recognised by the body's constructor, never
+ * by the declared name, so `nothing => void` and a schema's own `!void_type {}` instance are the
+ * same type as the kernel's `void`.
+ */
+export function resolvesToConstructor(
+  name: string,
+  entries: EntryLookup,
+  constructor: 'void_type' | 'value_type',
+): boolean {
+  const definition = terminalDefinition(name, entries);
+  return (
+    definition !== undefined && 'kind' in definition.body && definition.body.kind === constructor
+  );
+}
+
 function isScopedBody(body: Top): body is Scoped {
   return 'kind' in body && body.kind === 'scoped';
 }

@@ -103,8 +103,8 @@ function testMetaReader(type: string, value: DataValue): Top {
     return {
       kind: 'array',
       elementType: typeRefField(record, 'element_type'),
-      state: 'REQUIRED',
-      unordered: false,
+      voidable: false,
+      ordered: true,
       uniqueItems: false,
     } satisfies ArrayBody;
   }
@@ -133,7 +133,6 @@ function testStructureNamespace(): (name: string) => TypeDefinition | undefined 
       fields,
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     },
     annotations: [],
   });
@@ -319,7 +318,6 @@ describe('!!import merging into the type-name namespace', () => {
             fields: [],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           annotations: [],
         },
@@ -359,7 +357,6 @@ describe('!!import merging into the type-name namespace', () => {
             fields: [],
             groups: [],
             extension: 'OPEN',
-            discriminators: [],
           },
           annotations: [],
         },
@@ -428,7 +425,6 @@ function structureNamespaceWith(ctorName: string): (name: string) => TypeDefinit
       fields: [],
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     },
     annotations: [],
   };
@@ -583,9 +579,11 @@ describe('template materialisation (§5.10), end to end through the real Templat
     expect(typeParameters(box)).toEqual(['T']);
     // Never OPEN and never FINAL: nothing is ever read against the template itself (§5.10).
     expect((box.body as { readonly extension?: string }).extension).toBe('ABSTRACT');
-    expect((box.body as { readonly discriminators?: readonly string[] }).discriminators).toEqual(
-      [],
-    );
+    // The list is present only where a selector survives erasure of the parameters, so a base
+    // with none is tag-dispatched (§5.10).
+    expect(
+      (box.body as { readonly discriminators?: readonly string[] }).discriminators,
+    ).toBeUndefined();
   });
 
   it("an author-written 'abstract' on a record template travels inside the held text to every instantiation (§5.10)", () => {
@@ -689,15 +687,14 @@ function richMetaReader(type: string, value: DataValue): Top {
       fields,
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     } satisfies RecordBody;
   }
   if (type === 'array') {
     return {
       kind: 'array',
       elementType: richTypeRefField(record, 'element_type'),
-      state: 'REQUIRED',
-      unordered: false,
+      voidable: false,
+      ordered: true,
       uniqueItems: false,
     } satisfies ArrayBody;
   }
@@ -709,7 +706,7 @@ function richMetaReader(type: string, value: DataValue): Top {
         members.push((element.value.coreValue as TokenValue).text);
       }
     }
-    return { kind: 'enum', members, profile: 'IDENTIFIER' } satisfies EnumBody;
+    return { kind: 'enum', members, type: 'identifier' } satisfies EnumBody;
   }
   throw new Error(`richMetaReader: unhandled constructor '${type}'`);
 }
@@ -734,7 +731,6 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
       fields,
       groups: [],
       extension: 'OPEN',
-      discriminators: [],
     },
     annotations: [],
   });
@@ -786,8 +782,8 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
         body: {
           kind: 'array',
           elementType: { name: 'identifier', arguments: [], annotations: [] },
-          state: 'REQUIRED',
-          unordered: false,
+          voidable: false,
+          ordered: true,
           uniqueItems: false,
         },
         annotations: [],
@@ -798,7 +794,7 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
       {
         supertypes: ['atom', 'top'],
         subtypes: [],
-        body: { kind: 'unit' },
+        body: { kind: 'text_type', normalization: 'NONE' },
         annotations: [],
       },
     ],

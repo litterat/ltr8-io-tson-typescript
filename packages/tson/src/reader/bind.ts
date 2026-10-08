@@ -9,7 +9,7 @@
  *
  * **No schema in view, by design.** A `Binding` is authored independently of any schema
  * (`PORT-PLAN.md`, architectural decision 2) and carries none of a `record_field`'s own
- * `optional`/`voidable`/`role` facts (§5.2), `ElementState` (§5.3), or the size/uniqueness facets
+ * `optional`/`voidable`/`role` facts (§5.2), a position's `voidable` (§5.3), or the size/uniqueness facets
  * `ArrayBody`/`MapBody`
  * declare -- those are `schema/meta` questions, and `bind/strictness.ts`'s `checkBinding` already
  * answers the one such question a `Binding` alone can be checked against (does it cover its
@@ -625,7 +625,7 @@ function finishRecord<T>(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tuple (§2.7, §5.3's per-position shape without its ElementState -- see this file's own top
+// Tuple (§2.7, §5.3's per-position shape without its `voidable` -- see this file's own top
 // comment)
 // ---------------------------------------------------------------------------------------------
 
@@ -689,7 +689,7 @@ function* readTuple<T>(binding: TupleBinding<T>, ctx: ReadContext, readAtom: Ato
 }
 
 // ---------------------------------------------------------------------------------------------
-// Array (§2.7) -- no ElementState, no min_items/max_items/unique_items: ArrayBinding carries none
+// Array (§2.7) -- no `voidable`, no min_items/max_items/unique_items: ArrayBinding carries none
 // of §5's ArrayBody facets, so none of that validation happens at this layer. See this file's own
 // top comment.
 // ---------------------------------------------------------------------------------------------

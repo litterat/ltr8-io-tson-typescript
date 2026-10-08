@@ -40,7 +40,7 @@ import type {
 import { TsonReadError } from '../core/errors.js';
 import type { Diagnostic, DiagnosticCode } from '../core/diagnostic.js';
 import type { Annotations } from '../annotations/index.js';
-import type { AtomBinding, Binding, BindingRef, RecordBinding } from './binding.js';
+import type { AtomBinding, Binding, BindingRef, RecordBinding, VariantMember } from './binding.js';
 
 /**
  * Converts a wire {@link TokenValue} at an {@link AtomBinding} leaf to its host value. Consulted
@@ -69,7 +69,7 @@ function defaultAtomDecoder(_binding: AtomBinding<unknown>, wire: TokenValue): u
  * knows only `RecordBinding` shapes and nothing of `RecordField`/`FieldGroup` (see this file's own
  * top comment on the `ast/`+`bind/`-only boundary). `schema/metaReader.ts` is the one caller
  * today: `type_ref`'s own `name` is required with no default, so it names `positionalField`;
- * `field_group.state` defaults to `REQUIRED` when the wire omits it, so `defaultFor('state')`
+ * `field_group.optional` defaults to `false` when the wire omits it, so `defaultFor('optional')`
  * hands back that default re-spelled as a `DataValue`.
  */
 export interface RecordFieldPolicy {
@@ -202,6 +202,12 @@ export function fromDataValue<T>(
     // resolves to some other entry), so every unadmitted name is reported the same way regardless
     // of whether it happens to resolve somewhere this decode cannot see.
     if (value.typeRef === undefined) {
+      // A variant whose members are a field group's options (`type_argument`'s `name` | `value`,
+      // §5.11) is told apart by which field the record writes, not by a `!type-ref`.
+      const byField = memberByWrittenField(resolved.members, value.coreValue);
+      if (byField !== undefined) {
+        return fromDataValue(byField.binding, value, decodeAtom, fieldsFor) as T;
+      }
       throw readError(
         'TYPE_MISMATCH',
         `a '${resolved.members.map((m) => m.wireName).join('/')}' value needs its own !type-ref to say which member it is`,
@@ -220,6 +226,26 @@ export function fromDataValue<T>(
 }
 
 /**
+ * The one variant member whose record shape owns a field `value` writes, or `undefined` when none
+ * or several do — the dispatch a field group's options need, since each option is a record naming
+ * its own field and carries no `!type-ref` (§5.11).
+ */
+function memberByWrittenField(
+  members: readonly VariantMember[],
+  value: CoreValue,
+): VariantMember | undefined {
+  if (value.kind !== 'record') return undefined;
+  const matching = members.filter((member) => {
+    const binding = resolveRef(member.binding);
+    return (
+      binding.kind === 'record' &&
+      value.fields.some((written) => binding.byWireName.has(written.name))
+    );
+  });
+  return matching.length === 1 ? matching[0] : undefined;
+}
+
+/**
  * Converts a bare {@link CoreValue} back to a bound host value -- the read counterpart of
  * `encode.ts`'s {@link toCoreValue}. No framing to interpret at this position (`§2.3`'s
  * `core-value`, not `data-value`): a {@link VariantBinding} or {@link AnnotatedBinding} passed
@@ -233,7 +259,7 @@ export function fromDataValue<T>(
  * fallback.
  *
  * **A bind-required field absent from the wire record** tries, in order: `fieldsFor`'s own
- * {@link RecordFieldPolicy.defaultFor} (a schema `REQUIRED_DEFAULT`/`REQUIRED_FIXED` value); the
+ * {@link RecordFieldPolicy.defaultFor} (a field's `DEFAULT` or `FIXED` value); the
  * empty collection, when the field's own binding resolves to {@link ArrayBinding}/
  * {@link MapBinding} (`CLAUDE.md`'s "absent and empty are the same list"); otherwise a
  * {@link TsonReadError} -- a scalar/atom field genuinely has nothing left to default to.

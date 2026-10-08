@@ -26,8 +26,8 @@
  *    (`FieldSlot.required` is a *write*-direction flag, `combinators.ts`'s own `field()`/
  *    `optional()` set it from the host type's own optionality, not from the field's own marks).
  * 2. **Injected field defaulting.** `[T]` desugars to `!array { element_type: T }` alone
- *    (`desugar.ts`'s own array-sugar rewrite) -- `unordered`, `unique_items` and `state` are the
- *    *kernel's* own declared defaults (`array => ~product & { unordered: boolean ~ false ... }`,
+ *    (`desugar.ts`'s own array-sugar rewrite) -- `ordered`, `unique_items` and `voidable` are the
+ *    *kernel's* own declared defaults (`array => product & { ordered?: boolean ~ true ... }`,
  *    meta-kernel.tn), not something the wire ever restates, and the same is true one level down
  *    (`record_field.optional`/`voidable` `~ false`, `role ~ FREE`). `bind/decode.ts`'s own
  *    "absent and empty are the same list" rule already covers a missing `ArrayBinding`/
@@ -78,8 +78,8 @@ import type { Top, TypeDefinition } from './meta/typedef.js';
 /**
  * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`identifier`, `token`,
  * `text`, `boolean`, `integer`, `value`, `date`, `time`, `datetime`, `scope_kind`, and the other
- * enum-shaped constraint atoms -- `field_role`, `element_state`, `record_extension_type`,
- * `enum_profile`, `complex_component`, `ieee_format`, `bytes_encoding`). Deliberately narrow: this
+ * enum-shaped constraint atoms -- `field_role`, `record_extension_type`,
+ * `normalization`, `identifier_base`, `complex_component`, `ieee_format`, `bytes_encoding`). Deliberately narrow: this
  * is not a general-purpose `atom/`
  * replacement, only what a schema *source* document's own constructor-application bodies ever
  * carry -- min/max bounds, size bits, enum members, boolean flags, and the temporal bound facets.
@@ -173,7 +173,7 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
     }
 
     // The remaining meta-kernel/meta atoms are all closed enumerations (`scope_kind`,
-    // `field_role`, `element_state`, `record_extension_type`, `enum_profile`,
+    // `field_role`, `record_extension_type`, `normalization`, `identifier_base`,
     // `complex_component`, `ieee_format`, `bytes_encoding`): every member is written as its own
     // bare unquoted name, so the token's own text already is the host value -- `schema/meta`'s
     // corresponding types are plain string-literal unions.

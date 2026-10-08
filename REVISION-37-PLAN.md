@@ -173,6 +173,11 @@ Vectors: `a-field-group-option-holds-several-fields`, the eight group vectors in
 
 ### WP2B: typed parameters and declared family members (#9, #4; Part 2 §5.2, §5.10, §8.1, §8.2; change log §8.2 items 2, 5, 6, 10–12)
 
+- **Start from what Stage 1 left.** `compiler/parameterTypes.ts` is a full port of Java
+  `ParameterTypes`. It covers derivation, agreement, the may-not-widen bound check, the
+  meta-constructor refusal and the structure-namespace reading. Verify each against §5.10 and
+  wire it where it is not yet reached; do not build it a second time. The call-site check is the
+  part that does not exist.
 - **Parameter checks.** Several uses of one parameter must agree by IS-A. A written type narrows a
   value parameter, and is a type parameter's bound. A bound is inherited through another
   template's argument list, and a written bound may not be wider than the one it inherits. A bound
@@ -207,6 +212,10 @@ two modified `applying-template-directly*` vectors.
 
 ### WP2C: identifier families, enum types, and normalization (#7, #19; Part 1 §2.6, §7.1, §7.7, §8.2; Part 2 §5.4, §5.5, §5.7, §7.4, §7.7, §11.4; change log §8.2 items 4, 8)
 
+- **Start from what Stage 1 left.** `json/schema/atoms.ts`'s `identifierReader` applies §7.7's
+  fixed grammar to every `identifier_type`, while the text side (`atomBuilder.ts`) checks none, so
+  the two encodings disagree for any profile other than `identifier`. `link/disjointness.ts`
+  decides an enum's class by the name `identifier`. Both move to the profile and the `type`.
 - **Identifier profiles as data.** The profile is built from `start`, `continue`, `start_add`,
   `continue_add`, `medial` and `exclude`. A profile with an empty Start set, or a medial that is
   also Start or Continue, is refused. Join controls keep §7.7 rule 2's contexts under every

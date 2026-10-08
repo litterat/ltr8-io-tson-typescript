@@ -280,6 +280,35 @@ describe('fromDataValue -- variant dispatch on !type-ref (§3.2)', () => {
     expect(() => fromDataValue(unionBinding, wire, intDecoder)).toThrow(TsonReadError);
   });
 
+  // A field group's options (`type_argument`'s `name` | `value`, §5.11) are records naming their
+  // own field and carry no `!type-ref`, so the field the record writes selects the member.
+  it('with no !type-ref, selects the one member whose record owns a field the value writes (§5.11)', () => {
+    const wire: DataValue = {
+      annotations: [],
+      coreValue: { kind: 'record', fields: [{ name: 'text', value: { value: dataToken('hi') } }] },
+    };
+    expect(fromDataValue(unionBinding, wire, intDecoder)).toEqual({ tag: 'b', text: 'hi' });
+  });
+
+  it('with no !type-ref, a record writing no field of any member, or fields of several, selects nothing', () => {
+    const neither: DataValue = {
+      annotations: [],
+      coreValue: { kind: 'record', fields: [{ name: 'other', value: { value: dataToken('1') } }] },
+    };
+    expect(() => fromDataValue(unionBinding, neither, intDecoder)).toThrow(TsonReadError);
+    const both: DataValue = {
+      annotations: [],
+      coreValue: {
+        kind: 'record',
+        fields: [
+          { name: 'x', value: { value: dataToken('1') } },
+          { name: 'text', value: { value: dataToken('hi') } },
+        ],
+      },
+    };
+    expect(() => fromDataValue(unionBinding, both, intDecoder)).toThrow(TsonReadError);
+  });
+
   it('rejects a !type-ref naming no member', () => {
     const wire: DataValue = {
       annotations: [],

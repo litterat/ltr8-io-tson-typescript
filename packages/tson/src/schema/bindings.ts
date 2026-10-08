@@ -45,6 +45,7 @@ import {
   variant,
 } from '../bind/combinators.js';
 import { registry } from '../bind/registry.js';
+import type { FieldSlot } from '../bind/binding.js';
 import type {
   AnnotatedBinding,
   ArrayBinding,
@@ -71,7 +72,7 @@ import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType } from '../base/baseTypeResolver.js';
 import { TsonInternalError, TsonReadError } from '../core/errors.js';
 
-import type { Decimal, Rational, Unit } from './meta/algebra.js';
+import type { Decimal, Rational, ValueType, VoidType } from './meta/algebra.js';
 import type {
   Annotation,
   Annotations,
@@ -90,9 +91,7 @@ import type {
 import { isTemplateBody } from './meta/typedef.js';
 import type {
   ChoiceBody,
-  ElementState,
   EnumBody,
-  EnumProfile,
   FieldGroup,
   FieldRole,
   MapBody,
@@ -100,11 +99,22 @@ import type {
   RecordExtensionType,
   RecordField,
   TemplateBody,
+  TemplateParam,
   TupleBody,
   TupleElement,
   ArrayBody,
 } from './meta/bodies.js';
-import type { EmailType, RegexType, TextType, UriType, UuidType } from './meta/atoms-text.js';
+import type {
+  EmailType,
+  IdentifierBase,
+  IdentifierType,
+  IriType,
+  Normalization,
+  RegexType,
+  TextType,
+  UriType,
+  UuidType,
+} from './meta/atoms-text.js';
 import type { BytesEncoding, BytesType } from './meta/atoms-bytes.js';
 import type {
   ComplexComponent,
@@ -154,6 +164,16 @@ function atom<T>(wireType: string): Binding<T> {
 /** Spreads `{ [key]: value }` only when `value` is defined -- `exactOptionalPropertyTypes` means an absent optional property must be omitted, never assigned `undefined`, and this is that omission written once instead of at every optional field of every `construct`. */
 function opt<K extends PropertyKey, V>(key: K, value: V | undefined): Partial<Record<K, V>> {
   return value === undefined ? {} : ({ [key]: value } as Partial<Record<K, V>>);
+}
+
+/**
+ * A slot resolved output leaves unwritten while it holds `value` (§8.1: "fields at their default
+ * values are omitted"; a FIXED field at the value its constructor pins is the constructor's
+ * statement, not the instance's). Reading is unaffected: absence means the pinned or default value
+ * either way.
+ */
+function unwrittenAt<T>(slot: FieldSlot<T>, value: T): FieldSlot<T> {
+  return { ...slot, isPresent: (host: unknown) => slot.get(host) !== value };
 }
 
 /** `array()` for the common "ordered list of `E`, host type `readonly E[]`" shape -- every list-shaped field in this model (`CLAUDE.md`'s "absent and empty are the same list" fields included: the emptiness is the reader's concern, not this binding's). */
@@ -266,6 +286,23 @@ function decimalFromWire(w: unknown): Decimal {
     if (decimal !== undefined) return decimal;
   }
   throw notANumericBound('an exact decimal', w);
+}
+
+/**
+ * `discriminators` is `[field_name; 1..]` (§5.2, §8.1): a family is member-dispatched exactly where
+ * the list is present, so an empty list would be a second spelling of tag dispatch. It is refused
+ * where it is read, so a present list is never empty for any consumer.
+ */
+function nonEmptyDiscriminators(
+  list: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (list?.length === 0) {
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message: "'discriminators' must hold at least one field name (min_items: 1)",
+    });
+  }
+  return list;
 }
 
 /** `expected <label>, found <w>` -- mirrors `reader/bind.ts`'s own `ATOM_CONSTRAINT_VIOLATION` shape, thrown here rather than reported directly since this module has no `ReadContext` of its own (`bind/decode.ts`'s `TsonReadError` is the seam `definitionResolver.ts`'s `bindAtomInstance` already catches and re-reports through). */
@@ -435,10 +472,10 @@ const valueBinding: Binding<unknown> = atom<unknown>('value');
 // The kernel declares no `type_kind` (§4.1, §8.1): a resolved entry's kind is derived
 // (`typeKind`, `schema/meta/typedef.ts`) rather than carried, so there is no such atom to bind.
 const fieldRoleBinding: Binding<FieldRole> = atom<FieldRole>('field_role');
-const elementStateBinding: Binding<ElementState> = atom<ElementState>('element_state');
 const recordExtensionTypeBinding: Binding<RecordExtensionType> =
   atom<RecordExtensionType>('record_extension_type');
-const enumProfileBinding: Binding<EnumProfile> = atom<EnumProfile>('enum_profile');
+const normalizationBinding: Binding<Normalization> = atom<Normalization>('normalization');
+const identifierBaseBinding: Binding<IdentifierBase> = atom<IdentifierBase>('identifier_base');
 const complexComponentBinding: Binding<ComplexComponent> =
   atom<ComplexComponent>('complex_component');
 const floatFormatBinding: Binding<FloatFormat> = atom<FloatFormat>('ieee_format');
@@ -464,13 +501,19 @@ const sourcePositionBinding: Binding<SourcePosition> = bridge<SourcePosition, st
 );
 
 // -------------------------------------------------------------------------------------------
-// Unit / Annotation
+// ValueType, VoidType / Annotation
 // -------------------------------------------------------------------------------------------
 
-/** meta-kernel's `unit => ~atom & {}` (§4.2): the empty ATOM body backing `value`/`identifier`/`void`. */
-const unitBinding: RecordBinding<Unit> = record<Unit>({
+/** meta-kernel's `value_type => atom & {}` (§4.2): the empty ATOM body backing `value`. */
+const valueTypeBinding: RecordBinding<ValueType> = record<ValueType>({
   fields: [],
-  construct: () => ({ kind: 'unit' }),
+  construct: () => ({ kind: 'value_type' }),
+});
+
+/** meta-kernel's `void_type => atom & {}` (§4.2): the empty ATOM body backing `void`. */
+const voidTypeBinding: RecordBinding<VoidType> = record<VoidType>({
+  fields: [],
+  construct: () => ({ kind: 'void_type' }),
 });
 
 /**
@@ -653,7 +696,7 @@ const typeArgumentValueBinding: RecordBinding<TypeArgumentValue> = record<TypeAr
 });
 
 /**
- * `type_argument`'s REQUIRED field *group* (§5.11): exactly one of `name`/`value` present, never
+ * `type_argument`'s field *group*, which must be chosen (§5.11): exactly one of `name`/`value` present, never
  * both. `variant()`'s ordinary member-key convention names a wire *type*; here the two members are
  * a field-group choice, not two named types a `!type-ref` picks between, so the member keys below
  * are this union's own TypeScript discriminant values (`'ref'`/`'value'`) rather than a wire type
@@ -766,23 +809,42 @@ const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
 
 const fieldGroupBinding: RecordBinding<FieldGroup> = record<FieldGroup>({
   fields: [
-    field<FieldGroup, 'members'>(0, 'members', 'members', arrayOf<string>(identifierBinding)),
-    field<FieldGroup, 'state'>(1, 'state', 'state', elementStateBinding),
+    field<FieldGroup, 'members'>(
+      0,
+      'members',
+      'members',
+      arrayOf<readonly string[]>(arrayOf<string>(identifierBinding)),
+    ),
+    optional<FieldGroup, 'optionalMembers'>(
+      1,
+      'optional_members',
+      'optionalMembers',
+      arrayOf<string>(identifierBinding),
+    ),
+    field<FieldGroup, 'optional'>(2, 'optional', 'optional', booleanBinding),
   ],
   construct: (slots) => {
-    const [members, state] = slots as [readonly string[], ElementState];
-    return { members, state };
+    const [members, optionalMembers, optionalFlag] = slots as [
+      readonly (readonly string[])[],
+      readonly string[] | undefined,
+      boolean,
+    ];
+    return {
+      members,
+      ...(optionalMembers === undefined ? {} : { optionalMembers }),
+      optional: optionalFlag,
+    };
   },
 });
 
 const tupleElementBinding: RecordBinding<TupleElement> = record<TupleElement>({
   fields: [
     field<TupleElement, 'elementType'>(0, 'element_type', 'elementType', typeRefAnnotatedBinding),
-    field<TupleElement, 'state'>(1, 'state', 'state', elementStateBinding),
+    field<TupleElement, 'voidable'>(1, 'voidable', 'voidable', booleanBinding),
   ],
   construct: (slots) => {
-    const [elementType, state] = slots as [TypeRef, ElementState];
-    return { elementType, state };
+    const [elementType, voidable] = slots as [TypeRef, boolean];
+    return { elementType, voidable };
   },
 });
 
@@ -797,7 +859,7 @@ const recordBodyBinding: RecordBinding<RecordBody> = record<RecordBody>({
     field<RecordBody, 'fields'>(1, 'fields', 'fields', arrayOf<RecordField>(recordFieldBinding)),
     field<RecordBody, 'groups'>(2, 'groups', 'groups', arrayOf<FieldGroup>(fieldGroupBinding)),
     field<RecordBody, 'extension'>(3, 'extension', 'extension', recordExtensionTypeBinding),
-    field<RecordBody, 'discriminators'>(
+    optional<RecordBody, 'discriminators'>(
       4,
       'discriminators',
       'discriminators',
@@ -810,25 +872,56 @@ const recordBodyBinding: RecordBinding<RecordBody> = record<RecordBody>({
       readonly RecordField[],
       readonly FieldGroup[],
       RecordExtensionType,
-      readonly string[],
+      readonly string[] | undefined,
     ];
-    return { kind: 'record', supertypes, fields, groups, extension, discriminators };
+    return {
+      kind: 'record',
+      supertypes,
+      fields,
+      groups,
+      extension,
+      ...opt('discriminators', nonEmptyDiscriminators(discriminators)),
+    };
   },
 });
+
+/**
+ * The constructor named by an entry's `source`, carried on its body into {@link topBinding}'s
+ * write path (see `memberFor` below).
+ */
+const APPLIED = Symbol('appliedConstructor');
+interface Headed {
+  readonly [APPLIED]?: string;
+}
+
+/**
+ * An {@link ArrayBody} slot `set_type` fixes (`voidable: false`, `ordered: false`, `unique_items:
+ * true`): unwritten under a `set_type` head at the pinned value, written under `array`.
+ */
+function underSetType(slot: FieldSlot<boolean>, pinned: boolean): FieldSlot<boolean> {
+  return {
+    ...slot,
+    isPresent: (host: unknown) =>
+      !((host as Headed)[APPLIED] === 'set_type' && slot.get(host) === pinned),
+  };
+}
 
 const arrayBodyBinding: RecordBinding<ArrayBody> = record<ArrayBody>({
   fields: [
     field<ArrayBody, 'elementType'>(0, 'element_type', 'elementType', typeRefAnnotatedBinding),
-    field<ArrayBody, 'state'>(1, 'state', 'state', elementStateBinding),
-    field<ArrayBody, 'unordered'>(2, 'unordered', 'unordered', booleanBinding),
-    field<ArrayBody, 'uniqueItems'>(3, 'unique_items', 'uniqueItems', booleanBinding),
+    underSetType(field<ArrayBody, 'voidable'>(1, 'voidable', 'voidable', booleanBinding), false),
+    underSetType(field<ArrayBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding), false),
+    underSetType(
+      field<ArrayBody, 'uniqueItems'>(3, 'unique_items', 'uniqueItems', booleanBinding),
+      true,
+    ),
     optional<ArrayBody, 'minItems'>(4, 'min_items', 'minItems', bigintBinding),
     optional<ArrayBody, 'maxItems'>(5, 'max_items', 'maxItems', bigintBinding),
   ],
   construct: (slots) => {
-    const [elementType, state, unordered, uniqueItems, minItems, maxItems] = slots as [
+    const [elementType, voidable, ordered, uniqueItems, minItems, maxItems] = slots as [
       TypeRef,
-      ElementState,
+      boolean,
       boolean,
       boolean,
       bigint | undefined,
@@ -837,8 +930,8 @@ const arrayBodyBinding: RecordBinding<ArrayBody> = record<ArrayBody>({
     return {
       kind: 'array',
       elementType,
-      state,
-      unordered,
+      voidable,
+      ordered,
       uniqueItems,
       ...opt('minItems', minItems),
       ...opt('maxItems', maxItems),
@@ -850,15 +943,17 @@ const mapBodyBinding: RecordBinding<MapBody> = record<MapBody>({
   fields: [
     field<MapBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
     field<MapBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
-    field<MapBody, 'state'>(2, 'state', 'state', elementStateBinding),
-    optional<MapBody, 'minItems'>(3, 'min_items', 'minItems', bigintBinding),
-    optional<MapBody, 'maxItems'>(4, 'max_items', 'maxItems', bigintBinding),
+    field<MapBody, 'voidable'>(2, 'voidable', 'voidable', booleanBinding),
+    field<MapBody, 'ordered'>(3, 'ordered', 'ordered', booleanBinding),
+    optional<MapBody, 'minItems'>(4, 'min_items', 'minItems', bigintBinding),
+    optional<MapBody, 'maxItems'>(5, 'max_items', 'maxItems', bigintBinding),
   ],
   construct: (slots) => {
-    const [keyType, valueType, state, minItems, maxItems] = slots as [
+    const [keyType, valueType, voidable, ordered, minItems, maxItems] = slots as [
       TypeRef,
       TypeRef,
-      ElementState,
+      boolean,
+      boolean,
       bigint | undefined,
       bigint | undefined,
     ];
@@ -866,7 +961,8 @@ const mapBodyBinding: RecordBinding<MapBody> = record<MapBody>({
       kind: 'map',
       keyType,
       valueType,
-      state,
+      voidable,
+      ordered,
       ...opt('minItems', minItems),
       ...opt('maxItems', maxItems),
     };
@@ -915,16 +1011,33 @@ const choiceBodyBinding: RecordBinding<ChoiceBody> = record<ChoiceBody>({
   },
 });
 
+// `enum` and `text_enum` pin their `type` (`identifier` and `text`), so resolved output omits it
+// under exactly those constructors and writes it under every other, `enum_type` included (§8.1). Which
+// constructor heads the body is the entry's `source`, carried on the body under {@link APPLIED}.
+const typeSlot = {
+  ...field<EnumBody, 'type'>(0, 'type', 'type', identifierBinding),
+  isPresent: (host: unknown): boolean => {
+    const type = (host as EnumBody).type;
+    const applied = (host as Headed)[APPLIED];
+    return !(
+      (applied === 'enum' && type === 'identifier') ||
+      (applied === 'text_enum' && type === 'text')
+    );
+  },
+};
+
 const enumBodyBinding: RecordBinding<EnumBody> = record<EnumBody>({
   fields: [
-    // `enum_set` is `!set_type { element_type: text }` (§7.4, #12): members are TEXT, not
-    // identifiers, so a `TEXT`-profile enum can admit any string.
-    field<EnumBody, 'members'>(0, 'members', 'members', arrayOf<string>(textBinding)),
-    field<EnumBody, 'profile'>(1, 'profile', 'profile', enumProfileBinding),
+    // `type` names the text family the members are drawn from; `enum` and `text_enum` pin it, so a
+    // wire record under either constructor may omit it and the governing meta supplies it.
+    typeSlot,
+    // `enum_set` is `!set_type { element_type: text  min_items: 1 }` (§7.4): members are text,
+    // not identifiers, so an enum over a non-identifier family can admit any string.
+    field<EnumBody, 'members'>(1, 'members', 'members', arrayOf<string>(textBinding)),
   ],
   construct: (slots) => {
-    const [members, profile] = slots as [readonly string[], EnumProfile];
-    return { kind: 'enum', members, profile };
+    const [type, members] = slots as [string, readonly string[]];
+    return { kind: 'enum', type, members };
   },
 });
 
@@ -1101,17 +1214,19 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
     optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', bigintBinding),
     optional<TextType, 'length'>(2, 'length', 'length', bigintBinding),
     optional<TextType, 'pattern'>(3, 'pattern', 'pattern', textBinding),
-    // `text_member_set => !set_type { element_type: text }` (§7.4, #22): a value set on the text
-    // tier itself, reached the same way `integer_type.members`/`decimal_type.members` are.
+    // `text_member_set => !set_type { element_type: text  min_items: 1 }` (§7.4): a value set on
+    // the text tier itself, reached the same way `integer_type.members`/`decimal_type.members` are.
     optional<TextType, 'members'>(4, 'members', 'members', arrayOf<string>(textBinding)),
+    field<TextType, 'normalization'>(5, 'normalization', 'normalization', normalizationBinding),
   ],
   construct: (slots) => {
-    const [minLength, maxLength, length, pattern, members] = slots as [
+    const [minLength, maxLength, length, pattern, members, normalization] = slots as [
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
       readonly string[] | undefined,
+      Normalization,
     ];
     return {
       kind: 'text_type',
@@ -1120,6 +1235,80 @@ const textTypeBinding: RecordBinding<TextType> = record<TextType>({
       ...opt('length', length),
       ...opt('pattern', pattern),
       ...opt('members', members),
+      normalization,
+    };
+  },
+});
+
+const identifierTypeBinding: RecordBinding<IdentifierType> = record<IdentifierType>({
+  fields: [
+    unwrittenAt(
+      field<IdentifierType, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.unicode.org/reports/tr31/',
+    ),
+    optional<IdentifierType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
+    optional<IdentifierType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
+    optional<IdentifierType, 'length'>(3, 'length', 'length', bigintBinding),
+    optional<IdentifierType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
+    optional<IdentifierType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
+    field<IdentifierType, 'normalization'>(
+      6,
+      'normalization',
+      'normalization',
+      normalizationBinding,
+    ),
+    field<IdentifierType, 'start'>(7, 'start', 'start', identifierBaseBinding),
+    field<IdentifierType, 'continue'>(8, 'continue', 'continue', identifierBaseBinding),
+    optional<IdentifierType, 'startAdd'>(9, 'start_add', 'startAdd', textBinding),
+    optional<IdentifierType, 'continueAdd'>(10, 'continue_add', 'continueAdd', textBinding),
+    optional<IdentifierType, 'medial'>(11, 'medial', 'medial', textBinding),
+    optional<IdentifierType, 'exclude'>(12, 'exclude', 'exclude', textBinding),
+  ],
+  construct: (slots) => {
+    const [
+      spec,
+      minLength,
+      maxLength,
+      length,
+      pattern,
+      members,
+      normalization,
+      start,
+      continueBase,
+      startAdd,
+      continueAdd,
+      medial,
+      exclude,
+    ] = slots as [
+      string,
+      bigint | undefined,
+      bigint | undefined,
+      bigint | undefined,
+      string | undefined,
+      readonly string[] | undefined,
+      Normalization,
+      IdentifierBase,
+      IdentifierBase,
+      string | undefined,
+      string | undefined,
+      string | undefined,
+      string | undefined,
+    ];
+    return {
+      kind: 'identifier_type',
+      spec,
+      ...opt('minLength', minLength),
+      ...opt('maxLength', maxLength),
+      ...opt('length', length),
+      ...opt('pattern', pattern),
+      ...opt('members', members),
+      normalization,
+      start,
+      continue: continueBase,
+      ...opt('startAdd', startAdd),
+      ...opt('continueAdd', continueAdd),
+      ...opt('medial', medial),
+      ...opt('exclude', exclude),
     };
   },
 });
@@ -1147,21 +1336,29 @@ const bytesTypeBinding: RecordBinding<BytesType> = record<BytesType>({
 
 const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
   fields: [
-    field<RegexType, 'spec'>(0, 'spec', 'spec', textBinding),
+    unwrittenAt(
+      field<RegexType, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc9485',
+    ),
     optional<RegexType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
     optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
     optional<RegexType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<RegexType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
     optional<RegexType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
+    unwrittenAt(
+      field<RegexType, 'normalization'>(6, 'normalization', 'normalization', normalizationBinding),
+      'NONE',
+    ),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern, members] = slots as [
+    const [spec, minLength, maxLength, length, pattern, members, normalization] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
       readonly string[] | undefined,
+      Normalization,
     ];
     return {
       kind: 'regex_type',
@@ -1171,60 +1368,103 @@ const regexTypeBinding: RecordBinding<RegexType> = record<RegexType>({
       ...opt('length', length),
       ...opt('pattern', pattern),
       ...opt('members', members),
+      normalization,
     };
   },
 });
 
-const uriTypeBinding: RecordBinding<UriType> = record<UriType>({
-  fields: [
-    field<UriType, 'spec'>(0, 'spec', 'spec', textBinding),
-    optional<UriType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
-    optional<UriType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
-    optional<UriType, 'length'>(3, 'length', 'length', bigintBinding),
-    optional<UriType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
-    optional<UriType, 'scheme'>(5, 'scheme', 'scheme', textBinding),
-    optional<UriType, 'members'>(6, 'members', 'members', arrayOf<string>(textBinding)),
-  ],
-  construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern, scheme, members] = slots as [
-      string,
-      bigint | undefined,
-      bigint | undefined,
-      bigint | undefined,
-      string | undefined,
-      string | undefined,
-      readonly string[] | undefined,
-    ];
-    return {
-      kind: 'uri_type',
-      spec,
-      ...opt('minLength', minLength),
-      ...opt('maxLength', maxLength),
-      ...opt('length', length),
-      ...opt('pattern', pattern),
-      ...opt('scheme', scheme),
-      ...opt('members', members),
-    };
-  },
-});
+/** `uri_type` and `iri_type` share a shape; `kind` is the only difference. */
+function uriFamilyBinding<T extends UriType | IriType>(kind: T['kind']): RecordBinding<T> {
+  return record<T>({
+    fields: [
+      unwrittenAt(
+        field<T, 'spec'>(0, 'spec', 'spec', textBinding),
+        kind === 'uri_type'
+          ? 'https://www.rfc-editor.org/rfc/rfc3986'
+          : 'https://www.rfc-editor.org/rfc/rfc3987',
+      ),
+      optional<T, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
+      optional<T, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
+      optional<T, 'length'>(3, 'length', 'length', bigintBinding),
+      optional<T, 'pattern'>(4, 'pattern', 'pattern', textBinding),
+      optional<T, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
+      optional<T, 'schemes'>(6, 'schemes', 'schemes', arrayOf<string>(textBinding)),
+      field<T, 'allowRelative'>(7, 'allow_relative', 'allowRelative', booleanBinding),
+      field<T, 'allowFragment'>(8, 'allow_fragment', 'allowFragment', booleanBinding),
+      unwrittenAt(
+        field<T, 'normalization'>(9, 'normalization', 'normalization', normalizationBinding),
+        'NONE',
+      ),
+    ],
+    construct: (slots) => {
+      const [
+        spec,
+        minLength,
+        maxLength,
+        length,
+        pattern,
+        members,
+        schemes,
+        allowRelative,
+        allowFragment,
+        normalization,
+      ] = slots as [
+        string,
+        bigint | undefined,
+        bigint | undefined,
+        bigint | undefined,
+        string | undefined,
+        readonly string[] | undefined,
+        readonly string[] | undefined,
+        boolean,
+        boolean,
+        Normalization,
+      ];
+      return {
+        kind,
+        spec,
+        ...opt('minLength', minLength),
+        ...opt('maxLength', maxLength),
+        ...opt('length', length),
+        ...opt('pattern', pattern),
+        ...opt('members', members),
+        ...opt('schemes', schemes),
+        allowRelative,
+        allowFragment,
+        normalization,
+      } as unknown as T;
+    },
+  });
+}
+
+const uriTypeBinding: RecordBinding<UriType> = uriFamilyBinding<UriType>('uri_type');
+const iriTypeBinding: RecordBinding<IriType> = uriFamilyBinding<IriType>('iri_type');
 
 const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
   fields: [
-    field<EmailType, 'spec'>(0, 'spec', 'spec', textBinding),
+    unwrittenAt(
+      field<EmailType, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc5322',
+    ),
     optional<EmailType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
     optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
     optional<EmailType, 'length'>(3, 'length', 'length', bigintBinding),
     optional<EmailType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
     optional<EmailType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
+    unwrittenAt(
+      field<EmailType, 'normalization'>(6, 'normalization', 'normalization', normalizationBinding),
+      'NONE',
+    ),
   ],
   construct: (slots) => {
-    const [spec, minLength, maxLength, length, pattern, members] = slots as [
+    const [spec, minLength, maxLength, length, pattern, members, normalization] = slots as [
       string,
       bigint | undefined,
       bigint | undefined,
       bigint | undefined,
       string | undefined,
       readonly string[] | undefined,
+      Normalization,
     ];
     return {
       kind: 'email_type',
@@ -1234,6 +1474,7 @@ const emailTypeBinding: RecordBinding<EmailType> = record<EmailType>({
       ...opt('length', length),
       ...opt('pattern', pattern),
       ...opt('members', members),
+      normalization,
     };
   },
 });
@@ -1418,7 +1659,10 @@ const periodTypeBinding: RecordBinding<PeriodType> = record<PeriodType>({
 
 const ipv4TypeBinding: RecordBinding<Ipv4Type> = record<Ipv4Type>({
   fields: [
-    field<Ipv4Type, 'spec'>(0, 'spec', 'spec', textBinding),
+    unwrittenAt(
+      field<Ipv4Type, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc3986',
+    ),
     field<Ipv4Type, 'within'>(1, 'within', 'within', arrayOf<string>(textBinding)),
     field<Ipv4Type, 'excluding'>(2, 'excluding', 'excluding', arrayOf<string>(textBinding)),
   ],
@@ -1430,7 +1674,10 @@ const ipv4TypeBinding: RecordBinding<Ipv4Type> = record<Ipv4Type>({
 
 const ipv6TypeBinding: RecordBinding<Ipv6Type> = record<Ipv6Type>({
   fields: [
-    field<Ipv6Type, 'spec'>(0, 'spec', 'spec', textBinding),
+    unwrittenAt(
+      field<Ipv6Type, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc4291',
+    ),
     field<Ipv6Type, 'within'>(1, 'within', 'within', arrayOf<string>(textBinding)),
     field<Ipv6Type, 'excluding'>(2, 'excluding', 'excluding', arrayOf<string>(textBinding)),
   ],
@@ -1442,7 +1689,10 @@ const ipv6TypeBinding: RecordBinding<Ipv6Type> = record<Ipv6Type>({
 
 const cidr4TypeBinding: RecordBinding<Cidr4Type> = record<Cidr4Type>({
   fields: [
-    field<Cidr4Type, 'spec'>(0, 'spec', 'spec', textBinding),
+    unwrittenAt(
+      field<Cidr4Type, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc4632',
+    ),
     optional<Cidr4Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', bigintBinding),
     optional<Cidr4Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', bigintBinding),
     field<Cidr4Type, 'within'>(3, 'within', 'within', arrayOf<string>(textBinding)),
@@ -1469,7 +1719,10 @@ const cidr4TypeBinding: RecordBinding<Cidr4Type> = record<Cidr4Type>({
 
 const cidr6TypeBinding: RecordBinding<Cidr6Type> = record<Cidr6Type>({
   fields: [
-    field<Cidr6Type, 'spec'>(0, 'spec', 'spec', textBinding),
+    unwrittenAt(
+      field<Cidr6Type, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc4291',
+    ),
     optional<Cidr6Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', bigintBinding),
     optional<Cidr6Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', bigintBinding),
     field<Cidr6Type, 'within'>(3, 'within', 'within', arrayOf<string>(textBinding)),
@@ -1495,7 +1748,12 @@ const cidr6TypeBinding: RecordBinding<Cidr6Type> = record<Cidr6Type>({
 });
 
 const macTypeBinding: RecordBinding<MacType> = record<MacType>({
-  fields: [field<MacType, 'spec'>(0, 'spec', 'spec', textBinding)],
+  fields: [
+    unwrittenAt(
+      field<MacType, 'spec'>(0, 'spec', 'spec', textBinding),
+      'https://www.rfc-editor.org/rfc/rfc9542',
+    ),
+  ],
   construct: (slots) => {
     const [spec] = slots as [string];
     return { kind: 'mac_type', spec };
@@ -1507,12 +1765,28 @@ const macTypeBinding: RecordBinding<MacType> = record<MacType>({
 // -------------------------------------------------------------------------------------------
 
 /**
- * The kernel's `template => top & { parameters: [param_name]  template: text }` (§5.10) -- the
- * body of an entry that declares type parameters, carried in resolver output as an ordinary
- * `type_definition` whose `body` is a `!template` instance (§8.1). `spec/m/meta-resolved.tn`
- * writes `set` as `body: !template { parameters: [T]  template: "!set_type { element_type: T }" }`
- * and `core-resolved.tn` writes three more, so this is a position the bundled fixtures exercise,
- * not a speculative one.
+ * The kernel's `template_param => { name: param_name  type: type_ref  bound?: type_ref }` (§5.10,
+ * §8.1): one parameter of an open entry with the type an argument for it is read as.
+ */
+const templateParamBinding: RecordBinding<TemplateParam> = record<TemplateParam>({
+  fields: [
+    field<TemplateParam, 'name'>(0, 'name', 'name', identifierBinding),
+    field<TemplateParam, 'type'>(1, 'type', 'type', typeRefAnnotatedBinding),
+    optional<TemplateParam, 'bound'>(2, 'bound', 'bound', typeRefAnnotatedBinding),
+  ],
+  construct: (slots) => {
+    const [name, type, bound] = slots as [string, TypeRef, TypeRef | undefined];
+    return { name, type, ...opt('bound', bound) };
+  },
+});
+
+/**
+ * The kernel's `template => top & { parameters: [template_param]  template: text  extension?
+ * discriminators? }` (§5.10) -- the body of an entry that declares type parameters, carried in
+ * resolver output as an ordinary `type_definition` whose `body` is a `!template` instance (§8.1).
+ * `spec/m/meta-resolved.tn` writes `set` as `body: !template { parameters: [{ name: T  type:
+ * type_ref }]  template: "!set_type { element_type: T }" }`, so this is a position the bundled
+ * fixtures exercise, not a speculative one.
  *
  * `template` is held as TEXT and this binding treats it as text: the parse belongs to
  * `compiler/heldBody.ts`, and identity compares the parsed form, so whitespace inside the string
@@ -1524,24 +1798,43 @@ const templateBodyBinding: RecordBinding<TemplateBody> = record<TemplateBody>({
       0,
       'parameters',
       'parameters',
-      arrayOf<string>(identifierBinding),
+      arrayOf<TemplateParam>(templateParamBinding),
     ),
     field<TemplateBody, 'template'>(1, 'template', 'template', textBinding),
+    optional<TemplateBody, 'extension'>(2, 'extension', 'extension', recordExtensionTypeBinding),
+    optional<TemplateBody, 'discriminators'>(
+      3,
+      'discriminators',
+      'discriminators',
+      arrayOf<string>(identifierBinding),
+    ),
   ],
   construct: (slots) => {
-    const [parameters, template] = slots as [readonly string[], string];
-    return { parameters, template };
+    const [parameters, template, extension, discriminators] = slots as [
+      readonly TemplateParam[],
+      string,
+      RecordExtensionType | undefined,
+      readonly string[] | undefined,
+    ];
+    return {
+      parameters,
+      template,
+      ...opt('extension', extension),
+      ...opt('discriminators', nonEmptyDiscriminators(discriminators)),
+    };
   },
 });
 
 /**
  * `type_definition.body: top` (§4.1, §8.1) -- the wire's own `!type-ref` before the value picks
  * the member (§3.1), confirmed directly against `spec/m/*-resolved.tn`: `enum_set`'s body reads
- * `!set { element_type: identifier  min_items: 1 }`, not `!array { ... }`, even though `set`
- * shares {@link ArrayBody}'s shape rather than declaring one of its own -- both wire names below
- * resolve to {@link arrayBodyBinding}. `value`/`identifier`/`void` are the three instances of
- * {@link unitBinding} (confirmed the same way: all three read `body: !unit {}}` in
- * `meta-kernel-resolved.tn`).
+ * `!set_type { element_type: text  min_items: 1 }`, not `!array { ... }`, even though `set_type`
+ * shares {@link ArrayBody}'s shape rather than declaring one of its own -- the wire names below
+ * resolve to {@link arrayBodyBinding}. `value` and `void` are instances of {@link
+ * valueTypeBinding} and {@link voidTypeBinding}, constructors with empty vocabularies
+ * (`body: !value_type {}`, `body: !void_type {}` in `meta-kernel-resolved.tn`). `enum`,
+ * `text_enum` and `enum_type` all resolve to {@link enumBodyBinding}; a body is written under
+ * the constructor its entry's `source` names (§8.1), never one guessed from its shape.
  *
  * `data`, the meta layer's open extension point, has no member here: no bundled fixture exercises
  * one. `Top` still names it, so the const below is typed `VariantBinding<Top>` explicitly -- a
@@ -1558,14 +1851,15 @@ const topBinding: VariantBinding<Top> = variant(
     record: recordBodyBinding,
     array: arrayBodyBinding,
     set: arrayBodyBinding,
+    set_type: arrayBodyBinding,
     map: mapBodyBinding,
     tuple: tupleBodyBinding,
     choice: choiceBodyBinding,
     enum: enumBodyBinding,
-    unit: unitBinding,
-    value: unitBinding,
-    identifier: unitBinding,
-    void: unitBinding,
+    text_enum: enumBodyBinding,
+    enum_type: enumBodyBinding,
+    value_type: valueTypeBinding,
+    void_type: voidTypeBinding,
     reference: referenceBinding,
     scoped: scopedBinding,
     integer_type: integerTypeBinding,
@@ -1574,9 +1868,11 @@ const topBinding: VariantBinding<Top> = variant(
     rational_type: rationalTypeBinding,
     complex_type: complexTypeBinding,
     text_type: textTypeBinding,
+    identifier_type: identifierTypeBinding,
     bytes_type: bytesTypeBinding,
     regex_type: regexTypeBinding,
     uri_type: uriTypeBinding,
+    iri_type: iriTypeBinding,
     email_type: emailTypeBinding,
     uuid_type: uuidTypeBinding,
     date_type: dateTypeBinding,
@@ -1596,11 +1892,41 @@ const topBinding: VariantBinding<Top> = variant(
   // error — so `type_definition.body`, the one polymorphic slot in the whole resolved-schema
   // model, could be read but never written.
   //
-  // Every host kind has a member of the same name. The extra members are read-only wire aliases:
-  // `set` is written as an array body (its set-ness lives in `unordered`), and `value`/`identifier`/
-  // `void` share the unit binding. Reading still reaches them through byWireName.
+  // Every host kind has a member of the same name. `set`, `set_type`, `text_enum` and `enum_type`
+  // are extra wire names for the array and enum bodies, reached by reading through byWireName;
+  // `memberFor` below picks the constructor a body is written under.
   'kind',
 );
+
+// The constructor a body is written under (§8.1: "a binding record headed by the applied
+// constructor") is a fact about the entry, not about the body: `set_type` restates `array`'s
+// fields and adds none, and `enum`, `text_enum` and `enum_type` share one body shape, so no
+// inspection of the body can recover which was applied. It is recorded one level up, in the
+// entry's `source`. The `body` slot of {@link typeDefinitionBinding} therefore hands the variant
+// its body tagged with that name under {@link APPLIED}, and `memberFor` honours the tag where the
+// named member writes the body's own shape. A body with no `source` is written under its base
+// constructor: `array` for an array, `enum_type` for an enum.
+const baseMemberFor = topBinding.memberFor.bind(topBinding);
+function baseWireName(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  return (value as { kind?: unknown }).kind === 'enum' ? 'enum_type' : undefined;
+}
+Object.assign(topBinding, {
+  memberFor: (value: unknown) => {
+    const natural = baseMemberFor(value);
+    if (natural === undefined || typeof value !== 'object' || value === null) return natural;
+    const applied = (value as Headed)[APPLIED];
+    const wanted = applied ?? baseWireName(value);
+    if (wanted === undefined) return natural;
+    const named = topBinding.members.find((member) => member.wireName === wanted);
+    return named?.binding === natural.binding ? named : natural;
+  },
+});
+
+/** A body, tagged with the constructor its entry's `source` names, for {@link topBinding} to write under. */
+function headed(body: Top, source: TypeRef | undefined): Top {
+  return source === undefined ? body : Object.assign({}, body, { [APPLIED]: source.name });
+}
 
 // The `template` member's own recognition, attached after construction because `variant`'s shape
 // argument carries bindings alone. Two fields and no tag is exactly what `isTemplateBody`
@@ -1653,7 +1979,11 @@ const typeDefinitionBinding: RecordBinding<TypeDefinition> = record<TypeDefiniti
       'subtypes',
       arrayOf<string>(identifierBinding),
     ),
-    field<TypeDefinition, 'body'>(3, 'body', 'body', topBinding),
+    {
+      ...field<TypeDefinition, 'body'>(3, 'body', 'body', topBinding),
+      get: (host: unknown) =>
+        headed((host as TypeDefinition).body, (host as TypeDefinition).source),
+    },
     positionSlot,
     field<TypeDefinition, 'annotations'>(5, 'annotations', 'annotations', annotationsBinding),
   ],
@@ -1684,7 +2014,8 @@ const typeDefinitionBinding: RecordBinding<TypeDefinition> = record<TypeDefiniti
 export {
   tokenFormFromWire,
   tokenFormToWire,
-  unitBinding,
+  valueTypeBinding,
+  voidTypeBinding,
   rationalBinding,
   decimalBinding,
   calendarDateBinding,
@@ -1697,9 +2028,9 @@ export {
   booleanBinding,
   bigintBinding,
   fieldRoleBinding,
-  elementStateBinding,
+  normalizationBinding,
+  identifierBaseBinding,
   recordExtensionTypeBinding,
-  enumProfileBinding,
   complexComponentBinding,
   floatFormatBinding,
   bytesEncodingBinding,
@@ -1717,6 +2048,7 @@ export {
   integerSizeBinding,
   recordFieldBinding,
   fieldGroupBinding,
+  templateParamBinding,
   tupleElementBinding,
   recordBodyBinding,
   arrayBodyBinding,
@@ -1731,8 +2063,10 @@ export {
   complexTypeBinding,
   textTypeBinding,
   bytesTypeBinding,
+  identifierTypeBinding,
   regexTypeBinding,
   uriTypeBinding,
+  iriTypeBinding,
   emailTypeBinding,
   uuidTypeBinding,
   dateTypeBinding,
@@ -1777,10 +2111,10 @@ export const metaBindings: BindingRegistry = registry({
   tuple: tupleBodyBinding,
   choice: choiceBodyBinding,
   enum: enumBodyBinding,
-  unit: unitBinding,
-  value: unitBinding,
-  identifier: unitBinding,
-  void: unitBinding,
+  text_enum: enumBodyBinding,
+  enum_type: enumBodyBinding,
+  value_type: valueTypeBinding,
+  void_type: voidTypeBinding,
   reference: referenceBinding,
   scoped: scopedBinding,
   integer_type: integerTypeBinding,
@@ -1789,9 +2123,11 @@ export const metaBindings: BindingRegistry = registry({
   rational_type: rationalTypeBinding,
   complex_type: complexTypeBinding,
   text_type: textTypeBinding,
+  identifier_type: identifierTypeBinding,
   bytes_type: bytesTypeBinding,
   regex_type: regexTypeBinding,
   uri_type: uriTypeBinding,
+  iri_type: iriTypeBinding,
   email_type: emailTypeBinding,
   uuid_type: uuidTypeBinding,
   date_type: dateTypeBinding,
@@ -1808,6 +2144,7 @@ export const metaBindings: BindingRegistry = registry({
   integer_size: integerSizeBinding,
   record_field: recordFieldBinding,
   field_group: fieldGroupBinding,
+  template_param: templateParamBinding,
   tuple_element: tupleElementBinding,
   type_ref: typeRefAnnotatedBinding,
   type_argument: typeArgumentBinding,

@@ -1,5 +1,5 @@
 /**
- * The two remaining base-kind unions (`product`, `sum`, §4.1), the `unit` atom constructor,
+ * The two remaining base-kind unions (`product`, `sum`, §4.1), the `value_type` and `void_type` atom constructors,
  * the two product-shape enums implied by (but never carried on) a product body, and the exact
  * host-value shapes this package's constraint fields are typed with: {@link Rational} and
  * {@link Decimal}.
@@ -43,12 +43,21 @@ export type ProductSizeType = 'FIXED' | 'VARIABLE';
 export type ProductAccessType = 'INDEX' | 'NAMED';
 
 /**
- * The meta-kernel's `unit` atom constructor's own vocabulary, resolved (§4.2, §8.1): an
- * empty marker, `!unit {}` — the body of `value`, `identifier`, and `void` (and core's own
- * `void` sibling), "the atom with no constraint vocabulary" (§4.2).
+ * The meta-kernel's `value_type` atom constructor, resolved (§4.2, §5.4, §8.1): an empty marker,
+ * `!value_type {}` — the body of `value`, the atom with no constraint vocabulary and no class. A
+ * processor recognises it by constructor, never by name.
  */
-export interface Unit {
-  readonly kind: 'unit';
+export interface ValueType {
+  readonly kind: 'value_type';
+}
+
+/**
+ * The meta-kernel's `void_type` atom constructor, resolved (§4.2, §7.3, §8.1): an empty marker,
+ * `!void_type {}` — the body of `void` (and core's own `void` sibling), the atom whose only value
+ * is the void sentinel. A processor recognises it by constructor, never by name.
+ */
+export interface VoidType {
+  readonly kind: 'void_type';
 }
 
 /**

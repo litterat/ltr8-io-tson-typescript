@@ -114,7 +114,15 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
     // `fax` resolves in the schema (declared alongside the choice, an unrelated entry) but is not
     // one of `phone`/`email` -- admissibility fails, not resolution.
     const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
-      ['fax', { supertypes: [], subtypes: [], annotations: [], body: { kind: 'text_type' } }],
+      [
+        'fax',
+        {
+          supertypes: [],
+          subtypes: [],
+          annotations: [],
+          body: { kind: 'text_type', normalization: 'NONE' },
+        },
+      ],
     ]);
     const reader = choiceTreeReader(
       'contact_method',
@@ -184,7 +192,12 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
     const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
       [
         'phone_sub',
-        { supertypes: ['phone'], subtypes: [], annotations: [], body: { kind: 'text_type' } },
+        {
+          supertypes: ['phone'],
+          subtypes: [],
+          annotations: [],
+          body: { kind: 'text_type', normalization: 'NONE' },
+        },
       ],
     ]);
     const reader = choiceTreeReader(
@@ -212,8 +225,8 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
 
 const DISJOINT_SCHEMA = `
 !!id:"test://choice-disjoint.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }
@@ -343,8 +356,8 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"test://choice-sealed.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   pet => abstract {
     pet_type: text =?
@@ -420,8 +433,8 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
  */
 const ALIAS_VARIANT_SCHEMA = `
 !!id:"test://choice-alias-variant.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   note    => { body: text }
   n_of    => note

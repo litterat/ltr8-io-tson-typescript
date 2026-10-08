@@ -46,6 +46,9 @@ import type { Task } from '../../io/bytes.js';
 import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
+  atLeastOne,
+  describeViolation,
+  groupViolations,
   isGroupMember,
   type FieldGroup,
   type FieldOmission,
@@ -190,7 +193,7 @@ function fixedFieldReader(
 ): JsonTypeReader {
   const body = resolveFieldBody(ctx, fieldTypeName);
   if (body.kind === 'enum') return enumReader(fieldTypeName, body, schemaLocation);
-  if (body.kind === 'unit' && fieldTypeName === 'identifier') {
+  if (body.kind === 'identifier_type') {
     return identifierReader(fieldTypeName, schemaLocation);
   }
   return atomReader(fieldTypeName, body, schemaLocation);
@@ -216,7 +219,6 @@ interface RecordPlan {
   readonly stated: readonly (FieldValue | undefined)[];
   readonly index: ReadonlyMap<string, number>;
   readonly groups: readonly FieldGroup[];
-  readonly groupSlots: readonly (readonly number[])[];
 }
 
 function buildRecordPlan(
@@ -249,10 +251,6 @@ function buildRecordPlan(
     );
   });
 
-  const groupSlots = body.groups.map((group) =>
-    group.members.map((member) => index.get(toNfc(member)) ?? -1),
-  );
-
   return {
     displayName: name,
     own: selfNames(name, ctx.linkedSchema.entries),
@@ -266,7 +264,6 @@ function buildRecordPlan(
     stated,
     index,
     groups: body.groups,
-    groupSlots,
   };
 }
 
@@ -607,28 +604,35 @@ function* verifyFixed(
 }
 
 function validateGroups(ctx: JsonReadContext, plan: RecordPlan, slots: readonly Slot[]): void {
-  for (let g = 0; g < plan.groupSlots.length; g += 1) {
-    const memberSlots = plan.groupSlots[g];
-    const group = plan.groups[g];
-    if (memberSlots === undefined || group === undefined) continue;
-    let present = 0;
-    for (const at of memberSlots) {
-      if (at >= 0 && slots[at] !== undefined) present += 1;
-    }
-    if (present > 1) {
-      ctx.report(
-        'TYPE_MISMATCH',
-        `at most one of (${group.members.join(' | ')}) may be present, and ${String(present)} are`,
-        'at most one',
-        String(present),
-      );
-    } else if (group.state === 'REQUIRED' && present === 0) {
-      ctx.report(
-        'FIELD_REQUIRED',
-        `exactly one of (${group.members.join(' | ')}) is required, and none is present`,
-        'exactly one',
-        'none',
-      );
+  const isPresent = (member: string): boolean => {
+    const at = plan.index.get(toNfc(member));
+    return at !== undefined && slots[at] !== undefined;
+  };
+  for (const group of plan.groups) {
+    for (const violation of groupViolations(group, isPresent)) {
+      const message = describeViolation(group, violation, isPresent);
+      if (violation.kind === 'MEMBER_MISSING') {
+        ctx.report(
+          'FIELD_REQUIRED',
+          message,
+          'every unmarked member of the chosen option',
+          `missing ${violation.missing.join(', ')}`,
+        );
+      } else if (violation.kind === 'SEVERAL_CHOSEN') {
+        ctx.report(
+          'TYPE_MISMATCH',
+          message,
+          group.optional ? 'at most one option' : 'exactly one option',
+          String(violation.options.length),
+        );
+      } else {
+        ctx.report(
+          'FIELD_REQUIRED',
+          message,
+          atLeastOne(group) ? 'at least one option' : 'exactly one option',
+          'none',
+        );
+      }
     }
   }
 }

@@ -14,17 +14,16 @@
  *
  * {@link atomParserFor} answering `undefined` never means "unsupported": a record, container,
  * choice, reference or data body has no token-level answer to give ({@link isScalarBody} answers
- * `false` for all of those), and neither does `unit`'s `value`/`token` instance (or any other
- * non-`void` `unit` name) -- {@link isScalarBody} answers `true` for those, since §4.2 counts them
- * as scalar, but this module offers no parser for them: their own parsing contract is the
- * identifier grammar and base-type resolution, both out of scope for the one caller this module
- * exists for today. A caller that needs to tell the two `undefined` cases apart consults {@link
+ * `false` for all of those), and neither does `value_type`'s `value` instance -- {@link
+ * isScalarBody} answers `true` for it, since §4.2 counts it as scalar, but this module offers no
+ * parser for it: its parsing contract is the type the position hands it to, out of scope for the
+ * one caller this module exists for today. A caller that needs to tell the two `undefined` cases apart consults {@link
  * isScalarBody} first, exactly as {@link atomParserFor}'s own caller does.
  */
 import type { AtomToken, AtomType } from './contract.js';
 import { TsonAtomValidationError } from '../core/errors.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
-import type { RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type { IdentifierType, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { Product, Sum } from '../schema/meta/algebra.js';
 import type { Atom, Reference } from '../schema/meta/typedef.js';
 
@@ -67,17 +66,21 @@ export interface ScalarParser {
 /**
  * Whether `body`, resolved under `declaredName`, is a scalar type: the type a bare token can
  * denote directly (§5.2's "a fixed or default value is available on a scalar-typed field and
- * nowhere else"). Every ATOM-kind body counts, `void` excepted -- `void` is the type with no
- * value, so no token is one (§4.2).
+ * nowhere else"). Every ATOM-kind body counts, `void_type` excepted -- `void` is the type whose
+ * only value is the void sentinel, so no token is one (§4.2). Recognised by constructor, never by
+ * name.
  */
-export function isScalarBody(declaredName: string, body: ScalarCandidate): boolean {
+export function isScalarBody(body: ScalarCandidate): boolean {
   switch (body.kind) {
-    case 'unit':
-      return declaredName !== 'void';
+    case 'void_type':
+      return false;
+    case 'value_type':
     case 'enum':
     case 'integer_type':
     case 'text_type':
+    case 'identifier_type':
     case 'uri_type':
+    case 'iri_type':
     case 'regex_type':
     case 'decimal_type':
     case 'float_type':
@@ -145,10 +148,11 @@ function buildEnumParser(typeRef: string, body: EnumBody): AtomType<string | boo
  * choice `compiler/atomBuilder.ts`'s own `asTextConstraints` makes, duplicated here for the same
  * reason as {@link buildEnumParser} above.
  */
-function asTextConstraints(atom: RegexType): TextType {
-  const { minLength, maxLength, length, pattern } = atom;
+function asTextConstraints(atom: RegexType | IdentifierType): TextType {
+  const { minLength, maxLength, length, pattern, normalization } = atom;
   return {
     kind: 'text_type',
+    normalization,
     ...(minLength === undefined ? {} : { minLength }),
     ...(maxLength === undefined ? {} : { maxLength }),
     ...(length === undefined ? {} : { length }),
@@ -174,7 +178,10 @@ export function atomParserFor(
       return createIntegerParser(declaredName, body);
     case 'text_type':
       return createTextParser(declaredName, body);
+    case 'identifier_type':
+      return createTextParser(declaredName, asTextConstraints(body));
     case 'uri_type':
+    case 'iri_type':
       return createUriParser(declaredName, body);
     case 'regex_type':
       return createTextParser(declaredName, asTextConstraints(body));
@@ -213,6 +220,6 @@ export function atomParserFor(
     case 'complex_type':
       return createComplexParser(declaredName);
     default:
-      return undefined; // 'unit' (value/identifier instances), record, array, map, tuple, choice, reference, scoped, Data
+      return undefined; // value_type, void_type, record, array, map, tuple, choice, reference, scoped, Data
   }
 }

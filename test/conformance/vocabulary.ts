@@ -168,6 +168,9 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
   const uri = createUriParser('uri', {
     kind: 'uri_type',
     spec: 'https://www.rfc-editor.org/rfc/rfc3986',
+    allowRelative: false,
+    allowFragment: true,
+    normalization: 'NONE',
   });
   const uuid = createUuidParser('uuid', { kind: 'uuid_type' });
   const mac = createMacParser('mac', {
@@ -177,6 +180,7 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
   const email = createEmailParser('email', {
     kind: 'email_type',
     spec: 'https://www.rfc-editor.org/rfc/rfc5322',
+    normalization: 'NONE',
   });
 
   return {

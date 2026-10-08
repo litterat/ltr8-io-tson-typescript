@@ -134,9 +134,9 @@ export function mapTreeReader(
       let value: Value;
       if (valuePeek.kind === 'absent') {
         // The entry is present with an absent value, so it counts toward the size bounds either
-        // way (§5.3); what the state decides is whether the absence is permitted at all (§7.6).
+        // way (§5.3); what voidability decides is whether the absence is permitted at all (§7.6).
         yield* ctx.next();
-        if (body.state === 'REQUIRED') {
+        if (!body.voidable) {
           valueCtx.report(
             'FIELD_REQUIRED',
             `'${displayName}' entry '${keySegment}' is absent, but values are required`,

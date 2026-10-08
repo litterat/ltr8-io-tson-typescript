@@ -14,8 +14,8 @@
  * meta-kernel shape carrying a `role` fact (§5.2, `FieldRole`: `FREE`/`DEFAULT`/`FIXED`) this
  * check reads, because it is the one shape a FIXED value can make legitimately slot-free. No other
  * PRODUCT/SUM body has an analogous per-position "this position never needs binding coverage"
- * case -- a tuple position and an array element carry only the two-member {@link ElementState}
- * (§5.3), with no FIXED counterpart, and a `choice`'s variants (§5.4) are plain type references,
+ * case -- a tuple position and an array element carry only the one `voidable` fact (§5.3),
+ * with no FIXED counterpart, and a `choice`'s variants (§5.4) are plain type references,
  * not positions that can be pinned to a literal. So {@link checkRecordBinding} is this module's
  * only real check; {@link checkBinding} is the dispatcher a caller holding a `TypeDefinition`
  * uses without narrowing its body by hand, and is a deliberate no-op outside the `record`/`record`

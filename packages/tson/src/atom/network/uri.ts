@@ -8,7 +8,7 @@
  * **`pattern` (I-Regexp, RFC 9485) is enforced, but not by this module** -- see `email.ts`'s own
  * TSDoc for where and why: `compiler/atomBuilder.ts`'s own `withTextFacets` wraps this parser's
  * `read` with the same `pattern`/`members` checks `text.ts` runs for `text_type`/`regex_type`
- * directly. `minLength`/`maxLength`/`length`/`scheme` are enforced directly, below.
+ * directly. `minLength`/`maxLength`/`length`/`schemes` are enforced directly, below.
  *
  * Host value is `string`, the authored text unchanged: like `cidr4.ts`/`cidr6.ts`, there is no
  * decomposed URI type in this package to build instead (no `DOM` lib, no global `URL` in this
@@ -18,7 +18,7 @@
  */
 
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
-import type { UriType } from '../../schema/meta/atoms-text.js';
+import type { IriType, UriType } from '../../schema/meta/atoms-text.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { parseIpv6Bytes } from './ipv6.js';
 import { tryParseUri, type UriShape } from './uriGrammar.js';
@@ -31,7 +31,7 @@ function parseIpv6Candidate(candidate: string): boolean {
  * Builds the `AtomType` for one fully-parameterised `uri_type` instance. `typeRef` names the
  * type for error reporting, e.g. `'uri'` for §5.5's unconstrained `uri => !uri_type {}`.
  */
-export function createUriParser(typeRef: string, constraints: UriType): AtomType<string> {
+export function createUriParser(typeRef: string, constraints: UriType | IriType): AtomType<string> {
   function read(token: AtomToken): string {
     const text = token.text;
     const parsed = tryParseUri(text, parseIpv6Candidate);
@@ -71,13 +71,13 @@ export function createUriParser(typeRef: string, constraints: UriType): AtomType
     }
     // `pattern` (I-Regexp) is enforced by `compiler/atomBuilder.ts`'s own wrapper, not here --
     // see this module's own TSDoc.
-    if (constraints.scheme !== undefined) {
-      const actual = parsed.scheme;
-      if (actual?.toLowerCase() !== constraints.scheme.toLowerCase()) {
+    if (constraints.schemes !== undefined) {
+      const actual = parsed.scheme?.toLowerCase();
+      if (actual === undefined || !constraints.schemes.some((s) => s.toLowerCase() === actual)) {
         throw new TsonAtomValidationError(
           typeRef,
-          `'${text}' has scheme '${actual ?? ''}', expected '${constraints.scheme}'`,
-          `scheme ${constraints.scheme}`,
+          `'${text}' has scheme '${parsed.scheme ?? ''}', expected one of (${constraints.schemes.join(', ')})`,
+          `scheme ${constraints.schemes.join(' | ')}`,
         );
       }
     }

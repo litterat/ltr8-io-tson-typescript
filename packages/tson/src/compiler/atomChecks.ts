@@ -45,7 +45,7 @@ import type {
 import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type } from '../schema/meta/atoms-network.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
-import type { EmailType, UriType } from '../schema/meta/atoms-text.js';
+import type { EmailType, IriType, UriType } from '../schema/meta/atoms-text.js';
 import { parseNetworkBlock, whyNoValue } from '../atom/network/cidrParsing.js';
 import { parseIpv4Octets } from '../atom/network/ipv4.js';
 import { parseIpv6Bytes } from '../atom/network/ipv6.js';
@@ -587,7 +587,7 @@ function textUniqueMembers(members: readonly string[]): string[] {
  * when unset, or when it failed to parse and {@link textCoherence} has already reported that) so
  * this function never re-parses it and never reports a pattern-syntax problem twice.
  *
- * **`uri_type`/`email_type`'s own family-specific facets (`scheme`, and email's own address
+ * **`uri_type`/`email_type`'s own family-specific facets (`schemes`, and email's own address
  * grammar) are not asked of a member here** — `text_type`'s length/pattern facets are the only
  * ones this shared function owns. Each family's own obligation runs alongside this one instead
  * ({@link regexMemberSyntaxCoherence} for `regex_type`, {@link uriMemberCoherence}/
@@ -687,7 +687,7 @@ function regexMemberSyntaxCoherence(members: readonly string[] | undefined): str
 /**
  * §7.4's "every member satisfies the body's other facets", for the two families
  * {@link textMemberCoherence} deliberately leaves alone: a `uri_type`/`email_type` member is
- * checked against the family's OWN obligation -- `scheme` and RFC 3986's grammar for a URI,
+ * checked against the family's OWN obligation -- `schemes` and RFC 3986's grammar for a URI,
  * RFC 5322's dot-atom grammar for an email address -- by running it through the family's own
  * compiled parser ({@link createUriParser}/{@link createEmailParser}), the single source of
  * truth `compiler/atomBuilder.ts` reads at data-read time too, rather than a second, drifting
@@ -696,7 +696,7 @@ function regexMemberSyntaxCoherence(members: readonly string[] | undefined): str
  * accepted as one violation surfacing under two messages, rather than teaching this function to
  * suppress a family check because a shared one already ran.
  */
-function uriMemberCoherence(atom: UriType): string[] {
+function uriMemberCoherence(atom: UriType | IriType): string[] {
   if (atom.members === undefined) return [];
   const parser = createUriParser('uri', atom);
   const out: string[] = [];
@@ -1066,26 +1066,26 @@ function cidrCoherence(t: Cidr4Type | Cidr6Type, prefixBits: bigint): string[] {
 
 /**
  * An enum states at least one member, each stated once (§9). `enum.members` is typed `enum_set`
- * (`!set_type { element_type: text }`), whose `min_items` is `1` and whose `unique_items` is
- * pinned `true`, so `!enum []` and `!enum [OPEN OPEN]` both describe a body contradicting its own
- * declared shape and are refused at schema load rather than left to fail against every document —
+ * (`!set_type { element_type: text  min_items: 1 }`), whose `unique_items` is pinned `true`, so
+ * `!enum []` and `!enum [OPEN OPEN]` both describe a body contradicting its own declared shape and
+ * are refused at schema load rather than left to fail against every document —
  * {@link textUniqueMembers} states the same obligation for `text_member_set` and is reused here
  * rather than restated, since the two sets share one contract.
  *
- * **Under `IDENTIFIER` (the default), every member MUST match [TSON-DATA] §7.7's identifier
- * grammar** (§7.4, #21) — `enum_set`'s element type is `text`, not `identifier`, so nothing below
- * this check makes a member a name; a member that is not one is the body contradicting its own
- * declaration, in the family of coherence errors §7.2 makes a schema-load concern rather than data
- * validation. Under `TEXT` a member is any text and this rule does not apply.
+ * **Where `type` is `identifier`, every member MUST match [TSON-DATA] §7.7's identifier grammar**
+ * (§7.4) — `enum_set`'s element type is `text`, so nothing below this check makes a member a name;
+ * a member that is not one is the body contradicting its own declaration, in the family of
+ * coherence errors §7.2 makes a schema-load concern rather than data validation. For any other
+ * `type` a member is a value of that text family, which is not judged here.
  */
 function enumCoherence(t: EnumBody): string[] {
   const out = [...textUniqueMembers(t.members)];
-  if (t.profile !== 'IDENTIFIER') return out;
+  if (t.type !== 'identifier') return out;
   for (const member of t.members) {
     if (!isIdentifierText(member)) {
       out.push(
         `member '${member}' is not a well-formed identifier ([TSON-DATA] §7.7) -- an enum whose ` +
-          "members are not names declares 'profile: TEXT'",
+          "members are not names is a '!text_enum'",
       );
     }
   }
@@ -1094,24 +1094,37 @@ function enumCoherence(t: EnumBody): string[] {
 
 /**
  * An enum's value set is written out in full, so narrowing is plain subset containment (`members`
- * may drop members but never introduce one the source does not admit). `profile` is §5.7's
- * settable-once facet-kind table's own third example, over its one-step chain `IDENTIFIER` inside
- * `TEXT`: `IDENTIFIER` is the narrower position, so restating either profile verbatim tightens
- * vacuously and narrowing from `TEXT` to `IDENTIFIER` sets what the source left at its wider
- * default, while the reverse would grant back latitude a refinement may only withdraw -- the same
- * pair of outcomes {@link checkSettableOnce}'s generic equality check gives a facet with a true
- * "unset" state, reached here by comparing along the chain's one order instead, since `profile`
- * always carries a value and has no unset state of its own to leave.
+ * may drop members but never introduce one the source does not admit). `type` is fixed where the
+ * enum is constructed (§5.7): a refinement narrows the members and never the type, so restating
+ * the source's `type` verbatim is the only form that narrows.
  */
 function enumNarrows(source: EnumBody, refined: EnumBody): string[] {
   const out: string[] = [];
   checkSubset(out, 'members', source.members, refined.members);
-  if (source.profile === 'IDENTIFIER' && refined.profile === 'TEXT') {
+  if (source.type !== refined.type) {
     out.push(
-      "profile TEXT widens the source's own IDENTIFIER -- a refinement may withdraw the latitude " +
-        'of TEXT but never grant it',
+      `type '${refined.type}' replaces the source's own '${source.type}' -- an enum's type is ` +
+        'fixed where it is constructed, and a refinement narrows its members',
     );
   }
+  return out;
+}
+
+/**
+ * `uri_type`'s and `iri_type`'s narrowing: the text facets, then `schemes` as a subset compared
+ * with ASCII case folded, and `allow_relative`/`allow_fragment` as permissions a refinement may
+ * withdraw and never grant back (§5.7).
+ */
+function uriNarrows(source: UriType | IriType, refined: UriType | IriType): string[] {
+  const out = textNarrows(source, refined);
+  checkSubset(
+    out,
+    'schemes',
+    (source.schemes ?? []).map((scheme) => scheme.toLowerCase()),
+    (refined.schemes ?? []).map((scheme) => scheme.toLowerCase()),
+  );
+  checkOnlyWithdraws(out, 'allow_relative', source.allowRelative, refined.allowRelative);
+  checkOnlyWithdraws(out, 'allow_fragment', source.allowFragment, refined.allowFragment);
   return out;
 }
 
@@ -1160,9 +1173,15 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
         ? textNarrows(source, refined)
         : mismatch('a regex', refined);
     case 'uri_type':
-      return refined.kind === 'uri_type'
+      return refined.kind === 'uri_type' ? uriNarrows(source, refined) : mismatch('a uri', refined);
+    case 'iri_type':
+      return refined.kind === 'iri_type'
+        ? uriNarrows(source, refined)
+        : mismatch('an iri', refined);
+    case 'identifier_type':
+      return refined.kind === 'identifier_type'
         ? textNarrows(source, refined)
-        : mismatch('a uri', refined);
+        : mismatch('an identifier', refined);
     case 'email_type':
       return refined.kind === 'email_type'
         ? textNarrows(source, refined)
@@ -1209,9 +1228,10 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'ipv6_type'
         ? ipv6Narrows(source, refined)
         : mismatch('an ipv6', refined);
-    // No orderable facet and no selector at all: `unit` (opaque, no schema-shape signal), the
-    // identifier-only `uuid_type`, and `mac_type` (spec-pinned, no facet of its own to compare).
-    case 'unit':
+    // No orderable facet and no selector at all: `value_type` and `void_type` (empty
+    // vocabularies), `uuid_type`, and `mac_type` (spec-pinned, no facet of its own to compare).
+    case 'value_type':
+    case 'void_type':
     case 'uuid_type':
     case 'mac_type':
       return [];
@@ -1224,11 +1244,14 @@ function mismatch(sourceLabel: string, refined: Atom): readonly string[] {
 
 /** Every `Atom` union member's own `kind` literal — used by {@link isAtom} to tell an atom body from every other `Top` shape without importing each family's type just to name it. */
 const ATOM_KINDS: ReadonlySet<string> = new Set([
-  'unit',
+  'value_type',
+  'void_type',
   'enum',
   'integer_type',
   'text_type',
+  'identifier_type',
   'uri_type',
+  'iri_type',
   'regex_type',
   'decimal_type',
   'float_type',
@@ -1284,7 +1307,10 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
       return bytesCoherence(atom);
     case 'regex_type':
       return [...textCoherence(atom), ...regexMemberSyntaxCoherence(atom.members)];
+    case 'identifier_type':
+      return textCoherence(atom);
     case 'uri_type':
+    case 'iri_type':
       return [...textCoherence(atom), ...uriMemberCoherence(atom)];
     case 'email_type':
       return [...textCoherence(atom), ...emailMemberCoherence(atom)];
@@ -1310,7 +1336,8 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
       return periodCoherence(atom);
     // `component` is `complex_type`'s only field: a single selector has nothing else to
     // contradict.
-    case 'unit':
+    case 'value_type':
+    case 'void_type':
     case 'uuid_type':
     case 'complex_type':
     case 'mac_type':

@@ -50,8 +50,9 @@ import { diagnosticCodeForFetch } from '../core/diagnostic.js';
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
-import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
-import { typeParameters } from '../schema/meta/typedef.js';
+import type { TemplateParam } from '../schema/meta/bodies.js';
+import type { Annotations, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
+import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -64,10 +65,10 @@ import type {
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { desugar, lifted, type DesugarFailureReporter } from './desugar.js';
-import { createHeldBody, isHeldBody } from './heldBody.js';
+import { createHeldBody, isHeldBody, withParameters } from './heldBody.js';
 import { heldEmptyRecord } from './wireForm.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
-import { inferAll } from './parameterKinds.js';
+import { inferAll, kinds as parameterKindsOf } from './parameterTypes.js';
 import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syntheticMerge.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -351,13 +352,27 @@ export function resolveSchema(
     beforeMaterialise.set(name, requiredGet(namespace, name, 'resolveSchema'));
   }
 
-  // §5.10's parameter kinds, inferred by use, before anything closes: an argument is "read by the
-  // position it lands in", and once a parameter's kind is known that position is known at the
+  // §5.10's parameters, typed by use, before anything closes: an argument is "read by the
+  // position it lands in", and once a parameter's type is known that position is known at the
   // application rather than after substitution. Here because it needs every declaration resolved
   // (a slot's declared type comes from the constructor's own vocabulary) and nothing yet closed.
+  // The declared templates' parameters are stamped here too, not only their kinds.
   const unkinded = new Set<string>();
-  materialiser.setParameterKinds(
-    inferAll(namespace, new Set(declarations.keys()), deps.metaDefinitions, {
+  const written = writtenParameterTypes(declarations, resolver, (name, error) => {
+    if (receiver === undefined) {
+      throw error;
+    }
+    const declaration = declarations.get(name);
+    receiver.report(
+      schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
+    );
+  });
+  const declaredParameters = inferAll(
+    namespace,
+    new Set(declarations.keys()),
+    written,
+    deps.metaDefinitions,
+    {
       report(name, error): void {
         if (receiver === undefined) {
           throw error;
@@ -368,8 +383,10 @@ export function resolveSchema(
           schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
         );
       },
-    }),
+    },
   );
+  stampParameters(declaredParameters, [beforeMaterialise, namespace]);
+  materialiser.setParameterKinds(parameterKindsOf(declaredParameters));
   // Condemned on the same terms as a declaration that failed to resolve: the verdict is in, and
   // closing an application of a template whose parameters cannot be classified only reports the
   // consequence -- the substituted body failing its constructor's vocabulary -- against whichever
@@ -422,6 +439,25 @@ export function resolveSchema(
     for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
     for (const [name, definition] of instantiations) namespace.set(name, definition);
   }
+
+  // §5.10's parameters, recorded on every open entry this schema produced -- the materialiser
+  // mints open entries of its own, which is why this runs once everything has closed as well as
+  // before. A failure was reported by the first pass against the declaration that wrote it; one
+  // here is the same verdict, and the entry keeps what it had.
+  stampParameters(
+    inferAll(
+      namespace,
+      new Set([...resolvedLocals.keys(), ...instantiations.keys()]),
+      written,
+      deps.metaDefinitions,
+      {
+        report(): void {
+          // Already reported against the declaration that wrote it, by the pass before.
+        },
+      },
+    ),
+    [resolvedLocals, instantiations, namespace],
+  );
 
   // §8.3: a type position naming a REFERENCE entry keeps that name -- a reference is a hop, not a
   // rewrite, so resolved output states the chain exactly as the author wrote it and nothing here
@@ -564,12 +600,57 @@ function refuseHeadAbstraction(name: string, resolved: TypeDefinition): void {
   }
   const body = resolved.body;
   for (const application of body.applications()) {
-    if (body.parameters.includes(application.name)) {
+    if (body.parameterNames.includes(application.name)) {
       throw new TsonSchemaValidationError(
         `'${name}': '${application.name}' is a type parameter applied to arguments -- a parameter stands for a ` +
           `type, never for a template, and §5.10 admits no head abstraction, so '${application.name}<...>' is no ` +
           'form. Take the applied type as the parameter instead',
       );
+    }
+  }
+}
+
+/**
+ * What each declaration's parameter list wrote after a name (`<T: text>`), as the type-refs
+ * resolution uses, keyed by declaration then parameter. A written type that is not a reference to
+ * a type is reported against the declaration that wrote it and left out.
+ */
+function writtenParameterTypes(
+  declarations: ReadonlyMap<string, Declaration>,
+  resolver: DefinitionResolver,
+  report: (name: string, error: TsonSchemaValidationError) => void,
+): ReadonlyMap<string, ReadonlyMap<string, TypeRef>> {
+  const written = new Map<string, ReadonlyMap<string, TypeRef>>();
+  for (const [name, declaration] of declarations) {
+    if (declaration.parameterTypes === undefined) continue;
+    const types = new Map<string, TypeRef>();
+    for (const [parameter, ref] of declaration.parameterTypes) {
+      try {
+        types.set(parameter, resolver.parameterType(parameter, ref));
+      } catch (e: unknown) {
+        if (!(e instanceof TsonSchemaValidationError)) throw e;
+        report(name, e);
+      }
+    }
+    if (types.size > 0) written.set(name, types);
+  }
+  return written;
+}
+
+/**
+ * Stamps each named open entry's parameters (`parameterTypes.ts`) in every view of it, so every
+ * view of an entry agrees.
+ */
+function stampParameters(
+  parameters: ReadonlyMap<string, ReadonlyMap<string, TemplateParam>>,
+  views: readonly Map<string, TypeDefinition>[],
+): void {
+  for (const view of views) {
+    for (const [name, definition] of view) {
+      const settled = parameters.get(name);
+      if (settled !== undefined && isTemplateBody(definition.body) && isHeldBody(definition.body)) {
+        view.set(name, { ...definition, body: withParameters(definition.body, settled) });
+      }
     }
   }
 }

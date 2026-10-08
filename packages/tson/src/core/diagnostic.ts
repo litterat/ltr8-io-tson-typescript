@@ -73,7 +73,7 @@ export type DiagnosticCode =
   | 'UNRECOGNIZED_FIELD'
   /** Two entries of one map share a key (§2.6). */
   | 'DUPLICATE_MAP_KEY'
-  /** A map entry's key is the absent sentinel (§2.9). */
+  /** A map entry's key is the void sentinel (§2.9). */
   | 'ABSENT_MAP_KEY'
   /** Two fields of one record share a name (§2.5). */
   | 'DUPLICATE_FIELD'
@@ -198,6 +198,17 @@ export function diagnosticCodeForMechanism(mechanism: NameHygieneMechanism): Dia
   }
 }
 
+/**
+ * Whether `code` is one of §8.2's three name-hygiene refusals. A refusal is never reported under
+ * one of §8.1's four categories, so a consumer asking "was this reported as an error of the
+ * document" asks `isVerdict(code) && !isNameRefusal(code)`.
+ */
+export function isNameRefusal(code: DiagnosticCode): boolean {
+  return (
+    code === 'CONFUSABLE_NAMES' || code === 'RESTRICTED_CHARACTER' || code === 'RESTRICTED_SCRIPT'
+  );
+}
+
 /** The codes that assert nothing about the document -- see {@link isVerdict}. */
 const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
   'NOT_IMPLEMENTED',
@@ -213,13 +224,13 @@ const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
  * Whether `code` reports something an evaluation actually looked at and found, as opposed to a
  * check this library could not run at all.
  *
- * **This line is narrower than §8.1's own "not judged" line, deliberately.** Revision 36 states
+ * **This line is narrower than §8.1's own "not judged" line, deliberately.** §8.1 states
  * "not judged is a fifth outcome, not a verdict", with two members: a §8.2/§9.1 **refusal** (the
  * processor looked, under its own policy or limits, and declined) and an **unavailable schema**
  * (the processor had nothing to look with at all, §10.1). Both are outside §8.1's four categories
  * either way -- a refusal is never one of `FIELD_REQUIRED`/`TYPE_MISMATCH`/etc., and a fetch
  * failure is never one either, which every consumer of this module keeps as its own separate
- * check (`test/conformance/validate.ts`'s `REFUSAL_CODES`, for one). What this function answers
+ * check ({@link isNameRefusal}, for one). What this function answers
  * is a different, narrower question a consumer still needs split out from that pair: whether a
  * *rule ran against the document at all*. A refusal is squarely on the "ran" side of that split --
  * the processor read the name or counted the nesting and declined on its own terms, which is why

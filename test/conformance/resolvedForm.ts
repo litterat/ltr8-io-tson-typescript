@@ -34,6 +34,7 @@ import { createDefinitionMetaReader } from '../../packages/tson/src/schema/metaR
 import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
 import type { Top, TypeDefinition } from '../../packages/tson/src/schema/meta/typedef.js';
+import { isTemplateBody } from '../../packages/tson/src/schema/meta/typedef.js';
 import { normalizeSyntheticName, normalizeSyntheticNamesAnywhere } from './synthetic.js';
 
 /** `dv`'s decoded token text -- the resolved schema-map's own keys, always a bare identifier. */
@@ -54,12 +55,12 @@ function fieldValueOf(dv: DataValue, name: string): DataValue | undefined {
 
 /**
  * A no-op stand-in for `type_definition.body`'s own slot, valid against every member of
- * `topBinding`'s variant (`unitBinding`, zero fields) -- used only to satisfy the generic decode
+ * `topBinding`'s variant (`voidTypeBinding`, zero fields) -- used only to satisfy the generic decode
  * below while `body` itself is decoded separately; see {@link readTypeDefinition}'s own note.
  */
 const VOID_PLACEHOLDER: DataValue = {
   annotations: [],
-  typeRef: 'void',
+  typeRef: 'void_type',
   coreValue: { kind: 'empty-brace' },
 };
 
@@ -94,8 +95,8 @@ function withReplacedField(dv: DataValue, name: string, replacement: DataValue):
  * is itself an *arbitrary* top-level constructor application (`!array {...}`, `!enum {...}`, ...),
  * decoded through `fromDataValue`'s automatic variant dispatch — which shares the *outer* call's
  * fieldsFor closure rather than starting a fresh one keyed on `body`'s own wire name. So a
- * `REQUIRED_DEFAULT` field the resolved text omits for brevity (`array`'s own `unordered`/
- * `unique_items`/`state`, all defaulted in the fixture vectors) has no default source to consult
+ * defaulted field the resolved text omits for brevity (`array`'s own `ordered`/
+ * `unique_items`/`voidable`, all defaulted in the fixture vectors) has no default source to consult
  * mid-recursion, and decoding throws `FIELD_REQUIRED` for a field §8's own output never restates.
  *
  * The fix mirrors how `definitionResolver.ts` itself would read it: decode `body` through its
@@ -122,7 +123,13 @@ function readTypeDefinition(dv: DataValue, reader: DefinitionMetaReader): TypeDe
   // to go through `unknown`. Narrowing the reader's signature to say so is Stage 6's, along with
   // the resolved-form comparison this feeds.
   const definition = reader('type_definition', withoutBody) as unknown as TypeDefinition;
-  return { ...definition, body };
+  // The value's own annotations (`documentation => @annotation !type_definition {...}`) are framing
+  // on the data value, not a field the generic decode above reads, so they are carried here.
+  const annotations = dv.annotations.map((annotation) => ({
+    name: annotation.name,
+    ...(annotation.value === undefined ? {} : { value: annotation.value }),
+  }));
+  return { ...definition, body, annotations };
 }
 
 /**
@@ -187,12 +194,51 @@ function canonicalJson(value: unknown): string {
 }
 
 /**
- * `definition`, reduced to what a comparison is about: a canonical rendering with every
- * resolver-minted name's content hash normalised (RUNNER.md rule 6, generalised) wherever it
- * appears in the structure.
+ * A held template's text reduced to the structure it denotes. The kernel's `template` doc: what is
+ * compared is the parsed form, never the text, so two spellings that differ in whitespace are one
+ * template (Part 2 §5.10, §8.2). The reference's `ResolvedForm.parsedForComparison` does the same
+ * on both sides.
+ */
+function parsedTemplate(text: string): string {
+  const { document } = runSync(parseDocument(fromBytes(encodeUtf8(text))));
+  return JSON.stringify(document.root, (_key, value: unknown) =>
+    typeof value === 'bigint' ? value.toString() : value,
+  );
+}
+
+/** An annotation value reduced to comparable text: a data value's token, or a bound atom's value. */
+function annotationValueText(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  if (typeof value === 'object' && value !== null && 'coreValue' in value) {
+    const core = (value as DataValue).coreValue;
+    return core.kind === 'token' ? core.text : JSON.stringify(core);
+  }
+  if (typeof value === 'object' && value !== null && 'value' in value) {
+    return annotationValueText(value.value);
+  }
+  return typeof value === 'bigint' ? value.toString() : value;
+}
+
+/**
+ * `definition`, reduced to what a comparison is about: its annotations other than `doc` (whose text
+ * a fixture abbreviates) and `synthetic` (derived, recomputed on ingest -- §8.2), a held template
+ * as the structure its text parses to, and a canonical rendering with every resolver-minted
+ * name's content hash normalised (RUNNER.md rule 6, generalised) wherever it appears.
  */
 export function renderDefinition(definition: TypeDefinition): string {
-  return normalizeSyntheticNamesAnywhere(canonicalJson(definition));
+  const compared = {
+    ...definition,
+    annotations: definition.annotations
+      .filter((annotation) => annotation.name !== 'doc' && annotation.name !== 'synthetic')
+      .map((annotation) => ({
+        name: annotation.name,
+        value: annotationValueText(annotation.value),
+      })),
+    ...(isTemplateBody(definition.body)
+      ? { body: { ...definition.body, template: parsedTemplate(definition.body.template) } }
+      : {}),
+  };
+  return normalizeSyntheticNamesAnywhere(canonicalJson(compared));
 }
 
 /**

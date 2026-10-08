@@ -82,7 +82,7 @@ const CLASS_LABEL: Record<DiscriminationClass, string> = {
   BRACKET: 'bracket',
 };
 
-/** §4.2's table, from the wire end: the class an arriving JSON value's own kind names, or `undefined` for one that carries none (`null`, spent as the absent sentinel before any class question arises, §7). */
+/** §4.2's table, from the wire end: the class an arriving JSON value's own kind names, or `undefined` for one that carries none (`null`, spent as the void sentinel before any class question arises, §7). */
 function classOfKind(event: JsonEvent): DiscriminationClass | undefined {
   switch (event.kind) {
     case 'boolean':

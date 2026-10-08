@@ -10,16 +10,10 @@
  * already return, so `compile.ts`'s own resolver never has to know an entry it just built is a
  * leaf.
  *
- * **`unit` has no schema-shape signal of its own.** meta-kernel.tn's own doc for the `unit`
- * constructor states this outright: its three kernel instances (`value`, `token`, `void`) "are
- * opaque atoms distinguished by name and prose-level parsing contract, not by schema shape" --
- * every one of them resolves to the identical empty `{ kind: 'unit' }` body, so nothing in
- * `schema/meta`'s types can tell them apart. This module dispatches those three names
- * specifically (`byUnitName`); a user schema's own `~unit {}` instance under any other name has
- * no established contract to fall back on, and is read the same way `token` is -- its canonical
- * lexeme, verbatim -- as the most general "opaque atom" reading available. This is a real
- * spec-feedback finding worth recording upstream, not a silent guess: the resolved schema model
- * gives a compiler no shape-level way to honour §4.2's own three-way distinction.
+ * **`value` and `void` are recognised by constructor.** `value_type` and `void_type` are atom
+ * constructors with empty vocabularies (§4.2), so a `value_type` body reads its token
+ * uninterpreted for the position to resolve, and a `void_type` body admits only the void sentinel
+ * (§7.3). Nothing here consults a declared name.
  *
  * **`enum` has the same gap for exactly one built-in instance.** `boolean => !enum [true false]`
  * (core.tn) is schema-shape-identical to any other two-member user enum (`status => !enum [UP
@@ -33,7 +27,7 @@ import { TsonAtomValidationError } from '../core/errors.js';
 import type { AtomToken, AtomType } from '../atom/contract.js';
 import type { Atom } from '../schema/meta/typedef.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
-import type { RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type { IdentifierType, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { AtomValue, Value } from '../tree/nodes.js';
 import { atomNode } from '../tree/nodes.js';
 import type { Task } from '../io/bytes.js';
@@ -68,7 +62,7 @@ import { createDateTimeParser } from '../atom/temporal/datetime.js';
 import { createDurationParser } from '../atom/temporal/duration.js';
 import { createPeriodParser } from '../atom/temporal/period.js';
 
-/** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every non-`unit` atom family. */
+/** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every atom family but `void` and `value`. */
 function wrap<T extends AtomValue>(atomType: AtomType<T>, typeRef: string): TypeReader<Value> {
   return atomTreeReader(atomTypeReader(atomType, typeRef), typeRef);
 }
@@ -99,15 +93,7 @@ function buildEnumAtomType(typeRef: string, body: EnumBody): AtomType<string | b
   };
 }
 
-// ── unit ─────────────────────────────────────────────────────────────────────────────────────
-
-/** `token`, and every other schema's own `~unit {}` instance with no established prose contract -- the canonical lexeme, verbatim. See this module's own top note. */
-function tokenTextAtomType(): AtomType<string> {
-  return {
-    read: (token: AtomToken): string => token.text,
-    write: (value: string): string => value,
-  };
-}
+// ── value, void ──────────────────────────────────────────────────────────────────────────────
 
 /** §4's base value narrowed to the natural host value it implies -- this module's own copy of `reader/schemaless/tree.ts`'s `narrowBaseValue`/`narrowNumberForm`, duplicated rather than imported for the same reason that module states its own duplication: a small structural rule, nothing library-specific, and sub-agents share no context to import across. */
 function narrowBaseValue(value: BaseValue): AtomValue {
@@ -146,7 +132,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
  * that atom is in scope ([TSON-SCHEMA] §5.2, §7.4) -- which is why `decimal_type.min`'s `1` and
  * `1.0` are one number rather than an integer beside a float.
  */
-function unitValueTreeReader(displayName: string): TypeReader<Value> {
+function valueTreeReader(displayName: string): TypeReader<Value> {
   return {
     *read(ctx: ReadContext): Task<Value> {
       const annotations = yield* captureAnnotations(ctx);
@@ -169,13 +155,6 @@ function unitValueTreeReader(displayName: string): TypeReader<Value> {
   };
 }
 
-/** Dispatches `unit`'s three kernel names, and falls back to {@link tokenTextAtomType} for every other `~unit {}` instance. See this module's own top note. */
-function buildUnitReader(name: string): TypeReader<Value> {
-  if (name === 'void') return absentTreeReader(name);
-  if (name === 'value') return unitValueTreeReader(name);
-  return wrap(tokenTextAtomType(), name);
-}
-
 // ── regex_type ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -187,10 +166,11 @@ function buildUnitReader(name: string): TypeReader<Value> {
  * absent field must stay absent rather than become an explicit `undefined`) rather than widening
  * `createTextParser`'s own signature to accept either discriminant.
  */
-function asTextConstraints(atom: RegexType): TextType {
-  const { minLength, maxLength, length, pattern, members } = atom;
+function asTextConstraints(atom: RegexType | IdentifierType): TextType {
+  const { minLength, maxLength, length, pattern, members, normalization } = atom;
   return {
     kind: 'text_type',
+    normalization,
     ...(minLength === undefined ? {} : { minLength }),
     ...(maxLength === undefined ? {} : { maxLength }),
     ...(length === undefined ? {} : { length }),
@@ -240,15 +220,20 @@ function withTextFacets(
  */
 export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
   switch (atom.kind) {
-    case 'unit':
-      return buildUnitReader(name);
+    case 'value_type':
+      return valueTreeReader(name);
+    case 'void_type':
+      return absentTreeReader(name);
     case 'enum':
       return wrap(buildEnumAtomType(name, atom), name);
     case 'integer_type':
       return wrap(createIntegerParser(name, atom), name);
     case 'text_type':
       return wrap(createTextParser(name, atom), name);
+    case 'identifier_type':
+      return wrap(createTextParser(name, asTextConstraints(atom)), name);
     case 'uri_type':
+    case 'iri_type':
       return wrap(
         withTextFacets(createUriParser(name, atom), name, atom.members, atom.pattern),
         name,

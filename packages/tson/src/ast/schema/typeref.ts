@@ -83,10 +83,10 @@ export interface TypeArgValue {
  * `element-type = type-ref ["?"]` (§12.1, §5.3) — one position inside an {@link ArrayRef}, a
  * {@link TupleRef}, or a {@link MapRef}'s value.
  *
- * The optional `?` here is element/tuple-position optionality (a container-level fact),
- * distinct from a field's own `?` (§5.2) even though both reuse the same token: a field is
- * `field-name ":" type-ref ["?"]`, so in `xs: [T?]?` the inner `?` belongs to the element and
- * the outer to the field — they cannot collide.
+ * The `?` here makes the position `voidable`: the void sentinel `_` may stand in it (§5.3). It is
+ * the same fact a field's type `?` states, at a container position. In `xs: [T?]?` the inner `?`
+ * is the element's and the outer the field type's; a container's position is never missing, so
+ * there is no counterpart of the field name's `?`.
  *
  * Holds a plain {@link TypeRef} and nothing else; nesting needs no case of its own, because a
  * bracket or map form *is* a type-ref — `[[T; 2]; 3]` is an {@link ArrayRef} whose
@@ -94,8 +94,8 @@ export interface TypeArgValue {
  */
 export interface ElementType {
   readonly typeRef: TypeRef;
-  /** `true` for a trailing `?` — the position may carry the absent sentinel `_` in data. */
-  readonly optional: boolean;
+  /** `true` for a trailing `?` — the position may carry the void sentinel `_` in data. */
+  readonly voidable: boolean;
 }
 
 /**
@@ -130,9 +130,9 @@ export interface ArrayRef {
  * responsible for never constructing it with an `ArrayRef`, `MapRef`, `TupleRef`, or
  * `ChoiceRef` key.
  *
- * The value is an {@link ElementType}: `{K => V?}` marks the value OPTIONAL exactly as `[T?]`
- * marks an array element (§5.3), under which an entry's value may be the absent sentinel and the
- * entry still counts toward the size bounds. The key side carries no such suffix — an absent key
+ * The value is an {@link ElementType}: `{K => V?}` marks the value voidable exactly as `[T?]`
+ * marks an array element (§5.3), under which an entry's value may be the void sentinel and the
+ * entry still counts toward the size bounds. The key side carries no such suffix — a void key
  * is a resolver error ([TSON-DATA] §2.9), and `map-key` has no `?` to write (§12.1).
  */
 export interface MapRef {
@@ -144,8 +144,8 @@ export interface MapRef {
 
 /**
  * `"[" element-type 1*(separator element-type) "]"` (§12.1, §5.3) — a tuple type: two or more
- * positions, legal at every type-ref position, each carrying its own `?` for `OPTIONAL`
- * position state. Syntactic — desugars to `!tuple { elements: [...] }` at resolution.
+ * positions, legal at every type-ref position, each carrying its own `?` to make the
+ * position voidable. Syntactic — desugars to `!tuple { elements: [...] }` at resolution.
  *
  * Distinguished from {@link ArrayRef} by arity alone — one element (with or without a size) is
  * an array, two or more a tuple — which is why the minimum arity is encoded structurally here

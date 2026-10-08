@@ -12,7 +12,13 @@ function token(text: string): AtomToken {
   return { text, form: 'unquoted' };
 }
 
-const UNCONSTRAINED: UriType = { kind: 'uri_type', spec: 'rfc3986' };
+const UNCONSTRAINED: UriType = {
+  kind: 'uri_type',
+  allowRelative: true,
+  allowFragment: true,
+  normalization: 'NONE',
+  spec: 'rfc3986',
+};
 
 describe('§5.5 !uri -- accepted forms', () => {
   const parser = createUriParser('uri', UNCONSTRAINED);
@@ -61,14 +67,14 @@ describe('§5.5 !uri -- uri_type facets', () => {
     expect(() => parser.read(token('https://example.com/a'))).toThrow(TsonAtomValidationError);
   });
 
-  it('scheme rejects a mismatched scheme, case-insensitively matching on a match', () => {
-    const parser = createUriParser('uri', { ...UNCONSTRAINED, scheme: 'https' });
+  it('schemes rejects a scheme outside the set, matching with ASCII case folded (§5.5, §5.7)', () => {
+    const parser = createUriParser('uri', { ...UNCONSTRAINED, schemes: ['HTTPS'] });
     expect(parser.read(token('https://example.com/'))).toBe('https://example.com/');
     expect(() => parser.read(token('http://example.com/'))).toThrow(TsonAtomValidationError);
   });
 
-  it('scheme rejects a schemeless relative reference', () => {
-    const parser = createUriParser('uri', { ...UNCONSTRAINED, scheme: 'https' });
+  it('schemes rejects a schemeless relative reference', () => {
+    const parser = createUriParser('uri', { ...UNCONSTRAINED, schemes: ['https'] });
     expect(() => parser.read(token('foo/bar'))).toThrow(TsonAtomValidationError);
   });
 });

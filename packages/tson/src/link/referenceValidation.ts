@@ -37,7 +37,7 @@ import { isDataBody, type NonDataTop } from './bodyKind.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import { isHeldBody } from '../compiler/heldBody.js';
-import { terminal, type EntryLookup } from './referenceChain.js';
+import { resolvesToConstructor, terminal, type EntryLookup } from './referenceChain.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -234,7 +234,7 @@ function validateBody(
         checkFieldValue(entryName, field, namespace, ownParameters);
       }
       for (const group of r.groups) {
-        for (const member of group.members) {
+        for (const member of group.members.flat()) {
           if (!r.fields.some((f) => f.name === member)) {
             throw new TsonSchemaValidationError(
               `'${entryName}' has a field group referencing unknown field '${member}'`,
@@ -282,11 +282,14 @@ function validateBody(
       checkVariantsAreNotVoid(entryName, c, namespace);
       return;
     }
-    case 'unit':
+    case 'value_type':
+    case 'void_type':
     case 'enum':
     case 'integer_type':
     case 'text_type':
+    case 'identifier_type':
     case 'uri_type':
+    case 'iri_type':
     case 'regex_type':
     case 'decimal_type':
     case 'float_type':
@@ -369,7 +372,7 @@ function checkFieldValue(
   }
   const body = target.body;
   const value = field.value;
-  if (!isScalarBody(terminalName, body)) {
+  if (!isScalarBody(body)) {
     throw notAScalarType(entryName, field, value, body);
   }
   const parser = atomParserFor(terminalName, body);
@@ -433,8 +436,8 @@ function describeBody(body: NonDataTop): string {
       return 'a choice';
     case 'reference':
       return 'an alias';
-    case 'unit':
-      return 'the void type'; // reached only when isScalarBody already refused this same name
+    case 'void_type':
+      return 'the void type'; // reached only when isScalarBody already refused this same body
     case 'scoped':
       return "a scoped type, whose value names its own type rather than taking one from the position's own token shape";
     default:
@@ -650,7 +653,7 @@ function checkVariantsAreNotVoid(
 ): void {
   const lookup = lookupIn(namespace);
   for (const variant of choice.variants) {
-    if (terminal(variant.name, lookup) === 'void') {
+    if (resolvesToConstructor(variant.name, lookup, 'void_type')) {
       throw new TsonSchemaValidationError(
         `'${entryName}' has a variant${variant.name === 'void' ? '' : ` '${variant.name}'`} ` +
           "resolving to 'void' -- optionality is not choice (§5.4): a value's absence is the " +

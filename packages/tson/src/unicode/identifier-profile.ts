@@ -46,7 +46,7 @@ import { isXidContinue, isXidStart } from './xid.js';
  * 3. **No reserved words.** Nothing is excluded by name — `true`, `false`, and `null` are
  *    identifiers like any other — and this needs no code: the production alone already settles
  *    it. The one thing that looks like a reserved word, the token-initial underscore claimed by
- *    the absent sentinel `_` (§7.1), is not a name exclusion either. `_` is `XID_Continue` only,
+ *    the void sentinel `_` (§7.1), is not a name exclusion either. `_` is `XID_Continue` only,
  *    never `XID_Start`, so `identifier-start` already refuses it and no identifier can begin with
  *    one — `_` and `_id` fail {@link isIdentifierText} by falling straight out of the production,
  *    with no special case written for them anywhere in this module.

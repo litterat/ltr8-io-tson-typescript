@@ -1,6 +1,7 @@
 import type { Annotation } from '../value.js';
 import type { Position } from '../../core/position.js';
 import type { TypeDef } from './typedef.js';
+import type { TypeRef } from './typeref.js';
 
 /**
  * A schema document (Part 2 §2.1, §12.1): a fixed-shape header — optional `!!id`, mandatory
@@ -80,5 +81,13 @@ export interface Declaration {
   readonly typeDefAnnotations: readonly Annotation[];
   readonly mark?: 'abstract' | 'final';
   readonly typeDef: TypeDef;
+  /**
+   * The types the declaration's parameter list wrote — `<T: text, N: int8>` — keyed by parameter
+   * name, only for the parameters that wrote one (§5.10, §12.1). A written type narrows the type
+   * the parameter's positions give, so it lives beside the type-def rather than inside it: every
+   * desugar rewrite of the type-def keeps the declaration's own list as written. Absent when no
+   * parameter wrote a type.
+   */
+  readonly parameterTypes?: ReadonlyMap<string, TypeRef>;
   readonly position?: Position;
 }
