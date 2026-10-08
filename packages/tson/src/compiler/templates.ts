@@ -586,8 +586,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       !('kind' in body) ||
       isDataBody(body) ||
       body.kind === 'reference' ||
-      // An IRI is judged by the schema_identity's own parser, which is the URI grammar's today.
-      body.kind === 'iri_type' ||
       !isScalarBody(body)
     ) {
       return; // no scalar reading -- the substituted body's own position judges it

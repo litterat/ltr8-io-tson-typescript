@@ -8,7 +8,7 @@
  * production names the separator literally, and a space is a different, non-conforming
  * date-time profile some other formats accept), then `readFullTime` for the rest. Both halves
  * inherit their own strictness from `rfc3339.ts` -- the four-digit no-sign year, the ±18:00
- * offset bound, the leap-second gap -- with nothing extra to add here.
+ * offset bound, the refused leap second -- with nothing extra to add here.
  *
  * **`precision` bounds the *value*, and no `requireTimezone` facet exists** -- the same contract
  * `time.ts` implements and documents in full (§5.5); this module shares its own local

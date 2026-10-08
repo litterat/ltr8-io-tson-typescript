@@ -74,8 +74,8 @@ export interface AtomText {
 
 /**
  * The built-in vocabulary names whose text is always a bare numeric token (§7.6's `integer`/
- * `float`/`hex-float`/`special-value` forms) -- the full fixed-width integer ladder, the four
- * sign-bounded refinements, and the two approximate/exact non-integer families. Every other
+ * `float`/`hex-float`/`special-value` forms) -- the full fixed-width integer ladder, the
+ * arbitrary-precision `integer`, and the two approximate/exact non-integer families. Every other
  * built-in name (`uuid`, `date`, `rational`, `text`, the binary/network families, ...) writes
  * quoted, matching `TsonTreeWriter.writeAtom`'s "anything the reverse map matches is always
  * `quotedString`" rule -- restated here as a name table because this port's atom host values
@@ -94,10 +94,7 @@ const UNQUOTED_VOCABULARY_TYPES: ReadonlySet<string> = new Set([
   'uint64',
   'uint128',
   'uint256',
-  'positive_integer',
-  'non_negative_integer',
-  'negative_integer',
-  'non_positive_integer',
+  'integer',
   'number',
   'float32',
   'float64',

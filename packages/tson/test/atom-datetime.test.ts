@@ -94,3 +94,11 @@ describe('§5.5 !datetime -- precision', () => {
     expect(() => parser.read(token('2025-03-13T10:15:30.1Z'))).toThrow(TsonAtomValidationError);
   });
 });
+
+describe('§5.4 !datetime -- a leap second is refused', () => {
+  it('rejects second 60, which is not an instant on the UTC timeline', () => {
+    expect(() =>
+      createDateTimeParser('datetime', UNCONSTRAINED).read(token('2016-12-31T23:59:60Z')),
+    ).toThrow(TsonAtomParseError);
+  });
+});

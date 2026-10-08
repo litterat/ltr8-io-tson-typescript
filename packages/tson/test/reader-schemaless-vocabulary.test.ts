@@ -20,18 +20,22 @@ describe('lookupBuiltinAtom -- coverage matching BuiltinTypeVocabulary.java exac
     expect(lookupBuiltinAtom('unknown')).toBeUndefined();
   });
 
-  it('covers the full int8..int256/uint8..uint256 ladder plus the four sign-bounded refinements', () => {
+  it('covers the full int8..int256/uint8..uint256 ladder plus the arbitrary-precision integer (§5.6)', () => {
     for (const width of [8, 16, 32, 64, 128, 256]) {
       expect(lookupBuiltinAtom(`int${String(width)}`)).toBeDefined();
       expect(lookupBuiltinAtom(`uint${String(width)}`)).toBeDefined();
     }
+    expect(lookupBuiltinAtom('integer')).toBeDefined();
     for (const name of [
       'positive_integer',
       'non_negative_integer',
       'negative_integer',
       'non_positive_integer',
     ]) {
-      expect(lookupBuiltinAtom(name)).toBeDefined();
+      expect(lookupBuiltinAtom(name), `${name} left the vocabulary (§5.6)`).toBeUndefined();
+    }
+    for (const name of ['uri_reference', 'iri', 'iri_reference']) {
+      expect(lookupBuiltinAtom(name), name).toBeDefined();
     }
   });
 });
@@ -67,10 +71,10 @@ describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
     expect(() => uint8?.read({ text: '-1', form: 'unquoted' })).toThrow(TsonAtomValidationError);
   });
 
-  it('positive_integer is unbounded-width, min 1, matching `!integer ^ { min: 1 }`', () => {
-    const positive = lookupBuiltinAtom('positive_integer');
-    expect(positive?.read({ text: '9007199254740993', form: 'unquoted' })).toBe(9007199254740993n);
-    expect(() => positive?.read({ text: '0', form: 'unquoted' })).toThrow(TsonAtomValidationError);
+  it('integer is unbounded-width and unbounded-sign, matching `integer => !integer_type {}` (§5.6)', () => {
+    const integer = lookupBuiltinAtom('integer');
+    expect(integer?.read({ text: '9007199254740993', form: 'unquoted' })).toBe(9007199254740993n);
+    expect(integer?.read({ text: '-9007199254740993', form: 'unquoted' })).toBe(-9007199254740993n);
   });
 
   it('number (decimal_type) is exact and unconstrained -- no based-integer, no special values', () => {

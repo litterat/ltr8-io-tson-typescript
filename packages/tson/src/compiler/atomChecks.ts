@@ -754,6 +754,58 @@ function identifierCoherence(t: IdentifierType): string[] {
 }
 
 /**
+ * `normalization` on the families that fix it to `NONE` (§5.5, §5.7): `regex_type`, `uri_type`,
+ * `iri_type` and `email_type` are each their text as written, because a form over the whole text
+ * would change what a pattern matches, which resource a URI names, or which mailbox an address is.
+ * A construction stating another form contradicts the fixed field.
+ */
+function fixedNormalization(atom: { readonly normalization: Normalization }): string[] {
+  return atom.normalization === 'NONE'
+    ? []
+    : [
+        `normalization is ${atom.normalization}, but this type fixes it to NONE -- its value is its ` +
+          'text as written',
+      ];
+}
+
+/**
+ * `schemes` is a `scheme_set` (meta-kernel §5.5): a non-empty set of `scheme_name`s, an identifier
+ * whose profile is RFC 3986 §3.1's -- a letter, then letters, digits, `+`, `-` and `.` -- valued
+ * as ASCII-folded text. The binding folds each scheme, so a scheme reaching here is already in its
+ * form: one that still holds an uppercase letter, a full-width letter or a space is not a
+ * `scheme_name`, and two that fold to one value list that scheme twice.
+ */
+function schemeCoherence(schemes: readonly string[] | undefined): string[] {
+  if (schemes === undefined) return [];
+  const out: string[] = [];
+  if (schemes.length === 0) {
+    out.push("'schemes' is empty, so the body admits no value -- a scheme set states at least one");
+  }
+  const seen = new Set<string>();
+  for (const scheme of schemes) {
+    if (!isSchemeName(scheme)) {
+      out.push(`scheme '${scheme}' is not a scheme_name (RFC 3986 §3.1)`);
+    } else if (seen.has(scheme)) {
+      out.push(`schemes lists '${scheme}' twice, since schemes compare with ASCII case folded`);
+    }
+    seen.add(scheme);
+  }
+  return out;
+}
+
+/** `scheme_name`'s profile over a value already ASCII-folded: `[a-z][a-z0-9+.-]*`. */
+function isSchemeName(text: string): boolean {
+  if (text.length === 0) return false;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    const letter = code >= 0x61 && code <= 0x7a;
+    const tail = (code >= 0x30 && code <= 0x39) || code === 0x2b || code === 0x2d || code === 0x2e;
+    if (!(letter || (i > 0 && tail))) return false;
+  }
+  return true;
+}
+
+/**
  * `regex_type`'s own family-specific member obligation, beyond {@link textCoherence}'s shared
  * length/pattern rule: a `regex_type` value's own parsing contract is "a valid I-Regexp pattern"
  * (§5.7, RFC 9485), and §7.4's "the family's own parsing contract still applies" to a member set
@@ -1382,14 +1434,23 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'bytes_type':
       return bytesCoherence(atom);
     case 'regex_type':
-      return [...textCoherence(atom), ...regexMemberSyntaxCoherence(atom.members)];
+      return [
+        ...fixedNormalization(atom),
+        ...textCoherence(atom),
+        ...regexMemberSyntaxCoherence(atom.members),
+      ];
     case 'identifier_type':
       return identifierCoherence(atom);
     case 'uri_type':
     case 'iri_type':
-      return [...textCoherence(atom), ...uriMemberCoherence(atom)];
+      return [
+        ...fixedNormalization(atom),
+        ...schemeCoherence(atom.schemes),
+        ...textCoherence(atom),
+        ...uriMemberCoherence(atom),
+      ];
     case 'email_type':
-      return [...textCoherence(atom), ...emailMemberCoherence(atom)];
+      return [...fixedNormalization(atom), ...textCoherence(atom), ...emailMemberCoherence(atom)];
     case 'date_type':
       return dateCoherence(atom);
     case 'time_type':

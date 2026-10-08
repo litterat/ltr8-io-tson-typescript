@@ -1,31 +1,18 @@
 /**
- * A hand-written RFC 3986 `URI-reference` grammar, shared by `uri.ts` -- no `RegExp`, one
- * function per ABNF production, the same "a token is already fully decoded text by the time an
- * atom sees it, so a hand-scanned character walk is both the simplest and the most auditable way
- * to enforce a grammar this exact" discipline `temporal/rfc3339.ts` documents for its own grammar.
+ * A hand-written RFC 3986 `URI-reference` grammar and its RFC 3987 `IRI-reference` extension,
+ * shared by `uri.ts` and the directive-argument check -- no `RegExp`, one function per ABNF
+ * production, the same "a token is already fully decoded text by the time an atom sees it, so a
+ * hand-scanned character walk is both the simplest and the most auditable way to enforce a
+ * grammar this exact" discipline `temporal/rfc3339.ts` documents for its own grammar.
  *
- * **A deliberate divergence from `UriParser.java`, not an oversight.** `CONFORMANCE.md` records
- * that the Java implementation delegates entirely to `java.net.URI`, and that `URI`'s own Javadoc
- * states it implements RFC 2396 (as amended by RFC 2732) rather than RFC 3986 -- an accepted,
- * different-revision gap the reference implementation takes on because writing an RFC 3986
- * validator from scratch "isn't worth it at this stage" when a JDK type already covers most of
- * the ground. This port has no equivalent host type to delegate to at all (no `DOM` lib, no
- * global `URL` in this package's type configuration -- `CLAUDE.md`), so the trade the Java makes
- * does not apply here the same way: parsing RFC 3986 itself is not "extra" work traded against a
- * good-enough delegate, it is the only way to accept or reject a URI token at all. What follows
- * therefore implements §5.5's actually-cited grammar directly, which is stricter fidelity to the
- * spec than the reference implementation itself achieves -- see this port's own report for how
- * this divergence is called out as a deliberate choice, not a silent one.
+ * Both grammars are one set of productions parameterised by {@link UriGrammar}: under `iri`,
+ * `ucschar` stands beside `unreserved` in every component (RFC 3987 §2.2) and `iprivate` stands
+ * in the query alone. An IP literal stays US-ASCII under either. Characters are addressed as code
+ * points, never UTF-16 units, so a supplementary-plane `ucschar` is one character.
  *
- * **One documented simplification** relative to strict RFC 3986: `path-absolute` and
- * `path-rootless` are each treated as their leading segment (when present) followed by the same
- * `path-abempty` continuation grammar (`*( "/" segment )`), rather than `path-absolute`'s own
- * stricter rule that forbids an *empty* first segment from being followed by more path
- * (effectively disallowing `//` as a rootless continuation in one narrow corner). This widens
- * acceptance by an infinitesimal, security-irrelevant margin -- it never accepts a character
- * outside `pchar`/`unreserved`/`sub-delims`, never accepts an unescaped space, and never changes
- * which *scheme* or *host* a token denotes -- while keeping one shared path reader instead of
- * three near-identical ones.
+ * **A deliberate divergence from the JDK-leaning part of the reference.** `java.net.URI`
+ * implements RFC 2396; the reference parses RFC 3986 itself (`IriGrammar.java`) and so does this
+ * port, which has no host URI type at all.
  */
 
 const ASCII_ZERO = 0x30;
@@ -127,19 +114,58 @@ function isQueryOrFragmentCode(code: number): boolean {
 }
 
 /**
- * Consumes the maximal run of `text[pos..end)` where every character either satisfies
- * `isAllowed` or is a `pct-encoded = "%" HEXDIG HEXDIG` triple (unioned into nearly every
- * production below). Returns the position just past the run -- `pos` itself if nothing matched.
+ * The grammar a reference is read under: RFC 3986's `URI-reference` (`iri: false`, US-ASCII
+ * throughout) or RFC 3987's `IRI-reference` (`iri: true`). `parseIpv6` lets the caller supply
+ * `ipv6.ts`'s strict address grammar for `IP-literal` without this module importing it, so it
+ * stays a pure grammar (mirroring `temporal/rfc3339.ts`).
+ */
+export interface UriGrammar {
+  readonly iri: boolean;
+  readonly parseIpv6: (candidate: string) => boolean;
+}
+
+/** Which characters beyond US-ASCII a component admits under the IRI grammar (RFC 3987 §2.2). */
+type Beyond = 'none' | 'ucschar' | 'ucschar-iprivate';
+
+/**
+ * `ucschar` (RFC 3987 §2.2): the BMP's letters and marks from U+00A0, then each plane from 1 to 14
+ * but for its two last code points and plane 14's first 0x1000.
+ */
+export function isUcscharCode(code: number): boolean {
+  if (
+    (code >= 0xa0 && code <= 0xd7ff) ||
+    (code >= 0xf900 && code <= 0xfdcf) ||
+    (code >= 0xfdf0 && code <= 0xffef)
+  ) {
+    return true;
+  }
+  const plane = code >>> 16;
+  return (
+    plane >= 1 && plane <= 14 && (code & 0xffff) <= 0xfffd && (plane !== 14 || code >= 0xe1000)
+  );
+}
+
+/** `iprivate` (RFC 3987 §2.2): the private-use area and planes 15 and 16. */
+export function isIprivateCode(code: number): boolean {
+  return (code >= 0xe000 && code <= 0xf8ff) || (code >= 0xf0000 && (code & 0xffff) <= 0xfffd);
+}
+
+/**
+ * Consumes the maximal run of `text[pos..)` where every character either satisfies `isAllowed`
+ * (US-ASCII only), is a `pct-encoded = "%" HEXDIG HEXDIG` triple, or is a code point beyond
+ * US-ASCII that `beyond` admits (unioned into nearly every production below). Returns the position
+ * just past the run -- `pos` itself if nothing matched.
  */
 function readCharClassRun(
   text: string,
   pos: number,
-  end: number,
+  beyond: Beyond,
   isAllowed: (code: number) => boolean,
 ): number {
+  const end = text.length;
   let i = pos;
   while (i < end) {
-    const code = text.charCodeAt(i);
+    const code = text.codePointAt(i) ?? 0;
     if (code === ASCII_PERCENT) {
       if (
         i + 2 < end &&
@@ -151,10 +177,25 @@ function readCharClassRun(
       }
       break;
     }
-    if (!isAllowed(code)) break;
+    if (code < 0x80) {
+      if (!isAllowed(code)) break;
+    } else if (
+      beyond === 'none' ||
+      !(isUcscharCode(code) || (beyond === 'ucschar-iprivate' && isIprivateCode(code)))
+    ) {
+      break;
+    } else {
+      i += code > 0xffff ? 2 : 1;
+      continue;
+    }
     i += 1;
   }
   return i;
+}
+
+/** What a component admits beyond US-ASCII under `g`. */
+function ucs(g: UriGrammar): Beyond {
+  return g.iri ? 'ucschar' : 'none';
 }
 
 /** `scheme` starting at `pos` (always 0 in practice), or `undefined` if `text` does not start
@@ -187,15 +228,9 @@ function isValidIpvFuture(inner: string): boolean {
 /**
  * `IP-literal = "[" ( IPv6address / IPvFuture ) "]"` (RFC 3986 §3.2.2), starting at `pos` where
  * `text.charCodeAt(pos)` is already known to be `"["`. The `IPv6address` alternative reuses
- * `ipv6.ts`'s own strict RFC 4291 §2.2 grammar whole -- passed in rather than imported directly,
- * so this module stays a pure RFC 3986 grammar with no dependency of its own on the address
- * family modules (mirroring `temporal/rfc3339.ts`'s "pure grammar, no value/schema imports" note).
+ * `ipv6.ts`'s own strict RFC 4291 §2.2 grammar whole.
  */
-function readIpLiteral(
-  text: string,
-  pos: number,
-  parseIpv6: (candidate: string) => boolean,
-): number | undefined {
+function readIpLiteral(text: string, pos: number, g: UriGrammar): number | undefined {
   const close = text.indexOf(']', pos + 1);
   if (close < 0) return undefined;
   const inner = text.slice(pos + 1, close);
@@ -204,35 +239,31 @@ function readIpLiteral(
   if (first === ASCII_LOWER_V || first === ASCII_UPPER_V) {
     return isValidIpvFuture(inner) ? close + 1 : undefined;
   }
-  return parseIpv6(inner) ? close + 1 : undefined;
+  return g.parseIpv6(inner) ? close + 1 : undefined;
 }
 
 /**
  * `authority = [ userinfo "@" ] host [ ":" port ]` (RFC 3986 §3.2), `host = IP-literal /
- * IPv4address / reg-name`. The plain (non-bracketed) `IPv4address` alternative needs no separate
- * branch: every character an `IPv4address` can contain (digits and `.`) is already inside
- * `reg-name`'s own charset, so a bare dotted-quad host is accepted by the `reg-name` reader with
- * no special case, exactly as it would be by the full three-way grammar.
+ * IPv4address / reg-name`, with `iuserinfo`/`ireg-name` under the IRI grammar. The plain
+ * (non-bracketed) `IPv4address` alternative needs no separate branch: every character an
+ * `IPv4address` can contain (digits and `.`) is already inside `reg-name`'s own charset. The host
+ * may be empty (`reg-name = *( ... )`), and a port is digits only and may be empty (`port = *DIGIT`).
  */
-function readAuthority(
-  text: string,
-  pos: number,
-  parseIpv6: (candidate: string) => boolean,
-): number | undefined {
+function readAuthority(text: string, pos: number, g: UriGrammar): number | undefined {
   let cursor = pos;
-  const afterUserinfo = readCharClassRun(text, pos, text.length, isUserinfoCode);
+  const afterUserinfo = readCharClassRun(text, pos, ucs(g), isUserinfoCode);
   if (afterUserinfo < text.length && text.charCodeAt(afterUserinfo) === ASCII_AT) {
     cursor = afterUserinfo + 1;
   }
   if (cursor < text.length && text.charCodeAt(cursor) === ASCII_OPEN_BRACKET) {
-    const afterIp = readIpLiteral(text, cursor, parseIpv6);
+    const afterIp = readIpLiteral(text, cursor, g);
     if (afterIp === undefined) return undefined;
     cursor = afterIp;
   } else {
-    cursor = readCharClassRun(text, cursor, text.length, isRegNameCode);
+    cursor = readCharClassRun(text, cursor, ucs(g), isRegNameCode);
   }
   if (cursor < text.length && text.charCodeAt(cursor) === ASCII_COLON) {
-    cursor = readCharClassRun(text, cursor + 1, text.length, isDigitCode);
+    cursor = readCharClassRun(text, cursor + 1, 'none', isDigitCode);
   }
   // Authority ends where the character class runs above stop on their own: none of userinfo,
   // reg-name, IP-literal's own bracket close, or a numeric port can contain '/', '?' or '#'.
@@ -240,10 +271,10 @@ function readAuthority(
 }
 
 /** `path-abempty = *( "/" segment )`, `segment = *pchar` (RFC 3986 §3.3). */
-function readPathAbempty(text: string, pos: number): number {
+function readPathAbempty(text: string, pos: number, g: UriGrammar): number {
   let i = pos;
   while (i < text.length && text.charCodeAt(i) === ASCII_SLASH) {
-    i = readCharClassRun(text, i + 1, text.length, isPcharCode);
+    i = readCharClassRun(text, i + 1, ucs(g), isPcharCode);
   }
   return i;
 }
@@ -255,67 +286,68 @@ function readPathAbempty(text: string, pos: number): number {
 function readNonEmptyFirstSegmentPath(
   text: string,
   pos: number,
+  g: UriGrammar,
   isFirstSegmentCode: (code: number) => boolean,
 ): number | undefined {
-  const firstEnd = readCharClassRun(text, pos, text.length, isFirstSegmentCode);
+  const firstEnd = readCharClassRun(text, pos, ucs(g), isFirstSegmentCode);
   if (firstEnd === pos) return undefined;
-  return readPathAbempty(text, firstEnd);
+  return readPathAbempty(text, firstEnd, g);
 }
 
 /**
  * `hier-part = "//" authority path-abempty / path-absolute / path-rootless / path-empty`
- * (RFC 3986 §3). See this module's own TSDoc for `path-absolute`'s deliberate simplification to
- * `path-abempty`'s own grammar.
+ * (RFC 3986 §3). A leading `//` is always the authority form, so `path-absolute` (which may not
+ * begin `//`) and `path-abempty` read identically from a single leading `/`.
  */
-function readHierPart(
-  text: string,
-  pos: number,
-  parseIpv6: (candidate: string) => boolean,
-): number | undefined {
+function readHierPart(text: string, pos: number, g: UriGrammar): number | undefined {
   if (text.startsWith('//', pos)) {
-    const afterAuthority = readAuthority(text, pos + 2, parseIpv6);
+    const afterAuthority = readAuthority(text, pos + 2, g);
     if (afterAuthority === undefined) return undefined;
-    return readPathAbempty(text, afterAuthority);
+    return readPathAbempty(text, afterAuthority, g);
   }
   if (pos < text.length && text.charCodeAt(pos) === ASCII_SLASH) {
-    return readPathAbempty(text, pos);
+    return readPathAbempty(text, pos, g);
   }
-  return readNonEmptyFirstSegmentPath(text, pos, isPcharCode) ?? pos;
+  return readNonEmptyFirstSegmentPath(text, pos, g, isPcharCode) ?? pos;
 }
 
 /** `relative-part`'s exact counterpart to {@link readHierPart} -- `path-noscheme` instead of
  * `path-rootless`, so the reference's first segment can never itself look like `scheme ":"`. */
-function readRelativePart(
-  text: string,
-  pos: number,
-  parseIpv6: (candidate: string) => boolean,
-): number | undefined {
+function readRelativePart(text: string, pos: number, g: UriGrammar): number | undefined {
   if (text.startsWith('//', pos)) {
-    const afterAuthority = readAuthority(text, pos + 2, parseIpv6);
+    const afterAuthority = readAuthority(text, pos + 2, g);
     if (afterAuthority === undefined) return undefined;
-    return readPathAbempty(text, afterAuthority);
+    return readPathAbempty(text, afterAuthority, g);
   }
   if (pos < text.length && text.charCodeAt(pos) === ASCII_SLASH) {
-    return readPathAbempty(text, pos);
+    return readPathAbempty(text, pos, g);
   }
-  return readNonEmptyFirstSegmentPath(text, pos, isPcharNoColonCode) ?? pos;
+  return readNonEmptyFirstSegmentPath(text, pos, g, isPcharNoColonCode) ?? pos;
 }
 
-/** The shape information `uri.ts` needs beyond "well-formed": the `scheme` component, absent for
- * a relative reference (RFC 3986's `relative-ref` has none). */
+/** `query = *( pchar / "/" / "?" )`, with `iprivate` beside `ucschar` under the IRI grammar (RFC 3987 §2.2). */
+function readQuery(text: string, pos: number, g: UriGrammar): number {
+  return readCharClassRun(text, pos, g.iri ? 'ucschar-iprivate' : 'none', isQueryOrFragmentCode);
+}
+
+/** `fragment = *( pchar / "/" / "?" )` (RFC 3986 §3.5); `iprivate` is not admitted here. */
+function readFragment(text: string, pos: number, g: UriGrammar): number {
+  return readCharClassRun(text, pos, ucs(g), isQueryOrFragmentCode);
+}
+
+/** The shape information the facets need beyond "well-formed": the `scheme` component (absent
+ * for a relative reference, which RFC 3986's `relative-ref` has none) and whether a `#` fragment
+ * is present -- a present-but-empty fragment is a fragment. */
 export interface UriShape {
   readonly scheme?: string;
+  readonly fragment: boolean;
 }
 
 /**
- * `URI-reference = URI / relative-ref` (RFC 3986 §4.1), matched in full. `parseIpv6` lets the
- * caller supply `ipv6.ts`'s own strict address grammar for `IP-literal` without this module
- * importing it directly -- see {@link readIpLiteral}'s own note.
+ * `URI-reference = URI / relative-ref` (RFC 3986 §4.1), or `IRI-reference` (RFC 3987 §2.2) under
+ * `g.iri`, matched in full; `undefined` when `text` is not one.
  */
-export function tryParseUri(
-  text: string,
-  parseIpv6: (candidate: string) => boolean,
-): UriShape | undefined {
+export function tryParseUri(text: string, g: UriGrammar): UriShape | undefined {
   const schemeEnd = tryReadScheme(text, 0);
   let pos: number;
   let scheme: string | undefined;
@@ -325,20 +357,22 @@ export function tryParseUri(
     text.charCodeAt(schemeEnd) === ASCII_COLON
   ) {
     scheme = text.slice(0, schemeEnd);
-    const afterHierPart = readHierPart(text, schemeEnd + 1, parseIpv6);
+    const afterHierPart = readHierPart(text, schemeEnd + 1, g);
     if (afterHierPart === undefined) return undefined;
     pos = afterHierPart;
   } else {
-    const afterRelativePart = readRelativePart(text, 0, parseIpv6);
+    const afterRelativePart = readRelativePart(text, 0, g);
     if (afterRelativePart === undefined) return undefined;
     pos = afterRelativePart;
   }
   if (pos < text.length && text.charCodeAt(pos) === ASCII_QUESTION) {
-    pos = readCharClassRun(text, pos + 1, text.length, isQueryOrFragmentCode);
+    pos = readQuery(text, pos + 1, g);
   }
+  let fragment = false;
   if (pos < text.length && text.charCodeAt(pos) === ASCII_HASH) {
-    pos = readCharClassRun(text, pos + 1, text.length, isQueryOrFragmentCode);
+    pos = readFragment(text, pos + 1, g);
+    fragment = true;
   }
   if (pos !== text.length) return undefined;
-  return scheme === undefined ? {} : { scheme };
+  return scheme === undefined ? { fragment } : { scheme, fragment };
 }

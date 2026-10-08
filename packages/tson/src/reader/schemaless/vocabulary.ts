@@ -72,6 +72,7 @@ import type { AtomType } from '../../atom/contract.js';
 /** RFC pins, verbatim from `spec/m/meta.tn`/`meta-kernel.tn` -- see this module's own TSDoc. */
 const RFC = {
   uri: 'https://www.rfc-editor.org/rfc/rfc3986',
+  iri: 'https://www.rfc-editor.org/rfc/rfc3987',
   email: 'https://www.rfc-editor.org/rfc/rfc5322',
   ipv4: 'https://www.rfc-editor.org/rfc/rfc3986',
   ipv6: 'https://www.rfc-editor.org/rfc/rfc4291',
@@ -80,7 +81,7 @@ const RFC = {
   mac: 'https://www.rfc-editor.org/rfc/rfc9542',
 } as const;
 
-/** The fixed-width integer ladder §5.6 lists in full: `int8`..`int256`/`uint8`..`uint256`. */
+/** The fixed-width integer ladder §5.6 lists in full: `int8`..`int256`/`uint8`..`uint256`, beside the arbitrary-precision `integer` they refine. */
 const INTEGER_WIDTHS = [8, 16, 32, 64, 128, 256] as const;
 
 function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
@@ -104,22 +105,7 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
       }),
     );
   }
-  types.set(
-    'positive_integer',
-    createIntegerParser('positive_integer', { kind: 'integer_type', min: 1n }),
-  );
-  types.set(
-    'non_negative_integer',
-    createIntegerParser('non_negative_integer', { kind: 'integer_type', min: 0n }),
-  );
-  types.set(
-    'negative_integer',
-    createIntegerParser('negative_integer', { kind: 'integer_type', max: -1n }),
-  );
-  types.set(
-    'non_positive_integer',
-    createIntegerParser('non_positive_integer', { kind: 'integer_type', max: 0n }),
-  );
+  types.set('integer', createIntegerParser('integer', { kind: 'integer_type' }));
 
   types.set('number', createDecimalParser('number', { kind: 'decimal_type' }));
   types.set(
@@ -158,16 +144,36 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
   types.set('period', createPeriodParser('period', { kind: 'period_type' }));
 
   types.set('uuid', createUuidParser('uuid', { kind: 'uuid_type' }));
-  types.set(
-    'uri',
-    createUriParser('uri', {
-      kind: 'uri_type',
-      spec: RFC.uri,
-      allowRelative: false,
-      allowFragment: true,
-      normalization: 'NONE',
-    }),
-  );
+  for (const [name, allowRelative] of [
+    ['uri', false],
+    ['uri_reference', true],
+  ] as const) {
+    types.set(
+      name,
+      createUriParser(name, {
+        kind: 'uri_type',
+        spec: RFC.uri,
+        allowRelative,
+        allowFragment: true,
+        normalization: 'NONE',
+      }),
+    );
+  }
+  for (const [name, allowRelative] of [
+    ['iri', false],
+    ['iri_reference', true],
+  ] as const) {
+    types.set(
+      name,
+      createUriParser(name, {
+        kind: 'iri_type',
+        spec: RFC.iri,
+        allowRelative,
+        allowFragment: true,
+        normalization: 'NONE',
+      }),
+    );
+  }
   types.set(
     'email',
     createEmailParser('email', { kind: 'email_type', spec: RFC.email, normalization: 'NONE' }),

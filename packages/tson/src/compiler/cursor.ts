@@ -25,8 +25,7 @@ import { START, type Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
-import { parseIpv6Bytes } from '../atom/network/ipv6.js';
-import { tryParseUri } from '../atom/network/uriGrammar.js';
+import { isIriReference } from '../atom/network/uri.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import { toNfc } from '../unicode/nfc.js';
 
@@ -282,20 +281,15 @@ export function* parseNamedDirective(state: CursorState, expectedName: string): 
   // §3.3: a directive's argument is a URI, checked against the same hand-written RFC 3986
   // grammar the `!uri` atom uses -- so this layer and that one can never disagree about what a
   // URI is.
-  if (tryParseUri(arg.text, isIpv6Candidate) === undefined) {
+  if (!isIriReference(arg.text)) {
     throw new TsonParseError(
-      `'!!${expectedName}' argument '${arg.text}' is not a valid URI (§3.3)`,
+      `'!!${expectedName}' argument '${arg.text}' is not a valid IRI-reference (§3.3)`,
       arg.start,
-      { expected: 'a URI', actual: arg.text },
+      { expected: 'an IRI-reference', actual: arg.text },
     );
   }
 
   return arg.text;
-}
-
-/** The IPv6 literal recogniser RFC 3986's `IP-literal` host form needs. */
-function isIpv6Candidate(candidate: string): boolean {
-  return parseIpv6Bytes(candidate) !== undefined;
 }
 
 /**

@@ -105,6 +105,14 @@ export type DiagnosticCode =
   | 'SCHEMA_ERROR'
   /** A type reference does not resolve within the linked schema. */
   | 'UNKNOWN_TYPE'
+  /**
+   * A value opened a schema scope with a nested `!!schema` at a position whose type is not a
+   * `scoped` instance, a container of scoped elements included ([TSON-SCHEMA] §7.1, §7.8).
+   * Cross-schema acceptance is authored intent, declared by the position's own type, so a position
+   * that did not declare it has no cell to refuse the directive: §8.1's `resolver` category, where
+   * a nested `!!schema` at a `scoped` position whose cell does not admit it is a validation error.
+   */
+  | 'SCOPE_NOT_ADMITTED'
   /** A validation rule not covered by a more specific code. */
   | 'VALIDATION_ERROR'
   /** A construct this implementation has not built yet — a library gap, not bad input. */

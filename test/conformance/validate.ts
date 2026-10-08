@@ -45,6 +45,7 @@ const RESOLVER_CODES: ReadonlySet<DiagnosticCode> = new Set([
   'DUPLICATE_FIELD',
   'SCHEMA_ERROR',
   'ATOM_FORM_INVALID',
+  'SCOPE_NOT_ADMITTED',
 ] satisfies DiagnosticCode[]);
 
 /**

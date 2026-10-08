@@ -129,8 +129,8 @@ export function* typeRefAhead(ctx: ReadContext): Task<string | undefined> {
  * compile time (`link/referenceChain.ts`'s own `resolvesToScoped`). Where it does, this is a
  * no-op: the event is left exactly where it was, for that position's own reader to consume and
  * dispatch on (which cell it lands in -- LOCAL, EXTERN, or neither -- is that reader's own
- * concern, §7.8's own admits-EXTERN check included). Where it does not, the directive is consumed
- * and reported, and the value it prefixed still reads -- normally, as it would have with no
+ * concern, §7.8's own admits-EXTERN check included, and a validation error). Where it does not,
+ * the directive is consumed and reported as `SCOPE_NOT_ADMITTED` (§7.1, §7.8), a resolver error, and the value it prefixed still reads -- normally, as it would have with no
  * directive at all -- so a stray directive costs one diagnostic rather than a value.
  *
  * Costs nothing for the near-totality of values that carry no directive at all: everything below
@@ -146,7 +146,7 @@ export function* refuseUnscopedSchemaRef(
   if (peeked.kind !== 'schema-ref') return;
   yield* ctx.next();
   ctx.report(
-    'VALIDATION_ERROR',
+    'SCOPE_NOT_ADMITTED',
     `'${typeName}' is not a scoped type, so a value here cannot open a schema scope with ` +
       `'!!schema:"${peeked.uri}"' -- a position takes a value from a foreign schema only where ` +
       `its own schema said so, by declaring it scoped (§7.8)`,

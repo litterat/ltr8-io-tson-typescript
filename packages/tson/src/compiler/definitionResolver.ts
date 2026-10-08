@@ -2361,9 +2361,12 @@ function annotationsOf(
     ) {
       throw unresolvedAnnotation(deps, name, annotation.name);
     }
+    // A bare `@T` is shorthand for `@T:_` (§6): it is read against `T` like a written value, so a
+    // type that does not admit the void sentinel refuses the mark as it would refuse `_`. The bare
+    // form keeps no value, whatever the read returned.
     const boundValue =
       annotation.value === undefined
-        ? undefined
+        ? (bindAnnotationValue(deps, name, annotation.name, VOID_SENTINEL), undefined)
         : bindAnnotationValue(deps, name, annotation.name, annotation.value);
     annotations.push({
       name: annotation.name,
@@ -2372,6 +2375,9 @@ function annotationsOf(
   }
   return annotations;
 }
+
+/** The `_` a bare annotation stands for (§6), read against the annotation's type like a written one. */
+const VOID_SENTINEL: DataValue = { annotations: [], coreValue: { kind: 'absent' } };
 
 /** §3.3.3's one hop missed: `annotationName` is not an entry of the governing meta-schema's own namespace. */
 function unresolvedAnnotation(

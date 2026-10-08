@@ -45,6 +45,7 @@ import {
   variant,
 } from '../bind/combinators.js';
 import { registry } from '../bind/registry.js';
+import { applyNormalization } from '../unicode/normalization.js';
 import type { FieldSlot } from '../bind/binding.js';
 import type {
   AnnotatedBinding,
@@ -218,6 +219,17 @@ const identifierBinding: Binding<string> = bridge<string, AtomToken>(
   atom<AtomToken>('identifier'),
   (text) => ({ text, form: 'unquoted' }),
   (wire) => wire.text,
+);
+
+/**
+ * A URI scheme (§5.5's `scheme_name`): text whose value is the text ASCII-folded, as RFC 3986 §3.1
+ * compares a scheme. Only A-Z move, so a full-width letter reaches the coherence check unchanged
+ * and is refused there as the non-scheme it is.
+ */
+const schemeNameBinding: Binding<string> = bridge<string, string>(
+  textBinding,
+  (scheme) => scheme,
+  (wire) => applyNormalization('ASCII_CASEFOLD', wire),
 );
 
 const booleanBinding: Binding<boolean> = atom<boolean>('boolean');
@@ -1415,7 +1427,7 @@ function uriFamilyBinding<T extends UriType | IriType>(kind: T['kind']): RecordB
       optional<T, 'length'>(3, 'length', 'length', bigintBinding),
       optional<T, 'pattern'>(4, 'pattern', 'pattern', textBinding),
       optional<T, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
-      optional<T, 'schemes'>(6, 'schemes', 'schemes', arrayOf<string>(textBinding)),
+      optional<T, 'schemes'>(6, 'schemes', 'schemes', arrayOf<string>(schemeNameBinding)),
       field<T, 'allowRelative'>(7, 'allow_relative', 'allowRelative', booleanBinding),
       field<T, 'allowFragment'>(8, 'allow_fragment', 'allowFragment', booleanBinding),
       unwrittenAt(

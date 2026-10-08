@@ -157,7 +157,7 @@ describe('scoped reader -- scope membership (§7.8)', () => {
 });
 
 describe('scoped reader -- typed-position restriction, derived structurally (§7.8)', () => {
-  it('a nested !!schema at a non-scoped position is refused, and the whole read is abandoned (WP3B)', () => {
+  it('a nested !!schema at a non-scoped position is a resolver-category SCOPE_NOT_ADMITTED (§7.1, §7.8), and the whole read is abandoned', () => {
     const compiled = compileHost(true);
     const bytes = new TextEncoder().encode(
       '{ local: !note { body: "x" } foreign: !!schema:"' +
@@ -168,7 +168,7 @@ describe('scoped reader -- typed-position restriction, derived structurally (§7
     );
     const result = validate(compiled, 'envelope', bytes);
     const problem = result.diagnostics.find((d) => d.path === '/closed');
-    expect(problem?.code).toBe('VALIDATION_ERROR');
+    expect(problem?.code).toBe('SCOPE_NOT_ADMITTED');
     // A read is all-or-nothing (WP3B): the refusal at '/closed' means no partial 'envelope' to
     // mistake for a valid one, not a record with every other field intact.
     expect(result.value).toBeUndefined();

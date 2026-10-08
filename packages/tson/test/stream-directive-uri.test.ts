@@ -19,7 +19,7 @@ function drain(source: string): number {
   );
 }
 
-describe("a directive's argument must be a URI (§3.3)", () => {
+describe("a directive's argument must be an IRI-reference (§2.2.1, §3.3)", () => {
   it('rejects an argument with an unescaped space', () => {
     // The shared conformance vector parser/invalid/directive-argument-not-a-uri. Without the
     // check this parses clean through to document-end.
@@ -37,13 +37,22 @@ describe("a directive's argument must be a URI (§3.3)", () => {
       expect(parse.message).toContain('not a uri');
       expect(parse.message).toContain('§3.3');
       // The structured half, which Diagnostic carries through unchanged.
-      expect(parse.expected).toBe('a URI');
+      expect(parse.expected).toBe('an IRI-reference');
       expect(parse.actual).toBe('not a uri');
     }
   });
 
   it('accepts a well-formed absolute URI', () => {
     expect(() => drain('!!id:"https://tson.io/x.tn"\n_')).not.toThrow();
+  });
+
+  it('accepts text beyond US-ASCII, which RFC 3987 admits (§2.2.1)', () => {
+    expect(() => drain('!!id:"https://example.com/données/1042.tn"\n_')).not.toThrow();
+  });
+
+  it('rejects a private-use character outside the query, which RFC 3987 admits nowhere else', () => {
+    expect(() => drain('!!id:"https://example.com/\\u{E000}"\n_')).toThrow(TsonParseError);
+    expect(() => drain('!!id:"https://example.com/a?k=\\u{E000}"\n_')).not.toThrow();
   });
 
   it('accepts a relative reference, which RFC 3986 admits', () => {

@@ -45,17 +45,6 @@ function bestEffortSidecarSummary(vector: Vector): SidecarSummary | undefined {
 }
 
 /**
- * Valid vectors the reader cannot yet read at all, so there is nothing to round-trip: a directive
- * argument is an IRI-reference ([TSON-DATA] §2.2.1, §3.3), and the directive grammar still admits
- * a URI only. Each is a conformance failure of its own (`npm run test:conformance` reports it);
- * listing it here keeps this round trip about the writers and not about that gap, and an entry
- * leaves with the IRI grammar.
- */
-const NOT_YET_READABLE: ReadonlySet<string> = new Set([
-  'parser/valid/directive-argument-beyond-us-ascii',
-]);
-
-/**
  * Vectors this round trip applies to: a plain valid data document, real UTF-8, no schema splice.
  *
  * **Never the lexer layer.** A lexer-layer `valid` vector's sidecar promises only a well-formed
@@ -72,7 +61,6 @@ const NOT_YET_READABLE: ReadonlySet<string> = new Set([
 function roundTrippableVectors(): Vector[] {
   return discoverAllVectors().filter((vector) => {
     if (vector.layer === 'lexer') return false;
-    if (NOT_YET_READABLE.has(vector.name)) return false;
     const summary = bestEffortSidecarSummary(vector);
     return (
       summary?.outcome === 'valid' && summary.encoding === undefined && summary.meta === undefined
