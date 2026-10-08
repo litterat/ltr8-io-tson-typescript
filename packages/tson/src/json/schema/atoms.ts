@@ -267,7 +267,7 @@ export function withAnnotationObject(
         ctx
           .field(SCHEMA)
           .report(
-            'UNKNOWN_TYPE_REF',
+            'SCOPE_NOT_ADMITTED',
             `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
               `position -- '${displayName}' is not scoped`,
             'no $schema at this position',
@@ -500,7 +500,7 @@ function makeAtomReader(
 // void, value, identifier -- dispatched by constructor (§4.2, §5.7)
 // ---------------------------------------------------------------------------------------------
 
-/** §5.7: `void`'s sole value is absence, and JSON null is its one spelling. */
+/** §5.7: `void`'s sole value is the void sentinel, and JSON null is its one spelling. */
 export function voidReader(
   displayName: string,
   schemaLocation: SchemaLocation,

@@ -132,9 +132,9 @@ describe('§3.2/§3.3 the annotation object', () => {
     expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema is a resolver error everywhere this package reads (no scoped position built yet, §7.8, §9.4)', () => {
+  it('$schema at a position whose own type is not scoped is SCOPE_NOT_ADMITTED, a resolver error (§8.5, [TSON-SCHEMA] §7.8)', () => {
     const d = refusalJson('dog', '{"$schema": "https://example.test/x.tn", "pet_type": "dog"}');
-    expect(d.code).toBe('UNKNOWN_TYPE_REF');
+    expect(d.code).toBe('SCOPE_NOT_ADMITTED');
   });
 
   it('a $-initial member outside the closed reserved set is a resolver error (§3.2, §9.4)', () => {

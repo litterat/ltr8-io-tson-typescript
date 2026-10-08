@@ -72,6 +72,7 @@ import {
   type LinkedSchema,
   type Tson,
 } from '@ltr8/tson';
+import { canonicalizeIdentity } from '@ltr8/tson/identity';
 import { compileJsonSchema, validateJsonAsync, type JsonCompiledSchema } from '@ltr8/tson/json';
 import { UsageError } from '../exit.js';
 import { outcomeOfDiagnostics, outcomeOfFiles, type Outcome } from '../outcome.js';
@@ -424,7 +425,15 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
     context = {
       root,
       ...(needsText ? { text: tson.compile(linked) } : {}),
-      ...(needsJson ? { json: compileJsonSchema(linked) } : {}),
+      // §8.5's scope push resolves against the registry the schema was loaded into, as the text
+      // read's `tson.compile` does; a schema nobody registered is `SCHEMA_NOT_FOUND`.
+      ...(needsJson
+        ? {
+            json: compileJsonSchema(linked, {
+              foreignSchemas: (uri) => tson.schemas.get(canonicalizeIdentity(uri)),
+            }),
+          }
+        : {}),
     };
   }
 

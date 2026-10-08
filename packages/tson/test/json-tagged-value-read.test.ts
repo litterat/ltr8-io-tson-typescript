@@ -144,7 +144,7 @@ describe('§3.2 closed set', () => {
       'person',
       '{"$schema": "https://example.test/other.tn", "$type": "person", "name": "Ada"}',
     );
-    expect(problem.code).toBe('UNKNOWN_TYPE_REF');
+    expect(problem.code).toBe('SCOPE_NOT_ADMITTED');
     expect(problem.path).toBe('/$schema');
   });
 

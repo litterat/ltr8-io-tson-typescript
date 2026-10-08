@@ -209,7 +209,7 @@ vocabulary-only reading the way TSON text's base type resolution does; do not re
 `readTree`'s Class-1 behaviour.
 
 Not implemented: reading a document's own in-band `$schema`/`$type` with no out-of-band binding
-supplied, `scoped` positions (`declared`/`extern`/`dynamic`), the §3.5 `TSON-Schema` HTTP header
+supplied, the §3.5 `TSON-Schema` HTTP header
 fields, and a schema-directed JSON encoder — `[STATUS.md](../../STATUS.md)`'s Part 3 section has
 the full list. There is also no JSON counterpart of `readBind`/object binding: this subpath reads
 into a `JsonValue` tree only.

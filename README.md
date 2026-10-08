@@ -220,7 +220,7 @@ return a plain `JsonValue` tree with no type applied — because [TSON-JSON] §3
 no vocabulary-only reading the way TSON text's base type resolution does.
 
 What this subpath does not do, today: read a document's own in-band `$schema`/`$type` binding with
-no schema supplied out of band, read a `scoped` position (`declared`/`extern`/`dynamic`), speak the
+no schema supplied out of band, speak the
 §3.5 `TSON-Schema`/`TSON-Accept-Schema` HTTP header fields, or encode a schema-governed value back
 to JSON. See [STATUS.md](STATUS.md)'s Part 3 section for the full list.
 
@@ -325,7 +325,7 @@ resolved schema output) and known gaps. Part 3, the JSON encoding, covers a sche
 read and its CLI/package surface — narrower than the reference implementation's own scope, which
 also has an `objectReader` binding a JSON document straight into a host object; this port has no
 JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band-only
-binding, a scoped-position reader, the §3.5 HTTP header fields, or a schema-directed encoder — see
+binding, the §3.5 HTTP header fields, or a schema-directed encoder — see
 [STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps.
 
 ## Specification

@@ -374,3 +374,43 @@ export function* lookingAhead<T>(
     }
   }
 }
+
+/**
+ * Consumes the first member of the object at the cursor -- its name and its scalar value -- and
+ * leaves the object open, so whatever reads next meets it as though that member had never been
+ * written ([TSON-JSON] §8.5's scope push: a scoped position reads `$schema` to open the scope, and
+ * what is left is an annotation object led by `$type` in the foreign namespace, which the foreign
+ * type's reader reads as it reads any tagged value of its own).
+ *
+ * The caller has already peeked at both the object and its leading member, so the buffer holds at
+ * most those three events. Throws {@link TsonInternalError} where a lookahead is running (it would
+ * replay the member this drops) or the cursor is not at an object whose first member has a scalar
+ * value.
+ */
+export function* consumeLeadingMember(ctx: JsonReadContext): Task<void> {
+  const cursor = (ctx as JsonReadContext & CursorCarrier)[CURSOR];
+  if (cursor === undefined) {
+    throw new TsonInternalError(
+      'consumeLeadingMember was called with a JsonReadContext this module did not create',
+    );
+  }
+  if (cursor.recording !== undefined) {
+    throw new TsonInternalError(
+      'a lookahead is running, and it would replay the member consumeLeadingMember drops',
+    );
+  }
+  const open = yield* ctx.next();
+  const name = yield* ctx.next();
+  const value = yield* ctx.next();
+  const scalar =
+    value.kind === 'string' ||
+    value.kind === 'number' ||
+    value.kind === 'boolean' ||
+    value.kind === 'null';
+  if (open.kind !== 'object-start' || name.kind !== 'member-name' || !scalar) {
+    throw new TsonInternalError(
+      `no leading member with a scalar value to consume at '${open.kind}'`,
+    );
+  }
+  cursor.rewound.unshift(open);
+}

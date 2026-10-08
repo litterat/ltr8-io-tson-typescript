@@ -37,6 +37,7 @@ import { compile, type CompiledSchema } from '../src/compiler/compile.js';
 import { readTree, validate as validateText } from '../src/facade/tree.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { readJsonTree, validateJson } from '../src/json/facade.js';
+import { jsonValueToText } from '../src/json/write.js';
 import { scriptPolicy } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
@@ -97,6 +98,32 @@ const SCHEMA_SOURCE = `
   int_box    => box<int32>
   text_box   => box<text>
   crate      => { b: box }
+  local_box  => { v: declared }
+  extern_box => { v: extern }
+  port_label  => !text_enum ["80" "443"]
+  port_slot   => ( port_label | int32 )
+  ported      => { p: port_slot }
+  answer      => !text_enum ["true" "false"]
+  answer_slot => ( answer | boolean )
+  answered    => { a: answer_slot }
+  port_text   => ( port_label | text )
+  labelled    => { l: port_text }
+  fragment   => { ( include: text | name?: text  type?: text ) }
+  endpoint   => { ( host: text  port: int32 | socket: text )? }
+  contact    => { ( email: text | phone: text )+ }
+  header_name => !identifier_type { start: NONE  continue: NONE
+    start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
+    normalization: NFKC_CASEFOLD }
+  headers     => { header_name => text }
+  field_name  => !identifier_type { start: NONE  continue: NONE
+    start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
+    normalization: ASCII_CASEFOLD }
+  fields      => { field_name => text }
+  pinned      => { h: header_name = Idempotency-Key }
+  charset     => !text_type { members: [UTF-8 us-ascii]  normalization: NFKC_CASEFOLD }
+  encoded     => { c: charset }
+  safe_header => !enum_type { type: header_name  members: [Accept content-type] }
+  screened    => { h: safe_header }
   marks      => {
     nickname?: text
     from:      int32?
@@ -144,7 +171,7 @@ function sameVerdict(rootType: string, tsonBody: string, jsonBody: string): void
 
 /**
  * As {@link sameVerdict}, comparing the codes alone -- for a case where the two documents
- * genuinely have different *shapes*: §6.5's pairs form makes a compound-keyed map a JSON array of
+ * genuinely have different *shapes*: §6.4's pairs form makes a compound-keyed map a JSON array of
  * pairs, so a pointer into it names an entry index where the TSON map has a key. What still must
  * agree is which rule fired.
  */
@@ -606,9 +633,9 @@ describe('§6.1.5 subsumption at a field position', () => {
   });
 });
 
-// ── §6.5 maps ───────────────────────────────────────────────────────────────────────────────
+// ── §6.4 maps ───────────────────────────────────────────────────────────────────────────────
 
-describe('§6.5 maps', () => {
+describe('§6.4 maps', () => {
   it('a map entry value of the wrong shape', () => {
     sameVerdict('counts', '{ "a" => { b: 1 } }', '{"a": {"b": 1}}');
   });
@@ -621,11 +648,11 @@ describe('§6.5 maps', () => {
     sameVerdict('by_date', '{ "not-a-date" => 12.5 }', '{"not-a-date": 12.5}');
   });
 
-  it('§6.5: two spellings of one key (1, 1.0) are one key under a number key type, in both encodings', () => {
+  it('§6.4: two spellings of one key (1, 1.0) are one key under a number key type, in both encodings', () => {
     sameRule('by_number', '{ 1 => "a"  1.0 => "b" }', '{"1": "a", "1.0": "b"}');
   });
 
-  it('a compound key takes §6.5’s pairs form in JSON and the ordinary map form in text -- codes agree, pointers cannot', () => {
+  it('a compound key takes §6.4’s pairs form in JSON and the ordinary map form in text -- codes agree, pointers cannot', () => {
     sameCodes(
       'by_point',
       '{ { x: 1  y: 2 } => "a"  { y: 2  x: 1 } => "b" }',
@@ -692,5 +719,167 @@ describe('AllOrNothingReadTest: a read that reported anything reads to nothing, 
     expect(
       validateJson(goodJson, { schema: JSON_SCHEMA, root: 'route' }).value,
     ).not.toBeUndefined();
+  });
+});
+
+// ── §8.5 scoped positions: the value names its own type ──────────────────────────────────────
+
+describe('§8.5 scoped positions: the value names its own type', () => {
+  it('a scoped value naming a governing type is accepted by both', () => {
+    bothAccept(
+      'local_box',
+      '{ v: !robot { serial: R2 } }',
+      '{"v": {"$type": "robot", "serial": "R2"}}',
+    );
+  });
+
+  it('an untyped value at a scoped position is refused in both', () => {
+    sameVerdict('local_box', '{ v: { serial: R2 } }', '{"v": {"serial": "R2"}}');
+  });
+
+  it('a name the governing schema does not hold is refused in both', () => {
+    sameVerdict(
+      'local_box',
+      '{ v: !nowhere { serial: R2 } }',
+      '{"v": {"$type": "nowhere", "serial": "R2"}}',
+    );
+  });
+
+  it('a cell the instance does not hold: a scope push at declared, a bare type at extern', () => {
+    sameVerdict(
+      'local_box',
+      '{ v: !!schema:"https://example.test/other.tn" !robot { serial: R2 } }',
+      '{"v": {"$schema": "https://example.test/other.tn", "$type": "robot", "serial": "R2"}}',
+    );
+    sameVerdict(
+      'extern_box',
+      '{ v: !robot { serial: R2 } }',
+      '{"v": {"$type": "robot", "serial": "R2"}}',
+    );
+  });
+});
+
+// ── §5.2: an enum whose type is not an identifier family is string-class ─────────────────────
+
+describe('§5.2 a text enum is string-class whatever its members spell', () => {
+  it('beside int32 and beside boolean the choice is disjoint, and each value goes to its own class', () => {
+    bothAccept('ported', '{ p: "80" }', '{"p": "80"}');
+    bothAccept('ported', '{ p: 8080 }', '{"p": 8080}');
+    bothAccept('answered', '{ a: "true" }', '{"a": "true"}');
+    bothAccept('answered', '{ a: true }', '{"a": true}');
+  });
+
+  it('beside text it shares the string class, so the choice is not disjoint and needs the tag in both', () => {
+    sameVerdict('labelled', '{ l: 80 }', '{"l": 80}');
+    sameVerdict('labelled', '{ l: "80" }', '{"l": "80"}');
+  });
+});
+
+// ── §6.1.4: field groups whose options hold several fields ───────────────────────────────────
+
+describe('§6.1.4 field groups', () => {
+  it('documents both encodings admit: each option chosen alone, its marked members left out or not', () => {
+    bothAccept('fragment', '{ include: "a" }', '{"include": "a"}');
+    bothAccept('fragment', '{ type: "t" }', '{"type": "t"}');
+    bothAccept('fragment', '{ name: "n"  type: "t" }', '{"name": "n", "type": "t"}');
+    bothAccept('endpoint', '{}', '{}');
+    bothAccept('endpoint', '{ host: "h"  port: 80 }', '{"host": "h", "port": 80}');
+    bothAccept('contact', '{ email: "e"  phone: "p" }', '{"email": "e", "phone": "p"}');
+  });
+
+  it('two options chosen', () => {
+    sameRule('fragment', '{ include: "a"  name: "n" }', '{"include": "a", "name": "n"}');
+  });
+
+  it('no option chosen in a required group', () => {
+    sameRule('fragment', '{}', '{}');
+  });
+
+  it('a chosen option missing a member', () => {
+    sameRule('endpoint', '{ port: 80 }', '{"port": 80}');
+  });
+
+  it('an incomplete option beside another: the missing member first, then the count', () => {
+    sameRule('endpoint', '{ port: 80  socket: "s" }', '{"port": 80, "socket": "s"}');
+  });
+
+  it('no member of an at-least-one group', () => {
+    sameRule('contact', '{}', '{}');
+  });
+
+  it('every group verdict is FIELD_GROUP and the message states the group’s own rule', () => {
+    const messages = (root: string, doc: string): readonly string[] =>
+      json(root, doc).map((d) => d.message);
+    const groupRule = (root: string, doc: string, ...expected: string[]): void => {
+      const found = json(root, doc);
+      expect(found.every((d) => d.code === 'FIELD_GROUP')).toBe(true);
+      expect(messages(root, doc)).toEqual(expected);
+    };
+    groupRule(
+      'endpoint',
+      '{"port": 80, "socket": "s"}',
+      "'port' chose (host port) on 'endpoint', which needs 'host'",
+      "at most one option of (host port | socket) may be chosen for 'endpoint', found 2",
+    );
+    groupRule('contact', '{}', "at least one of (email | phone) must be present for 'contact'");
+    groupRule(
+      'fragment',
+      '{}',
+      "exactly one option of (include | name? type?) must be chosen for 'fragment', found none",
+    );
+    groupRule(
+      'fragment',
+      '{"include": "a", "type": "t"}',
+      "exactly one option of (include | name? type?) must be chosen for 'fragment', found 2",
+    );
+  });
+});
+
+// ── §5.5: a text family's normalization ──────────────────────────────────────────────────────
+
+describe('§5.5 a text family’s normalization', () => {
+  it('a member, a pin and a key each match the value in the type’s form however it is cased', () => {
+    bothAccept('encoded', '{ c: Us-Ascii }', '{"c": "Us-Ascii"}');
+    bothAccept('pinned', '{ h: IDEMPOTENCY-KEY }', '{"h": "IDEMPOTENCY-KEY"}');
+    bothAccept(
+      'headers',
+      '{ Content-Type => "a"  Accept => "b" }',
+      '{"Content-Type": "a", "Accept": "b"}',
+    );
+  });
+
+  it('two casings of one name are one key', () => {
+    sameRule(
+      'headers',
+      '{ Content-Type => "a"  content-type => "b" }',
+      '{"Content-Type": "a", "content-type": "b"}',
+    );
+  });
+
+  it('a pin no casing matches', () => {
+    sameRule('pinned', '{ h: request-id }', '{"h": "request-id"}');
+  });
+
+  it('a JSON tree keeps the spelling that arrived', () => {
+    const result = validateJson('{"c": "UTF-8"}', { schema: JSON_SCHEMA, root: 'encoded' });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value === undefined ? '' : jsonValueToText(result.value)).toBe('{"c":"UTF-8"}');
+  });
+
+  it('an enum over a case-folding label type matches a member however it is cased', () => {
+    bothAccept('screened', '{ h: Content-Type }', '{"h": "Content-Type"}');
+    sameRule('screened', '{ h: x-trace }', '{"h": "x-trace"}');
+  });
+
+  it('an ASCII fold admits any casing of an ASCII name and refuses a full-width one, in both', () => {
+    bothAccept('fields', '{ Content-Type => "a" }', '{"Content-Type": "a"}');
+    sameRule(
+      'fields',
+      '{ Content-Type => "a"  content-type => "b" }',
+      '{"Content-Type": "a", "content-type": "b"}',
+    );
+    const fullWidth = verdictsOf(tson('fields', '{ "\uff23ontent-Type" => "a" }'));
+    expect(fullWidth).toEqual([{ code: 'ATOM_FORM_INVALID', path: '/\uff23ontent-Type' }]);
+    expect(verdictsOf(json('fields', '{"\uff23ontent-Type": "a"}'))).toEqual(fullWidth);
   });
 });

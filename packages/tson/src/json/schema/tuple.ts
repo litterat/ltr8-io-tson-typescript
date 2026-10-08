@@ -14,9 +14,9 @@ import type { CompileContext } from './compile.js';
 import { skipNextValue } from './eventSkip.js';
 import type { JsonTypeReader } from './types.js';
 
-const ABSENT = Symbol('json.tuple.absent');
+const VOID = Symbol('json.tuple.void');
 const REFUSED = Symbol('json.tuple.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED;
+type Slot = JsonValue | typeof VOID | typeof REFUSED;
 
 export function buildTupleReader(
   name: string,
@@ -78,9 +78,7 @@ export function buildTupleReader(
       }
 
       if (outer.reported() !== reportedBefore) return undefined;
-      return jsonArray(
-        positions.map((slot) => (slot === ABSENT ? jsonNull() : (slot as JsonValue))),
-      );
+      return jsonArray(positions.map((slot) => (slot === VOID ? jsonNull() : (slot as JsonValue))));
     },
   };
 
@@ -96,7 +94,7 @@ export function buildTupleReader(
           'null',
         );
       }
-      return ABSENT;
+      return VOID;
     }
     const reader = slotReaders[position];
     if (reader === undefined) throw new Error('unreachable: position index out of range');

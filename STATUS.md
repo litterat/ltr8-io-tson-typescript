@@ -252,11 +252,13 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
     call to `readJsonTree`/`validateJson` requires `schema`/`root`. `$type` tag dispatch _inside_
     a document already bound out of band (subsumption, record families, choices) is implemented in
     full; what is missing is starting a read with no binding at all.
-  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`)
-    compile to a `NOT_IMPLEMENTED` reader (`json/schema/compile.ts`'s own top note) — the plan
-    stays total (every entry still compiles), but reading such a position reports the gap rather
-    than a value. A template naming no `extension` — a genuine open template used bare, never
-    applied — takes the same `NOT_IMPLEMENTED` reader.
+  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`) are
+    read (`json/schema/scoped.ts`). An EXTERN value's foreign schema is looked up through
+    `compileJsonSchema(linked, { foreignSchemas })`; a compile with no lookup reports
+    `SCHEMA_NOT_PERMITTED`. No JSON registry or front-door loader supplies one yet: a caller
+    passes its own lookup (a `Tson` instance's `schemas` map serves). A template naming no
+    `extension` — a genuine open template used bare, never applied — still takes a
+    `NOT_IMPLEMENTED` reader.
   - **The §3.5 `TSON-Schema`/`TSON-Accept-Schema` header fields are not implemented.** They are an
     HTTP-transport convention over §3.4's out-of-band route; nothing in this package or the CLI
     reads or writes them. A caller wiring an HTTP layer implements them itself, on top of the

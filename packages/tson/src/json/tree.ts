@@ -7,7 +7,7 @@
  * factories — mirroring the reference implementation's own choice (`design/json-lexer-stream-tree.md`):
  * "a consumer moving between the two learns one value model, and a bridge is later a mapping
  * rather than a rewrite". **This is a faithful JSON model, not a TSON one**: {@link JsonNull} is a
- * real value here, because at this layer it is one — [TSON-JSON] §7 makes JSON `null` the absent
+ * real value here, because at this layer it is one — [TSON-JSON] §7 makes JSON `null` the void
  * sentinel's spelling *at a typed position*, and a schemaless tree has none of those (`json/index.ts`'s
  * own top note has the full reasoning for why this encoding has no schema-free record/map reading
  * to resolve `null` against in the first place).

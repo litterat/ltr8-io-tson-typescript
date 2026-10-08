@@ -189,7 +189,7 @@ describe('§8.1: the tagged form, admitted at every choice position', () => {
         'shape',
         '{"$schema": "https://example.test/other.tn", "$type": "circle", "radius": 1.0}',
       ).code,
-    ).toBe('UNKNOWN_TYPE_REF');
+    ).toBe('SCOPE_NOT_ADMITTED');
   });
 });
 

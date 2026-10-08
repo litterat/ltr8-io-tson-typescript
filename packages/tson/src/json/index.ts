@@ -190,13 +190,18 @@ export function parseJsonCollecting(
 // ---------------------------------------------------------------------------------------------
 // The schema-directed layer ([TSON-JSON] §3–§8): compiling a `LinkedSchema` to a reader per entry,
 // and reading a JSON document against one into a `JsonValue` tree, including §3.2/§3.3's reserved
-// namespace and annotation object and §6.1.5/§8's dispatch. See `json/schema/compile.ts`'s own top
-// note for exactly which positions this package does not read yet (a scoped position, and a
+// namespace and annotation object, §6.1.5/§8's dispatch and §8.5's scoped positions. See
+// `json/schema/compile.ts`'s own top note for the one position this package does not read yet (a
 // template family base named with no `extension`) — reported as `NOT_IMPLEMENTED` rather than
 // silently skipped.
 // ---------------------------------------------------------------------------------------------
 
-export type { JsonCompiledSchema, JsonTypeReader } from './schema/compile.js';
+export type {
+  ForeignSchemas,
+  JsonCompiledSchema,
+  JsonCompileDeps,
+  JsonTypeReader,
+} from './schema/compile.js';
 export { compileJsonSchema } from './schema/compile.js';
 
 export type { ReadJsonOptions, ValidateJsonResult } from './facade.js';

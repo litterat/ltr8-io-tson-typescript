@@ -215,7 +215,7 @@ export function buildMemberDispatcher(
       rctx
         .field(SCHEMA)
         .report(
-          'UNKNOWN_TYPE_REF',
+          'SCOPE_NOT_ADMITTED',
           `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
             `position -- '${displayName}' is a record`,
           'no $schema at this position',
@@ -257,7 +257,7 @@ export function buildMemberDispatcher(
         // ordinary record reader surfaces this same field's own required-field check) -- a
         // discriminator is an ordinary required field of the base with one more consequence
         // (selection) layered on, not a rule of its own. A discriminator this package's own
-        // bounded lookahead did not find "leading" is the identical case: the field is absent from
+        // bounded lookahead did not find "leading" is the identical case: the field is missing from
         // what a decoder may hold before dispatch, whether the document omitted it entirely or
         // simply wrote it after another member (§6.1.5's own bound, and a genuine, acknowledged
         // difference from the text encoding's full-record lookahead -- but not one this code
@@ -268,7 +268,7 @@ export function buildMemberDispatcher(
             'FIELD_REQUIRED',
             `missing ${tupleLabel([selector.name])} for '${displayName}' -- a sealed family selects ` +
               `its member by reading it, so its discriminators lead the object, after any '$type' ` +
-              `(§6.1.5), and '${selector.name}' is absent or follows another member`,
+              `(§6.1.5), and '${selector.name}' is missing or follows another member`,
             `'${selector.name}' as a leading member`,
             '(missing)',
           );
@@ -355,7 +355,14 @@ export function buildMemberDispatcher(
     // reserved remains to recognize, so only the discriminators are read, from wherever the
     // stream now sits.
     const selectors = yield* leadingSelectors(rctx, selectorNames);
-    const lead: Lead = { schema: false, typed: false, type: undefined, wrapper: false, selectors };
+    const lead: Lead = {
+      schema: false,
+      schemaRef: undefined,
+      typed: false,
+      type: undefined,
+      wrapper: false,
+      selectors,
+    };
     return yield* dispatch(rctx, lead, true);
   }
 

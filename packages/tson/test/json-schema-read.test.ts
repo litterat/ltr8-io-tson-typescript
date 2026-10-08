@@ -296,11 +296,11 @@ describe('§5 atoms', () => {
     expect(refusal('count', '{"$value": 42}').code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema at an atom position is refused -- no atom position here is scoped (§7.8, §9.4)', () => {
+  it('$schema at an atom position is SCOPE_NOT_ADMITTED -- no atom position is scoped (§8.5, [TSON-SCHEMA] §7.8)', () => {
     expect(
       refusal('count', '{"$schema": "https://example.test/x.tn", "$type": "count", "$value": 42}')
         .code,
-    ).toBe('UNKNOWN_TYPE_REF');
+    ).toBe('SCOPE_NOT_ADMITTED');
   });
 });
 
@@ -850,7 +850,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     return diagnostic;
   }
 
-  it("a scoped position -- core.tn's own `dynamic` -- is a gap and not a verdict", () => {
+  it("a scoped position -- core.tn's own `dynamic` -- reads (§8.5): a bare null names no type", () => {
     const gapSchema = resolveUserSchema(`
 !!id:"https://example.test/gaps-scoped.tn"
 !!meta:"https://tson.io/2026/37/m/meta.tn"
@@ -866,8 +866,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
       identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
-    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
-    expect(isVerdict(diagnostic.code), 'a gap must not be a verdict on the document').toBe(false);
+    expect(diagnostic.code).toBe('VALIDATION_ERROR');
   });
 
   it("a meta-layer 'data' construct -- meta-kernel's own `data` entry composed onto -- is a gap and not a verdict", () => {

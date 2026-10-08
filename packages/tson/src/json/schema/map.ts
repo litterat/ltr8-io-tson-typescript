@@ -11,7 +11,7 @@
  *   array of two-element arrays, each key read at `K`'s own reader; a compound key compares by the
  *   `JsonValue` tree its reader produced, reduced the same way (§6.1.6: member order carries none).
  *
- * `{K => V?}` admits JSON null as an entry's absent value in either form — present, counting
+ * `{K => V?}` admits JSON null as an entry's void value in either form — present, counting
  * toward the size bounds, carrying none; `{K => V}` refuses one, as with an array element (§7).
  */
 import { diagnosticCodeForAtomError, type SchemaLocation } from '../../core/diagnostic.js';
@@ -33,13 +33,13 @@ import type { JsonTypeReader } from './types.js';
 import { declareOrder } from '../../value/orderedness.js';
 import { identityOfHost, identityOfNode } from './valueIdentity.js';
 
-const ABSENT = Symbol('json.map.absent');
+const VOID = Symbol('json.map.void');
 const REFUSED = Symbol('json.map.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED;
+type Slot = JsonValue | typeof VOID | typeof REFUSED;
 
 function slotNode(slot: Slot | undefined): JsonValue | undefined {
   if (slot === undefined || slot === REFUSED) return undefined;
-  return slot === ABSENT ? jsonNull() : slot;
+  return slot === VOID ? jsonNull() : slot;
 }
 
 /** `K`'s own scalar parser, when `K`'s reference chain ends at a type a single scalar token denotes — `undefined` for every other `K`, which takes the pairs form. */
@@ -393,7 +393,7 @@ function* entryValue(
         'null',
       );
     }
-    return ABSENT;
+    return VOID;
   }
   const value = yield* valueReader.read(at);
   return value === undefined ? REFUSED : (value as JsonValue);

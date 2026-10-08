@@ -213,7 +213,7 @@ function* tagged(
     ctx
       .field(SCHEMA)
       .report(
-        'UNKNOWN_TYPE_REF',
+        'SCOPE_NOT_ADMITTED',
         `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
           `position -- '${displayName}' is a choice, whose variants its own schema declares`,
         'no $schema at this position',
@@ -287,7 +287,7 @@ function* untagged(
   if (peeked.kind === 'null') {
     ctx.report(
       'FIELD_REQUIRED',
-      `'${displayName}' admits no absence, and JSON null is this encoding's spelling of the ` +
+      `'${displayName}' is not voidable, and JSON null is this encoding's spelling of the ` +
         `void sentinel (§7)`,
       `a value of one of (${namesList})`,
       'null',

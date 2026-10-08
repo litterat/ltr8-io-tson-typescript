@@ -23,9 +23,9 @@ import { identityOfNode, isIdentified } from './valueIdentity.js';
 import { createConfusableScope } from '../../unicode/skeleton.js';
 import { terminalDefinition } from '../../link/referenceChain.js';
 
-const ABSENT = Symbol('json.array.absent');
+const VOID = Symbol('json.array.void');
 const REFUSED = Symbol('json.array.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED;
+type Slot = JsonValue | typeof VOID | typeof REFUSED;
 
 export function buildArrayReader(
   name: string,
@@ -99,7 +99,7 @@ export function buildArrayReader(
               'null',
             );
           }
-          elements.push(ABSENT);
+          elements.push(VOID);
           continue;
         }
         const value = yield* keyedReader.read(at);
@@ -135,7 +135,7 @@ export function buildArrayReader(
 
       if (outer.reported() !== reportedBefore) return undefined;
       return declareOrder(
-        jsonArray(elements.map((slot) => (slot === ABSENT ? jsonNull() : (slot as JsonValue)))),
+        jsonArray(elements.map((slot) => (slot === VOID ? jsonNull() : (slot as JsonValue)))),
         body.ordered,
       );
     },

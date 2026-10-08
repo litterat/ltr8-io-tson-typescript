@@ -43,7 +43,7 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
+import { selfNames, terminal, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
   groupRefusals,
@@ -103,7 +103,12 @@ export interface FieldValue {
  * by its JS `typeof`, which cannot render a `number` family's {@link TsonDecimal} host value at
  * all.
  */
-function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): JsonValue {
+function fieldValueNode(
+  form: AtomForm,
+  hostValue: unknown,
+  tokenText: string,
+  stringClass: boolean,
+): JsonValue {
   switch (form) {
     case 'boolean':
       return jsonBoolean(hostValue as boolean);
@@ -122,7 +127,9 @@ function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): 
     case 'string':
       return jsonString(tokenText);
     case 'enum':
-      return tokenText === 'true' || tokenText === 'false'
+      // §5.2: an enum whose type is not an identifier family is string-class whatever its members
+      // spell, so only an identifier enum's `true`/`false` are JSON booleans.
+      return !stringClass && (tokenText === 'true' || tokenText === 'false')
         ? jsonBoolean(tokenText === 'true')
         : jsonString(tokenText);
   }
@@ -174,7 +181,11 @@ export function fieldValueOf(
   );
   const hostValue = parse(token.text);
   const text = write === undefined ? token.text : write(hostValue);
-  return { hostValue, node: fieldValueNode(form, hostValue, text) };
+  const entries = ctx.linkedSchema.entries;
+  const stringClass = ctx.linkedSchema.textEnums.has(
+    terminal(fieldTypeName, (n) => entries.get(n)),
+  );
+  return { hostValue, node: fieldValueNode(form, hostValue, text, stringClass) };
 }
 
 /**
@@ -277,13 +288,13 @@ function buildRecordPlan(
 // Slots -- what a field's slot in the read loop holds
 // ---------------------------------------------------------------------------------------------
 
-const ABSENT = Symbol('json.record.absent');
+const VOID = Symbol('json.record.void');
 const REFUSED = Symbol('json.record.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED | undefined;
+type Slot = JsonValue | typeof VOID | typeof REFUSED | undefined;
 
 function slotToNode(slot: Slot): JsonValue | undefined {
   if (slot === undefined || slot === REFUSED) return undefined;
-  return slot === ABSENT ? jsonNull() : slot;
+  return slot === VOID ? jsonNull() : slot;
 }
 
 /**
@@ -344,7 +355,7 @@ function refuseReserved(ctx: JsonReadContext, name: string, displayName: string)
     ctx
       .field(SCHEMA)
       .report(
-        'UNKNOWN_TYPE_REF',
+        'SCOPE_NOT_ADMITTED',
         `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
           `position -- '${displayName}' is a record`,
         'no $schema at this position',
@@ -544,7 +555,7 @@ function* statedNull(
   const field = plan.fields[at];
   if (field === undefined) throw new Error('unreachable');
   if (field.voidable) {
-    return ABSENT;
+    return VOID;
   }
   if (field.role === 'DEFAULT') {
     fctx.report(
@@ -637,7 +648,7 @@ function fillMissing(ctx: JsonReadContext, plan: RecordPlan, slots: Slot[]): voi
           'nothing',
         );
     } else if (omission === 'INJECTED') {
-      slots[i] = plan.stated[i]?.node ?? ABSENT;
+      slots[i] = plan.stated[i]?.node ?? VOID;
     }
   }
 }

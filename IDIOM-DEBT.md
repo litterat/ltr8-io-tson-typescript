@@ -259,7 +259,7 @@ reasons that hold here identically —
   never inspection of the value. A pull-only event source has no channel for the position to say
   so, and giving it one would put the JSON encoding's problem inside the TSON reader stack.
 - **`null` is two things.** In a plain `JsonValue` tree it is a real value (`json/tree.ts`'s
-  `JsonNull`); under a schema it is the absent sentinel and nothing else (§7). Settling that in a
+  `JsonNull`); under a schema it is the void sentinel and nothing else (§7). Settling that in a
   shared event vocabulary would answer a schema's question one layer too early.
 
 Both arguments are about the _event_ layer specifically, and — per the reference's own note — do
@@ -282,7 +282,13 @@ did, so there is no single TSON-side sibling to point at, only the pattern), and
 nameHygiene.ts` calls the _shared_ `unicode/policy.ts#nameHygieneRefusal` with a one-name scope
 rather than duplicating its logic — the one place in this item's list where reuse, not
 duplication, was possible, because that function already lived below both `reader/` and `json/`
-in the import graph.
+in the import graph. A third: `json/schema/scoped.ts` and `json/schema/foreign.ts` are the JSON copy of
+`compiler/compile.ts`'s `buildScopedReader` and its `compileForeign` cache ([TSON-SCHEMA] §7.8,
+[TSON-JSON] §8.5) — the same cell rule, `schemas` narrowing and foreign-schema lookup, where the
+text reader selects the cell off `!type`/`!!schema` and this one off the annotation object's
+leading members. The seam a unification would take is a cell-selection function from "what the
+value said about itself" to a `{ local | extern, schema?, type? }` verdict, with each encoding's
+reader supplying only how it peeks and how it consumes the opening apparatus.
 
 **What is _not_ duplicated, on purpose.** The `src/json/**` ESLint zone (`eslint.config.js`)
 forbids importing `lexer/`, `stream/`, `reader/`, `compiler/`, `tree/`, `write/` or `facade/` at

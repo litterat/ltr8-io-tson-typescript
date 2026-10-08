@@ -16,13 +16,15 @@
  * here, at compile time, so a redundant `$type` restating the position's own type (or an alias of
  * it) is the only form §7.2 subsumption admits there.
  *
- * **What it does not (§8.5, and one corner of §5.10).** A scoped position, and a template naming
- * no type parameters' worth of `extension` (a genuine open template, never applied bare) both
- * compile to {@link notImplementedReader}: the plan stays **total** (every entry gets a reader, so
- * a schema whose types include one of these still compiles), and reading such a position reports
- * `NOT_IMPLEMENTED`, [TSON-DATA] §8.1's own non-verdict "a construct this implementation has not
- * built yet" — recorded gaps, matching the Java reference's own scope (`design/json-schema-
- * directed-reading.md`: "§8.5's scoped positions reach a NOT_IMPLEMENTED reader").
+ * **Scoped positions (§8.5)** compile to `json/schema/scoped.ts`'s reader: LOCAL routes are wired
+ * here, and an EXTERN value's foreign schema is looked up as it arrives through
+ * {@link JsonCompileDeps.foreignSchemas}.
+ *
+ * **What it does not (one corner of §5.10).** A template naming no `extension` (a genuine open
+ * template, never applied bare) compiles to {@link notImplementedReader}: the plan stays
+ * **total** (every entry gets a reader, so a schema whose types include one still compiles), and
+ * reading such a position reports `NOT_IMPLEMENTED`, [TSON-DATA] §8.1's own non-verdict "a
+ * construct this implementation has not built yet".
  *
  * **A closed reference collapses at compile time** ([TSON-SCHEMA] §8.3): `day => date` compiles
  * to exactly the reader `date` itself compiles to, resolved once here rather than walked on every
@@ -55,10 +57,19 @@ import { buildTagDispatcher } from './dispatchTag.js';
 import { skipNextValue } from './eventSkip.js';
 import { buildMapReader } from './map.js';
 import { buildRecordReader } from './record.js';
+import { createForeignLookup, type ForeignLookup, type ForeignSchemas } from './foreign.js';
+import { buildScopedReader } from './scoped.js';
 import { buildTupleReader } from './tuple.js';
 import type { JsonTypeReader } from './types.js';
 
 export type { JsonTypeReader } from './types.js';
+export type { ForeignSchemas } from './foreign.js';
+
+/** {@link compileJsonSchema}'s dependencies: the one seam a scoped position needs ([TSON-JSON] §8.5). */
+export interface JsonCompileDeps {
+  /** Where a value's own `$schema` is looked up as it arrives. Omitted, a scope push reports `SCHEMA_NOT_PERMITTED`. */
+  readonly foreignSchemas?: ForeignSchemas;
+}
 
 /** What a factory needs beyond the entry it is building — one held per compile, never mutated after it finishes. */
 export interface CompileContext {
@@ -79,6 +90,8 @@ export interface CompileContext {
    * reader that produces that decoded value.
    */
   rawAtomReader(name: string): AtomReader | undefined;
+  /** The lookup a scoped position reaches a document-named schema through (§8.5). */
+  readonly foreign: ForeignLookup;
 }
 
 /**
@@ -133,8 +146,19 @@ function locationOf(
   };
 }
 
-/** Compiles `linkedSchema` in tree mode: one {@link JsonTypeReader} per entry, eagerly. */
-export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchema {
+/**
+ * Compiles `linkedSchema` in tree mode: one {@link JsonTypeReader} per entry, eagerly.
+ * `foreign` is the lookup shared with the schema that admitted this one, so a scope push
+ * compiles each foreign identity once.
+ */
+export function compileJsonSchema(
+  linkedSchema: LinkedSchema,
+  deps: JsonCompileDeps = {},
+  foreign?: ForeignLookup,
+): JsonCompiledSchema {
+  const lookup: ForeignLookup =
+    foreign ??
+    createForeignLookup(deps.foreignSchemas, (linked) => compileJsonSchema(linked, deps, lookup));
   const finished = new Map<string, JsonTypeReader>();
   const atomReaders = new Map<string, AtomReader>();
   const building = new Set<string>();
@@ -183,6 +207,7 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
     locationOf: (name: string) => locationOf(linkedSchema, name),
     isAtomReader: (name: string) => atomReaders.has(name),
     rawAtomReader: (name: string) => atomReaders.get(name),
+    foreign: lookup,
   };
 
   function build(name: string, def: TypeDefinition): JsonTypeReader {
@@ -306,7 +331,14 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
       case 'choice':
         return buildChoiceReader(name, constructorBody, location, context);
       case 'scoped':
-        return notImplementedReader(name, 'a scoped position (§8.5)');
+        return buildScopedReader({
+          displayName: name,
+          body: constructorBody,
+          entries: linkedSchema.entries,
+          schemaLocation: location,
+          resolve,
+          foreign: lookup,
+        });
       default: {
         const raw = atomReader(name, constructorBody, location);
         atomReaders.set(name, raw);

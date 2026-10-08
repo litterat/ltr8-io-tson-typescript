@@ -101,13 +101,12 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
         : yield* untagged.read(ctx);
     }
     if (lead.schema) {
-      // §3.3, §9.4: `$schema` at a position whose effective type is not scoped is a resolver
-      // error, not `UNRECOGNIZED_FIELD`'s validation category -- see `reservedMembers.ts`'s top
-      // note for the full citation and the divergence from the Java reference this pins.
+      // [TSON-SCHEMA] §7.8, [TSON-JSON] §8.5: `$schema` at a position whose own type is not
+      // scoped is `SCOPE_NOT_ADMITTED`, a resolver error.
       ctx
         .field(SCHEMA)
         .report(
-          'UNKNOWN_TYPE_REF',
+          'SCOPE_NOT_ADMITTED',
           `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
             `position -- '${displayName}' is a record`,
           'no $schema at this position',
@@ -144,7 +143,7 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
     if (route === undefined) {
       if (own.has(lead.type)) {
         // §5.2: a tag naming the base itself asserts what no value satisfies -- an ABSTRACT
-        // base's own redundant-tag case, refused on the same terms as an absent tag (both are
+        // base's own redundant-tag case, refused on the same terms as a missing tag (both are
         // "nothing to place an untagged value as"), never `TYPE_MISMATCH`'s admissibility
         // question: the name resolves, and resolves to exactly the position's own type.
         //
