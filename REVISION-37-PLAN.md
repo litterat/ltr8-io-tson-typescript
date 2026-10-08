@@ -159,6 +159,11 @@ green.
   optional group at most one. The `+` form admits any non-empty subset. A chosen option must have
   every unmarked member present. Choosing two options is an error.
 - `typeInhabitance` guards read `voidable` and chosen options (§5.10.1).
+- **Every group refusal is a new code, `FIELD_GROUP`** (Java `RecordDiagnostics`, commits
+  `f94d9950` and `349d443c`), where Revision 36 used `TYPE_MISMATCH` or `FIELD_REQUIRED`. There are
+  four messages: exactly one option, at most one, at least one (for `+`), and an option needing a
+  member. Per-option missing-member reports come before the count of chosen options. A second
+  mark after `)` (`)+?`) is a parse error.
 
 Vectors: `a-field-group-option-holds-several-fields`, the eight group vectors in `schema/invalid`,
 `a-chosen-option-missing-an-unmarked-member`, `two-options-chosen`,
@@ -208,7 +213,8 @@ two modified `applying-template-directly*` vectors.
   profile. A profile's own additions are exempt from `Identifier_Status`, and a per-segment unit
   divides at the profile's own separators. The profile facets and `normalization` are **fixed at
   construction**: a refinement may not set or move them, and an instance refinement restates them
-  verbatim. The Java is `base/unicode/IdentifierProfile.java`, `atom/parser/IdentifierParser.java`
+  verbatim. The Java is `base/unicode/IdentifierProfile.java` (its `separates` is the per-segment
+  rule), `atom/parser/IdentifierParser.java`
   and `schema/meta/IdentifierType.java`. `src/unicode/` already holds the XID tables, and this port
   checks those tables in rather than consulting the host.
 - **Normalization.** A text value is its token's text put into the type's form, and every facet and
@@ -216,9 +222,14 @@ two modified `applying-template-directly*` vectors.
   when, each in its type's form, they are NFC-equal. Map-key and set-member identity read the key
   type's form, and so do enum members and selector pins. NFKC_CASEFOLD needs a case-fold table
   (Java `base/unicode/NfkcCasefold.java`). Generate it as `gen-unicode-tables.mjs` generates XID,
-  record its Unicode version, and never consult the host for it. ASCII_CASEFOLD folds A–Z only.
+  record its Unicode version, and never consult the host for it. ASCII_CASEFOLD folds A–Z only, with
+  no NFC or NFKC step (`ded0acc2`), so a full-width spelling stays distinct. A refusal names the
+  token as `'written' (read as 'value' under FORM)` when the form changed it (`a001e62f`).
 - **An identifier family's value is a name.** §8.2's per-name mechanisms reach it under the
-  family's own profile. The keys of a map keyed by one, and the elements of a unique array (a set,
+  family's own profile. Name judgement reports **every** rule a name fails, `RESTRICTED_CHARACTER`
+  before `RESTRICTED_SCRIPT`, so one name may draw two diagnostics. A look-alike pair is reported at
+  the second element or key. An element that fails to read is excluded from both the duplicate
+  check and the look-alike check (`4836f48d`). The keys of a map keyed by one, and the elements of a unique array (a set,
   or any `unique_items` array) of one, are look-alike scopes. This holds in data
   (`validate/refused`) and in schema-layer defaults, pins and annotation values (`schema/refused`).
   `( identifier | int32 )` is disjoint.
@@ -253,7 +264,13 @@ supplementary-character vectors in `schema/` and `validate/`.
   tuples. `ordered` never changes what a document may write, and output keeps the order written.
 - **A scoped push (#5, §7.1, §7.8).** A nested `!!schema` at a `scoped` position whose `scope` does
   not hold EXTERN is a validation error (the cell rule). At a position whose type is not scoped
-  (a container of scoped elements included), it is a resolver error.
+  (a container of scoped elements included), it is a resolver error under a new code,
+  `SCOPE_NOT_ADMITTED` (`5e2a3cec`).
+- **Lengths count code points.** `min_length`, `max_length` and `length` count code points in the
+  text, URI, IRI and email checks (`fd5a5acc`). A JS `.length` counts UTF-16 units, which is the
+  bug the reference fixed in its own host.
+- **A bare annotation in a schema document** is read as `_` against its type, so a non-void
+  annotation written bare is refused (`2b275794`). `@deprecated` is now `void`.
 - Atom-family facet coherence for the URI/IRI facets. `a-uri-is-never-normalized` and its siblings
   check that `normalization` is fixed to NONE on those constructors.
 
@@ -268,11 +285,88 @@ tuple vectors, `a-container-states-whether-order-is-part-of-its-value`,
 
 ## Stage 3: behaviour the change log does not state
 
-_To be written from the survey of the reference's commits between the pins._
+The reference carries behaviour between the pins that no change-log item names. Two packages over
+disjoint files, run in sequence.
+
+### WP3A: refusals, policy and identity
+
+- **A name refusal is not a verdict (`b7d84f1d`).** `CONFUSABLE_NAMES`, `RESTRICTED_CHARACTER` and
+  `RESTRICTED_SCRIPT` join the non-verdict codes, and `core/diagnostic.ts`'s `isVerdict` is the one
+  list that changes. Add an `isNameRefusal`. `tson validate` reports a refused file as
+  `NOT_CHECKED` and still exits 1. The exit ladder is unchanged. Check that the conformance
+  harness's `refused` assertions still hold: they read `isVerdict` and must not keep a copy.
+- **A schema-load name refusal carries its §8.2 code** and a pointer to the refused key, not a
+  generic schema error (Java `SchemaRefusalException`, `30d4f2b7`).
+- **Processor policy (Part 1 §8.2, `policy.tn`).** Split the existing name policy as the reference
+  did. `ScriptPolicy` is a UTS #39 level plus its permitted scripts, with no per-segment option.
+  `IdentifierPolicy` is a script policy plus `perSegment` and `skeletonDistinctness`, with
+  `defaults()` and `none()`. The processor policy holds an identifier policy, a token policy (a
+  `ScriptPolicy`), limits, and the UTS #39 data version. Keep relaxation a code decision at the
+  call site, never ambient (CLAUDE.md). **`policy.tn` is a fourth bundled schema**, registered with
+  the standard library and served by identity as meta and core are. Nothing loads a policy
+  document, and no document selects its own policy.
+- **Identity (Part 1 §2.2.1).** An identity is parsed as RFC 3987. With no authority it is the
+  absolute path, so `/x.tn`, `file:/x.tn` and `file:///x.tn` are one identity, and a relative path
+  with no host is refused. A non-ASCII host is admitted. Fragment, userinfo and port stay refused,
+  and the host must be lowercase. The fetch side reads the raw path, undecoded.
+- **Wording.** A missing required field reads `(missing)`, never `(absent)`. Rule names and
+  messages say "void" and "void sentinel".
+
+### WP3B: `strip` and the CLI
+
+- **`strip` (Java `TsonSchemaStripper`, `StripCommand`).** It parses a schema document, drops
+  `!!id`, drops a header argument's `?query` while keeping its `#fragment`, and shortens a bundled
+  identity (`meta-kernel`, `meta`, `core`, not `policy`) to `"37/core"`. It drops `@doc`, `@title`,
+  `@examples` and `@comment`, or only `@comment` under `--keep-docs`. Output is one line per header
+  directive and per declaration, with the schema map's `}` on its own line, runs of whitespace as
+  one space, and quoted strings re-emitted single-line. The output is re-lexed and re-parsed, and a
+  mismatch is an internal fault. As a library function it belongs in the compiler. In the CLI,
+  `tson strip [--keep-docs] <schema>` prints to stdout and exits 0, 1 for a malformed schema
+  (`file:line:col: msg`), or 2 for usage or an unreadable file.
+- **CLI policy.** Add `--identifier-allow-look-alikes`. The policy report gives
+  `identifier_policy` four members (`level`, `per_segment`, `skeleton_distinctness`, `permitting`)
+  and `token_policy` two (`level`, `permitting`). Scripts are named by their UAX #24 alias (`Latin`,
+  `Old_Italic`). The CLI's diagnostics schema imports `policy.tn`. The CLI's examples and help move
+  to `/2026/37/`.
+
+**Gate:** 459/459, unit green, `npm run smoke:cli` green.
 
 ## Stage 4: Part 3, the JSON encoding
 
-_To be written from the survey and change log §7.1 and §8.3._
+Part 3 defines no type-system rule. Each change spells, in JSON, a rule Part 1 or Part 2 owns, so
+this stage follows Stage 2 and reuses what it built through the paths `src/json` may import. **If a
+Stage 2 rule lives somewhere the JSON zone cannot reach (`compiler`, `reader`), move it to `link/`,
+`schema/` or `atom/` rather than widening the zone.** The changes are change log §7.1 and §8.3, and
+the reference's tson-json diff.
+
+- **Void vocabulary (§6.1.2, §7).** JSON `null` is the void sentinel's spelling, and a member not
+  written is missing. Messages follow.
+- **Key identity (§3.1, §6.4).** Duplicate member names at a map position are judged after the key
+  type's `normalization`, then NFC.
+- **Atoms (§5, §5.2, §5.6).** Identifier families are string-class and take their profile and form.
+  An enum member is matched in its label type's form. Text is put into its form before facets are
+  judged. `uri` and `iri` refuse a relative reference, `uri` anything beyond US-ASCII. A leap
+  second is refused.
+- **Field groups (§6.1.4).** A group that is not optional admits exactly one option, an optional
+  group at most one, and `+` any non-empty subset, under `FIELD_GROUP`.
+- **Containers (§6.2, §6.3, §6.4).** A set may be empty. `tuple1<T>` is a one-element array. **An
+  ordered map** (`ordered: true`) is delivered in the order read, in object form and pairs form
+  alike.
+- **Scoped positions (§3.3, §8.5).** Read them, where Revision 36 reported `NOT_IMPLEMENTED`. `$type`
+  alone selects LOCAL. `$schema` with `$type` selects EXTERN: fetch the foreign schema through the
+  registry, consume `$schema`, and read the rest as a `$type`-led object. A bare value, a missing
+  `$type`, a cell the scope does not admit, or a schema or type outside `schemas` is a validation
+  error. A type the schema does not declare is `UNKNOWN_TYPE`, and an unobtainable schema takes
+  its fetch code. `$schema` at a position whose own type is not scoped is `SCOPE_NOT_ADMITTED`, a
+  resolver error. Java: `DispatchScopedReader`, `ForeignSchemas`.
+- **Name hygiene (§9.4).** An identifier-typed value is judged under its family's profile, and a
+  refused value reads as nothing. An identifier-keyed map's keys, and a set (or `unique_items`
+  array) of identifiers, are look-alike scopes. An array that allows repeats is not, and neither
+  is a set of text.
+- Port the reference's new and changed tson-json tests, case for case, as Revision 36's 4c and 4d
+  did. Java-host binding cases are excepted.
+
+**Gate:** the JSON unit tests, 459/459 unchanged, and the browser bundle builds.
 
 ## Stage 5: sweep
 
@@ -285,4 +379,8 @@ _To be written from the survey and change log §7.1 and §8.3._
 
 ## To report upstream
 
-_Collected as the run goes._
+- **`policy.tn` is outside `strip`'s shortening.** The reference shortens `meta-kernel`, `meta` and
+  `core` and leaves `policy` its full URL. That may be deliberate, since nothing imports policy as a
+  schema, but it is unstated.
+
+_The rest is collected as the run goes._
