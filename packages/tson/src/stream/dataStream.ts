@@ -49,8 +49,7 @@
  * the "raw URI arguments, uninterpreted" contract {@link DocumentStart} itself documents.
  */
 
-import { parseIpv6Bytes } from '../atom/network/ipv6.js';
-import { tryParseUri } from '../atom/network/uriGrammar.js';
+import { isIriReference } from '../atom/network/uri.js';
 import { TsonInternalError, TsonParseError, TsonUnsupportedDocumentError } from '../core/errors.js';
 import { START, type Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
@@ -308,7 +307,7 @@ function isAlwaysMapStart(type: TokenType): boolean {
     case 'bang':
     case 'lbrace':
     case 'lbracket':
-    case 'absent-token':
+    case 'void-token':
       return true;
     default:
       return false;
@@ -431,20 +430,15 @@ function* parseNamedDirective(state: StreamState, expectedName: string): Task<st
   // §3.3: a directive's argument is a URI. The check runs against the same hand-written RFC 3986
   // grammar the `!uri` atom uses, unconstrained, so the two layers can never disagree about what a
   // URI is. Without it a document like `!!id:"not a uri"` parses clean through to document-end.
-  if (tryParseUri(arg.text, isIpv6Candidate) === undefined) {
+  if (!isIriReference(arg.text)) {
     throw new TsonParseError(
-      `'!!${expectedName}' argument '${arg.text}' is not a valid URI (§3.3)`,
+      `'!!${expectedName}' argument '${arg.text}' is not a valid IRI-reference (§3.3)`,
       arg.start,
-      { expected: 'a URI', actual: arg.text },
+      { expected: 'an IRI-reference', actual: arg.text },
     );
   }
 
   return arg.text;
-}
-
-/** The IPv6 literal recogniser RFC 3986's `IP-literal` host form needs. */
-function isIpv6Candidate(candidate: string): boolean {
-  return parseIpv6Bytes(candidate) !== undefined;
 }
 
 /** `"!" unquoted-token` (§3.2), rejecting the schema-only type-expression forms (array brackets, `<...>`, `?`) that have no role in a data value. */
@@ -490,7 +484,7 @@ function* parseTypeRefName(state: StreamState): Task<string> {
       next,
       `'!${name.text}?' uses the optional suffix, which is schema syntax and not available in a ` +
         `data value (§3.2): optionality is a field's state where the schema declares it, and a ` +
-        `value that is absent is written '_' (§2.9)`,
+        `value that is void is written '_' (§2.9)`,
     );
   }
   if (!isStructuralDelimiter(next.type) && adjacentTo(name, next)) {
@@ -646,9 +640,9 @@ function* stepCoreValue(state: StreamState): Task<void> {
       state.ready.push({ kind: 'array-start', position: t.start });
       pushFrame(state, { kind: 'array', first: true });
       return;
-    case 'absent-token':
+    case 'void-token':
       yield* advance(state);
-      state.ready.push({ kind: 'absent', position: t.start });
+      state.ready.push({ kind: 'void', position: t.start });
       return;
     case 'unquoted-token':
     case 'single-line-token':
@@ -664,7 +658,7 @@ function* stepCoreValue(state: StreamState): Task<void> {
     default:
       throw parseError(
         t,
-        `expected a value (record, map, array, empty braces, the absent sentinel '_', or a token), ` +
+        `expected a value (record, map, array, empty braces, the void sentinel '_', or a token), ` +
           `found ${describe(t)}`,
       );
   }
@@ -726,7 +720,7 @@ function* parseBraceValue(state: StreamState): Task<void> {
 
   throw parseError(
     t1,
-    `expected a value (record, map, array, empty braces, the absent sentinel '_', or a token), ` +
+    `expected a value (record, map, array, empty braces, the void sentinel '_', or a token), ` +
       `found ${describe(t1)}`,
   );
 }

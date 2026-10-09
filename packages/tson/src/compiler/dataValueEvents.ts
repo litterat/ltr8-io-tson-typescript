@@ -93,8 +93,8 @@ function emitCoreValue(core: CoreValue, events: TsonEvent[]): void {
     case 'empty-brace':
       events.push({ kind: 'empty-brace', position: PLACEHOLDER });
       return;
-    case 'absent':
-      events.push({ kind: 'absent', position: PLACEHOLDER });
+    case 'void':
+      events.push({ kind: 'void', position: PLACEHOLDER });
       return;
     case 'token':
       events.push({ kind: 'token', text: core.text, form: core.form, position: PLACEHOLDER });

@@ -62,8 +62,8 @@ describe('§5.4 !time -- full-time = partial-time time-offset, offset mandatory'
   });
 });
 
-describe('§5.4 !time -- CONFORMANCE.md: one accepted, unfixable gap', () => {
-  it('rejects a spec-legal leap second (60) -- java.time has no leap-second concept', () => {
+describe('§5.4 !time -- a leap second is refused', () => {
+  it('rejects second 60, which is neither a time of day nor a UTC instant', () => {
     expect(() => createTimeParser('time', UNCONSTRAINED).read(token('23:59:60Z'))).toThrow(
       TsonAtomParseError,
     );

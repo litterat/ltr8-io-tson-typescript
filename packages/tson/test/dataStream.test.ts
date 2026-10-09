@@ -52,8 +52,8 @@ function describeEvent(e: TsonEvent): string {
       return `SchemaRef(${e.uri})`;
     case 'token':
       return `Token(${e.text},${e.form})`;
-    case 'absent':
-      return 'Absent';
+    case 'void':
+      return 'Void';
     case 'empty-brace':
       return 'EmptyBrace';
   }
@@ -87,8 +87,8 @@ describe('a data value at the document root (§2.3, §7.4)', () => {
     ]);
   });
 
-  it('the absent sentinel is the whole document (§2.9)', () => {
-    expect(shape('_')).toEqual(['DocumentStart(|)', 'Absent', 'DocumentEnd']);
+  it('the void sentinel is the whole document (§2.9)', () => {
+    expect(shape('_')).toEqual(['DocumentStart(|)', 'Void', 'DocumentEnd']);
   });
 
   it('"{}" resolves to its own empty-brace event, not a record or map (§2.8)', () => {
@@ -261,12 +261,12 @@ describe('records (§2.5)', () => {
     ]);
   });
 
-  it('a field value may be the absent sentinel', () => {
+  it('a field value may be the void sentinel', () => {
     expect(shape('{ x: _ }')).toEqual([
       'DocumentStart(|)',
       'RecordStart',
       'FieldName(x)',
-      'Absent',
+      'Void',
       'RecordEnd',
       'DocumentEnd',
     ]);
@@ -333,7 +333,7 @@ describe('maps (§2.6)', () => {
       'Token(10%,single-line)',
       'Token(loyalty,unquoted)',
       'MapArrow',
-      'Absent',
+      'Void',
       'MapEnd',
       'DocumentEnd',
     ]);
@@ -419,11 +419,11 @@ describe('brace disambiguation (§2.8): at most two tokens of lookahead', () => 
     ]);
   });
 
-  it('the absent sentinel as a key parses structurally -- rejecting it is a resolver-layer concern (§2.9)', () => {
+  it('the void sentinel as a key parses structurally -- rejecting it is a resolver-layer concern (§2.9)', () => {
     expect(shape('{ _ => 1 }')).toEqual([
       'DocumentStart(|)',
       'MapStart',
-      'Absent',
+      'Void',
       'MapArrow',
       'Token(1,unquoted)',
       'MapEnd',
@@ -466,12 +466,12 @@ describe('arrays (§2.7)', () => {
     expect(shape('[1, 2, 3]')).toEqual(shape('[1 2 3]'));
   });
 
-  it('the absent sentinel occupies a positional slot (§2.9)', () => {
+  it('the void sentinel occupies a positional slot (§2.9)', () => {
     expect(shape('[1 _ 3]')).toEqual([
       'DocumentStart(|)',
       'ArrayStart',
       'Token(1,unquoted)',
-      'Absent',
+      'Void',
       'Token(3,unquoted)',
       'ArrayEnd',
       'DocumentEnd',
@@ -821,7 +821,7 @@ describe('a field name is an identifier, for both spellings (§2.5, §7.7)', () 
 
   it("rejects the quoted field name '_id' -- '_' is XID_Continue only, so no identifier begins with it (§7.7 rule 3)", () => {
     // The bare spelling '_id' cannot reach this check at all: '_' is not in the unquoted-token
-    // start set (§7.1), so the lexer reads it as its own absent-token followed by a separate
+    // start set (§7.1), so the lexer reads it as its own void-token followed by a separate
     // 'id' token, which the §2.8 brace dispatch commits to a map on before a field name is ever
     // in play. Only the quoted spelling reaches the identifier check as one token.
     expect(() => events('{ "_id": 1 }')).toThrow(/not an identifier/);

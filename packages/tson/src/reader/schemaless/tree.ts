@@ -37,7 +37,7 @@
  * problem, a collecting one gathers them all. **Reporting never abandons the value here** --
  * unlike a schema-governed tree/bind read (`reader/tree/support.ts`'s own `abandonedValue`), this
  * reader keeps building: the node is still constructed and its children are still read, so one
- * pass finds everything, and a leaf whose atom rejected the token stands as an {@link AbsentNode}
+ * pass finds everything, and a leaf whose atom rejected the token stands as an {@link VoidNode}
  * rather than aborting the container around it. It is the facade above this reader that decides
  * whether that tree ever reaches a caller: `facade/tree.ts`'s own `validate` withholds `value`
  * for the whole document whenever anything was reported, whatever layer raised it -- so this
@@ -80,16 +80,16 @@ import type {
   ScopedValue,
 } from '../../ast/value.js';
 import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/nodes.js';
-import { absentNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
+import { voidNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
 import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
 import { toNfc } from '../../unicode/nfc.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
   nameHygieneRefusal,
   tokenHygieneRefusal,
-  type NamePolicy,
-  type TokenPolicy,
+  type IdentifierPolicy,
+  type ScriptPolicy,
 } from '../../unicode/policy.js';
 import { firstConfusableCollision } from '../../unicode/skeleton.js';
 import { UTS39_VERSION } from '../../unicode/uts39.js';
@@ -122,30 +122,30 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    * name as it is pulled off the event stream (checked once each -- see `checkIdentifierHygiene`
    * in this module). All three positions are `identifier` (§2.5, §7.7), so all three meet all
    * three mechanisms; the scope a record's field names form is what mechanism 1 additionally
-   * needs. Defaults to {@link DEFAULT_NAME_POLICY} -- mechanism
+   * needs. Defaults to {@link DEFAULT_IDENTIFIER_POLICY} -- mechanism
    * 3 at Highly Restrictive over the whole name -- matching §8.2's own defaults. Relaxing any of
    * the three is this field's job (`unicode/policy.ts`'s own `with*` functions build a relaxed
    * value); §8.2 forbids relaxing one silently, e.g. from an environment variable, which is
    * exactly what passing a policy explicitly here is not.
    */
-  readonly identifierPolicy?: NamePolicy;
+  readonly identifierPolicy?: IdentifierPolicy;
   /**
    * [TSON-DATA] §8.2's "Values" paragraph: the policy applied to every token this reader decodes
    * as a value -- a record field's value, an array element, a map key or its value, and (nested,
    * recursively) an annotation's own value. Defaults to {@link DEFAULT_TOKEN_POLICY}, Unrestricted,
    * so an ordinary read scans nothing. Distinct from {@link identifierPolicy}: a value has no
    * identifier profile and no scope to be distinct within, so only the restricted-script rule
-   * (mechanism 3) ever applies here -- see `unicode/policy.ts`'s own {@link TokenPolicy} doc.
+   * (mechanism 3) ever applies here -- see `unicode/policy.ts`'s own {@link ScriptPolicy} doc.
    *
    * **Never checked against a field name, type-ref, or annotation name.** Those are `identifier`
    * positions governed by {@link identifierPolicy} alone (`checkIdentifierHygiene`,
    * {@link reportNameHygiene}); this field governs the positions that are not names at all. The
    * pinned Java reference checks both surfaces together at its own event-source layer, where the
-   * four text-bearing event kinds are not yet told apart (`TokenPolicyEventSource`'s own doc); this
+   * four text-bearing event kinds are not yet told apart (`ScriptPolicyEventSource`'s own doc); this
    * reader already dispatches on event kind before either check runs, so the two surfaces are kept
    * separate here rather than merged incidentally.
    */
-  readonly tokenPolicy?: TokenPolicy;
+  readonly tokenPolicy?: ScriptPolicy;
 }
 
 /**
@@ -158,7 +158,7 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
 export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}): TypeReader<Value> {
   const preserve = options.preserveUnknownTypeRefs ?? false;
   const limit = maxNestingDepthOf(options);
-  const identifierPolicy = options.identifierPolicy ?? DEFAULT_NAME_POLICY;
+  const identifierPolicy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
   const tokenPolicy = options.tokenPolicy ?? DEFAULT_TOKEN_POLICY;
   return {
     read: (ctx: ReadContext): Task<Value> =>
@@ -176,8 +176,8 @@ export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}):
 function* readStructuralAnnotations(
   ctx: ReadContext,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth = 0,
 ): Task<Annotations> {
   const first = yield* ctx.peek();
@@ -207,8 +207,8 @@ function* readStructuralAnnotations(
 function* readStructuralDataValue(
   ctx: ReadContext,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth = 0,
 ): Task<DataValue> {
   if (depth >= limit) {
@@ -239,8 +239,8 @@ function* readStructuralDataValue(
 function* readStructuralScopedValue(
   ctx: ReadContext,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth: number,
 ): Task<ScopedValue> {
   const peeked = yield* ctx.peek();
@@ -256,8 +256,8 @@ function* readStructuralScopedValue(
 function* readStructuralCoreValue(
   ctx: ReadContext,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth: number,
 ): Task<CoreValue> {
   const e = yield* ctx.next();
@@ -320,8 +320,8 @@ function* readStructuralCoreValue(
     case 'token':
       checkTokenHygiene(ctx, e.text, tokenPolicy);
       return { kind: 'token', text: e.text, form: e.form };
-    case 'absent':
-      return { kind: 'absent' };
+    case 'void':
+      return { kind: 'void' };
     case 'empty-brace':
       return { kind: 'empty-brace' };
     default:
@@ -340,7 +340,7 @@ function* readStructuralCoreValue(
  */
 function* readTypeRefName(
   ctx: ReadContext,
-  identifierPolicy: NamePolicy,
+  identifierPolicy: IdentifierPolicy,
 ): Task<string | undefined> {
   const peeked = yield* ctx.peek();
   if (peeked.kind !== 'type-ref') return undefined;
@@ -377,7 +377,7 @@ function* readTypeRefName(
 function checkIdentifierHygiene(
   ctx: ReadContext,
   name: string,
-  identifierPolicy: NamePolicy,
+  identifierPolicy: IdentifierPolicy,
 ): void {
   const refusal = nameHygieneRefusal([name], identifierPolicy);
   if (refusal === undefined) return;
@@ -410,14 +410,14 @@ function checkIdentifierHygiene(
  * function's caller ever rewinds past a `token` event either.
  *
  * **Restricted-script only.** {@link tokenHygieneRefusal} can return only that one rule -- see its
- * own doc and `unicode/policy.ts`'s {@link TokenPolicy} doc for why mechanisms 1 and 2 have
+ * own doc and `unicode/policy.ts`'s {@link ScriptPolicy} doc for why mechanisms 1 and 2 have
  * nothing to check on a value.
  *
  * Reported/thrown exactly the way {@link checkIdentifierHygiene} is -- see that function's own
  * note, and {@link reportNameHygiene}'s, on why a fail-fast refusal here surfaces as
  * {@link TsonNameHygieneRefusedError} rather than {@link TsonReadError}.
  */
-function checkTokenHygiene(ctx: ReadContext, text: string, tokenPolicy: TokenPolicy): void {
+function checkTokenHygiene(ctx: ReadContext, text: string, tokenPolicy: ScriptPolicy): void {
   const detail = tokenHygieneRefusal(text, tokenPolicy);
   if (detail === undefined) return;
   const message = `the token '${text}' is refused under [TSON-DATA] §8.2's "Values" token policy: ${detail}`;
@@ -485,8 +485,8 @@ function* readNode(
   ctx: ReadContext,
   preserve: boolean,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth: number,
 ): Task<Value> {
   if (depth >= limit) {
@@ -538,9 +538,9 @@ function* readNode(
     case 'empty-brace':
       yield* ctx.next();
       return recordNode(new Map(), typeRefName, annotations);
-    case 'absent':
+    case 'void':
       yield* ctx.next();
-      return absentNode(typeRefName, annotations);
+      return voidNode(typeRefName, annotations);
     case 'token':
       yield* ctx.next();
       checkTokenHygiene(ctx, peeked.text, tokenPolicy);
@@ -561,8 +561,8 @@ function* readRecord(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // record-start
@@ -639,7 +639,7 @@ function* readRecord(
 function reportNameHygiene(
   ctx: ReadContext,
   fieldNames: Iterable<string>,
-  identifierPolicy: NamePolicy,
+  identifierPolicy: IdentifierPolicy,
 ): void {
   const names = [...fieldNames];
   for (const name of names) {
@@ -701,8 +701,8 @@ function* readArray(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // array-start
@@ -740,8 +740,8 @@ function* readMap(
   annotations: Annotations,
   preserve: boolean,
   limit: number,
-  identifierPolicy: NamePolicy,
-  tokenPolicy: TokenPolicy,
+  identifierPolicy: IdentifierPolicy,
+  tokenPolicy: ScriptPolicy,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // map-start
@@ -757,16 +757,16 @@ function* readMap(
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
     const key = yield* readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, depth + 1);
-    if (key.kind === 'absent') {
-      // §2.9: the absent sentinel states that a position carries no value, and a map key is a
+    if (key.kind === 'void') {
+      // §2.9: the void sentinel states that a position carries no value, and a map key is a
       // position that must. The map-entry production admits any value in key position, so this
       // is the reader's to refuse -- no grammar rule and no schema can see it first.
       ctx.report(
-        'ABSENT_MAP_KEY',
-        `a map key is the absent sentinel -- '_' states that a position carries no value (§2.9), ` +
+        'VOID_MAP_KEY',
+        `a map key is the void sentinel -- '_' states that a position carries no value (§2.9), ` +
           `and an entry with no key states an entry for nothing`,
         'a key',
-        'the absent sentinel',
+        'the void sentinel',
       );
     }
     const identity = keyIdentity(key);
@@ -830,7 +830,7 @@ function leaf(
     } catch (error) {
       if (error instanceof TsonAtomTypeError) {
         reportAtomViolation(ctx, match.name, error, token.text);
-        return absentNode(typeRefName, annotations);
+        return voidNode(typeRefName, annotations);
       }
       throw error;
     }
@@ -872,8 +872,8 @@ function narrowNumberForm(form: NumberForm): AtomValue {
 // compound one, and a leading `!text` or `@doc` is in neither.
 // ---------------------------------------------------------------------------------------------
 
-/** A unique stand-in for the absent sentinel `_` as a key identity -- distinct from every real decoded value, including the string `"null"` (quoted or not: base resolution's own `StringValue`, §4.4). */
-const ABSENT_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-absent-key');
+/** A unique stand-in for the void sentinel `_` as a key identity -- distinct from every real decoded value, including the string `"null"` (quoted or not: base resolution's own `StringValue`, §4.4). */
+const VOID_KEY_IDENTITY: unique symbol = Symbol('tson-schemaless-void-key');
 
 /**
  * The value {@link deepEqual}-comparable identity of `node`, for duplicate-key detection. Equates
@@ -910,7 +910,7 @@ function identityDigest(value: unknown): string {
     case 'undefined':
       return 'u';
     case 'symbol':
-      // `ABSENT_KEY_IDENTITY` is the one symbol `keyIdentity` ever produces -- a fixed tag is
+      // `VOID_KEY_IDENTITY` is the one symbol `keyIdentity` ever produces -- a fixed tag is
       // enough, and the `'unscaled' in value` shape checks below cannot even run on a symbol.
       return 'y';
     default:
@@ -961,8 +961,8 @@ function keyIdentity(node: Value): unknown {
     }
     case 'map':
       return node.entries.map((entry) => [keyIdentity(entry.key), keyIdentity(entry.value)]);
-    case 'absent':
-      return ABSENT_KEY_IDENTITY;
+    case 'void':
+      return VOID_KEY_IDENTITY;
     case 'tuple':
     case 'missing':
       throw new TsonInternalError(

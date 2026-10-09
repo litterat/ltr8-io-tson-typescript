@@ -27,10 +27,15 @@ import { abandonedValue } from './support.js';
  * before delegating, so this framing pass is a no-op by the time it runs; see this directory's own
  * hoisting note in `annotations.ts`). Reports and returns `undefined` rather than throwing when the
  * core-value isn't a token at all, or when `atomType.read` rejects the token's shape or value.
+ *
+ * `refuses`, when given, judges the value `atomType` read and answers whether the processor
+ * declines it -- reporting the refusal itself -- as an identifier family's value is judged under
+ * the name-hygiene policy (§8.2). A refused value yields `undefined`, like any other soft failure.
  */
 export function atomTypeReader<T>(
   atomType: AtomType<T>,
   displayName: string,
+  refuses?: (ctx: ReadContext, value: T) => boolean,
 ): TypeReader<T | undefined> {
   return {
     *read(ctx: ReadContext): Task<T | undefined> {
@@ -52,7 +57,10 @@ export function atomTypeReader<T>(
       }
       yield* ctx.next();
       try {
-        return atomType.read({ text: e.text, form: e.form });
+        const value = atomType.read({ text: e.text, form: e.form });
+        // A value the processor declines under its name-hygiene policy (§8.2) is no value of the
+        // document: it has already been reported, apart from §8.1's four categories.
+        return refuses?.(ctx, value) === true ? undefined : value;
       } catch (error) {
         if (error instanceof TsonAtomTypeError) {
           ctx.report(diagnosticCodeForAtomError(error), error.message, error.expected, e.text);

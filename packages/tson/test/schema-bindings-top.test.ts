@@ -31,10 +31,11 @@ describe('type_definition.body can be written, not just read', () => {
         fields: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
       },
     ],
-    ['unit', { kind: 'unit' }],
+    ['value_type', { kind: 'value_type' }],
+    ['void_type', { kind: 'void_type' }],
+    ['enum', { kind: 'enum', type: 'identifier', members: ['A', 'B'] }],
   ])('writes a %s body without a write error', (_name, body) => {
     if (binding === undefined) throw new Error('type_definition binding missing');
     const encoded = toDataValue(binding, definitionWith(body as Top));
@@ -43,9 +44,9 @@ describe('type_definition.body can be written, not just read', () => {
 
   it('names the member on the wire, which is what a read matches back on', () => {
     if (binding === undefined) throw new Error('type_definition binding missing');
-    const encoded = toDataValue(binding, definitionWith({ kind: 'unit' }));
+    const encoded = toDataValue(binding, definitionWith({ kind: 'value_type' }));
     if (encoded.coreValue.kind !== 'record') throw new Error('unreachable');
     const body = encoded.coreValue.fields.find((f) => f.name === 'body');
-    expect(body?.value.value.typeRef).toBe('unit');
+    expect(body?.value.value.typeRef).toBe('value_type');
   });
 });

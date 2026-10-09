@@ -14,8 +14,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/tagged-1.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person   => { name: text }
   employee => person & { department: text }
@@ -144,7 +144,7 @@ describe('§3.2 closed set', () => {
       'person',
       '{"$schema": "https://example.test/other.tn", "$type": "person", "name": "Ada"}',
     );
-    expect(problem.code).toBe('UNKNOWN_TYPE_REF');
+    expect(problem.code).toBe('SCOPE_NOT_ADMITTED');
     expect(problem.path).toBe('/$schema');
   });
 

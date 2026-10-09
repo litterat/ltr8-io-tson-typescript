@@ -10,10 +10,10 @@ import {
 } from '../src/core/errors.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   perSegment,
   withSkeletonDistinctness,
-  type NamePolicy,
+  type IdentifierPolicy,
 } from '../src/unicode/policy.js';
 import type { RecordNode, Value } from '../src/tree/nodes.js';
 
@@ -49,12 +49,12 @@ const ID_POLZOVATELYA =
     0x044f,
   );
 
-function readFail(text: string, identifierPolicy?: NamePolicy): Value {
+function readFail(text: string, identifierPolicy?: IdentifierPolicy): Value {
   const options = identifierPolicy === undefined ? {} : { identifierPolicy };
   return runSync(schemalessTreeReader(options).read(bodyContextOver(text)));
 }
 
-function readCollect(text: string, identifierPolicy?: NamePolicy) {
+function readCollect(text: string, identifierPolicy?: IdentifierPolicy) {
   const { ctx, diagnostics } = collectingContextOver(text);
   const options = identifierPolicy === undefined ? {} : { identifierPolicy };
   const value = runSync(schemalessTreeReader(options).read(ctx));
@@ -139,7 +139,7 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the record-scope check',
     // on their own, which is what leaves the relaxation observable.
     const skeletonPair = `{ aec: 1, "${cp(0x0430, 0x0435, 0x0441)}": 2 }`;
     expect(() =>
-      readFail(skeletonPair, withSkeletonDistinctness(DEFAULT_NAME_POLICY, false)),
+      readFail(skeletonPair, withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false)),
     ).not.toThrow();
   });
 
@@ -201,7 +201,7 @@ describe('schemalessTreeReader -- name hygiene (§8.2), the type-ref/annotation-
 
   it('a relaxed policy admits a mixed-script annotation name once the unit is per-segment', () => {
     const text = `@${ID_POLZOVATELYA} "x"`;
-    expect(() => readFail(text, perSegment(DEFAULT_NAME_POLICY))).not.toThrow();
+    expect(() => readFail(text, perSegment(DEFAULT_IDENTIFIER_POLICY))).not.toThrow();
   });
 
   it('checks a nested annotation values own annotation name too (§3.1s recursive value)', () => {

@@ -10,7 +10,7 @@
  * constructor-application payload, a `core-value` (§5.5-§5.6) -- and no production here uses the
  * full `data-value`: an atom-refinement body is a braced `record-def` (§5.5, not a `core-value`;
  * see {@link parseAtomRefinementOrInstance}'s own note), and a field-modifier value is a bare
- * token or the absent sentinel (§5.2), never annotations, a type-ref, or a container.
+ * token or the void sentinel (§5.2), never annotations, a type-ref, or a container.
  *
  * Built directly over {@link CursorState} (a raw, two-token-lookahead cursor over the shared
  * lexer) rather than through `stream/dataStream.ts`'s data-document event source: a schema
@@ -41,6 +41,7 @@ import type {
   FieldModifier,
   GroupDef,
   GroupMember,
+  GroupQuantifier,
   Instance,
   RecordEntry,
   RemovalSet,
@@ -173,13 +174,15 @@ function* parseDeclaration(state: CursorState): Task<Declaration> {
   yield* expect(state, 'map-arrow-token', "a declaration's '=>'");
   const typeDefAnnotations = yield* parseAnnotationList(state);
   const mark = yield* parseDefinitionMarkOpt(state);
-  const typeDef = yield* parseTypeDef(state);
+  const parameterTypes = new Map<string, TypeRef>();
+  const typeDef = yield* parseTypeDef(state, parameterTypes);
   return {
     nameAnnotations,
     name,
     typeDefAnnotations,
     ...(mark !== undefined ? { mark } : {}),
     typeDef,
+    ...(parameterTypes.size > 0 ? { parameterTypes } : {}),
     position: nameToken.start,
   };
 }
@@ -204,11 +207,11 @@ function* parseDefinitionMarkOpt(state: CursorState): Task<'abstract' | 'final' 
 
 // ── Type Definitions (§5, §12.1) ────────────────────────────────────────
 
-function* parseTypeDef(state: CursorState): Task<TypeDef> {
+function* parseTypeDef(state: CursorState, parameterTypes: Map<string, TypeRef>): Task<TypeDef> {
   // The parameter list comes first, so one token then decides the alternative: `!` with no
   // parameters is an instance or an atom refinement, `!` with parameters an instance-template
   // (§12.1). `<` only ever starts a parameter list, so consuming it costs no lookahead.
-  const typeParams = yield* parseTypeParamsOpt(state);
+  const typeParams = yield* parseTypeParamsOpt(state, parameterTypes);
 
   if (yield* check(state, 'bang')) {
     return yield* parseAtomRefinementOrInstance(state, typeParams);
@@ -552,37 +555,138 @@ function* parseFieldModifier(state: CursorState): Task<FieldModifier> {
   return isDefault ? { kind: 'default', token } : { kind: 'fixed', token };
 }
 
+/**
+ * `group-def` (§12.1, §5.11): `|` separates options, and the members of one option are separated as
+ * a record body's entries are. The mark after `)` is `?` or `+`, never both, and touches the `)`.
+ */
 function* parseGroupDef(state: CursorState, annotations: readonly Annotation[]): Task<GroupDef> {
   const start = (yield* peekToken(state)).start;
   yield* expect(state, 'lparen', "a field group's opening '('");
-  const members: GroupMember[] = [yield* parseGroupMember(state)];
-  if (!(yield* check(state, 'pipe'))) {
+  const options: [GroupMember, ...GroupMember[]][] = [yield* parseGroupOption(state)];
+  while (yield* check(state, 'pipe')) {
+    yield* advance(state);
+    options.push(yield* parseGroupOption(state));
+  }
+  yield* expect(state, 'rparen', "a field group's closing ')'");
+  const quantifier: GroupQuantifier = (yield* consumeAdjacent(state, 'question'))
+    ? 'AT_MOST_ONE'
+    : (yield* consumeAdjacent(state, 'plus'))
+      ? 'AT_LEAST_ONE'
+      : 'EXACTLY_ONE';
+  if (
+    quantifier !== 'EXACTLY_ONE' &&
+    ((yield* check(state, 'question')) || (yield* check(state, 'plus')))
+  ) {
+    const here = yield* peekToken(state);
+    if (samePosition(state.lastEnd, here.start)) {
+      throw parseError(
+        here,
+        "a field group takes one mark after its ')': '?' for at most one option, or '+' for at " +
+          'least one of its members (§5.11)',
+      );
+    }
+  }
+  const group: GroupDef = { kind: 'groupDef', annotations, options, quantifier };
+  checkGroupShape(group, start);
+  return group;
+}
+
+/**
+ * The shapes a group may take (§5.11), each refused with the spelling it restates, so that every
+ * presence rule has one spelling:
+ *
+ * - the only member of an option takes no `?`, being present exactly when its option is chosen;
+ * - `+` takes options of one field each, at least two of them;
+ * - a group of one option is `?`, with at least two members and one of them unmarked. A bare one
+ *   is plain fields, or with every member marked the `+` group; a `?` one with a single member, or
+ *   with every member marked, is plain optional fields.
+ */
+function checkGroupShape(group: GroupDef, start: Position): void {
+  for (const option of group.options) {
+    const only = option[0];
+    if (option.length === 1 && only.omittable) {
+      throw new TsonParseError(
+        `'${only.name}' is the only member of its option, so the '?' on its name changes nothing ` +
+          '-- it is present exactly when its option is chosen (§5.11); write it without the ' +
+          "'?'",
+        start,
+      );
+    }
+  }
+  const members = group.options.flat();
+  const names = members.map((member) => member.name);
+  if (group.quantifier === 'AT_LEAST_ONE') {
+    if (group.options.some((option) => option.length > 1)) {
+      throw new TsonParseError(
+        "a '+' group's options are single fields, at least one of them present -- an option " +
+          "holding several fields belongs to a bare or '?' group (§5.11)",
+        start,
+      );
+    }
+    if (members.length < 2) {
+      throw new TsonParseError(
+        "a '+' group needs at least two members -- at least one of a single field is that " +
+          'field, required (§5.11)',
+        start,
+      );
+    }
+    return;
+  }
+  if (group.options.length > 1) return;
+  const anyUnmarked = members.some((member) => !member.omittable);
+  if (group.quantifier === 'EXACTLY_ONE') {
     throw new TsonParseError(
-      "a field group requires at least two members separated by '|' (§5.11)",
+      anyUnmarked
+        ? 'a bare group of one option states plain fields -- its option is always chosen, so its ' +
+            `unmarked members are required and its marked ones optional; declare (${names.join(', ')}) ` +
+            'as fields (§5.11)'
+        : 'a bare group of one option whose members are all marked admits at least one of them -- ' +
+            `write it with '+', each member its own option: (${names.join(' | ')})+ (§5.11)`,
       start,
     );
   }
-  while (yield* check(state, 'pipe')) {
-    yield* advance(state);
+  if (members.length < 2 || !anyUnmarked) {
+    throw new TsonParseError(
+      `a '?' group of one option ${members.length < 2 ? 'and one member' : 'whose members are all marked'} ` +
+        `admits each member independently -- declare (${names.join(', ')}) as optional fields (§5.11)`,
+      start,
+    );
+  }
+}
+
+function* parseGroupOption(state: CursorState): Task<[GroupMember, ...GroupMember[]]> {
+  const members: [GroupMember, ...GroupMember[]] = [yield* parseGroupMember(state)];
+  while (
+    !(yield* check(state, 'pipe')) &&
+    !(yield* check(state, 'rparen')) &&
+    !(yield* check(state, 'eof'))
+  ) {
+    if (yield* check(state, 'comma')) {
+      yield* advance(state);
+    }
     members.push(yield* parseGroupMember(state));
   }
-  yield* expect(state, 'rparen', "a field group's closing ')'");
-  const optional = yield* consumeAdjacentQuestion(state);
-  return {
-    kind: 'groupDef',
-    annotations,
-    members: members as [GroupMember, GroupMember, ...GroupMember[]],
-    optional,
-  };
+  return members;
 }
 
 function* parseGroupMember(state: CursorState): Task<GroupMember> {
   const annotations = yield* parseAnnotationList(state);
   const name = yield* expectFieldNameToken(state, "a field group member's name");
+  // Optional once the member's option is chosen: the option, not the record, is what the mark is about.
+  const omittable = yield* consumeAdjacentQuestion(state);
   yield* expect(state, 'colon', "a field group member's ':'");
   const typeRef = yield* parseTypeRef(state);
   const voidable = yield* consumeAdjacentQuestion(state);
-  return { annotations, name: name.text, typeRef, voidable };
+  if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
+    // §5.11: a member's presence is the group's and a group never injects, so `~`, `=` and `=?`
+    // are refused here by name rather than as a malformed group.
+    throw parseError(
+      yield* peekToken(state),
+      "a field group member takes no value modifier -- §5.11 gives the group a member's " +
+        "presence, so none of them takes a default, a pin, or the discriminator mark '=?'",
+    );
+  }
+  return { annotations, name: name.text, omittable, typeRef, voidable };
 }
 
 // ── Type References (§5.3, §12.1) ───────────────────────────────────────
@@ -704,7 +808,7 @@ function* rejectMapQuestion(state: CursorState, side: string): Task<void> {
     const here = yield* peekToken(state);
     throw parseError(
       here,
-      `'?' is not permitted on a map type's ${side} (§5.3); an absent key states an entry for nothing`,
+      `'?' is not permitted on a map type's ${side} (§5.3); a void key states an entry for nothing`,
     );
   }
 }
@@ -757,8 +861,8 @@ function* parseTypeArg(state: CursorState): Task<TypeArg> {
   if (t.type === 'lbrace') {
     return { kind: 'ref', ref: yield* parseMap(state) };
   }
-  if (t.type === 'absent-token') {
-    throw parseError(t, "the absent sentinel '_' is not valid in a type argument position (§7.6)");
+  if (t.type === 'void-token') {
+    throw parseError(t, "the void sentinel '_' is not valid in a type argument position (§7.6)");
   }
   throw mismatch('a type argument (a type reference or a scalar value)', t);
 }
@@ -788,7 +892,7 @@ function* parseMapBody(state: CursorState): Task<MapRef> {
 /** `element-type = type-ref ["?"]` (§12.1). Nesting needs no case of its own: a bracket or map form *is* a type-ref. */
 function* parseElementType(state: CursorState): Task<ElementType> {
   const ref = yield* parseTypeRef(state);
-  return { typeRef: ref, optional: yield* consumeAdjacentQuestion(state) };
+  return { typeRef: ref, voidable: yield* consumeAdjacentQuestion(state) };
 }
 
 /** `size-spec` (§12.1), shared by the bracket and map forms -- `closing` is the bracket or brace the open-ended `N..` form runs up against. */
@@ -814,17 +918,32 @@ function* expectSizeBound(state: CursorState): Task<string> {
 
 // ── Names and Small Helpers ──────────────────────────────────────────────
 
-function* parseTypeParamsOpt(state: CursorState): Task<string[]> {
+/**
+ * `type-params = "<" type-param *( separator type-param ) [","] ">"`, with `type-param =
+ * param-name [ ":" type-ref ]` (§12.1, §5.10). The names are the list every consumer reads; a
+ * written type is collected into `written` for the declaration being parsed, since it narrows what
+ * resolution derives rather than shaping the type-def.
+ */
+function* parseTypeParamsOpt(state: CursorState, written: Map<string, TypeRef>): Task<string[]> {
   if (!(yield* check(state, 'less-than'))) {
     return [];
   }
   yield* advance(state);
-  const params: string[] = [yield* expectTypeName(state, 'a type parameter')];
+  const params: string[] = [yield* parseTypeParam(state, written)];
   while (yield* consumeSeparatorOrCloseCheck(state, 'greater-than')) {
-    params.push(yield* expectTypeName(state, 'a type parameter'));
+    params.push(yield* parseTypeParam(state, written));
   }
   yield* expect(state, 'greater-than', "a type parameter list's closing '>'");
   return params;
+}
+
+function* parseTypeParam(state: CursorState, written: Map<string, TypeRef>): Task<string> {
+  const name = yield* expectTypeName(state, 'a type parameter');
+  if (yield* check(state, 'colon')) {
+    yield* advance(state);
+    written.set(name, yield* parseTypeRef(state));
+  }
+  return name;
 }
 
 /** `type-name = unquoted-token` (§12.1), with the added restriction that its text MUST NOT match [TSON-DATA] §7.6's `number` production -- "numbers are not declarable names" (`param-name` shares the rule). */
@@ -846,13 +965,21 @@ function rejectNumericTypeName(text: string, start: Position): void {
 
 /** `"?"` MUST be immediately adjacent to the preceding token (§12.3) -- field type, tuple/array position, or field group. */
 function* consumeAdjacentQuestion(state: CursorState): Task<boolean> {
-  if (!(yield* check(state, 'question'))) {
+  return yield* consumeAdjacent(state, 'question');
+}
+
+/** A `?` or `+` mark binds to the token before it and so must touch it (§12.3). */
+function* consumeAdjacent(state: CursorState, mark: 'question' | 'plus'): Task<boolean> {
+  if (!(yield* check(state, mark))) {
     return false;
   }
   const prevEnd = state.lastEnd;
   const q = yield* peekToken(state);
   if (!samePosition(prevEnd, q.start)) {
-    throw parseError(q, "'?' must be immediately adjacent to the preceding type (no whitespace)");
+    throw parseError(
+      q,
+      `'${q.text}' must be immediately adjacent to what it marks (no whitespace)`,
+    );
   }
   yield* advance(state);
   return true;

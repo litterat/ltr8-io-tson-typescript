@@ -31,7 +31,7 @@
  * the two questions a held, unresolved body can answer without being resolved.
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
-import type { TemplateBody } from '../schema/meta/bodies.js';
+import type { RecordExtensionType, TemplateBody, TemplateParam } from '../schema/meta/bodies.js';
 import type { TypeRef } from '../schema/meta/typedef.js';
 import { writeDataValue } from '../write/astWriter.js';
 import { isApplication, typeRefOf } from './wireForm.js';
@@ -52,6 +52,8 @@ import { isApplication, typeRefOf } from './wireForm.js';
  */
 export interface HeldBody extends TemplateBody {
   readonly application: DataValue;
+  /** The parameter names, in declaration order — {@link TemplateBody.parameters} without the types. */
+  readonly parameterNames: readonly string[];
   names(): ReadonlySet<string>;
   applications(): readonly TypeRef[];
 }
@@ -67,23 +69,96 @@ export function isHeldBody(body: TemplateBody): body is HeldBody {
   return 'application' in body;
 }
 
-/** `parameters`, named-parameter-first, in declaration order — `HeldBody`'s own contribution to `TemplateBody.parameters`. */
-export function createHeldBody(application: DataValue, parameters: readonly string[]): HeldBody {
-  return {
+/** The kernel entry every type-reference slot is typed by (§9) — what an unclassified parameter starts as. */
+const TYPE_REF: TypeRef = { name: 'type_ref', arguments: [], annotations: [] };
+
+/** The family-base facts a held body carries beside its parameters and text (§5.10). */
+interface HeldFacts {
+  readonly extension?: RecordExtensionType;
+  readonly discriminators?: readonly string[];
+}
+
+/**
+ * Wraps a held application and the parameters it binds, in declaration order. A parameter's type
+ * is derived from the body once the whole schema has resolved (`parameterTypes.ts`), well after a
+ * held body is built, so every parameter starts as an unbounded type parameter.
+ */
+export function createHeldBody(
+  application: DataValue,
+  parameters: readonly string[],
+  facts: HeldFacts = {},
+): HeldBody {
+  return heldBodyOf(
     application,
+    parameters.map((name): TemplateParam => ({ name, type: TYPE_REF })),
+    facts,
+  );
+}
+
+/**
+ * `held` with some of its recorded facts replaced: its typed parameters, and the family-base
+ * `extension` and `discriminators` (§5.10). The application and text are the same, since the
+ * held text is authoritative.
+ */
+export function reheld(
+  held: HeldBody,
+  patch: HeldFacts & { readonly parameters?: readonly TemplateParam[] },
+): HeldBody {
+  const extension = patch.extension ?? held.extension;
+  const discriminators = patch.discriminators ?? held.discriminators;
+  return heldBodyOf(held.application, patch.parameters ?? held.parameters, {
+    ...(extension === undefined ? {} : { extension }),
+    ...(discriminators === undefined ? {} : { discriminators }),
+  });
+}
+
+/** `held` with its parameters replaced by the typed ones `settled` names, by parameter name; a parameter `settled` does not name keeps what it had. */
+export function withParameters(
+  held: HeldBody,
+  settled: ReadonlyMap<string, TemplateParam>,
+): HeldBody {
+  return reheld(held, {
+    parameters: held.parameters.map((parameter) => settled.get(parameter.name) ?? parameter),
+  });
+}
+
+/**
+ * **Everything beyond the `TemplateBody` contract is non-enumerable**: the application, the
+ * parameter names and the two queries are this module's working state, and a held body compared,
+ * spread or written is the contract alone — `parameters`, `template`, `extension`,
+ * `discriminators`.
+ */
+function heldBodyOf(
+  application: DataValue,
+  parameters: readonly TemplateParam[],
+  facts: HeldFacts,
+): HeldBody {
+  const body: TemplateBody = {
     parameters,
     template: writeDataValue(application),
-    names(): ReadonlySet<string> {
-      const names = new Set<string>();
-      collectNames(application.coreValue, names);
-      return names;
-    },
-    applications(): readonly TypeRef[] {
-      const applications: TypeRef[] = [];
-      collectApplications(application.coreValue, applications);
-      return applications;
-    },
+    ...(facts.extension === undefined ? {} : { extension: facts.extension }),
+    ...(facts.discriminators === undefined || facts.discriminators.length === 0
+      ? {}
+      : { discriminators: facts.discriminators }),
   };
+  return Object.defineProperties(body, {
+    application: { value: application },
+    parameterNames: { value: parameters.map((parameter) => parameter.name) },
+    names: {
+      value(): ReadonlySet<string> {
+        const names = new Set<string>();
+        collectNames(application.coreValue, names);
+        return names;
+      },
+    },
+    applications: {
+      value(): readonly TypeRef[] {
+        const applications: TypeRef[] = [];
+        collectApplications(application.coreValue, applications);
+        return applications;
+      },
+    },
+  }) as HeldBody;
 }
 
 function collectNames(value: CoreValue, into: Set<string>): void {
@@ -108,7 +183,7 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       }
       return;
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return;
   }
 }
@@ -140,7 +215,7 @@ function collectApplications(value: CoreValue, into: TypeRef[]): void {
       return;
     case 'token':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return;
   }
 }

@@ -19,7 +19,7 @@ const resolve = (): TypeReader<Value> => INT_READER;
 
 function reader(
   options: {
-    state?: 'REQUIRED' | 'OPTIONAL';
+    voidable?: boolean;
     uniqueItems?: boolean;
     minItems?: bigint;
     maxItems?: bigint;
@@ -28,8 +28,8 @@ function reader(
   const body: ArrayBody = {
     kind: 'array',
     elementType: { name: 'int32', arguments: [], annotations: [] },
-    state: options.state ?? 'REQUIRED',
-    unordered: false,
+    voidable: options.voidable ?? false,
+    ordered: true,
     uniqueItems: options.uniqueItems ?? false,
     ...(options.minItems !== undefined ? { minItems: options.minItems } : {}),
     ...(options.maxItems !== undefined ? { maxItems: options.maxItems } : {}),
@@ -60,19 +60,19 @@ describe('arrayTreeReader -- shape and elements (§2.7)', () => {
   });
 });
 
-describe('arrayTreeReader -- absent elements (§5.3 element_state)', () => {
-  it('a REQUIRED element written `_` reports FIELD_REQUIRED and abandons the whole array (WP3B)', () => {
+describe('arrayTreeReader -- void elements (§5.3 voidable)', () => {
+  it('a non-voidable element written `_` reports FIELD_REQUIRED and abandons the whole array (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('[1 _ 3]');
-    const value = runSync(reader({ state: 'REQUIRED' }).read(ctx));
+    const value = runSync(reader({ voidable: false }).read(ctx));
     expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
-  it('an OPTIONAL element written `_` is silently AbsentNode, no diagnostic', () => {
+  it('a voidable element written `_` is silently VoidNode, no diagnostic', () => {
     const { ctx, diagnostics } = collectingContextOver('[1 _ 3]');
-    const value = runSync(reader({ state: 'OPTIONAL' }).read(ctx));
+    const value = runSync(reader({ voidable: true }).read(ctx));
     if (value.kind !== 'array') throw new Error('unreachable');
-    expect(value.elements.map((e) => e.kind)).toEqual(['atom', 'absent', 'atom']);
+    expect(value.elements.map((e) => e.kind)).toEqual(['atom', 'void', 'atom']);
     expect(diagnostics.diagnostics).toEqual([]);
   });
 });

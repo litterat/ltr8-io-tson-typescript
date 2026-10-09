@@ -105,6 +105,17 @@ export type DeclaredApplicationCloser = (
 ) => TypeDefinition | undefined;
 
 /**
+ * §5.10's argument check for an application that denotes no entry: a composition operand absorbs
+ * its template's fields by value and mints nothing, so it never reaches the materialiser's closing
+ * path, which is where an application's arguments are otherwise judged against the parameters they
+ * bind. Throws a `TsonSchemaValidationError` when an argument is outside its parameter's bound or
+ * type; an argument it cannot judge is left to the position, as everywhere else.
+ *
+ * Optional on the same terms as {@link ApplicationCloser}.
+ */
+export type ApplicationChecker = (application: TypeRef) => void;
+
+/**
  * Converts an already-bound `Top` body back to a bare wire `CoreValue` — this port's own
  * replacement for the Java original's `TsonObjectWriter` field, needed for exactly one thing:
  * §5.6's chained atom-refinement merge (`mergeWithSource` in `definitionResolver.ts`), which has

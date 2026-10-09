@@ -342,6 +342,8 @@ const XID_PROPERTIES = [
     closure: 'ID_Continue',
   },
   { escape: 'Nd', constant: 'DECIMAL_DIGIT', label: 'Nd', closure: null },
+  { escape: 'ID_Start', constant: 'ID_START', label: 'ID_Start', closure: null },
+  { escape: 'ID_Continue', constant: 'ID_CONTINUE', label: 'ID_Continue', closure: null },
 ];
 
 function buildXid() {
@@ -372,7 +374,7 @@ function buildXid() {
  * worth knowing about, which is why the constant is exported rather than hidden.
  */
 
-/** The Unicode version {@link isXidStart}, {@link isXidContinue} and {@link isNd} describe. */
+/** The Unicode version {@link isXidStart}, {@link isXidContinue}, {@link isIdStart}, {@link isIdContinue} and {@link isNd} describe. */
 export const UNICODE_VERSION = '${unicodeVersion}';
 
 ${RUNTIME_HELPERS}
@@ -418,6 +420,20 @@ export function isXidContinue(codePoint: number): boolean {
   return codePoint < ASCII_LIMIT
     ? asciiHas(codePoint, ASCII_XID_CONTINUE)
     : contains(XID_CONTINUE, codePoint);
+}
+
+/**
+ * Whether \`codePoint\` has the Unicode property \`ID_Start\`: \`XID_Start\` plus the few characters
+ * whose NFKC form is not an identifier. The base an identifier profile draws from when it asks for
+ * \`ID\` rather than \`XID\` ([TSON-SCHEMA] §5.5).
+ */
+export function isIdStart(codePoint: number): boolean {
+  return contains(ID_START, codePoint);
+}
+
+/** Whether \`codePoint\` has the Unicode property \`ID_Continue\`; {@link isIdStart}'s peer. */
+export function isIdContinue(codePoint: number): boolean {
+  return contains(ID_CONTINUE, codePoint);
 }
 
 /**

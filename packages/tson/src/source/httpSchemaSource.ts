@@ -146,7 +146,7 @@ export function httpSchemaSource(options: HttpSchemaSourceOptions = {}): HttpSch
     // Concatenate, then VERIFY against the parser that will actually be used. `fetch` re-parses
     // this string with the WHATWG parser, whose notion of a path separator is wider than RFC
     // 3986's — a backslash is one for a special scheme, and it resolves the dot-segments that
-    // exposes. canonicalizeIdentity now rejects a raw backslash, so nothing known reaches here,
+    // exposes. canonicalizeIdentity refuses a raw backslash (outside the IRI grammar), so nothing known reaches here,
     // but a source that maps a host into a *sub-path* of an origin is exactly the place where a
     // future parser quirk becomes an SSRF. Checking the parsed result costs one parse per fetch
     // and makes the containment property independent of what the identity check happens to catch.

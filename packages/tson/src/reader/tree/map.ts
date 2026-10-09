@@ -12,7 +12,7 @@ import type { ReadContext, TypeReader } from '../contracts.js';
 import type { MapBody } from '../../schema/meta/bodies.js';
 import type { TsonEvent } from '../../stream/event.js';
 import type { MapEntry, Value } from '../../tree/nodes.js';
-import { absentNode, mapNode } from '../../tree/nodes.js';
+import { voidNode, mapNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -22,7 +22,10 @@ import {
   skipScopedValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
+import { declareOrder } from '../../value/orderedness.js';
+import { reportConfusablePair } from './refusal.js';
 import { abandonedValue, type TreeTypeResolver } from './support.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
 
 type Shape = 'entries' | 'empty' | 'mismatch';
 
@@ -36,6 +39,13 @@ function keySegmentFor(e: TsonEvent): string {
  * value types' own readers, once, at construction; `isScopedType` answers §7.8's typed-position
  * question for the value type at that same step -- a map key is a plain `data-value`, never a
  * `scoped-value` (§2.6), so it never carries a nested `!!schema` for this to guard.
+ *
+ * `keysAreNames` is true when the key type is an identifier family: its keys are then one naming
+ * scope (§11.4), and a key reading alike with an earlier one is reported (`CONFUSABLE_NAMES`) at
+ * its own position, as §8.2 places a refused pair, and its entry read normally. A key whose reading
+ * reported -- its policy refusal included -- is no name of the scope, for the reason it is not in
+ * the duplicate check. The caller passes it only where the read's policy applies skeleton
+ * distinctness.
  */
 export function mapTreeReader(
   name: string,
@@ -44,6 +54,7 @@ export function mapTreeReader(
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
   isScopedType: (typeName: string) => boolean,
+  keysAreNames = false,
 ): TypeReader<Value> {
   const keyParser = resolveType(body.keyType.name);
   const valueParser = resolveType(body.valueType.name);
@@ -94,15 +105,16 @@ export function mapTreeReader(
   function* readInto(ctx: ReadContext, sink: (key: Value, value: Value) => void): Task<void> {
     let count = 0;
     const seenKeys: Value[] = [];
+    const names = keysAreNames ? createConfusableScope() : undefined;
     for (;;) {
       const keyPeek = yield* ctx.peek();
       if (keyPeek.kind === 'map-end') break;
-      if (keyPeek.kind === 'absent') {
+      if (keyPeek.kind === 'void') {
         yield* ctx.next(); // the absent key itself
         ctx.report(
           'TYPE_MISMATCH',
-          `'${displayName}': the absent sentinel '_' must not appear as a map key (§2.9)`,
-          "a real map key, never the absent sentinel '_'",
+          `'${displayName}': the void sentinel '_' must not appear as a map key (§2.9)`,
+          "a real map key, never the void sentinel '_'",
           '_',
         );
         yield* ctx.next(); // map-arrow
@@ -125,6 +137,12 @@ export function mapTreeReader(
             );
         } else {
           seenKeys.push(key);
+          if (names !== undefined && key.kind === 'atom' && typeof key.value === 'string') {
+            const collision = names.add(key.value);
+            if (collision !== undefined) {
+              reportConfusablePair(ctx.field(keySegment), collision, 'keys');
+            }
+          }
         }
       }
       yield* ctx.next(); // map-arrow
@@ -132,19 +150,19 @@ export function mapTreeReader(
       yield* refuseUnscopedSchemaRef(valueCtx, scopedValue, body.valueType.name);
       const valuePeek = yield* ctx.peek();
       let value: Value;
-      if (valuePeek.kind === 'absent') {
-        // The entry is present with an absent value, so it counts toward the size bounds either
-        // way (§5.3); what the state decides is whether the absence is permitted at all (§7.6).
+      if (valuePeek.kind === 'void') {
+        // The entry is present with a void value, so it counts toward the size bounds either
+        // way (§5.3); what voidability decides is whether the absence is permitted at all (§7.6).
         yield* ctx.next();
-        if (body.state === 'REQUIRED') {
+        if (!body.voidable) {
           valueCtx.report(
             'FIELD_REQUIRED',
-            `'${displayName}' entry '${keySegment}' is absent, but values are required`,
+            `'${displayName}' entry '${keySegment}' is void, but values are required`,
             'a value',
-            '(absent)',
+            '_',
           );
         }
-        value = absentNode();
+        value = voidNode();
       } else {
         value = yield* valueParser.read(valueCtx);
       }
@@ -174,7 +192,7 @@ export function mapTreeReader(
       if (mapCtx.reported() > mark) {
         return abandonedValue();
       }
-      return mapNode(entries, name, annotations);
+      return declareOrder(mapNode(entries, name, annotations), body.ordered);
     },
   };
 }

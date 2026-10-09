@@ -107,7 +107,8 @@ function stubConstructorKind(name: string): TypeKind | undefined {
   if (name === 'record' || name === 'array' || name === 'map' || name === 'tuple') return 'PRODUCT';
   if (name === 'choice' || name === 'scoped') return 'SUM';
   if (name === 'data') return 'DATA';
-  if (name === 'unit' || name === 'enum' || name.endsWith('_type')) return 'ATOM';
+  if (name === 'value_type' || name === 'void_type' || name === 'enum' || name.endsWith('_type'))
+    return 'ATOM';
   if (name === 'reference' || name === 'template') return 'PRODUCT'; // no base kind in their own chain (§4.1's own default)
   return undefined;
 }
@@ -376,14 +377,14 @@ describe('composition (§5.8)', () => {
     const doc = parse(`
       top  => {}
       atom => top & {}
-      unit => atom & {}
+      value_type => atom & {}
     `);
     const { resolver, entries, structure } = harness();
     resolveAll(resolver, entries, doc);
-    const unitEntry = entries.get('unit');
-    if (unitEntry === undefined) throw new Error('unreachable');
-    expect(kindOf(unitEntry, entries, structure)).toBe('ATOM');
-    expect(entries.get('unit')?.supertypes).toEqual(['atom', 'top']);
+    const constructor = entries.get('value_type');
+    if (constructor === undefined) throw new Error('unreachable');
+    expect(kindOf(constructor, entries, structure)).toBe('ATOM');
+    expect(entries.get('value_type')?.supertypes).toEqual(['atom', 'top']);
   });
 
   it('reaching two base kinds through supertypes is a resolver error (§4.1)', () => {
@@ -521,7 +522,7 @@ describe('composition (§5.8)', () => {
     entries.set('bound', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     expect(thrownBy(() => resolveOne(resolver, doc, 'c'))).toBeInstanceOf(
@@ -648,22 +649,44 @@ describe('§11.5\'s "supertype chain" limit', () => {
 // ── Field groups (§5.11) ─────────────────────────────────────────────────────────────────────
 
 describe('field groups (§5.11)', () => {
-  it("flattens each member to optional: true, role: FREE regardless of the group's own state", () => {
+  it("flattens each member to optional: true, role: FREE regardless of the group's own `optional`", () => {
     const doc = parse('t => { (a: token | b: token) }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
     expect(fieldNamed(body, 'a')).toMatchObject({ optional: true, voidable: false, role: 'FREE' });
     expect(fieldNamed(body, 'b')).toMatchObject({ optional: true, voidable: false, role: 'FREE' });
-    expect(body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+    expect(body.groups).toEqual([{ members: [['a'], ['b']], optional: false }]);
   });
 
-  it('a `?`-marked group is state OPTIONAL', () => {
+  it('an option holds several fields, and `?` on a member name marks it optional within its option (§5.11)', () => {
+    const doc = parse('t => { (host: token  port?: token | socket: token) }');
+    const { resolver } = harness();
+    const body = resolveOne(resolver, doc, 't').body;
+    if (!isRecordBody(body)) throw new Error('unreachable');
+    expect(body.groups).toEqual([
+      { members: [['host', 'port'], ['socket']], optionalMembers: ['port'], optional: false },
+    ]);
+    expect(body.fields.map((f) => f.name)).toEqual(['host', 'port', 'socket']);
+    expect(body.fields.every((f) => f.optional)).toBe(true);
+  });
+
+  it('`+` lowers to one option holding every member, each marked optional, on a group that is not optional (§5.11)', () => {
+    const doc = parse('t => { (email: token | phone: token)+ }');
+    const { resolver } = harness();
+    const body = resolveOne(resolver, doc, 't').body;
+    if (!isRecordBody(body)) throw new Error('unreachable');
+    expect(body.groups).toEqual([
+      { members: [['email', 'phone']], optionalMembers: ['email', 'phone'], optional: false },
+    ]);
+  });
+
+  it('a `?`-marked group is optional', () => {
     const doc = parse('t => { (a: token | b: token)? }');
     const { resolver } = harness();
     const body = resolveOne(resolver, doc, 't').body;
     if (!isRecordBody(body)) throw new Error('unreachable');
-    expect(body.groups[0]?.state).toBe('OPTIONAL');
+    expect(body.groups[0]?.optional).toBe(true);
   });
 
   it('a bare restatement of both group members via ordinary field syntax leaves both governed by the group -- "no restated member is ever always present, so the rule an earlier revision needed against two always-present members of one group has nothing left to refuse" (§5.11) -- the schema loads cleanly, and a document with both present is validate\'s own concern, not the resolver\'s', () => {
@@ -680,10 +703,10 @@ describe('field groups (§5.11)', () => {
     // its own, so `optional` stays `true` for both -- the group, not the field, answers omission.
     expect(fieldNamed(bad.body, 'a')).toMatchObject({ optional: true, role: 'FREE' });
     expect(fieldNamed(bad.body, 'b')).toMatchObject({ optional: true, role: 'FREE' });
-    expect(bad.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+    expect(bad.body.groups).toEqual([{ members: [['a'], ['b']], optional: false }]);
   });
 
-  it('a composition body restates an inherited group, tightening OPTIONAL to REQUIRED', () => {
+  it('a composition body restates an inherited group, tightening an optional group to one that must be chosen', () => {
     const doc = parse(`
       base     => { (a: token | b: token)? }
       required => base & { (a: token | b: token) }
@@ -692,7 +715,7 @@ describe('field groups (§5.11)', () => {
     entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
     const required = resolveOne(resolver, doc, 'required');
     if (!isRecordBody(required.body)) throw new Error('unreachable');
-    expect(required.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+    expect(required.body.groups).toEqual([{ members: [['a'], ['b']], optional: false }]);
   });
 
   it('rejects a restatement that loosens REQUIRED to OPTIONAL', () => {
@@ -782,10 +805,10 @@ describe('field groups (§5.11)', () => {
     expect(a.voidable).toBe(true);
     expect(a.role).toBe('FREE');
     // `a` stays a member -- the group is untouched by the restatement.
-    expect(ok.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+    expect(ok.body.groups).toEqual([{ members: [['a'], ['b']], optional: false }]);
   });
 
-  it("a restated member's name mark is refused -- it takes none, since its omission answer is the group's (§5.11)", () => {
+  it("a restated member's name mark may be dropped and never added -- adding one loosens its option (§5.11)", () => {
     const doc = parse(`
       base => { (a: token | b: token) }
       bad  => base & { a?: token }
@@ -794,7 +817,19 @@ describe('field groups (§5.11)', () => {
     entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('name mark');
+    expect((error as TsonSchemaValidationError).message).toContain('loosens its option');
+  });
+
+  it("a restated member that drops its option's '?' becomes required there (§5.11)", () => {
+    const doc = parse(`
+      base => { (a: token  b?: token | c: token) }
+      sub  => base & { a: token  b: token }
+    `);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const sub = resolveOne(resolver, doc, 'sub');
+    if (!isRecordBody(sub.body)) throw new Error('unreachable');
+    expect(sub.body.groups).toEqual([{ members: [['a', 'b'], ['c']], optional: false }]);
   });
 
   it("a restated member's default ('~') is refused -- a default is a value only omission reaches, and omission is the group's (§5.11)", () => {
@@ -822,7 +857,7 @@ describe('field groups (§5.11)', () => {
     expect(a.value?.text).toBe('x');
     // The member is still governed by the group, so it is never `fieldOmission`-`'INJECTED'` --
     // the reader must not manufacture `a` on omission just because it now carries a pinned value.
-    expect(sub.body.groups).toEqual([{ members: ['a', 'b'], state: 'REQUIRED' }]);
+    expect(sub.body.groups).toEqual([{ members: [['a'], ['b']], optional: false }]);
   });
 
   it("a member reachable by refinement may not acquire the selector '=?' (§5.2, §5.11)", () => {
@@ -890,7 +925,7 @@ describe('refinement (§5.7)', () => {
     entries.set('bound', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
@@ -929,7 +964,7 @@ describe('refinement (§5.7)', () => {
     const q = resolveOne(resolver, doc, 'q');
     if (!isRecordBody(q.body)) throw new Error('unreachable');
     expect(q.body.extension).toBe('OPEN');
-    expect(q.body.discriminators).toEqual([]);
+    expect(q.body.discriminators).toBeUndefined();
   });
 
   it("a restatement pinning a discriminator field FIXED does not inherit the base's own discriminators -- the subtype is a member, not itself a further base", () => {
@@ -942,7 +977,7 @@ describe('refinement (§5.7)', () => {
     const dog = resolveOne(resolver, doc, 'dog');
     if (!isRecordBody(dog.body)) throw new Error('unreachable');
     expect(dog.body.extension).toBe('OPEN');
-    expect(dog.body.discriminators).toEqual([]);
+    expect(dog.body.discriminators).toBeUndefined();
     expect(fieldNamed(dog.body, 'pet_type')).toMatchObject({ role: 'FIXED', optional: false });
   });
 
@@ -1064,7 +1099,7 @@ describe('annotations (§6)', () => {
     structure.set('doc', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     const resolved = resolveOne(resolver, doc, 't');
@@ -1085,7 +1120,7 @@ describe('annotations (§6)', () => {
     structure.set('doc', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     const error = thrownBy(() => resolveOne(resolver, doc, 't'));
@@ -1103,7 +1138,7 @@ describe('annotations (§6)', () => {
     structure.set('doc', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     const error = thrownBy(() => resolveOne(resolver, doc, 't'));
@@ -1124,7 +1159,7 @@ describe('annotations (§6)', () => {
     structure.set('doc', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     const error = thrownBy(() => resolveOne(resolver, doc, 't'));
@@ -1291,7 +1326,7 @@ describe('constructor application (§5.5, §5.6)', () => {
     structure.set('something', {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
@@ -1717,7 +1752,7 @@ describe('coverage gaps reported as TsonNotImplementedError, never silently mis-
         typeParams: [],
         ref: {
           kind: 'arrayRef',
-          elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, optional: false },
+          elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
         },
       },
     };
@@ -1749,9 +1784,95 @@ describe('invariant violations (bugs in this library, never a verdict on the sch
       // IS-A `top` (hand-built) is what reaches the record-shape check at all.
       supertypes: ['atom', 'top'],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     });
     expect(thrownBy(() => resolveOne(resolver, doc, 'bad'))).toBeInstanceOf(TsonInternalError);
+  });
+});
+
+// ── Removal and restatement of field groups (§5.9 rule 7, §5.11) ─────────────────────────────
+
+describe('removing a field-group member (§5.9 rule 7, §5.11 Removal)', () => {
+  function resolveBody(source: string, name: string): RecordBody {
+    const doc = parse(source);
+    const { resolver, entries } = harness();
+    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
+    const resolved = resolveOne(resolver, doc, name);
+    if (!isRecordBody(resolved.body)) throw new Error('unreachable');
+    return resolved.body;
+  }
+
+  it('a member leaves its option, and an option left with several members stays (§5.11)', () => {
+    const body = resolveBody(
+      `base => { (host: token  port: token  extra?: token | socket: token) }
+       thin => base - { extra }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([{ members: [['host', 'port'], ['socket']], optional: false }]);
+    expect(body.fields.map((f) => f.name)).toEqual(['host', 'port', 'socket']);
+  });
+
+  it('an emptied option leaves the group, and the group left with one single-member option dissolves into the plain field (§5.11)', () => {
+    const body = resolveBody(
+      `base => { (a: token | b: token) }
+       thin => base - { b }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    const a = fieldNamed(body, 'a');
+    expect(a.optional).toBe(false);
+    expect(a.role).toBe('FREE');
+  });
+
+  it("a dissolved optional group's survivor takes `?` on its name and keeps its own voidability (§5.11)", () => {
+    const body = resolveBody(
+      `base => { (a: token? | b: token)? }
+       thin => base - { b }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    const a = fieldNamed(body, 'a');
+    expect(a.optional).toBe(true);
+    expect(a.voidable).toBe(true);
+  });
+
+  it('a bare group reduced to one option with an unmarked member becomes plain fields, marked members optional (§5.11)', () => {
+    const body = resolveBody(
+      `base => { (a: token  b?: token | c: token) }
+       thin => base - { c }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    expect(fieldNamed(body, 'a').optional).toBe(false);
+    expect(fieldNamed(body, 'b').optional).toBe(true);
+  });
+
+  it('removal leaves a `+` group that keeps two members, and dissolves one that falls to one (§5.11)', () => {
+    const three = resolveBody(
+      `base => { (a: token | b: token | c: token)+ }
+       thin => base - { c }`,
+      'thin',
+    );
+    expect(three.groups).toEqual([
+      { members: [['a', 'b']], optionalMembers: ['a', 'b'], optional: false },
+    ]);
+    const two = resolveBody(
+      `base => { (a: token | b: token)+ }
+       thin => base - { b }`,
+      'thin',
+    );
+    expect(two.groups).toEqual([]);
+    expect(fieldNamed(two, 'a').optional).toBe(false);
+  });
+
+  it('removing every member drops the group with them (§5.11)', () => {
+    const body = resolveBody(
+      `base => { keep: token  (a: token | b: token) }
+       thin => base - { a b }`,
+      'thin',
+    );
+    expect(body.groups).toEqual([]);
+    expect(body.fields.map((f) => f.name)).toEqual(['keep']);
   });
 });

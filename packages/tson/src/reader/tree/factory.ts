@@ -5,7 +5,7 @@
  * `name -> reader` table, wired for the recursive/cyclic case) and instantiates the frozen generic
  * `Def`/`Context` parameters this way.
  *
- * **Deliberately narrow.** `atomTreeReader`/`absentTreeReader` (`atom.ts`, `absent.ts`) have no factory
+ * **Deliberately narrow.** `atomTreeReader`/`voidTreeReader` (`atom.ts`, `void.ts`) have no factory
  * here: choosing the right `AtomType` for a resolved atom body means walking the whole built-in
  * vocabulary table (§5, ~30 constructors) plus a schema's own atom refinements, which is compiler work,
  * not tree-reader work -- see this package's own work-package report.

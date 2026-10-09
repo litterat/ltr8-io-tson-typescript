@@ -76,7 +76,7 @@ function appendReadable(out: string[], value: CoreValue): void {
       break;
     case 'map':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       out.push('_v');
       break;
   }
@@ -122,8 +122,17 @@ function appendValue(out: string[], value: CoreValue): void {
       out.push(')');
       break;
     case 'map':
+      // Injective, or two different maps (`extern_of<S>`'s `schemas`, say) would derive one
+      // canonical rendering and silently share an entry -- §8.2's freshness MUST.
+      out.push('m(');
+      value.entries.forEach((entry) => {
+        appendValue(out, entry.key.coreValue);
+        appendValue(out, entry.value.value.coreValue);
+      });
+      out.push(')');
+      break;
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       out.push('?');
       break;
   }

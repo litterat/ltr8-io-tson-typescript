@@ -8,14 +8,14 @@
  * story, and building continues past it anyway (so later elements keep the indices the source
  * data gave them, and `uniqueItems` never compares against the fake sentinel a failed read hands
  * back), but the tree this reader ultimately returns for the array is never a partial one. An
- * explicitly-`_` element is the one legitimate {@link AbsentNode} this reader ever produces.
+ * explicitly-`_` element is the one legitimate {@link VoidNode} this reader ever produces.
  */
 import type { Task } from '../../io/bytes.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import type { ArrayBody } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
-import { absentNode, arrayNode } from '../../tree/nodes.js';
+import { voidNode, arrayNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -24,12 +24,22 @@ import {
   skipCoreValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
+import { declareOrder } from '../../value/orderedness.js';
+import { reportConfusablePair } from './refusal.js';
 import { abandonedValue, renderValue, type TreeTypeResolver } from './support.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
 
 /**
  * Builds an `array` tree reader for one compiled schema entry. `resolveType` resolves the element
  * type's own reader once, at construction; `isScopedType` answers §7.8's typed-position question
  * for that same element type, at the same step.
+ *
+ * `elementsAreNames` is true when the array is unique (a set, or any `unique_items` array) and its
+ * element type is an identifier family: its elements are then one naming scope (§11.4), and an
+ * element reading alike with an earlier one is reported (`CONFUSABLE_NAMES`) at its own index, as
+ * §8.2 places a refused pair; a duplicate is the duplicate it is and nothing else. An element that
+ * failed to read is no member of either check, there being no value to compare. The caller passes
+ * it only where the read's policy applies skeleton distinctness.
  */
 export function arrayTreeReader(
   name: string,
@@ -38,6 +48,7 @@ export function arrayTreeReader(
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
   isScopedType: (typeName: string) => boolean,
+  elementsAreNames = false,
 ): TypeReader<Value> {
   const elementParser = resolveType(body.elementType.name);
   const scopedElement = isScopedType(body.elementType.name);
@@ -81,6 +92,7 @@ export function arrayTreeReader(
 
   function* readInto(ctx: ReadContext, sink: (decoded: Value) => void): Task<void> {
     const seen: Value[] | undefined = body.uniqueItems ? [] : undefined;
+    const names = elementsAreNames && seen !== undefined ? createConfusableScope() : undefined;
     let index = 0;
     for (;;) {
       const peeked = yield* ctx.peek();
@@ -95,17 +107,17 @@ export function arrayTreeReader(
       // `verifyFixed` skips its equality check on the same checkpoint. The element is still handed
       // to `sink` so later indices stay accurate; the whole array is abandoned below regardless.
       let elementAbandoned: boolean;
-      if (elementPeek.kind === 'absent') {
-        yield* ctx.next(); // consume the absent event regardless of REQUIRED/OPTIONAL
-        if (body.state === 'REQUIRED') {
+      if (elementPeek.kind === 'void') {
+        yield* ctx.next(); // consume the void event regardless of voidability
+        if (!body.voidable) {
           elementCtx.report(
             'FIELD_REQUIRED',
-            `'${displayName}' element [${String(index)}] is absent, but elements are required`,
+            `'${displayName}' element [${String(index)}] is void, but elements are required`,
             'a value',
-            '(absent)',
+            '_',
           );
         }
-        decoded = absentNode();
+        decoded = voidNode();
         elementAbandoned = false;
       } else {
         const before = ctx.reported();
@@ -124,6 +136,12 @@ export function arrayTreeReader(
             );
         } else {
           seen.push(decoded);
+          if (names !== undefined && decoded.kind === 'atom' && typeof decoded.value === 'string') {
+            const collision = names.add(decoded.value);
+            if (collision !== undefined) {
+              reportConfusablePair(ctx.index(index), collision, 'elements');
+            }
+          }
         }
       }
       sink(decoded);
@@ -149,7 +167,7 @@ export function arrayTreeReader(
       if (arrayCtx.reported() > mark) {
         return abandonedValue();
       }
-      return arrayNode(elements, name, annotations);
+      return declareOrder(arrayNode(elements, name, annotations), body.ordered);
     },
   };
 }

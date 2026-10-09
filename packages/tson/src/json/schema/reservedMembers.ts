@@ -60,16 +60,18 @@ const EMPTY_MAP: ReadonlyMap<string, JsonEvent> = new Map();
 /**
  * What an object's leading members say about it.
  *
- * @param schema whether `$schema` leads — never admitted by anything this package reads (§8.5's
- *   scoped positions are a recorded gap, `json/schema/compile.ts`'s own top note)
+ * @param schema whether `$schema` leads — admitted only at a scoped position holding EXTERN
+ *   (§8.5, `json/schema/scoped.ts`); every other reader refuses it
+ * @param schemaRef that member's string content, or `undefined` where it is missing or not a string
  * @param typed whether a `$type` member leads, whatever its value
- * @param type that member's string content, or `undefined` where it is absent or not a string
+ * @param type that member's string content, or `undefined` where it is missing or not a string
  * @param wrapper whether `$value` follows the reserved members — §3.3's wrapper form
  * @param selectors the scalar value of each requested member found leading after the reserved
- *   ones, by NFC name; a requested member not among them is absent here
+ *   ones, by NFC name; a requested member not among them is missing here
  */
 export interface Lead {
   readonly schema: boolean;
+  readonly schemaRef: string | undefined;
   readonly typed: boolean;
   readonly type: string | undefined;
   readonly wrapper: boolean;
@@ -78,6 +80,7 @@ export interface Lead {
 
 export const NO_LEAD: Lead = {
   schema: false,
+  schemaRef: undefined,
   typed: false,
   type: undefined,
   wrapper: false,
@@ -125,15 +128,19 @@ export function* lead(ctx: JsonReadContext, wanted: ReadonlySet<string> = EMPTY_
     if (opening.kind !== 'object-start') return NO_LEAD;
 
     let schema = false;
+    let schemaRef: string | undefined;
     let typed = false;
     let type: string | undefined;
     let event = yield* ahead.next();
 
     if (isMemberNamed(event, SCHEMA)) {
       schema = true;
+      const named = yield* ahead.peek();
+      schemaRef = named.kind === 'string' ? named.value : undefined;
       if (!(yield* skipScalar(ahead))) {
         return {
           schema: true,
+          schemaRef: undefined,
           typed: false,
           type: undefined,
           wrapper: false,
@@ -147,12 +154,19 @@ export function* lead(ctx: JsonReadContext, wanted: ReadonlySet<string> = EMPTY_
       const peeked = yield* ahead.peek();
       type = peeked.kind === 'string' ? peeked.value : undefined;
       if (!(yield* skipScalar(ahead))) {
-        return { schema, typed: true, type: undefined, wrapper: false, selectors: EMPTY_MAP };
+        return {
+          schema,
+          schemaRef,
+          typed: true,
+          type: undefined,
+          wrapper: false,
+          selectors: EMPTY_MAP,
+        };
       }
       event = yield* ahead.next();
     }
     if (isMemberNamed(event, VALUE)) {
-      return { schema, typed, type, wrapper: true, selectors: EMPTY_MAP };
+      return { schema, schemaRef, typed, type, wrapper: true, selectors: EMPTY_MAP };
     }
 
     const selectors = new Map<string, JsonEvent>();
@@ -164,7 +178,7 @@ export function* lead(ctx: JsonReadContext, wanted: ReadonlySet<string> = EMPTY_
       yield* ahead.next(); // the value just peeked
       event = yield* ahead.next(); // the next member-name, or whatever follows
     }
-    return { schema, typed, type, wrapper: false, selectors };
+    return { schema, schemaRef, typed, type, wrapper: false, selectors };
   });
 }
 

@@ -67,6 +67,20 @@ describe('top-level dispatch', () => {
 });
 
 describe('validate (schemaless)', () => {
+  it('Part 1 §9.1: a document past the nesting-depth limit is NOT_CHECKED and exits 1, not INVALID', async () => {
+    const file = join(dir, 'deep.tn');
+    await writeFile(file, '['.repeat(200) + ']'.repeat(200) + '\n', 'utf8');
+    const text = captureOutput();
+    const code = await main(['validate', file]);
+    expect(code).toBe(EXIT.INVALID);
+    expect(text.stdout()).toContain('LIMIT_REFUSED');
+    expect(text.stdout().split('\n')).toContain('not checked');
+    expect(text.stdout().split('\n')).not.toContain('invalid');
+    const json = captureOutput();
+    await main(['validate', '--format', 'json', file]);
+    expect((JSON.parse(json.stdout()) as { outcome: string }).outcome).toBe('NOT_CHECKED');
+  });
+
   it('a well-formed document is valid, exit 0', async () => {
     const file = join(dir, 'ok.tn');
     await writeFile(file, '{ a: 1  b: "two" }\n', 'utf8');
@@ -371,39 +385,42 @@ describe('policy command', () => {
     expect(io.stdout()).toContain('unicode_data_version');
   });
 
-  it("--format json also carries §9.1's resource-limits policy, reachable with no document in hand", async () => {
+  it("--format json states policy.tn's `limits` (§9.1) and skeleton_distinctness, with no document in hand", async () => {
     const io = captureOutput();
     const code = await main(['policy', '--format', 'json']);
     expect(code).toBe(EXIT.OK);
     const parsed = JSON.parse(io.stdout()) as {
-      limits_policy: {
-        max_nesting_depth: number;
-        max_import_closure: number;
-        max_schema_entries: number;
-        max_reference_chain: number;
-        max_supertype_chain: number;
-        max_materialisation_depth: number;
-      };
+      identifier_policy: { skeleton_distinctness: boolean };
+      limits: { max_depth: number };
     };
-    expect(parsed.limits_policy).toEqual({
-      max_nesting_depth: 64,
-      max_import_closure: 64,
-      max_schema_entries: 65_536,
-      max_reference_chain: 64,
-      max_supertype_chain: 64,
-      max_materialisation_depth: 64,
-    });
+    expect(parsed.limits).toEqual({ max_depth: 64 });
+    expect(parsed.identifier_policy.skeleton_distinctness).toBe(true);
+    expect(parsed).not.toHaveProperty('limits_policy');
   });
 
-  it('--format tson and --format text both carry the limits policy too', async () => {
+  it('--format tson and --format text both carry the depth limit too', async () => {
     const tson = captureOutput();
     await main(['policy', '--format', 'tson']);
-    expect(tson.stdout()).toContain('limits_policy');
-    expect(tson.stdout()).toContain('max_supertype_chain');
+    expect(tson.stdout()).toContain('limits');
+    expect(tson.stdout()).toContain('max_depth');
 
     const text = captureOutput();
     await main(['policy']);
-    expect(text.stdout()).toContain('limits:');
+    expect(text.stdout()).toContain('max depth:');
+  });
+
+  it('--identifier-allow-look-alikes turns skeleton distinctness off, and the text says so', async () => {
+    const json = captureOutput();
+    await main(['policy', '--identifier-allow-look-alikes', '--format', 'json']);
+    const parsed = JSON.parse(json.stdout()) as {
+      identifier_policy: { skeleton_distinctness: boolean };
+    };
+    expect(parsed.identifier_policy.skeleton_distinctness).toBe(false);
+
+    vi.restoreAllMocks();
+    const text = captureOutput();
+    await main(['policy', '--identifier-allow-look-alikes']);
+    expect(text.stdout()).toContain('HIGHLY_RESTRICTIVE without skeleton distinctness');
   });
 
   it('reflects --identifier-policy/--identifier-per-segment/--token-policy in all three formats', async () => {
@@ -481,15 +498,13 @@ describe('policy flags reach validate/compile', () => {
     expect(code).toBe(EXIT.OK);
     const parsed = JSON.parse(io.stdout()) as {
       outcome: string;
-      policy: { identifier_policy: { level: string } };
-      limits_policy: { max_nesting_depth: number; max_supertype_chain: number };
+      policy: { identifier_policy: { level: string }; limits: { max_depth: number } };
       files: { outcome: string }[];
     };
     expect(parsed.outcome).toBe('VALID');
     expect(parsed.policy.identifier_policy.level).toBe('HIGHLY_RESTRICTIVE');
-    // §9.1's resource-limits policy rides beside the §8.2 one, on the same terms (§9.1).
-    expect(parsed.limits_policy.max_nesting_depth).toBe(64);
-    expect(parsed.limits_policy.max_supertype_chain).toBe(64);
+    // §9.1's depth limit rides inside the policy, as policy.tn's `limits`.
+    expect(parsed.policy.limits.max_depth).toBe(64);
     expect(parsed.files[0]?.outcome).toBe('VALID');
   });
 
@@ -507,10 +522,8 @@ describe('policy flags reach validate/compile', () => {
     expect(code).toBe(EXIT.OK);
     const parsed = JSON.parse(io.stdout()) as {
       policy: { token_policy: { level: string } };
-      limits_policy: { max_schema_entries: number };
     };
     expect(parsed.policy.token_policy.level).toBe('SINGLE_SCRIPT');
-    expect(parsed.limits_policy.max_schema_entries).toBe(65_536);
   });
 
   it('compile: an unknown script name in --token-scripts is a usage error naming it', async () => {
@@ -764,9 +777,26 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
         'person',
         jsonFile,
       ]);
+      // §8.1's fifth outcome: not a verdict, so the file is NOT_CHECKED -- and still exit 1.
       expect(code).toBe(EXIT.INVALID);
       expect(io.stdout()).toContain('RESTRICTED_SCRIPT');
       expect(io.stdout()).not.toContain('UNRECOGNIZED_FIELD');
+      // The text report states the real outcome: a refusal reached no verdict, so it is not 'invalid'.
+      expect(io.stdout().split('\n')).toContain('not checked');
+      expect(io.stdout().split('\n')).not.toContain('invalid');
+      const json = captureOutput();
+      await main([
+        'validate',
+        '--format',
+        'json',
+        '--schema',
+        join(dir, 'person.tn'),
+        '--root',
+        'person',
+        jsonFile,
+      ]);
+      const report = JSON.parse(json.stdout()) as { outcome: string };
+      expect(report.outcome).toBe('NOT_CHECKED');
     });
 
     it('--identifier-policy unrestricted admits the name, which then reports UNRECOGNIZED_FIELD instead', async () => {
@@ -786,5 +816,85 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
       expect(io.stdout()).not.toContain('RESTRICTED_SCRIPT');
       expect(io.stdout()).toContain('UNRECOGNIZED_FIELD');
     });
+  });
+});
+
+describe('strip', () => {
+  const SCHEMA = [
+    '!!id:"https://example.test/thing-1.tn"',
+    '!!meta:"https://tson.io/2026/37/m/meta.tn"',
+    '!!import:"https://tson.io/2026/37/m/core.tn"',
+    '{',
+    '  @doc:"A thing."',
+    '  thing => int32',
+    '}',
+    '',
+  ].join('\n');
+
+  it('prints the reading form and leaves the file alone, exit 0', async () => {
+    const file = join(dir, 'thing.tn');
+    await writeFile(file, SCHEMA, 'utf8');
+    const io = captureOutput();
+    const code = await main(['strip', file]);
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toBe('!!meta:"37/meta"\n!!import:"37/core"\n{\nthing => int32\n}\n');
+    expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
+  });
+
+  it('--keep-docs keeps the documentation', async () => {
+    const file = join(dir, 'thing.tn');
+    await writeFile(file, SCHEMA, 'utf8');
+    const io = captureOutput();
+    const code = await main(['strip', '--keep-docs', file]);
+    expect(code).toBe(EXIT.OK);
+    expect(io.stdout()).toBe(
+      '!!meta:"37/meta"\n!!import:"37/core"\n{\n@doc:"A thing." thing => int32\n}\n',
+    );
+  });
+
+  it('an unknown option, a missing file argument and a second file are usage errors, exit 2', async () => {
+    const file = join(dir, 'thing.tn');
+    await writeFile(file, SCHEMA, 'utf8');
+    for (const args of [['strip', '--keep-doc', file], ['strip'], ['strip', file, file]]) {
+      vi.restoreAllMocks();
+      const io = captureOutput();
+      expect(await main(args)).toBe(EXIT.USAGE);
+      expect(io.stderr()).toContain('usage: tson strip');
+    }
+  });
+
+  it('a malformed schema is rejected where it breaks, as file:line:col: message, exit 1', async () => {
+    const file = join(dir, 'broken.tn');
+    await writeFile(file, '!!meta:"https://tson.io/2026/37/m/meta.tn"\n{ thing => }\n', 'utf8');
+    const io = captureOutput();
+    const code = await main(['strip', file]);
+    expect(code).toBe(EXIT.INVALID);
+    expect(io.stderr().startsWith(`${file}:2:`)).toBe(true);
+    expect(io.stdout()).toBe('');
+  });
+
+  it('a data document is not a schema document, exit 1', async () => {
+    const file = join(dir, 'data.tn');
+    await writeFile(file, '{ a: 1 }\n', 'utf8');
+    const io = captureOutput();
+    expect(await main(['strip', file])).toBe(EXIT.INVALID);
+    expect(io.stderr()).toContain(`${file}:`);
+  });
+
+  it('a file that cannot be read is exit 2, "cannot read"', async () => {
+    const io = captureOutput();
+    const code = await main(['strip', join(dir, 'missing.tn')]);
+    expect(code).toBe(EXIT.USAGE);
+    expect(io.stderr().startsWith('cannot read')).toBe(true);
+  });
+
+  it('--help describes the command, and the unknown-command message lists strip', async () => {
+    const help = captureOutput();
+    expect(await main(['strip', '--help'])).toBe(EXIT.OK);
+    expect(help.stdout()).toContain('usage: tson strip');
+    vi.restoreAllMocks();
+    const unknown = captureOutput();
+    expect(await main(['stripp'])).toBe(EXIT.USAGE);
+    expect(unknown.stderr()).toContain('strip');
   });
 });

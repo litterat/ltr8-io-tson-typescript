@@ -26,10 +26,11 @@ import type { FieldRole } from '../schema/meta/bodies.js';
  * discriminator a family's members pin (§5.2); every other field of this shape is then at its
  * bare `FREE`/unpinned defaults, `=?` taking no value of its own.
  *
- * A token naming a type parameter rides `value` like any other (§5.7's "Open modifiers"); nothing
- * here labels it as one -- §8.1's shadowing rule (a token is a parameter exactly when its text
- * resolves into the enclosing entry's own `parameters`) is what tells the two apart wherever the
- * question is asked.
+ * A token naming a type parameter rides `value` like any other (§5.7's "Open modifiers"), and the
+ * marks beside it are the author's exactly as beside a literal; nothing here labels the token as a
+ * parameter -- §8.1's shadowing rule (a token is a parameter exactly when its text resolves into
+ * the enclosing entry's own `parameters`) is what tells the two apart wherever the question is
+ * asked.
  */
 export interface ResolvedFieldMarks {
   readonly optional: boolean;
@@ -41,12 +42,10 @@ export interface ResolvedFieldMarks {
 
 /**
  * §5.2's table for one field. `optional`/`voidable` are the two marks as written -- the entry's
- * own `?` on the name and on the type. `parameters` is the enclosing declaration's
- * type-parameter list, empty outside a template.
+ * own `?` on the name and on the type.
  *
  * @throws TsonSchemaValidationError for the four spellings §5.2 rules out: a default on an
- *   unmarked name (unless the value names an enclosing template parameter, §5.7's "Open
- *   modifiers"), a pin on a voidable type, and the selector `=?` on a marked name or a voidable
+ *   unmarked name (a parameter's value included, §5.7's "Open modifiers"), a pin on a voidable type, and the selector `=?` on a marked name or a voidable
  *   type. (A modifier on a `void`-typed field is a resolver error checked once the field's type
  *   is known, at the field's own resolution site -- this table does not see the type.)
  */
@@ -55,7 +54,6 @@ export function resolveFieldMarks(
   optional: boolean,
   voidable: boolean,
   modifier: FieldModifier | undefined,
-  parameters: readonly string[],
 ): ResolvedFieldMarks {
   if (modifier === undefined) {
     return { optional, voidable, role: 'FREE', selector: false };
@@ -88,8 +86,7 @@ export function resolveFieldMarks(
     );
   }
   const token = modifier.token;
-  const isParameter = parameters.includes(token.text);
-  if (!optional && !fixed && !isParameter) {
+  if (!optional && !fixed) {
     throw new TsonSchemaValidationError(
       `field '${fieldName}' gives a default to a key that is always written ('type ~ value') -- an ` +
         "unmarked name says the key is always written, and '~ value' is a value only omission can " +

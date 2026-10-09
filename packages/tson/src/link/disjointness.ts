@@ -52,16 +52,17 @@ import { choiceDisjoint } from '../schema/meta/typedef.js';
 export type DiscriminationClass = 'BOOLEAN' | 'NUMBER' | 'STRING' | 'BRACE' | 'BRACKET';
 
 /**
- * An enum's class depends on its profile (§7.4, §5.4, #21). Under `TEXT` the enum is string-class
- * whatever its members' spellings — `!enum [80 443]` under `TEXT` admits the *texts* `80` and
- * `443`, not the numbers, so classifying by token would misclassify it; the members are read as
- * data, never as base-resolved tokens, and a `TEXT` enum is therefore always `STRING`. Under
- * `IDENTIFIER` (the default) the class is the members' shared base-type class read off each
- * member's own token (`[true false]` is `BOOLEAN`; an identifier never begins with a digit, so no
- * member is number-class); mixed members yield `undefined`.
+ * An enum's class depends on its `type` (§7.4, §5.4), read from linking's `textEnums` rather than
+ * from the type's name: `type` resolves in a namespace the body cannot see. Where `type` is not an
+ * identifier family the enum is string-class whatever its members' spellings — `!text_enum [80
+ * 443]` admits the *texts* `80` and `443`, not the numbers, so classifying by token would
+ * misclassify it; the members are read as data, never as base-resolved tokens, and such an enum is
+ * therefore always `STRING`. Where `type` is an identifier family the class is the members' shared
+ * base-type class read off each member's own token (`[true false]` is `BOOLEAN`; an identifier
+ * never begins with a digit, so no member is number-class); mixed members yield `undefined`.
  */
-function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
-  if (body.profile === 'TEXT') return 'STRING';
+function classifyEnum(body: EnumBody, isTextEnum: boolean): DiscriminationClass | undefined {
+  if (isTextEnum) return 'STRING';
   let common: DiscriminationClass | undefined;
   for (const member of body.members) {
     const base = resolveBaseType({ text: member, form: 'unquoted' });
@@ -78,24 +79,21 @@ function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
 
 /**
  * Whether `keyType`'s reference chain terminates at a type "a single scalar token denotes by its
- * content" (§5.4, #17) — an atom-family instance or an enum, **the `unit` instances `value` and
- * `void` excepted**: `value` is read by kind rather than content and `void` has no key at all, so
- * neither is a type a token's own content picks out, even though both are structurally `Unit`
- * atoms like every other unnamed `unit_type` instance (which *is* read by content, the same
- * fallback `compiler/atomBuilder.ts`'s own `buildUnitReader` gives any `unit`-kind type besides
- * those two kernel names). The two are told apart by the terminal entry's own **name**, since
- * their resolved bodies are identical (`{ kind: 'unit' }`) and carry no field to distinguish them.
+ * content" (§5.4) — an atom-family instance or an enum, **the `value_type` and `void_type`
+ * instances excepted**: `value` is read by kind rather than content and `void` has no key at all,
+ * so neither is a type a token's own content picks out. The two are recognised by constructor
+ * (§4.2), never by name.
  */
 function isScalarContentKeyType(
   keyName: string,
   namespace: ReadonlyMap<string, TypeDefinition>,
 ): boolean {
   const terminalName = terminal(keyName, (n) => namespace.get(n));
-  if (terminalName === 'value' || terminalName === 'void') return false;
   const def = namespace.get(terminalName);
   if (def === undefined) return false; // unresolved or cyclic: no class either
   const body = def.body;
-  return 'kind' in body && !isDataBody(body) && isAtom(body);
+  if (!('kind' in body) || isDataBody(body) || !isAtom(body)) return false;
+  return body.kind !== 'value_type' && body.kind !== 'void_type';
 }
 
 /**
@@ -109,8 +107,10 @@ function isClassStableFloat(body: FloatType): boolean {
 }
 
 function classify(
+  name: string,
   def: TypeDefinition,
   namespace: ReadonlyMap<string, TypeDefinition>,
+  textEnums: ReadonlySet<string>,
 ): DiscriminationClass | undefined {
   const body = def.body;
   if (!('kind' in body)) {
@@ -126,7 +126,9 @@ function classify(
     case 'float_type':
       return isClassStableFloat(body) ? 'NUMBER' : undefined;
     case 'text_type':
+    case 'identifier_type':
     case 'uri_type':
+    case 'iri_type':
     case 'regex_type':
     case 'uuid_type':
     case 'date_type':
@@ -143,7 +145,7 @@ function classify(
     case 'mac_type':
       return 'STRING';
     case 'enum':
-      return classifyEnum(body);
+      return classifyEnum(body, textEnums.has(name));
     case 'record':
       return 'BRACE';
     case 'map':
@@ -155,8 +157,8 @@ function classify(
     case 'array':
     case 'tuple':
       return 'BRACKET';
-    // rational/complex need a tag (their typed forms straddle classes); unit, choice, scoped,
-    // and a Data body all have no class either.
+    // rational/complex need a tag (their typed forms straddle classes); value_type, void_type,
+    // choice, scoped, and a Data body all have no class either.
     default:
       return undefined;
   }
@@ -172,19 +174,26 @@ function classify(
 export function discriminationClassOf(
   name: string,
   namespace: ReadonlyMap<string, TypeDefinition>,
+  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
 ): DiscriminationClass | undefined {
-  const def = terminalDefinition(name, (n) => namespace.get(n));
-  return def === undefined ? undefined : classify(def, namespace);
+  const lookup = (n: string): TypeDefinition | undefined => namespace.get(n);
+  const def = terminalDefinition(name, lookup);
+  return def === undefined
+    ? undefined
+    : classify(terminal(name, lookup), def, namespace, textEnums);
 }
+
+const NO_TEXT_ENUMS: ReadonlySet<string> = new Set();
 
 /** `true` exactly when every variant has a class and no class repeats (§5.4). */
 export function isChoiceDisjoint(
   variants: readonly { readonly name: string }[],
   namespace: ReadonlyMap<string, TypeDefinition>,
+  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
 ): boolean {
   const seen = new Set<DiscriminationClass>();
   for (const variant of variants) {
-    const variantClass = discriminationClassOf(variant.name, namespace);
+    const variantClass = discriminationClassOf(variant.name, namespace, textEnums);
     if (variantClass === undefined || seen.has(variantClass)) {
       return false;
     }
@@ -200,6 +209,7 @@ export function isChoiceDisjoint(
  */
 export function computeDisjointness(
   merged: ReadonlyMap<string, TypeDefinition>,
+  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
 ): Map<string, TypeDefinition> {
   const result = new Map(merged);
   for (const [name, def] of merged) {
@@ -207,7 +217,7 @@ export function computeDisjointness(
     if ('kind' in body && !isDataBody(body) && body.kind === 'choice') {
       result.set(name, {
         ...def,
-        body: { ...body, disjoint: isChoiceDisjoint(body.variants, merged) },
+        body: { ...body, disjoint: isChoiceDisjoint(body.variants, merged, textEnums) },
       });
     }
   }

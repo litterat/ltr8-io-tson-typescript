@@ -36,7 +36,8 @@ function reader(minItems?: bigint, maxItems?: bigint): TypeReader<Value> {
     kind: 'map',
     keyType: { name: 'text', arguments: [], annotations: [] },
     valueType: { name: 'int32', arguments: [], annotations: [] },
-    state: 'REQUIRED',
+    voidable: false,
+    ordered: false,
     ...(minItems !== undefined ? { minItems } : {}),
     ...(maxItems !== undefined ? { maxItems } : {}),
   };
@@ -75,7 +76,7 @@ describe('mapTreeReader -- shape and entries (§2.6, §2.8)', () => {
 });
 
 describe('mapTreeReader -- keys (§2.6, §2.9)', () => {
-  it('rejects the absent sentinel in key position, and abandons the map (WP3B)', () => {
+  it('rejects the void sentinel in key position, and abandons the map (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('{ _ => 1 }');
     const value = runSync(reader().read(ctx));
     expect(value).toBeUndefined();

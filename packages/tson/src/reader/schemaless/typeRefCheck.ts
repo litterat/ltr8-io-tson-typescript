@@ -41,8 +41,8 @@ export function describeEvent(e: TsonEvent): string {
       return 'an array';
     case 'empty-brace':
       return '{}';
-    case 'absent':
-      return "the absent sentinel '_'";
+    case 'void':
+      return "the void sentinel '_'";
     case 'token':
       return `token '${e.text}'`;
     default:

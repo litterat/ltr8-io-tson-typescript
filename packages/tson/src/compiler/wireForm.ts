@@ -69,7 +69,8 @@ export const FIELDS = 'fields';
 export const GROUPS = 'groups';
 export const MEMBERS = 'members';
 export const TYPE = 'type';
-export const STATE = 'state';
+/** `field_group.optional_members` — the members marked `?` within their option (§5.11). */
+export const OPTIONAL_MEMBERS = 'optional_members';
 export const SUPERTYPES = 'supertypes';
 /** `record_field.optional` — the name's own `?` (§5.2). */
 export const OPTIONAL = 'optional';
@@ -141,7 +142,7 @@ export type AnnotationValueEncoder = (value: unknown) => DataValue;
 
 export function defaultAnnotationValueEncoder(value: unknown): DataValue {
   if (value === null || value === undefined) {
-    return { annotations: [], coreValue: { kind: 'absent' } };
+    return { annotations: [], coreValue: { kind: 'void' } };
   }
   if (typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'number') {
     return { annotations: [], coreValue: tokenValue(String(value)) };
@@ -200,18 +201,7 @@ export function heldRecord(
       })),
     );
   });
-  const groups = body.groups.map((group: FieldGroup) => {
-    const members: RecordField[] = [
-      {
-        name: MEMBERS,
-        value: scoped({ kind: 'array', elements: group.members.map((m) => scoped(tokenValue(m))) }),
-      },
-    ];
-    if (group.state !== 'REQUIRED') {
-      members.push(nameField(STATE, group.state));
-    }
-    return scoped({ kind: 'record', fields: members });
-  });
+  const groups = body.groups.map((group: FieldGroup) => groupValue(group));
   const binding: RecordField[] = [];
   if (body.supertypes.length > 0) {
     binding.push({
@@ -229,7 +219,7 @@ export function heldRecord(
   if (body.extension !== 'OPEN') {
     binding.push(nameField(EXTENSION, body.extension));
   }
-  if (body.discriminators.length > 0) {
+  if (body.discriminators !== undefined) {
     binding.push({
       name: DISCRIMINATORS,
       value: scoped({
@@ -239,6 +229,37 @@ export function heldRecord(
     });
   }
   return { annotations: [], typeRef: RECORD, coreValue: { kind: 'record', fields: binding } };
+}
+
+/** A list of field names as the array of bare names a resolved document writes. */
+function namesValue(names: readonly string[]): CoreValue {
+  return { kind: 'array', elements: names.map((name) => scoped(tokenValue(name))) };
+}
+
+/**
+ * A `field_group` as a held body writes it (§5.11): `optional_members` only where it names a
+ * member, and `optional` only where it is set.
+ */
+export function groupValue(
+  group: FieldGroup,
+  annotations: readonly Annotation[] = [],
+): ScopedValue {
+  const members: RecordField[] = [
+    {
+      name: MEMBERS,
+      value: scoped({
+        kind: 'array',
+        elements: group.members.map((option) => scoped(namesValue(option))),
+      }),
+    },
+  ];
+  if (group.optionalMembers !== undefined && group.optionalMembers.length > 0) {
+    members.push({ name: OPTIONAL_MEMBERS, value: scoped(namesValue(group.optionalMembers)) });
+  }
+  if (group.optional) {
+    members.push(nameField(OPTIONAL, 'true'));
+  }
+  return scoped({ kind: 'record', fields: members }, annotations);
 }
 
 /**

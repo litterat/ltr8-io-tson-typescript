@@ -3,14 +3,14 @@
  * unversioned names a vector's sidecar may use to refer to them (`meta`/`import` fields; see
  * the test-suite README's "Schema-governed vectors").
  *
- * Real identities off the test-suite's own README ("Schema-governed vectors" table, Revision 36)
+ * Real identities off the test-suite's own README ("Schema-governed vectors" table, Revision 37)
  * and `ltr8-io-tson-java`'s `TsonBundledSchemas`: a version bump only ever touches this table,
  * never the vectors that reference `core.tn`.
  */
 export const BUNDLED_SCHEMA_IDS = {
-  'meta-kernel.tn': 'https://tson.io/2026/36/m/meta-kernel.tn',
-  'meta.tn': 'https://tson.io/2026/36/m/meta.tn',
-  'core.tn': 'https://tson.io/2026/36/m/core.tn',
+  'meta-kernel.tn': 'https://tson.io/2026/37/m/meta-kernel.tn',
+  'meta.tn': 'https://tson.io/2026/37/m/meta.tn',
+  'core.tn': 'https://tson.io/2026/37/m/core.tn',
 } as const satisfies Record<string, string>;
 
 /** A short, unversioned bundled-schema name usable in a sidecar's `meta`/`import` fields. */

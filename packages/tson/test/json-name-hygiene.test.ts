@@ -12,13 +12,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { isVerdict, type Diagnostic } from '../src/core/diagnostic.js';
+import { isNameRefusal, isVerdict, type Diagnostic } from '../src/core/diagnostic.js';
 import { TsonReadError } from '../src/core/errors.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { readJsonTree, validateJson, type ReadJsonOptions } from '../src/json/facade.js';
 import { parseJson } from '../src/json/index.js';
 import { jsonValueToText } from '../src/json/write.js';
-import { DEFAULT_NAME_POLICY, permitting } from '../src/unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY, permitting } from '../src/unicode/policy.js';
 import { scriptNamed } from '../src/unicode/uts39.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
@@ -30,8 +30,8 @@ const POLICY = new Set(['CONFUSABLE_NAMES', 'RESTRICTED_CHARACTER', 'RESTRICTED_
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/hygiene-1.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   account => { password: text  note?: text? }
   circle  => { radius: float64 }
@@ -97,21 +97,16 @@ describe('the case the rule exists for', () => {
     expect(POLICY.has(problem.code)).toBe(true);
   });
 
-  it('a refusal is a verdict but not an invalidity, and names the name it refused (JsonIdentifierPolicyTest)', () => {
+  it('a refusal is not a verdict, and names the name it refused (JsonIdentifierPolicyTest)', () => {
     const lookAlike = `n${CYRILLIC_A}me`;
     const problem = refusal('account', `{"password": "s3cret", "${lookAlike}": "x"}`);
     // The mixed-script name refuses under the restriction-level mechanism specifically -- not
     // merely "some policy code", which the shared `refusal` helper above already narrows to.
     expect(problem.code).toBe('RESTRICTED_SCRIPT');
-    // Pinned to `core/diagnostic.ts`'s own documented, codebase-wide convention: "a refusal *is* a
-    // verdict ({@link isVerdict}) -- the processor looked and declined... though not a validity
-    // one" -- applied identically to both encodings, not a JSON-only choice. Worth flagging rather
-    // than silently carrying over (`CLAUDE.md`'s own spec-feedback rule): [TSON-JSON] §9.4 reads
-    // the other way for a name-hygiene refusal ("not judged... never a verdict on the document"),
-    // and Part 1's own §8.1 is the section that would have to settle which reading governs
-    // `isVerdict`, `core/diagnostic.ts` being shared infrastructure well outside this file's own
-    // JSON-only scope to relitigate.
-    expect(isVerdict(problem.code), 'the processor looked and declined').toBe(true);
+    // A refusal is §8.1's fifth outcome, [TSON-JSON] §9.4's "not judged... never a verdict on the
+    // document": the same answer in both encodings, from `core/diagnostic.ts`'s one list.
+    expect(isNameRefusal(problem.code)).toBe(true);
+    expect(isVerdict(problem.code), 'a refusal says nothing about validity').toBe(false);
     expect(problem.actual).toBe(`'${lookAlike}'`);
   });
 
@@ -157,7 +152,10 @@ describe('the reach, narrower than "every name"', () => {
 
 describe('the policy is configuration, and relaxing it is code', () => {
   it('§8.2 requires a relaxation be a code decision: an unrestricted policy draws the ordinary closure verdict instead', () => {
-    const unrestricted = { ...DEFAULT_NAME_POLICY, restrictionLevel: 'UNRESTRICTED' as const };
+    const unrestricted = {
+      ...DEFAULT_IDENTIFIER_POLICY,
+      restrictionLevel: 'UNRESTRICTED' as const,
+    };
     const problems = problemsOf(
       'account',
       `{"password": "s3cret", "p${CYRILLIC_A}ssword": "evil"}`,
@@ -179,7 +177,7 @@ describe('the policy is configuration, and relaxing it is code', () => {
     const latin = scriptNamed('Latin');
     const cyrillic = scriptNamed('Cyrillic');
     if (latin === undefined || cyrillic === undefined) throw new Error('unreachable');
-    const bilingual = permitting(DEFAULT_NAME_POLICY, latin, cyrillic);
+    const bilingual = permitting(DEFAULT_IDENTIFIER_POLICY, latin, cyrillic);
     const lookAlike = `p${CYRILLIC_A}ssword`;
     expect(refusal('account', `{"password": "s3cret", "${lookAlike}": "evil"}`).code).toBe(
       'RESTRICTED_SCRIPT',
@@ -201,7 +199,7 @@ describe('names that read alike (mechanism 1) reach only what has a set to be a 
     const latin = scriptNamed('Latin');
     const cyrillic = scriptNamed('Cyrillic');
     if (latin === undefined || cyrillic === undefined) throw new Error('unreachable');
-    return permitting(DEFAULT_NAME_POLICY, latin, cyrillic);
+    return permitting(DEFAULT_IDENTIFIER_POLICY, latin, cyrillic);
   })();
 
   it('two names that read alike are accepted at a map position -- they are two keys, not a name set (§4.1: form is not meaning)', () => {

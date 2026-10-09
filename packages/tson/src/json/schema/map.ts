@@ -11,7 +11,7 @@
  *   array of two-element arrays, each key read at `K`'s own reader; a compound key compares by the
  *   `JsonValue` tree its reader produced, reduced the same way (§6.1.6: member order carries none).
  *
- * `{K => V?}` admits JSON null as an entry's absent value in either form — present, counting
+ * `{K => V?}` admits JSON null as an entry's void value in either form — present, counting
  * toward the size bounds, carrying none; `{K => V}` refuses one, as with an array element (§7).
  */
 import { diagnosticCodeForAtomError, type SchemaLocation } from '../../core/diagnostic.js';
@@ -23,20 +23,23 @@ import type { Atom } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
 import { jsonArray, jsonNull, jsonObject, type JsonValue } from '../tree.js';
-import { describeEvent, fieldValueParser, type FieldValueParser } from './atoms.js';
+import { describeEvent, enumFormOf, fieldValueParser, type FieldValueParser } from './atoms.js';
+import { reportConfusablePair, valueNameRefuses } from './nameHygiene.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonTypeReader } from './types.js';
+import { declareOrder } from '../../value/orderedness.js';
 import { identityOfHost, identityOfNode } from './valueIdentity.js';
 
-const ABSENT = Symbol('json.map.absent');
+const VOID = Symbol('json.map.void');
 const REFUSED = Symbol('json.map.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED;
+type Slot = JsonValue | typeof VOID | typeof REFUSED;
 
 function slotNode(slot: Slot | undefined): JsonValue | undefined {
   if (slot === undefined || slot === REFUSED) return undefined;
-  return slot === ABSENT ? jsonNull() : slot;
+  return slot === VOID ? jsonNull() : slot;
 }
 
 /** `K`'s own scalar parser, when `K`'s reference chain ends at a type a single scalar token denotes — `undefined` for every other `K`, which takes the pairs form. */
@@ -49,21 +52,24 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
   const body = definition.body;
   if ('template' in body && 'parameters' in body) return undefined;
   if (body.kind === 'reference') return undefined;
-  if (body.kind === 'unit' && terminalName !== 'identifier') return undefined; // `value`/`void`: no content grammar
+  if (body.kind === 'value_type' || body.kind === 'void_type') return undefined; // no content grammar
   if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/scoped/Data
   try {
-    return fieldValueParser(terminalName, body as Atom);
+    return fieldValueParser(terminalName, body as Atom, enumFormOf(ctx.linkedSchema, terminalName));
   } catch {
     return undefined;
   }
 }
 
 const ATOM_KINDS: ReadonlySet<string> = new Set([
-  'unit',
+  'value_type',
+  'void_type',
   'enum',
   'integer_type',
   'text_type',
+  'identifier_type',
   'uri_type',
+  'iri_type',
   'regex_type',
   'decimal_type',
   'float_type',
@@ -94,7 +100,7 @@ export function buildMapReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader<JsonValue> {
-  const optionalValues = body.state === 'OPTIONAL';
+  const optionalValues = body.voidable;
   const minItems = body.minItems;
   const maxItems = body.maxItems;
   const valueReader = ctx.resolve(body.valueType.name);
@@ -107,6 +113,7 @@ export function buildMapReader(
         keyParser,
         valueReader,
         optionalValues,
+        body.ordered,
         minItems,
         maxItems,
       )
@@ -116,17 +123,26 @@ export function buildMapReader(
         ctx.resolve(body.keyType.name),
         valueReader,
         optionalValues,
+        body.ordered,
         minItems,
         maxItems,
       );
 }
 
+/**
+ * An object-form map's keys. Where the key type is an identifier family the keys are names
+ * ([TSON-DATA] §8.2): each is judged under the family's profile, and they are one naming scope
+ * ([TSON-SCHEMA] §11.4), so a key reading alike with an earlier one is reported at its own member
+ * (`CONFUSABLE_NAMES`) and its entry read normally. A key whose reading reported -- its policy
+ * refusal included -- is no name of the scope, for the reason it is not in the duplicate check.
+ */
 function objectFormReader(
   name: string,
   schemaLocation: SchemaLocation,
   keyParser: FieldValueParser,
   valueReader: JsonTypeReader,
   optionalValues: boolean,
+  ordered: boolean,
   minItems: bigint | undefined,
   maxItems: bigint | undefined,
 ): JsonTypeReader<JsonValue> {
@@ -142,6 +158,10 @@ function objectFormReader(
       const names: string[] = [];
       const values: Slot[] = [];
       const byIdentity = new Map<string, number>();
+      const scope =
+        keyParser.profile !== undefined && readCtx.identifierPolicy().skeletonDistinctness
+          ? createConfusableScope()
+          : undefined;
       let count = 0;
 
       for (;;) {
@@ -178,6 +198,14 @@ function objectFormReader(
           yield* entryValue(at, valueReader, optionalValues, event.name);
           continue;
         }
+        if (
+          keyParser.profile !== undefined &&
+          typeof hostKey === 'string' &&
+          valueNameRefuses(at, hostKey, keyParser.profile)
+        ) {
+          yield* entryValue(at, valueReader, optionalValues, event.name);
+          continue;
+        }
         const entry = yield* entryValue(at, valueReader, optionalValues, event.name);
         const identity = identityOfHost(hostKey);
         const slot = byIdentity.get(identity);
@@ -192,6 +220,10 @@ function objectFormReader(
           continue;
         }
         byIdentity.set(identity, names.length);
+        if (scope !== undefined && typeof hostKey === 'string') {
+          const collision = scope.add(hostKey);
+          if (collision !== undefined) reportConfusablePair(at, collision, 'keys');
+        }
         names.push(event.name);
         values.push(entry);
       }
@@ -204,7 +236,7 @@ function objectFormReader(
         const node = slotNode(values[i]);
         if (memberName !== undefined && node !== undefined) members.set(memberName, node);
       }
-      return jsonObject(members);
+      return declareOrder(jsonObject(members), ordered);
     },
   };
 }
@@ -215,6 +247,7 @@ function pairsFormReader(
   keyReader: JsonTypeReader,
   valueReader: JsonTypeReader,
   optionalValues: boolean,
+  ordered: boolean,
   minItems: bigint | undefined,
   maxItems: bigint | undefined,
 ): JsonTypeReader<JsonValue> {
@@ -259,7 +292,7 @@ function pairsFormReader(
         const v = slotNode(values[i]);
         if (k !== undefined && v !== undefined) pairs.push(jsonArray([k, v]));
       }
-      return jsonArray(pairs);
+      return declareOrder(jsonArray(pairs), ordered);
     },
   };
 }
@@ -360,7 +393,7 @@ function* entryValue(
         'null',
       );
     }
-    return ABSENT;
+    return VOID;
   }
   const value = yield* valueReader.read(at);
   return value === undefined ? REFUSED : (value as JsonValue);

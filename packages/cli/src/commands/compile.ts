@@ -18,16 +18,10 @@
  * question about a root, not about the schema as a whole.
  */
 import { readFile } from 'node:fs/promises';
-import type { LinkedSchema, Tson } from '@ltr8/tson';
+import { TsonNameHygieneRefusedError, type LinkedSchema, type Tson } from '@ltr8/tson';
 import { outcomeOfFiles, type Outcome } from '../outcome.js';
 import { isInvalidSchemaError } from '../problem.js';
-import {
-  limitsPolicyOf,
-  processorPolicyOf,
-  type LimitsPolicy,
-  type PolicyOptions,
-  type ProcessorPolicy,
-} from '../policyOptions.js';
+import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
 export interface CompileFileResult {
@@ -47,6 +41,11 @@ async function compileOne(tson: Tson, file: string): Promise<CompileFileResult> 
     if (isInvalidSchemaError(error)) {
       return { file, outcome: 'INVALID', message: error.message };
     }
+    // §8.2's fifth outcome: this processor's policy declined the schema, which says nothing
+    // about whether it is valid -- not checked, and (like any rejection) exit 1.
+    if (error instanceof TsonNameHygieneRefusedError) {
+      return { file, outcome: 'NOT_CHECKED', message: error.message };
+    }
     throw error;
   }
   return { file, outcome: 'VALID', id: linked.id, entryCount: linked.entries.size };
@@ -56,8 +55,6 @@ export interface CompileRun {
   readonly outcome: Outcome;
   /** Stated once for the run, never per file -- mirrors `commands/validate.ts`'s own `ValidateRun.policy`. */
   readonly policy: ProcessorPolicy;
-  /** [TSON-DATA] §9.1's resource-limits policy this run was judged under -- reported beside {@link policy} on the same terms §9.1 states for it. */
-  readonly limits: LimitsPolicy;
   readonly files: readonly CompileFileResult[];
 }
 
@@ -74,7 +71,6 @@ export async function runCompile(
   return {
     outcome: outcomeOfFiles(results.map((r) => r.outcome)),
     policy: processorPolicyOf(policy),
-    limits: limitsPolicyOf(),
     files: results,
   };
 }

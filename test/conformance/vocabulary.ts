@@ -165,10 +165,23 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
     within: [],
     excluding: [],
   });
-  const uri = createUriParser('uri', {
-    kind: 'uri_type',
-    spec: 'https://www.rfc-editor.org/rfc/rfc3986',
-  });
+  const uriFamily = (
+    name: string,
+    kind: 'uri_type' | 'iri_type',
+    rfc: string,
+    allowRelative: boolean,
+  ): ReturnType<typeof createUriParser> =>
+    createUriParser(name, {
+      kind,
+      spec: `https://www.rfc-editor.org/rfc/${rfc}`,
+      allowRelative,
+      allowFragment: true,
+      normalization: 'NONE',
+    });
+  const uri = uriFamily('uri', 'uri_type', 'rfc3986', false);
+  const uriReference = uriFamily('uri_reference', 'uri_type', 'rfc3986', true);
+  const iri = uriFamily('iri', 'iri_type', 'rfc3987', false);
+  const iriReference = uriFamily('iri_reference', 'iri_type', 'rfc3987', true);
   const uuid = createUuidParser('uuid', { kind: 'uuid_type' });
   const mac = createMacParser('mac', {
     kind: 'mac_type',
@@ -177,6 +190,7 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
   const email = createEmailParser('email', {
     kind: 'email_type',
     spec: 'https://www.rfc-editor.org/rfc/rfc5322',
+    normalization: 'NONE',
   });
 
   return {
@@ -223,6 +237,9 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
     cidr4: (token) => cidr4.write(cidr4.read(token)),
     cidr6: (token) => cidr6.write(cidr6.read(token)),
     uri: (token) => uri.write(uri.read(token)),
+    uri_reference: (token) => uriReference.write(uriReference.read(token)),
+    iri: (token) => iri.write(iri.read(token)),
+    iri_reference: (token) => iriReference.write(iriReference.read(token)),
     uuid: (token) => formatUuid(uuid.read(token).bytes),
     mac: (token) => formatMac(mac.read(token).octets),
     email: (token) => email.write(email.read(token)),

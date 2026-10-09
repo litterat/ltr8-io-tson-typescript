@@ -163,7 +163,7 @@ describe('the limit is configurable (§9.1 asks for a bound, not for this number
     // The five [TSON-SCHEMA] §11.5 schema-side limits ride along at their own spec defaults --
     // not independently configurable yet (`core/limits.ts`'s own top note) -- so only
     // `maxNestingDepth` reflects what this instance was configured with.
-    expect(tson.limitsPolicy).toEqual({
+    expect(tson.processorPolicy.limits).toEqual({
       maxNestingDepth: 20,
       maxImportClosure: 64,
       maxSchemaEntries: 65_536,
@@ -191,7 +191,7 @@ describe('a schema document is bounded too, on every path into it', () => {
   // Worse than the data-side case, because a schema is routinely fetched from somewhere else:
   // each of these used to exhaust the host call stack inside `resolveSchema`/`compile` and escape
   // as an uncaught RangeError.
-  const HEADER = '!!id:"test://deep.tn"\n!!meta:"https://tson.io/2026/36/m/meta.tn"\n';
+  const HEADER = '!!id:"test://deep.tn"\n!!meta:"https://tson.io/2026/37/m/meta.tn"\n';
 
   const VECTORS: readonly (readonly [string, (n: number) => string])[] = [
     [
@@ -230,8 +230,8 @@ describe('a recursive schema-governed read is bounded (the compiled reader stack
   // schema type reading a deep document overflowed the host stack and escaped `readTree`.
   const compiled = compile(
     resolveUserSchema(`!!id:"test://recursive.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   node => { children: [node] }
 }

@@ -42,8 +42,8 @@ import { requireValue } from './reader-tree-helpers.js';
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   reading => {
     id: uuid
@@ -61,6 +61,7 @@ const USER_SCHEMA = `
   sample => (temperature | pressure)
   temperature => { celsius: float64 }
   pressure => { kilopascals: float64  gauge: boolean }
+  non_empty_text => !text ^ { min_length: 1 }
 }
 `;
 
@@ -423,6 +424,8 @@ describe('a non-conforming document is rejected with a located, named diagnostic
     ]);
     expect(result.diagnostics[0]?.message).toContain("unknown field 'colour' on 'reading'");
     expect(result.diagnostics[1]?.message).toBe("missing required field 'recorded' for 'reading'");
+    // §8.1 / Part 3's shared vocabulary: a field never written is missing, never absent.
+    expect(result.diagnostics[1]?.actual).toBe('(missing)');
   });
 
   it('throws through the fail-fast entry point, carrying the whole diagnostic', () => {

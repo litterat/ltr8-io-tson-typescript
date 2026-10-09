@@ -31,8 +31,8 @@ function resolve(typeName: string): TypeReader<Value> {
   throw new Error(`unknown test type '${typeName}'`);
 }
 
-function slot(type: 'text' | 'int32', state: TupleElement['state'] = 'REQUIRED'): TupleElement {
-  return { elementType: { name: type, arguments: [], annotations: [] }, state };
+function slot(type: 'text' | 'int32', voidable: TupleElement['voidable'] = false): TupleElement {
+  return { elementType: { name: type, arguments: [], annotations: [] }, voidable };
 }
 
 function reader(elements: TupleElement[]): TypeReader<Value> {
@@ -59,18 +59,18 @@ describe('tupleTreeReader -- positions (§5.3 [TSON-SCHEMA])', () => {
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('a REQUIRED position written `_` reports FIELD_REQUIRED, and abandons the whole tuple (WP3B)', () => {
+  it('a non-voidable position written `_` reports FIELD_REQUIRED, and abandons the whole tuple (WP3B)', () => {
     const { ctx, diagnostics } = collectingContextOver('[_ 1]');
     const value = runSync(reader([slot('text'), slot('int32')]).read(ctx));
     expect(value).toBeUndefined();
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
   });
 
-  it('an OPTIONAL position written `_` is silently AbsentNode', () => {
+  it('a voidable position written `_` is silently VoidNode', () => {
     const { ctx, diagnostics } = collectingContextOver('[_ 1]');
-    const value = runSync(reader([slot('text', 'OPTIONAL'), slot('int32')]).read(ctx));
+    const value = runSync(reader([slot('text', true), slot('int32')]).read(ctx));
     if (value.kind !== 'tuple') throw new Error('unreachable');
-    expect(value.elements[0]?.kind).toBe('absent');
+    expect(value.elements[0]?.kind).toBe('void');
     expect(diagnostics.diagnostics).toEqual([]);
   });
 });

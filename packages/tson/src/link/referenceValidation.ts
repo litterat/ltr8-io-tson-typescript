@@ -37,7 +37,8 @@ import { isDataBody, type NonDataTop } from './bodyKind.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import { isHeldBody } from '../compiler/heldBody.js';
-import { terminal, type EntryLookup } from './referenceChain.js';
+import type { Normalization } from '../schema/meta/atoms-text.js';
+import { resolvesToConstructor, terminal, type EntryLookup } from './referenceChain.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -75,6 +76,12 @@ export interface ValidateReferencesOptions {
    * the first {@link TsonSchemaValidationError} propagates.
    */
   readonly receiver?: DiagnosticsReceiver;
+  /**
+   * Each enum's label-type `normalization` (`LinkedSchema.enumForms`, [TSON-SCHEMA] §7.4), so a
+   * field's default or pin naming an enum is read in the form the enum matches in. Omitted means
+   * every enum matches as written.
+   */
+  readonly enumForms?: ReadonlyMap<string, Normalization>;
 }
 
 /**
@@ -89,9 +96,10 @@ export function validateReferences(
   options: ValidateReferencesOptions,
 ): void {
   const { schemaId, structureNamespace, receiver } = options;
+  const enumForms = options.enumForms ?? NO_ENUM_FORMS;
   for (const [name, def] of merged) {
     try {
-      validateEntry(name, def, merged, structureNamespace);
+      validateEntry(name, def, merged, structureNamespace, enumForms);
     } catch (e: unknown) {
       if (!isReportableLinkError(e)) {
         throw e;
@@ -135,11 +143,14 @@ function linkProblem(
 
 // ── Per-entry validation ─────────────────────────────────────────────────────────────────────
 
+const NO_ENUM_FORMS: ReadonlyMap<string, Normalization> = new Map();
+
 function validateEntry(
   name: string,
   def: TypeDefinition,
   namespace: ReadonlyMap<string, TypeDefinition>,
   structureNamespace: ReadonlyMap<string, TypeDefinition> | undefined,
+  enumForms: ReadonlyMap<string, Normalization>,
 ): void {
   checkOpenEntryUsesEveryParameter(name, def);
 
@@ -171,7 +182,7 @@ function validateEntry(
     }
   }
 
-  validateBody(name, def, namespace, typeParameters(def));
+  validateBody(name, def, namespace, typeParameters(def), enumForms);
 }
 
 function validateBody(
@@ -179,6 +190,7 @@ function validateBody(
   def: TypeDefinition,
   namespace: ReadonlyMap<string, TypeDefinition>,
   ownParameters: readonly string[],
+  enumForms: ReadonlyMap<string, Normalization>,
 ): void {
   const body = def.body;
   if (!('kind' in body)) {
@@ -231,10 +243,10 @@ function validateBody(
       }
       for (const field of r.fields) {
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
-        checkFieldValue(entryName, field, namespace, ownParameters);
+        checkFieldValue(entryName, field, namespace, ownParameters, enumForms);
       }
       for (const group of r.groups) {
-        for (const member of group.members) {
+        for (const member of group.members.flat()) {
           if (!r.fields.some((f) => f.name === member)) {
             throw new TsonSchemaValidationError(
               `'${entryName}' has a field group referencing unknown field '${member}'`,
@@ -282,11 +294,14 @@ function validateBody(
       checkVariantsAreNotVoid(entryName, c, namespace);
       return;
     }
-    case 'unit':
+    case 'value_type':
+    case 'void_type':
     case 'enum':
     case 'integer_type':
     case 'text_type':
+    case 'identifier_type':
     case 'uri_type':
+    case 'iri_type':
     case 'regex_type':
     case 'decimal_type':
     case 'float_type':
@@ -341,6 +356,7 @@ function checkFieldValue(
   field: RecordField,
   namespace: ReadonlyMap<string, TypeDefinition>,
   ownParameters: readonly string[],
+  enumForms: ReadonlyMap<string, Normalization>,
 ): void {
   if (field.value === undefined || ownParameters.includes(field.type.name)) {
     return;
@@ -369,10 +385,10 @@ function checkFieldValue(
   }
   const body = target.body;
   const value = field.value;
-  if (!isScalarBody(terminalName, body)) {
+  if (!isScalarBody(body)) {
     throw notAScalarType(entryName, field, value, body);
   }
-  const parser = atomParserFor(terminalName, body);
+  const parser = atomParserFor(terminalName, body, enumForms.get(terminalName));
   if (parser === undefined) {
     return; // scalar but unchecked here -- see `atom/forType.ts`'s own top note
   }
@@ -433,8 +449,8 @@ function describeBody(body: NonDataTop): string {
       return 'a choice';
     case 'reference':
       return 'an alias';
-    case 'unit':
-      return 'the void type'; // reached only when isScalarBody already refused this same name
+    case 'void_type':
+      return 'the void type'; // reached only when isScalarBody already refused this same body
     case 'scoped':
       return "a scoped type, whose value names its own type rather than taking one from the position's own token shape";
     default:
@@ -650,7 +666,7 @@ function checkVariantsAreNotVoid(
 ): void {
   const lookup = lookupIn(namespace);
   for (const variant of choice.variants) {
-    if (terminal(variant.name, lookup) === 'void') {
+    if (resolvesToConstructor(variant.name, lookup, 'void_type')) {
       throw new TsonSchemaValidationError(
         `'${entryName}' has a variant${variant.name === 'void' ? '' : ` '${variant.name}'`} ` +
           "resolving to 'void' -- optionality is not choice (§5.4): a value's absence is the " +
@@ -695,8 +711,8 @@ function collectNames(ref: TypeRef, into: Set<string>): void {
   }
 }
 
-/** Every name an entry's body mentions, for {@link checkOpenEntryUsesEveryParameter}. */
-function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void {
+/** Every name an entry's body mentions: for {@link checkOpenEntryUsesEveryParameter}, and for finding the declaration that wrote a minted entry's name (`recordExtension.ts`). */
+export function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void {
   if (!('kind' in body)) {
     // The one question a held body answers without being resolved, and it answers it about
     // tokens rather than references -- the same rule substitution follows when deciding what to

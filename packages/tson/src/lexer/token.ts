@@ -21,8 +21,8 @@ export type TokenType =
   | 'multi-line-token'
   /** An unquoted token: identifiers, numbers, dates, etc. (§7.1, §7.3). */
   | 'unquoted-token'
-  /** `_` — the absent sentinel (§2.9). */
-  | 'absent-token'
+  /** `_` — the void sentinel (§2.9). */
+  | 'void-token'
   /** `{` (§7.2 rule 4). */
   | 'lbrace'
   /** `}` (§7.2 rule 4). */
@@ -69,6 +69,8 @@ export type TokenType =
   | 'caret'
   /** `-` not immediately followed by an unquoted-continuation character (§7.2.4, §7.2.5). */
   | 'minus'
+  /** `+` not immediately followed by an unquoted-continuation character (§7.2.4, §7.2.5). Reserved by the schema grammar as the at-least-one field group's suffix; a parse error in a data value. */
+  | 'plus'
   /** End of input. */
   | 'eof';
 

@@ -13,9 +13,9 @@ import { describe, expect, it } from 'vitest';
 
 import { createTson, mapSchemaSource, type SchemaSource } from '../src/config.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
-  tokenPolicy,
+  scriptPolicy,
   withRestrictionLevel,
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
@@ -63,6 +63,7 @@ const CATALOG_SCHEMA = `
 !!import:"${CORE_ID}"
 {
   reading => { id: uuid label: non_empty_text }
+  non_empty_text => !text ^ { min_length: 1 }
 }
 `;
 
@@ -106,7 +107,7 @@ describe('createTson: registry primitives', () => {
     const kernel = linkSchema(bootstrapMetaKernel(KERNEL_BYTES));
     expect(kernel.id).toBe(KERNEL_ID);
     tson.register(kernel);
-    expect(tson.schemas.get('tson.io/2026/36/m/meta-kernel.tn')).toBe(kernel);
+    expect(tson.schemas.get('tson.io/2026/37/m/meta-kernel.tn')).toBe(kernel);
   });
 
   it('resolveSchema refuses a schema whose governing !!meta is not registered', () => {
@@ -119,7 +120,7 @@ describe('createTson: registry primitives', () => {
     tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
     const meta = tson.resolveSchema(META_BYTES);
     expect(meta.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/36/m/meta.tn')).toBe(meta);
+    expect(tson.schemas.get('tson.io/2026/37/m/meta.tn')).toBe(meta);
 
     const core = tson.resolveSchema(CORE_BYTES);
     expect(core.id).toBe(CORE_ID);
@@ -182,8 +183,8 @@ describe('createTson: preload against a configured schemaSource', () => {
 
     await tson.preload([META_ID, CORE_ID]);
 
-    expect(tson.schemas.get('tson.io/2026/36/m/meta.tn')?.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/36/m/core.tn')?.id).toBe(CORE_ID);
+    expect(tson.schemas.get('tson.io/2026/37/m/meta.tn')?.id).toBe(META_ID);
+    expect(tson.schemas.get('tson.io/2026/37/m/core.tn')?.id).toBe(CORE_ID);
 
     // Idempotent: a second preload of the same references touches the source again but adds
     // nothing new and does not throw (already registered, so resolution is skipped entirely).
@@ -409,14 +410,14 @@ describe('mapSchemaSource: a SchemaSource over an in-memory table (port of TsonS
 describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
   it('reports both policies and the UCD release they were computed against', () => {
     const tson = createTson();
-    expect(tson.processorPolicy.identifierPolicy).toEqual(DEFAULT_NAME_POLICY);
+    expect(tson.processorPolicy.identifierPolicy).toEqual(DEFAULT_IDENTIFIER_POLICY);
     expect(tson.processorPolicy.tokenPolicy).toEqual(DEFAULT_TOKEN_POLICY);
     expect(tson.processorPolicy.unicodeDataVersion).toBe(UTS39_VERSION);
   });
 
   it('carries the policies the instance was configured with, not the defaults', () => {
-    const identifierPolicy = withRestrictionLevel(DEFAULT_NAME_POLICY, 'ASCII_ONLY');
-    const token = tokenPolicy('SINGLE_SCRIPT');
+    const identifierPolicy = withRestrictionLevel(DEFAULT_IDENTIFIER_POLICY, 'ASCII_ONLY');
+    const token = scriptPolicy('SINGLE_SCRIPT');
     const tson = createTson({ identifierPolicy, tokenPolicy: token });
     expect(tson.processorPolicy.identifierPolicy).toEqual(identifierPolicy);
     expect(tson.processorPolicy.tokenPolicy).toEqual(token);
@@ -440,6 +441,8 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
       keyAnnotations: new Map<string, Annotations>(),
       bootstrap: false,
       origins: new Map<string, string>(),
+      textEnums: new Set<string>(),
+      enumForms: new Map(),
     };
   }
 

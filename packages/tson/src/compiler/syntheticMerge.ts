@@ -144,7 +144,7 @@ function holdsApplication(value: CoreValue): boolean {
       return value.elements.some((e) => holdsApplication(e.value.coreValue));
     case 'map':
     case 'empty-brace':
-    case 'absent':
+    case 'void':
     case 'token':
       return false;
   }

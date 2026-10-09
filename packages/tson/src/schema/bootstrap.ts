@@ -15,7 +15,7 @@
  * non-`Instance` declaration first (an ordinary `definitionResolver.ts` pass, one source-order
  * walk -- meta-kernel's own non-`Instance` declarations never forward-reference each other, so
  * this needs none of `schemaResolver.ts`'s own on-demand/cycle-detecting machinery), then every
- * deferred `Instance` declaration (`value => !unit {}`, `boolean => !enum [true false]`, ...) once
+ * deferred `Instance` declaration (`value => !value_type {}`, `boolean => !enum [true false]`, ...) once
  * every constructor they reference -- including ones declared *later* in the file, e.g.
  * `boolean => !enum [true false]` precedes `enum`'s own declaration -- has an entry to transfer a
  * kind from.
@@ -62,6 +62,7 @@ import { desugar } from '../compiler/desugar.js';
 import { parseSchemaDocument } from '../compiler/schemaParser.js';
 import type { Schema } from '../compiler/schemaResolver.js';
 import type { ArrayBody, EnumBody, MapBody } from './meta/bodies.js';
+import type { IdentifierType, IriType } from './meta/atoms-text.js';
 import type { Top, TypeDefinition } from './meta/typedef.js';
 import { defaultAtomEncoder } from '../write/bindingWriter.js';
 import { topBinding } from './bindings.js';
@@ -216,7 +217,7 @@ function resolveInto(
   const targetName = requireTypeRef(instance.value, declaration.name);
   const target = entries.get(targetName);
   if (target === undefined) return;
-  const body = instanceBody(instance, targetName);
+  const body = instanceBody(instance, targetName, declaration.name);
   if (body === undefined) return;
   entries.set(declaration.name, {
     source: { name: targetName, arguments: [], annotations: [] },
@@ -236,41 +237,95 @@ function requireTypeRef(value: DataValue, declarationName: string): string {
   return value.typeRef;
 }
 
-const RFC_3986 = 'https://www.rfc-editor.org/rfc/rfc3986';
+const RFC_3987 = 'https://www.rfc-editor.org/rfc/rfc3987';
 const RFC_9485 = 'https://www.rfc-editor.org/rfc/rfc9485';
+const UAX_31 = 'https://www.unicode.org/reports/tr31/';
 
 /**
- * The direct, hand-written construction for one of meta-kernel's own nine real constructor
- * targets, `undefined` for anything else -- left for the caller to decide what that means (today:
- * the declaration is simply left out of the result, rather than failing the whole bootstrap;
- * unexercised against the real fixture, since every real target is one of the nine).
+ * `identifier => !identifier_type { continue_add: "-" }` resolved: the profile the lexer, parser,
+ * resolver and linker already hold, since the kernel's own names are read by it before the kernel
+ * exists. The kernel stating another would be a kernel describing a profile this implementation
+ * does not run.
+ */
+const IDENTIFIER: IdentifierType = {
+  kind: 'identifier_type',
+  spec: UAX_31,
+  normalization: 'NFC',
+  start: 'XID',
+  continue: 'XID',
+  continueAdd: '-',
+};
+
+/** `scheme_name`, the second `identifier_type` instance, resolved: what `uri_type.schemes` and `iri_type.schemes` read their elements through. */
+const SCHEME_NAME: IdentifierType = {
+  kind: 'identifier_type',
+  spec: UAX_31,
+  normalization: 'ASCII_CASEFOLD',
+  start: 'NONE',
+  continue: 'NONE',
+  startAdd: 'abcdefghijklmnopqrstuvwxyz',
+  continueAdd: 'abcdefghijklmnopqrstuvwxyz0123456789+-.',
+};
+
+/** `iri => !iri_type { allow_relative: false }` resolved: the kernel's one IRI instance, which types `atom_specification.spec`. */
+const IRI: IriType = {
+  kind: 'iri_type',
+  spec: RFC_3987,
+  allowRelative: false,
+  allowFragment: true,
+  normalization: 'NONE',
+};
+
+/**
+ * The direct, hand-written construction for one of meta-kernel's own real constructor targets,
+ * `undefined` for anything else -- left for the caller to decide what that means (today: the
+ * declaration is simply left out of the result, rather than failing the whole bootstrap;
+ * unexercised against the real fixture, since every real target is covered).
+ *
+ * `identifier_type` is the one target with two instances, told apart by the entry's own `name`:
+ * `identifier` and `scheme_name`, each checked against the constant held for it.
  *
  * Exported so a test can exercise the unrecognised-target and wrong-shape-body branches directly
- * -- neither is reachable through the real fixture (every real target is one of the nine, and
- * every empty-bodied one really is empty).
+ * -- neither is reachable through the real fixture.
  */
-export function instanceBody(instance: Instance, target: string): Top | undefined {
+export function instanceBody(instance: Instance, target: string, name = ''): Top | undefined {
   switch (target) {
-    case 'unit':
+    case 'value_type':
       requireEmptyBody(instance, target);
-      return { kind: 'unit' };
+      return { kind: 'value_type' };
+    case 'void_type':
+      requireEmptyBody(instance, target);
+      return { kind: 'void_type' };
+    case 'identifier_type':
+      if (name === 'scheme_name') {
+        requireStated(instance, target, {
+          start: 'NONE',
+          continue: 'NONE',
+          start_add: SCHEME_NAME.startAdd ?? '',
+          continue_add: SCHEME_NAME.continueAdd ?? '',
+          normalization: 'ASCII_CASEFOLD',
+        });
+        return SCHEME_NAME;
+      }
+      requireStated(instance, target, { continue_add: '-' });
+      return IDENTIFIER;
     case 'integer_type':
       requireEmptyBody(instance, target);
       return { kind: 'integer_type' };
     case 'text_type':
       requireEmptyBody(instance, target);
-      return { kind: 'text_type' };
-    case 'uri_type':
-      requireEmptyBody(instance, target);
-      return { kind: 'uri_type', spec: RFC_3986 };
+      return { kind: 'text_type', normalization: 'NONE' };
+    case 'iri_type':
+      requireStated(instance, target, { allow_relative: 'false' });
+      return IRI;
     case 'regex_type':
       requireEmptyBody(instance, target);
-      return { kind: 'regex_type', spec: RFC_9485 };
+      return { kind: 'regex_type', spec: RFC_9485, normalization: 'NONE' };
     case 'enum':
       return toEnumBody(instance.value);
     // `array` is emitted by desugar.ts above; `set_type` is written by hand in the kernel too
-    // (`integer_member_set`, `enum_set`). They differ only in the defaults `set_type` tightens
-    // (§5.7): ordered/duplicating vs unordered/unique.
+    // (`integer_member_set`, `enum_set`). They differ only in the defaults `set_type` fixes
+    // (§5.7): ordered and duplicating vs unordered and unique.
     case 'array':
       return toArrayBody(instance.value, false);
     case 'set_type':
@@ -279,6 +334,39 @@ export function instanceBody(instance: Instance, target: string): Top | undefine
       return toMapBody(instance.value);
     default:
       return undefined;
+  }
+}
+
+/**
+ * A non-empty instance body checked to state exactly `expected`, field for field, each a bare
+ * token: the constant this implementation holds for the entry is only as good as the kernel text
+ * it stands for.
+ */
+function requireStated(
+  instance: Instance,
+  target: string,
+  expected: Readonly<Record<string, string>>,
+): void {
+  const stated = new Map<string, string>();
+  const body = instance.value.coreValue;
+  if (body.kind === 'record') {
+    for (const field of body.fields) {
+      const value = field.value.value.coreValue;
+      if (value.kind === 'token') stated.set(field.name, value.text);
+    }
+  }
+  const entries = Object.entries(expected);
+  const matches =
+    body.kind === 'record' &&
+    stated.size === entries.length &&
+    body.fields.length === entries.length &&
+    entries.every(([key, value]) => stated.get(key) === value);
+  if (!matches) {
+    throw new TsonInternalError(
+      `expected ${JSON.stringify(expected)} for !${target}, found ${JSON.stringify(
+        body.kind === 'record' ? Object.fromEntries(stated) : body.kind,
+      )}`,
+    );
   }
 }
 
@@ -296,8 +384,8 @@ function toArrayBody(value: DataValue, unique: boolean): ArrayBody {
   return {
     kind: 'array',
     elementType: { name: bindingField(value, 'element_type'), arguments: [], annotations: [] },
-    state: 'REQUIRED',
-    unordered: unique,
+    voidable: false,
+    ordered: !unique,
     uniqueItems: unique,
   };
 }
@@ -305,7 +393,7 @@ function toArrayBody(value: DataValue, unique: boolean): ArrayBody {
 /**
  * `!map { key_type: K  value_type: V }` as the body it denotes. Meta-kernel's own sole map
  * instance (`schema => {type_name => type_definition}`) never desugars with the value-optional
- * sugar, so `state` is always `REQUIRED`, its default -- there is no `state` field in the
+ * sugar, so `voidable` is always `false`, its default -- there is no `voidable` field in the
  * binding record to read (§8.1 omits a field at its default).
  */
 function toMapBody(value: DataValue): MapBody {
@@ -313,7 +401,8 @@ function toMapBody(value: DataValue): MapBody {
     kind: 'map',
     keyType: { name: bindingField(value, 'key_type'), arguments: [], annotations: [] },
     valueType: { name: bindingField(value, 'value_type'), arguments: [], annotations: [] },
-    state: 'REQUIRED',
+    voidable: false,
+    ordered: false,
   };
 }
 
@@ -356,5 +445,5 @@ function toEnumBody(value: DataValue): EnumBody {
     }
     members.push(core.text);
   }
-  return { kind: 'enum', members, profile: 'IDENTIFIER' };
+  return { kind: 'enum', type: 'identifier', members };
 }

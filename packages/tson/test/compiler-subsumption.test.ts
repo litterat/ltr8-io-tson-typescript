@@ -16,8 +16,8 @@ import { requireValue } from './reader-tree-helpers.js';
 
 const USER_SCHEMA = `
 !!id:"test://subsumption.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person    => { name: text }
   employee  => person & { badge: text }
@@ -54,8 +54,10 @@ describe('subsumption -- §7.2 at every position it governs', () => {
     // declares at all, so it is `UNKNOWN_TYPE_REF`.
     const uuidResult = readHolder(`{ t: !uuid "x" ${REST} }`);
     expect(uuidResult.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    // Core declares no type IS-A `text` (it keeps only what a schema cannot do without, §9), so
+    // `text` has no subtypes for the report to list.
     expect(uuidResult.diagnostics[0]?.message).toContain(
-      "'!uuid' is not a known subtype of 'text'",
+      "'!uuid' is not valid at a 'text' position",
     );
 
     const nosuchResult = readHolder(`{ t: !nosuch "x" ${REST} }`);
@@ -88,8 +90,8 @@ describe('subsumption -- §7.2 at every position it governs', () => {
   it('refuses an unrelated type at a tuple position', () => {
     const tupleSchema = `
 !!id:"test://subsumption-tuple.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   pair => [text, text]
   unrelated => [integer, integer]
@@ -174,8 +176,8 @@ describe('subsumption -- §7.2 at every position it governs', () => {
 
 const FAMILY_SCHEMA = `
 !!id:"test://subsumption-family.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   pet => abstract {
     pet_type: text =?
@@ -346,8 +348,8 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
 
 const TEMPLATE_FAMILY_SCHEMA = `
 !!id:"test://subsumption-template-family.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   pet    => <N, T> { type: text = N  pet: T }
   dog    => pet<"dog", text> & { note: text }
@@ -402,10 +404,10 @@ describe(
     });
 
     it(
-      'a missing selector is a required-field error even though the closed member’s own copy ' +
-        'of the field is optional (§5.7’s fixation) -- dispatch is decided by what is written, ' +
-        'never by what a member would inject (§7.2), and nothing else about the record is ' +
-        'inspected once that refusal fires',
+      'a missing selector is a required-field error: `type: text = N` is a marker every ' +
+        'document writes (§5.7), dispatch is decided by what is written, never by what a member ' +
+        'would inject (§7.2), and nothing else about the record is inspected once that refusal ' +
+        'fires',
       () => {
         const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n" } }`);
         expect(result.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);

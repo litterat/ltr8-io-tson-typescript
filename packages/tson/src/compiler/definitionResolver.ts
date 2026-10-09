@@ -43,9 +43,12 @@
  * {@link resolveAtomRefinement}'s own note for why neither IS-A nor kind can stand in for it.
  *
  * **Field groups (§5.11) flatten**: each member becomes an ordinary `RecordField` in source
- * position, state `OPTIONAL` regardless of the group's own state (a REQUIRED group still means
- * each *member* is individually optional — at most one is guaranteed, not which); the group
- * itself is recorded separately as a `FieldGroup`. A composed supertype's groups are inherited
+ * position with `optional: true` regardless of the group's own `optional` (a group that must be
+ * chosen still leaves each *member* individually omittable — one option is chosen, not which); the
+ * group itself is recorded separately as a `FieldGroup`: its options, the members marked `?`
+ * within them, and whether the group as a whole may be left out. A group that must be chosen
+ * admits exactly one option, an optional one at most one, and the `+` form any non-empty subset
+ * of its members. A composed supertype's groups are inherited
  * whole, in supertype order, ahead of the body's own.
  *
  * **`subtypes` is never populated** — the reverse index over a whole resolved schema is a global
@@ -60,9 +63,16 @@ import {
   TsonNotImplementedError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import { TsonBindMismatchError, TsonMissingBindingError, TsonReadError } from '../core/errors.js';
+import {
+  TsonBindMismatchError,
+  TsonMissingBindingError,
+  TsonReadError,
+  TsonNameHygieneRefusedError,
+  TsonRefusedError,
+} from '../core/errors.js';
 import { DEFAULT_MAX_SUPERTYPE_CHAIN, supertypeChainLimitRefusal } from '../core/limits.js';
-import type { DataValue, RecordValue } from '../ast/value.js';
+import type { DataValue, RecordValue, ScopedValue } from '../ast/value.js';
+import { asciiLowercase } from '../unicode/normalization.js';
 import type { Annotation as WrittenAnnotation } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
 import type { ConstructionDef, RefinedDef, TypeDef } from '../ast/schema/typedef.js';
@@ -89,10 +99,11 @@ import type {
   TypeRef,
 } from '../schema/meta/typedef.js';
 import { isConstructor } from '../schema/meta/typedef.js';
+import { groupMembers, lowerGroup } from './groupLowering.js';
 import {
+  spellGroup,
   fieldOmission,
   isGroupMember,
-  type ElementState,
   type FieldGroup,
   type FieldOmission,
   type RecordBody,
@@ -106,18 +117,20 @@ import { toNfc } from '../unicode/nfc.js';
 import type { TsonDecimal } from '../value/types.js';
 import type {
   AnnotationValueReader,
+  ApplicationChecker,
   ApplicationCloser,
   DeclaredApplicationCloser,
   DefinitionGetter,
   DefinitionMetaReader,
   SourceBodyEncoder,
 } from './resolverTypes.js';
-import { createHeldBody, type HeldBody } from './heldBody.js';
+import { createHeldBody, reheld, type HeldBody } from './heldBody.js';
 import {
   DISCRIMINATORS,
   EXTENSION,
   FIELDS,
   NAME,
+  OPTIONAL,
   ROLE,
   TYPE,
   VALUE,
@@ -131,7 +144,6 @@ import {
   typeRefOf,
 } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
-import { fixRoutedValues, parametricFieldNames } from './templates.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
 import { terminal, terminalDefinition } from '../link/referenceChain.js';
@@ -150,6 +162,7 @@ export interface DefinitionResolverDeps {
   readonly metaDefinitions: DefinitionGetter;
   readonly namespaceDefinitions: DefinitionGetter;
   readonly applicationCloser?: ApplicationCloser;
+  readonly applicationChecker?: ApplicationChecker;
   readonly declaredApplicationCloser?: DeclaredApplicationCloser;
   readonly encodeSourceBody?: SourceBodyEncoder;
 }
@@ -171,6 +184,14 @@ export interface DefinitionResolver {
    * needs the identical annotation-resolution rule for a schema document's own header position.
    */
   annotationsFor(name: string, written: readonly WrittenAnnotation[]): Annotations;
+
+  /**
+   * The type a declaration's parameter list wrote after `parameter` (`<T: text>`, §5.10), as a
+   * resolved type-ref. A written type names a type or an application of one; a container sugar
+   * form is not lifted at this position, so it has no entry to name and is refused here in those
+   * terms.
+   */
+  parameterType(parameter: string, written: AstTypeRef): TypeRef;
 }
 
 export function createDefinitionResolver(deps: DefinitionResolverDeps): DefinitionResolver {
@@ -185,6 +206,16 @@ export function createDefinitionResolver(deps: DefinitionResolverDeps): Definiti
     },
     annotationsFor(name: string, written: readonly WrittenAnnotation[]): Annotations {
       return annotationsOf(deps, name, written);
+    },
+    parameterType(parameter: string, written: AstTypeRef): TypeRef {
+      if (written.kind !== 'simpleRef' && written.kind !== 'genericRef') {
+        throw new TsonSchemaValidationError(
+          `parameter '${parameter}' is written with ${written.kind === 'arrayRef' ? 'an array' : written.kind === 'mapRef' ? 'a map' : written.kind === 'tupleRef' ? 'a tuple' : 'a choice'} ` +
+            "type, and a parameter's written type names a declared type or an application of one " +
+            '(§5.10); declare the form under a name and write that name',
+        );
+      }
+      return resolveTypeRef(deps, written);
     },
   };
 }
@@ -219,14 +250,14 @@ function applyRecordExtensionMark(
   // §5.2: "`final` beside one [a selector] is refused, the members it selects being subtypes
   // that could then never exist" -- FINAL admits no subtype and a selector's whole point is that
   // the record has members, so the two are mutually exclusive whatever the author intended.
-  if (mark === 'final' && body.discriminators.length > 0) {
+  if (mark === 'final' && body.discriminators !== undefined) {
     throw new TsonSchemaValidationError(
       `'${name}' writes 'final' beside a selector ('=?') -- a selector says this record's members ` +
         'pin it, and FINAL admits no subtype, so the members a selector implies could never exist ' +
         '(§5.2)',
     );
   }
-  let extension: RecordExtensionType = body.discriminators.length > 0 ? 'ABSTRACT' : 'OPEN';
+  let extension: RecordExtensionType = body.discriminators !== undefined ? 'ABSTRACT' : 'OPEN';
   if (mark === 'abstract') extension = 'ABSTRACT';
   if (mark === 'final') extension = 'FINAL';
   return extension === body.extension ? body : { ...body, extension };
@@ -258,11 +289,12 @@ function deriveTemplateFamilyFacts(
   if (parameters.length === 0 || transitiveSupertypes.includes('top')) {
     return undefined;
   }
-  const candidates = new Set(record.discriminators);
+  const candidates = new Set(record.discriminators ?? []);
   if (isFreshRecordTemplate) {
     for (const field of record.fields) {
       if (
         field.role === 'FIXED' &&
+        !field.optional &&
         field.value?.form === 'UNQUOTED' &&
         parameters.includes(field.value.text)
       ) {
@@ -284,6 +316,17 @@ function deriveTemplateFamilyFacts(
     discriminators.push(field.name);
   }
   return { extension: 'ABSTRACT', discriminators };
+}
+
+/** `held` with a family base's facts stamped on: `discriminators` only where the base names a selector (§5.10). */
+function withFamilyFacts(
+  held: HeldBody,
+  facts: { readonly extension: RecordExtensionType; readonly discriminators: readonly string[] },
+): HeldBody {
+  return reheld(held, {
+    extension: facts.extension,
+    ...(facts.discriminators.length > 0 ? { discriminators: facts.discriminators } : {}),
+  });
 }
 
 /** Whether `ref` mentions any of `parameters`, at any depth -- {@link deriveTemplateFamilyFacts}'s own selector-erasure condition. */
@@ -318,7 +361,7 @@ function holdRecordDraft(
   }
   return {
     ...held,
-    body: { ...held.body, extension: facts.extension, discriminators: facts.discriminators },
+    body: withFamilyFacts(held.body, facts),
   };
 }
 
@@ -689,7 +732,7 @@ function resolveInstanceTemplate(
   const asRecordFields: RecordField[] = wireFields.fields.map((f) => ({
     name: f.name,
     type: f.type,
-    optional: false,
+    optional: f.optional,
     voidable: false,
     role: f.role === 'FIXED' || f.role === 'DEFAULT' ? f.role : 'FREE',
     ...(f.value === undefined ? {} : { value: f.value }),
@@ -703,7 +746,9 @@ function resolveInstanceTemplate(
       fields: asRecordFields,
       groups: [],
       extension: 'OPEN',
-      discriminators: wireFields.discriminators,
+      ...(wireFields.discriminators.length > 0
+        ? { discriminators: wireFields.discriminators }
+        : {}),
     },
     template.typeParams,
     draft.supertypes,
@@ -713,7 +758,7 @@ function resolveInstanceTemplate(
     ? draft
     : {
         ...draft,
-        body: { ...held, extension: facts.extension, discriminators: facts.discriminators },
+        body: withFamilyFacts(held, facts),
       };
 }
 
@@ -762,6 +807,8 @@ interface HeldFieldSummary {
   readonly name: string;
   readonly type: TypeRef;
   readonly role: string;
+  /** The name carries `?` (§5.2): the key may be missing. */
+  readonly optional: boolean;
   readonly value?: Token;
 }
 
@@ -792,6 +839,7 @@ function parseHeldRecordFields(record: RecordValue): {
         name: nameValue.text,
         type,
         role,
+        optional: wireField(fieldRecord, OPTIONAL)?.kind === 'token',
         ...(valueValue?.kind === 'token'
           ? { value: { text: valueValue.text, form: metaFormOfLexer(valueValue.form) } }
           : {}),
@@ -913,8 +961,14 @@ function checkNarrows(name: string, sourceName: string, sourceBody: Top, refined
   if (!isAtom(sourceBody) || !isAtom(refinedBody)) return;
   const violations = checkAtomNarrows(sourceBody, refinedBody);
   if (violations.length > 0) {
+    // A facet fixed at construction is not widened by a move; it is not movable at all, and the
+    // message says which of the two the author did.
+    const fixed = violations.every((violation) => violation.includes('is fixed where'));
     throw new TsonSchemaValidationError(
-      `'${name}': refinement of '!${sourceName}' widens rather than tightens it (§5.7): ${violations.join('; ')}`,
+      `'${name}': refinement of '!${sourceName}' ` +
+        (fixed
+          ? `moves a facet that is fixed at construction (§5.5, §5.7): ${violations.join('; ')}`
+          : `widens rather than tightens it (§5.7): ${violations.join('; ')}`),
     );
   }
 }
@@ -955,7 +1009,9 @@ function mergeWithSource(
     for (const field of sourceEncoded.fields) merged.set(field.name, field);
   }
   if (newBindings.coreValue.kind === 'record') {
-    for (const field of newBindings.coreValue.fields) merged.set(field.name, field);
+    for (const field of newBindings.coreValue.fields) {
+      merged.set(field.name, inheritOrder(field, merged.get(field.name)));
+    }
   } else if (newBindings.coreValue.kind !== 'empty-brace') {
     // The author's error, not a gap: §12.1's `atom-refinement` takes a `record-def`, so this
     // verdict does not change as this library improves.
@@ -968,6 +1024,47 @@ function mergeWithSource(
     annotations: newBindings.annotations,
     typeRef: constructorName,
     coreValue: mergedRecord,
+  };
+}
+
+/** The member-set facets whose surviving members keep their inherited order (§7.5). */
+const ORDERED_BY_INHERITANCE: ReadonlySet<string> = new Set(['members', 'schemes', 'within']);
+
+/**
+ * A refinement that shrinks a member set keeps the surviving members in their inherited order
+ * (§7.5): `[https http ftp]` refined to `[FTP https]` is `[https ftp]`, whatever order the
+ * refinement wrote them in. Members the source does not hold keep their written order after the
+ * inherited ones; they are refused by the narrowing check, not reordered away. `schemes` compare
+ * with ASCII case folded (§5.5), every other set by its text.
+ */
+function inheritOrder<F extends { readonly name: string; readonly value: ScopedValue }>(
+  written: F,
+  inherited: F | undefined,
+): F {
+  if (inherited === undefined || !ORDERED_BY_INHERITANCE.has(written.name)) return written;
+  const was = inherited.value.value.coreValue;
+  const now = written.value.value.coreValue;
+  if (was.kind !== 'array' || now.kind !== 'array') return written;
+  const key = (element: ScopedValue): string | undefined => {
+    const core = element.value.coreValue;
+    if (core.kind !== 'token') return undefined;
+    return written.name === 'schemes' ? asciiLowercase(core.text) : core.text;
+  };
+  const rank = (element: ScopedValue): number => {
+    const wanted = key(element);
+    const at = was.elements.findIndex((candidate) => key(candidate) === wanted);
+    return at < 0 ? was.elements.length : at;
+  };
+  const ordered = now.elements
+    .map((element, index) => ({ element, index, rank: rank(element) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.element);
+  return {
+    ...written,
+    value: {
+      ...written.value,
+      value: { ...written.value.value, coreValue: { ...now, elements: ordered } },
+    },
   };
 }
 
@@ -1324,7 +1421,7 @@ function resolveComposition(
     fields,
     groups,
     extension: 'OPEN',
-    discriminators,
+    ...(discriminators.length > 0 ? { discriminators } : {}),
   };
   // §5.9: subtraction breaks IS-A. The contract index (supertypes) is emptied while the body
   // keeps `directSupertypes` as authorial lineage (record.supertypes) -- for EVERY supertype,
@@ -1347,7 +1444,7 @@ function bodyNames(construction: ConstructionDef): Set<string> {
     if (entry.kind === 'fieldDef') {
       names.add(entry.name);
     } else {
-      for (const member of entry.members) names.add(member.name);
+      for (const member of groupMembers(entry)) names.add(member.name);
     }
   }
   return names;
@@ -1357,8 +1454,9 @@ function bodyNames(construction: ConstructionDef): Set<string> {
  * §5.9's removal clause, applied last. Two things are rejected: a name nowhere in the merged
  * field set (rule 2), and a name this declaration's own body mentions (rule 4) — checked first,
  * since a body-introduced field *is* in the merged set and the weaker "no such field" answer
- * would misdiagnose it. A group left with one surviving member dissolves into an ordinary field
- * taking the group's own state (§5.11).
+ * would misdiagnose it. A removed member leaves its option and an emptied option leaves the
+ * group; a group left with one option that no schema could write dissolves into the plain fields
+ * it equals, and removing every member drops the group with them (§5.11).
  */
 function applyRemovals(
   declarationName: string,
@@ -1386,13 +1484,29 @@ function applyRemovals(
 
   const surviving: FieldGroup[] = [];
   for (const group of groups) {
-    const members = group.members.filter((m) => !removed.has(m));
-    if (members.length === group.members.length) {
+    if (!group.members.flat().some((member) => removed.has(member))) {
       surviving.push(group);
-    } else if (members.length > 1) {
-      surviving.push({ members, state: group.state });
-    } else if (members.length === 1) {
-      dissolveInto(fields, at(members, 0, 'applyRemovals'), group.state);
+      continue;
+    }
+    const options = group.members
+      .map((option) => option.filter((member) => !removed.has(member)))
+      .filter((option) => option.length > 0);
+    // A member left alone in its option is present exactly when the option is chosen, so its mark goes.
+    const optionalMembers = (group.optionalMembers ?? []).filter((member) =>
+      options.some((option) => option.length > 1 && option.includes(member)),
+    );
+    const first = options[0];
+    if (
+      options.length > 1 ||
+      (first !== undefined && keepsOneOption(first, optionalMembers, group.optional))
+    ) {
+      surviving.push({
+        members: options,
+        ...(optionalMembers.length > 0 ? { optionalMembers } : {}),
+        optional: group.optional,
+      });
+    } else if (first !== undefined) {
+      dissolveInto(fields, first, optionalMembers, group.optional);
     }
   }
   groups.length = 0;
@@ -1404,16 +1518,42 @@ function applyRemovals(
 }
 
 /**
- * §5.11: the last member of a dissolved group becomes a plain field carrying the group's own
- * state -- REQUIRED an unmarked name, OPTIONAL the name's own `?`; the field's own voidability is
- * unchanged.
+ * Whether a group reduced to one option is still one a schema could write (§5.11): not optional
+ * with at least two members, every one marked — the `+` group — or optional with at least two
+ * members, one unmarked. Any other one option is plain fields.
  */
-function dissolveInto(fields: RecordField[], member: string, groupState: ElementState): void {
-  const optional = groupState === 'OPTIONAL';
-  const index = fields.findIndex((f) => f.name === member);
-  if (index >= 0) {
-    fields[index] = { ...at(fields, index, 'dissolveInto'), optional };
-  }
+function keepsOneOption(
+  option: readonly string[],
+  optionalMembers: readonly string[],
+  optionalGroup: boolean,
+): boolean {
+  if (option.length < 2) return false;
+  const anyUnmarked = option.some((member) => !optionalMembers.includes(member));
+  return optionalGroup ? anyUnmarked : !anyUnmarked;
+}
+
+/**
+ * §5.11: a group reduced to one option it may not keep becomes the plain fields it equals. In a
+ * group that is not optional the option is always chosen, so its unmarked members are required and
+ * its marked ones optional; in an optional group every member is optional. A sole member takes the
+ * group's own `optional` as its own: an unmarked name where the group had to be chosen, `?` on the
+ * name where it was optional. The field's own voidability is unchanged.
+ */
+function dissolveInto(
+  fields: RecordField[],
+  option: readonly string[],
+  optionalMembers: readonly string[],
+  optionalGroup: boolean,
+): void {
+  fields.forEach((field, index) => {
+    if (!option.includes(field.name)) return;
+    const omittable = optionalGroup || optionalMembers.includes(field.name);
+    fields[index] = {
+      ...field,
+      optional: omittable,
+      role: 'FREE',
+    };
+  });
 }
 
 function addIfAbsent(list: string[], seen: Set<string>, name: string): void {
@@ -1585,7 +1725,7 @@ function refineOnto(
     if (entry.kind === 'groupDef') {
       if (!restatesInheritedGroup(deps, name, entry, fields, groups, inheritedFieldIndex)) {
         throw new TsonSchemaValidationError(
-          `'${name}': the group (${memberNames(entry).join(' | ')}) names no inherited group -- a refinement ` +
+          `'${name}': the group ${spellGroup(lowerGroup(entry))} names no inherited group -- a refinement ` +
             "copies its source's whole field set and admits no new fields or groups; composition ('&') is " +
             'what adds one (§5.7, §5.11)',
         );
@@ -1605,7 +1745,7 @@ function refineOnto(
       entry,
       at(fields, index, 'refineOnto'),
       parameters,
-      isGroupMember(groups, entry.name),
+      groups,
     );
   }
   checkSupertypeChainLimit(name, transitiveSupertypes);
@@ -1624,7 +1764,6 @@ function refineOnto(
     fields,
     groups,
     extension: 'OPEN',
-    discriminators: [],
   };
   return {
     ...(source === undefined ? {} : { source }),
@@ -1700,18 +1839,10 @@ interface OpenOperand {
  * are types, and its fields arrive with them via {@link substitute}.
  *
  * `held.parameters` (the *named template's own* parameters, `pet`'s `N`/`T`, never `name`'s) are
- * bound the moment this runs, whether or not `name` itself stays open — but §5.7's "Open
- * modifiers" ties fixation (the name mark, `optional: true`) to the *value* becoming concrete,
- * not to this one substitution: with an outer parameter riding through in one of
- * `application.args` (`<S> pet<S, text>`), the routed field's value substitutes to `S`, still a
- * parameter, so it stays required and FREE here, exactly as the spec's own held form does, and
- * {@link fixRoutedValues} is skipped. `namesOwnParameter` is what tells the two cases apart, and
- * a later closing sees the deferred field for what it is: `parametricFieldNames` reads the still
- * -unfixed `S` token straight off `name`'s own held wire once `name<...>` itself closes, so the
- * fixation the open case defers here is the one the outer closing applies, never a lost one. Only
- * a fully-bound operand fixates here, with the same {@link fixRoutedValues} a named type position
- * closes an instantiation with (`templates.ts`'s own `closeHeldInstantiation`), never a second
- * copy.
+ * bound the moment this runs, whether or not `name` itself stays open. A parametric modifier takes
+ * the name mark its literal spelling takes (§5.7), so substitution leaves each absorbed field with
+ * the `optional` and `role` its declaration wrote and nothing is left to fix when the value
+ * becomes concrete.
  */
 function openOperand(
   deps: DefinitionResolverDeps,
@@ -1734,17 +1865,20 @@ function openOperand(
     );
   }
   const held = template.body;
-  if (held.parameters.length !== application.args.length) {
+  if (held.parameterNames.length !== application.args.length) {
     throw new TsonSchemaValidationError(
-      `'${name}': ${position} '${head}' declares ${String(held.parameters.length)} type parameter(s) and ` +
+      `'${name}': ${position} '${head}' declares ${String(held.parameterNames.length)} type parameter(s) and ` +
         `is applied to ${String(application.args.length)} (§5.10)`,
     );
   }
   const bindings = new Map<string, TypeArgument>();
-  held.parameters.forEach((parameter, i) => {
+  held.parameterNames.forEach((parameter, i) => {
     bindings.set(parameter, typeArgument(deps, at(application.args, i, 'openOperand')));
   });
-  const substituted = substitute(held.application.coreValue, head, held.parameters, bindings);
+  if (deps.applicationChecker !== undefined && !namesOwnParameter(application, typeParams)) {
+    deps.applicationChecker({ name: head, arguments: [...bindings.values()], annotations: [] });
+  }
+  const substituted = substitute(held.application.coreValue, head, held.parameterNames, bindings);
   const absorbedValue: DataValue = {
     annotations: held.application.annotations,
     ...(held.application.typeRef === undefined ? {} : { typeRef: held.application.typeRef }),
@@ -1757,22 +1891,7 @@ function openOperand(
         "vocabulary, so there is nothing to compose with (§5.8, and §5.7's vocabulary-body rule read across)",
     );
   }
-  if (namesOwnParameter(application, typeParams)) {
-    // `name` itself stays open through this operand (an outer parameter rides one of
-    // `application.args`): a routed field's substituted value is still a parameter, not a
-    // concrete one, so §5.7's fixation does not fire yet. Deferred to `name<...>`'s own closing,
-    // which rediscovers it via `parametricFieldNames` over `name`'s own held wire.
-    return { ancestors: template.supertypes, body: absorbed };
-  }
-  const parametricNames = parametricFieldNames(held.application.coreValue, held.parameters);
-  const fixed = fixRoutedValues(absorbed, parametricNames);
-  if (!isRecordBody(fixed)) {
-    throw new TsonInternalError(
-      `'${name}': ${position} '${head}<...>' stopped being a record body after fixation -- ` +
-        'fixRoutedValues only ever maps a record body’s own field list',
-    );
-  }
-  return { ancestors: template.supertypes, body: fixed };
+  return { ancestors: template.supertypes, body: absorbed };
 }
 
 /** A fully-bound application at one of the two field-absorbing positions, closed to the entry it denotes. */
@@ -1821,7 +1940,14 @@ function resolveRecordBody(
       parameters,
     );
   }
-  return { kind: 'record', supertypes: [], fields, groups, extension: 'OPEN', discriminators };
+  return {
+    kind: 'record',
+    supertypes: [],
+    fields,
+    groups,
+    extension: 'OPEN',
+    ...(discriminators.length > 0 ? { discriminators } : {}),
+  };
 }
 
 /**
@@ -1850,7 +1976,7 @@ function resolveEntry(
         entry,
         at(fields, index, 'resolveEntry'),
         parameters,
-        isGroupMember(groups, entry.name),
+        groups,
       );
     } else {
       requireFieldNameNotSeen(declarationName, entry.name, seenFieldNames, 'BODY_FIELD');
@@ -1868,15 +1994,13 @@ function resolveEntry(
   }
   if (restatesInheritedGroup(deps, declarationName, entry, fields, groups, inheritedFieldIndex))
     return;
-  const members: string[] = [];
-  for (const member of entry.members) {
+  for (const member of groupMembers(entry)) {
     requireFieldNameNotSeen(declarationName, member.name, seenFieldNames, 'GROUP_MEMBER');
     const field = resolveGroupMember(deps, member);
     seenFieldNames.add(field.name);
     fields.push(field);
-    members.push(field.name);
   }
-  groups.push({ members, state: entry.optional ? 'OPTIONAL' : 'REQUIRED' });
+  groups.push(lowerGroup(entry));
 }
 
 /**
@@ -1884,8 +2008,8 @@ function resolveEntry(
  * names an already-inherited field. `isGroupMember` says whether that inherited field is a
  * field-group member (`groups` already lists it) -- §5.11's own two rules over a restated member,
  * both refused here rather than left to {@link checkFieldRefinementOrder}'s general three orders:
- * **it takes no name mark**, since its omission answer is the group's and a mark would state a
- * second one to disagree with; and **`~ v` stays refused**, a default being a value only omission
+ * **its name mark may be dropped and never added**, since the `?` speaks for the member's option
+ * ({@link restateMemberMark}); and **`~ v` stays refused**, a default being a value only omission
  * reaches and omission being the group's. A member's `=` pin is admitted (checked when written,
  * never injected, §5.11) and its type slot may still narrow or tighten voidable true → false, "as
  * at any field" -- both flow through {@link resolveField} exactly as a non-member's do. `=?` is
@@ -1898,37 +2022,76 @@ function resolveTighteningField(
   fieldDef: FieldDef,
   inherited: RecordField,
   parameters: readonly string[],
-  isGroupMember: boolean,
+  groups: FieldGroup[],
 ): RecordField {
   const prefix = declarationName === undefined ? '' : `'${declarationName}': `;
+  const isMember = isGroupMember(groups, fieldDef.name);
   if (fieldDef.modifier?.kind === 'selector') {
     throw new TsonSchemaValidationError(
       `${prefix}'${fieldDef.name}' acquires the selector '=?' by refinement -- a discriminator is ` +
         'declared once, at the base, and every subtype instead restates it pinned FIXED (§5.2, ' +
-        `§5.7)${isGroupMember ? '; a member reachable by refinement may not acquire a selector (§5.11)' : ''}`,
+        `§5.7)${isMember ? '; a member reachable by refinement may not acquire a selector (§5.11)' : ''}`,
     );
   }
-  if (isGroupMember) {
-    if (fieldDef.optional) {
-      throw new TsonSchemaValidationError(
-        `${prefix}the restated group member '${fieldDef.name}' carries a name mark -- a member ` +
-          "takes none, since its omission answer is the group's (§5.11)",
-      );
-    }
+  if (isMember) {
+    // The default is refused first: it is the more basic fault, and the name mark a member written
+    // beside it is then not also reported as loosening its option.
     if (fieldDef.modifier?.kind === 'default') {
       throw new TsonSchemaValidationError(
         `${prefix}the restated group member '${fieldDef.name}' takes a default ('~') -- a default ` +
           "is a value only omission reaches, and omission is the group's, not one member's (§5.11)",
       );
     }
+    restateMemberMark(declarationName, fieldDef, groups);
   }
   const { field } = resolveField(deps, fieldDef, parameters, inherited);
-  // §5.11: a member is never anything but optional -- its own omission question is the group's,
-  // whatever this restatement's modifier resolved `optional` to (always `false`, `fieldDef.optional`
-  // being refused above).
-  const tightened: RecordField = isGroupMember ? { ...field, optional: true } : field;
-  checkFieldRefinementOrder(declarationName, fieldDef.name, inherited, tightened, isGroupMember);
+  // §5.11: a member is never anything but optional as a field -- its own omission question is its
+  // option's and the group's, whatever this restatement's modifier resolved `optional` to.
+  const tightened: RecordField = isMember ? { ...field, optional: true } : field;
+  checkFieldRefinementOrder(declarationName, fieldDef.name, inherited, tightened, isMember);
   return tightened;
+}
+
+/**
+ * A restated member's name `?` (§5.11) speaks for its option, not the record: it keeps the member
+ * optional once its option is chosen, and leaving it off makes the member required there — the
+ * name's `?` is never inherited, at a member as at any field. It may be dropped and never added,
+ * since adding one loosens the option. The `+` group, the one group of a single option that may
+ * not be left out, is the exception: its members were written without a `?`, so they are restated
+ * that way and keep their mark.
+ */
+function restateMemberMark(
+  declarationName: string | undefined,
+  fieldDef: FieldDef,
+  groups: FieldGroup[],
+): void {
+  const prefix = declarationName === undefined ? '' : `'${declarationName}': `;
+  const index = groups.findIndex((group) =>
+    group.members.some((option) => option.includes(fieldDef.name)),
+  );
+  const group = groups[index];
+  if (group === undefined) return;
+  const atLeastOne = group.members.length === 1 && !group.optional;
+  const marked = (group.optionalMembers ?? []).includes(fieldDef.name);
+  if (fieldDef.optional && (atLeastOne || !marked)) {
+    throw new TsonSchemaValidationError(
+      `${prefix}'${fieldDef.name}' is a member of a field group ${
+        atLeastOne
+          ? "written with '+', whose members take no '?' -- restate it as written there"
+          : "without a '?' on its name, and adding one loosens its option"
+      } (§5.11)`,
+    );
+  }
+  if (!fieldDef.optional && marked && !atLeastOne) {
+    const optionalMembers = (group.optionalMembers ?? []).filter(
+      (member) => member !== fieldDef.name,
+    );
+    groups[index] = {
+      members: group.members,
+      ...(optionalMembers.length > 0 ? { optionalMembers } : {}),
+      optional: group.optional,
+    };
+  }
 }
 
 /**
@@ -2111,13 +2274,7 @@ function resolveFieldEntry(
   }
   const voidable = field.type !== undefined ? field.type.voidable : (inherited?.voidable ?? false);
 
-  const resolved = resolveFieldMarks(
-    field.name,
-    field.optional,
-    voidable,
-    field.modifier,
-    parameters,
-  );
+  const resolved = resolveFieldMarks(field.name, field.optional, voidable, field.modifier);
   return {
     field: {
       name: field.name,
@@ -2134,17 +2291,13 @@ function resolveFieldEntry(
   };
 }
 
-function memberNames(groupDef: GroupDef): string[] {
-  return groupDef.members.map((m) => m.name);
-}
-
 /**
  * §5.11's group restatement, shared by a refinement body and a composition body: a restated group
- * MUST have the same member labels in the same order (member type-refs restated verbatim), and
- * may tighten state OPTIONAL→REQUIRED; REQUIRED→OPTIONAL or changing membership is a resolver
- * error. Returns `false` (having applied nothing) when this group names nothing inherited and so
- * is genuinely new -- which a composition body appends and a refinement body rejects, each at its
- * own call site.
+ * MUST have the same options, their members in the same order (member type-refs restated
+ * verbatim), may drop a member's `?` or the group's, and never add one; changing membership is a
+ * resolver error. Returns `false` (having applied nothing) when this group names nothing inherited
+ * and so is genuinely new -- which a composition body appends and a refinement body rejects, each
+ * at its own call site.
  */
 function restatesInheritedGroup(
   deps: DefinitionResolverDeps,
@@ -2154,10 +2307,11 @@ function restatesInheritedGroup(
   groups: FieldGroup[],
   inheritedFieldIndex: ReadonlyMap<string, number>,
 ): boolean {
-  const restated = memberNames(groupDef);
+  const restatement = lowerGroup(groupDef);
+  const restated = restatement.members.flat();
   const inheritedMembers = restated.filter((m) => inheritedFieldIndex.has(m));
   if (inheritedMembers.length === 0) return false;
-  const prefix = `${declarationName === undefined ? '' : `'${declarationName}': `}the restated group (${restated.join(' | ')}) `;
+  const prefix = `${declarationName === undefined ? '' : `'${declarationName}': `}the restated group ${spellGroup(restatement)} `;
   if (inheritedMembers.length !== restated.length) {
     throw new TsonSchemaValidationError(
       `${prefix}adds a member the source does not declare -- changing membership is a resolver error (§5.11)`,
@@ -2165,7 +2319,7 @@ function restatesInheritedGroup(
   }
 
   const index = groups.findIndex((g) =>
-    g.members.includes(at(restated, 0, 'restatesInheritedGroup')),
+    g.members.some((option) => option.includes(at(restated, 0, 'restatesInheritedGroup'))),
   );
   if (index < 0) {
     throw new TsonSchemaValidationError(
@@ -2173,16 +2327,31 @@ function restatesInheritedGroup(
     );
   }
   const inherited = at(groups, index, 'restatesInheritedGroup');
-  const sameOrder =
-    inherited.members.length === restated.length &&
-    inherited.members.every((m, i) => m === restated[i]);
-  if (!sameOrder) {
+  const sameOptions =
+    inherited.members.length === restatement.members.length &&
+    inherited.members.every(
+      (option, i) =>
+        option.length === restatement.members[i]?.length &&
+        option.every((member, j) => member === restatement.members[i]?.[j]),
+    );
+  if (!sameOptions) {
     throw new TsonSchemaValidationError(
-      `${prefix}does not match the inherited group (${inherited.members.join(' | ')}) -- a restatement MUST ` +
-        'have the same member labels in the same order, and changing membership is a resolver error (§5.11)',
+      `${prefix}does not match the inherited group ${spellGroup(inherited)} -- a restatement MUST ` +
+        'have the same options, their members in the same order, and changing membership is a ' +
+        'resolver error (§5.11)',
     );
   }
-  for (const member of groupDef.members) {
+  const inheritedOptional = inherited.optionalMembers ?? [];
+  const added = (restatement.optionalMembers ?? []).filter(
+    (member) => !inheritedOptional.includes(member),
+  );
+  if (added.length > 0) {
+    throw new TsonSchemaValidationError(
+      `${prefix}marks ${added.join(', ')} '?' where the source does not -- a restatement may drop ` +
+        "a member's '?' and never add one, which loosens its option (§5.11)",
+    );
+  }
+  for (const member of groupMembers(groupDef)) {
     const restatedType = resolveTypeRef(deps, member.typeRef);
     const inheritedIndex = requiredGet(inheritedFieldIndex, member.name, 'restatesInheritedGroup');
     const inheritedField = at(fields, inheritedIndex, 'restatesInheritedGroup');
@@ -2203,13 +2372,13 @@ function restatesInheritedGroup(
     };
   }
 
-  const state: ElementState = groupDef.optional ? 'OPTIONAL' : 'REQUIRED';
-  if (inherited.state === 'REQUIRED' && state === 'OPTIONAL') {
+  if (!inherited.optional && restatement.optional) {
     throw new TsonSchemaValidationError(
-      `${prefix}loosens a REQUIRED group to OPTIONAL -- a restatement may only tighten OPTIONAL→REQUIRED (§5.11)`,
+      `${prefix}makes the group optional where the source's is not -- a restatement may drop a ` +
+        "group's '?' and never add one (§5.11)",
     );
   }
-  groups[index] = { members: inherited.members, state };
+  groups[index] = restatement;
   return true;
 }
 
@@ -2250,9 +2419,12 @@ function annotationsOf(
     ) {
       throw unresolvedAnnotation(deps, name, annotation.name);
     }
+    // A bare `@T` is shorthand for `@T:_` (§6): it is read against `T` like a written value, so a
+    // type that does not admit the void sentinel refuses the mark as it would refuse `_`. The bare
+    // form keeps no value, whatever the read returned.
     const boundValue =
       annotation.value === undefined
-        ? undefined
+        ? (bindAnnotationValue(deps, name, annotation.name, VOID_SENTINEL), undefined)
         : bindAnnotationValue(deps, name, annotation.name, annotation.value);
     annotations.push({
       name: annotation.name,
@@ -2261,6 +2433,9 @@ function annotationsOf(
   }
   return annotations;
 }
+
+/** The `_` a bare annotation stands for (§6), read against the annotation's type like a written one. */
+const VOID_SENTINEL: DataValue = { annotations: [], coreValue: { kind: 'void' } };
 
 /** §3.3.3's one hop missed: `annotationName` is not an entry of the governing meta-schema's own namespace. */
 function unresolvedAnnotation(
@@ -2291,6 +2466,18 @@ function bindAnnotationValue(
   try {
     return deps.annotationValueReader?.(annotationName, value);
   } catch (e) {
+    // A refusal under §8.2's name-hygiene policy says this processor declined the value, not that
+    // the schema is wrong: it reaches the caller as the fifth outcome, unwrapped.
+    if (e instanceof TsonNameHygieneRefusedError && e.pointer === undefined) {
+      throw new TsonNameHygieneRefusedError(e.message, {
+        mechanism: e.mechanism,
+        names: e.names,
+        uts39Version: e.uts39Version,
+        pointer: `/${declaration}`,
+        cause: e,
+      });
+    }
+    if (e instanceof TsonRefusedError) throw e;
     if (e instanceof TsonReadError) {
       throw new TsonSchemaValidationError(
         `'${declaration}': the value of annotation '@${annotationName}' is not valid data for the type ` +

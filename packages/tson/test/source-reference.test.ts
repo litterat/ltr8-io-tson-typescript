@@ -46,6 +46,28 @@ describe('permittedReference', () => {
     expect(() => permittedReference('a/b.tn', false)).toThrow(TsonSchemaFetchError);
   });
 
+  it('refuses a hostless reference: it names a library entry and is never fetched (§2.2.1)', () => {
+    for (const hostless of [
+      '/local/orders.tn',
+      'file:/local/orders.tn',
+      'file:///local/orders.tn',
+    ]) {
+      try {
+        permittedReference(hostless, false);
+        throw new Error('expected a throw');
+      } catch (error) {
+        expect(error).toBeInstanceOf(TsonSchemaFetchError);
+        expect((error as TsonSchemaFetchError).reason).toBe('not-permitted');
+      }
+    }
+  });
+
+  it('splits a non-ASCII host and path as written, the path undecoded (RFC 3987)', () => {
+    const permitted = permittedReference('https://bücher.example/sch%C3%A9mas/x.tn', false);
+    expect(permitted.host).toBe('bücher.example');
+    expect(permitted.path).toBe('/sch%C3%A9mas/x.tn');
+  });
+
   it('requires a ?sha256= pin only when asked', () => {
     expect(() => permittedReference('https://example.com/a.tn', true)).toThrow(
       TsonSchemaFetchError,

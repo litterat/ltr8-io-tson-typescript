@@ -1,5 +1,10 @@
 import type { NameHygieneMechanism } from '../unicode/policy.js';
-import { TsonAtomParseError, type SchemaFetchReason, type TsonAtomTypeError } from './errors.js';
+import {
+  TsonAtomParseError,
+  type SchemaFetchReason,
+  type TsonAtomTypeError,
+  type TsonNameHygieneRefusedError,
+} from './errors.js';
 // Referenced only from a TSDoc {@link} tag above, which the unused-vars rule cannot see -- see
 // `atom/contract.ts`'s own copy of this note.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -13,12 +18,20 @@ import type { Position } from './position.js';
  * new code is an API change rather than a new string appearing in a message.
  */
 export type DiagnosticCode =
-  /** A resource limit was exceeded ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5) -- §8.1's fifth outcome, naming the limit and the threshold it was checked against. */
+  /** A resource limit was exceeded ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5) -- a refusal ({@link isRefusal}), §8.1's fifth outcome and not a verdict, naming the limit and the threshold it was checked against. */
   | 'LIMIT_REFUSED'
   /** A required field was absent from the data. */
   | 'FIELD_REQUIRED'
   /** A field the schema fixes carried a different value. */
   | 'FIELD_FIXED'
+  /**
+   * A field group's presence rule broken ([TSON-SCHEMA] §5.11): no option chosen where the group
+   * needs one, more chosen than it admits, or a chosen option missing a member its group does not
+   * mark optional. One code for everything a group decides, so a consumer repairs the group as one
+   * thing rather than as separate field and type problems; a field outside any group keeps
+   * {@link FIELD_REQUIRED}.
+   */
+  | 'FIELD_GROUP'
   /**
    * The value's type is not one the position takes. Covers a written type annotation naming a
    * type the position does not admit ([TSON-SCHEMA] §7.2's subsumption rule, a choice's variant
@@ -73,8 +86,8 @@ export type DiagnosticCode =
   | 'UNRECOGNIZED_FIELD'
   /** Two entries of one map share a key (§2.6). */
   | 'DUPLICATE_MAP_KEY'
-  /** A map entry's key is the absent sentinel (§2.9). */
-  | 'ABSENT_MAP_KEY'
+  /** A map entry's key is the void sentinel (§2.9). */
+  | 'VOID_MAP_KEY'
   /** Two fields of one record share a name (§2.5). */
   | 'DUPLICATE_FIELD'
   /**
@@ -97,6 +110,14 @@ export type DiagnosticCode =
   | 'SCHEMA_ERROR'
   /** A type reference does not resolve within the linked schema. */
   | 'UNKNOWN_TYPE'
+  /**
+   * A value opened a schema scope with a nested `!!schema` at a position whose type is not a
+   * `scoped` instance, a container of scoped elements included ([TSON-SCHEMA] §7.1, §7.8).
+   * Cross-schema acceptance is authored intent, declared by the position's own type, so a position
+   * that did not declare it has no cell to refuse the directive: §8.1's `resolver` category, where
+   * a nested `!!schema` at a `scoped` position whose cell does not admit it is a validation error.
+   */
+  | 'SCOPE_NOT_ADMITTED'
   /** A validation rule not covered by a more specific code. */
   | 'VALIDATION_ERROR'
   /** A construct this implementation has not built yet — a library gap, not bad input. */
@@ -141,8 +162,9 @@ export type DiagnosticCode =
   // Three codes, one per mechanism, rather than one code beside a `mechanism` field, for the
   // reason the five `SCHEMA_*` codes above give: the mechanism is what a consumer routes on.
   //
-  // A refusal *is* a verdict ({@link isVerdict}) -- the processor looked and declined, and the
-  // sender holds the fix -- though not a validity one.
+  // A refusal is not a verdict ({@link isVerdict}): it asserts nothing about whether the document
+  // is valid, only that this processor's policy declined it -- another deployment's policy may
+  // accept the same bytes. It is §8.1's fifth outcome, reported apart from the four categories.
 
   /** Two names in one scope reduce to one UTS #39 skeleton (mechanism 1). */
   | 'CONFUSABLE_NAMES'
@@ -198,8 +220,49 @@ export function diagnosticCodeForMechanism(mechanism: NameHygieneMechanism): Dia
   }
 }
 
+/**
+ * The diagnostic a thrown {@link TsonNameHygieneRefusedError} reports: its §8.2 code, its message,
+ * and -- for a refusal while loading a schema -- the schema's id and the pointer to the refused
+ * key. One function, so a fail-fast throw and a collecting report cannot disagree on either.
+ */
+export function diagnosticOfNameRefusal(error: TsonNameHygieneRefusedError): Diagnostic {
+  return {
+    code: diagnosticCodeForMechanism(error.mechanism),
+    message: error.message,
+    ...(error.schemaId === undefined ? {} : { schemaId: error.schemaId }),
+    ...(error.pointer === undefined ? {} : { schemaPointer: error.pointer }),
+  };
+}
+
+/**
+ * Whether `code` is one of §8.2's three name-hygiene refusals. A refusal is never reported under
+ * one of §8.1's four categories and is not a verdict ({@link isVerdict}), so "was this reported
+ * as an error of the document" is simply `isVerdict(code)`.
+ */
+export function isNameRefusal(code: DiagnosticCode): boolean {
+  return (
+    code === 'CONFUSABLE_NAMES' || code === 'RESTRICTED_CHARACTER' || code === 'RESTRICTED_SCRIPT'
+  );
+}
+
+/**
+ * Whether `code` is a §8.1 refusal: this processor declined the document under its own policy,
+ * data version or limits -- a §8.2 name refusal ({@link isNameRefusal}) or a §9.1 limit refusal
+ * (`LIMIT_REFUSED`). The same bytes may be accepted in full by a processor configured otherwise,
+ * so a refusal is not a verdict ({@link isVerdict}) and is never reported under one of §8.1's four
+ * categories. The five `SCHEMA_*` fetch codes are the other kind of non-verdict -- no schema was
+ * obtained -- and are not refusals.
+ */
+export function isRefusal(code: DiagnosticCode): boolean {
+  return isNameRefusal(code) || code === 'LIMIT_REFUSED';
+}
+
 /** The codes that assert nothing about the document -- see {@link isVerdict}. */
 const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
+  'CONFUSABLE_NAMES',
+  'RESTRICTED_CHARACTER',
+  'RESTRICTED_SCRIPT',
+  'LIMIT_REFUSED',
   'NOT_IMPLEMENTED',
   'BIND_MISMATCH',
   'SCHEMA_NOT_PERMITTED',
@@ -213,27 +276,17 @@ const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
  * Whether `code` reports something an evaluation actually looked at and found, as opposed to a
  * check this library could not run at all.
  *
- * **This line is narrower than §8.1's own "not judged" line, deliberately.** Revision 36 states
- * "not judged is a fifth outcome, not a verdict", with two members: a §8.2/§9.1 **refusal** (the
- * processor looked, under its own policy or limits, and declined) and an **unavailable schema**
- * (the processor had nothing to look with at all, §10.1). Both are outside §8.1's four categories
- * either way -- a refusal is never one of `FIELD_REQUIRED`/`TYPE_MISMATCH`/etc., and a fetch
- * failure is never one either, which every consumer of this module keeps as its own separate
- * check (`test/conformance/validate.ts`'s `REFUSAL_CODES`, for one). What this function answers
- * is a different, narrower question a consumer still needs split out from that pair: whether a
- * *rule ran against the document at all*. A refusal is squarely on the "ran" side of that split --
- * the processor read the name or counted the nesting and declined on its own terms, which is why
- * `core/limits.ts` *throws* `TsonLimitRefusedError` rather than silently continuing, and why the
- * CLI's own `exit.ts` gives a refusal the same exit code as an ordinary rejection (its own note
- * has the reasoning). An unavailable schema is on the "did not run" side, with `NOT_IMPLEMENTED`
- * and `BIND_MISMATCH` beside it for two further reasons a rule never reached the document at all:
- * nothing here asserts anything about the document -- which is exactly what a caller routing on
- * the answer needs, and why a plain `valid: boolean` cannot carry it (it conflates *was this
- * checked* with *did it pass*).
+ * **A `false` answer means the document was not judged**, §8.1's "fifth outcome, not a verdict".
+ * Two groups answer `false`. A refusal ({@link isRefusal}) says this processor declined under its
+ * own policy, data version or limits -- a §8.2 name refusal, or a §9.1 limit refusal -- which
+ * asserts nothing about validity: "the document may be well-formed, valid and accepted in full by
+ * the next processor along" (§9.1). The rest say no rule ran: `NOT_IMPLEMENTED` that this library
+ * could not check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five
+ * `SCHEMA_*` codes that no schema was obtained to check against (§10.1).
  *
- * The seven `NON_VERDICT` codes are not-run for three different reasons: `NOT_IMPLEMENTED` that
- * this library could not check it, `BIND_MISMATCH` that the reading application is wired wrong,
- * and the five `SCHEMA_*` codes that no schema was obtained to check against.
+ * A consumer that asks whether a document was *rejected* rather than *judged* asks
+ * {@link isRefusal} beside this: the CLI reports a refused file as `NOT_CHECKED` and still exits
+ * 1, since the sender holds the fix.
  *
  * Stated here so no consumer keeps its own copy of the set. Two already would -- the CLI's exit
  * code and its report outcome -- and a private copy each is how two consumers come to disagree

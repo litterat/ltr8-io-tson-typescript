@@ -76,8 +76,8 @@ describe('root value shapes (§2.3, §7.4)', () => {
     });
   });
 
-  it('the absent sentinel (§2.9)', () => {
-    expect(doc('_')).toEqual({ root: { annotations: [], coreValue: { kind: 'absent' } } });
+  it('the void sentinel (§2.9)', () => {
+    expect(doc('_')).toEqual({ root: { annotations: [], coreValue: { kind: 'void' } } });
   });
 
   it('empty braces (§2.8), left unresolved at this layer', () => {
@@ -376,7 +376,7 @@ describe('positions are identity-keyed, never structural (WeakMap<CoreValue, Pos
   });
 });
 
-describe('the absent sentinel is a value, not a missing key (§2.9)', () => {
+describe('the void sentinel is a value, not a missing key (§2.9)', () => {
   it('a record field explicitly holding "_" is structurally distinct from having no such field', () => {
     const d = doc('{ x: _ }');
     const record = d.root.coreValue as {
@@ -384,7 +384,7 @@ describe('the absent sentinel is a value, not a missing key (§2.9)', () => {
       fields: readonly { name: string; value: { value: { coreValue: CoreValue } } }[];
     };
     expect(record.fields).toHaveLength(1);
-    expect(defined(record.fields[0]).value.value.coreValue).toEqual({ kind: 'absent' });
+    expect(defined(record.fields[0]).value.value.coreValue).toEqual({ kind: 'void' });
   });
 
   it('"{}" is its own empty-brace core-value, never an empty record with zero fields', () => {
@@ -399,7 +399,7 @@ describe('the absent sentinel is a value, not a missing key (§2.9)', () => {
       kind: 'map';
       entries: readonly { key: { coreValue: CoreValue } }[];
     };
-    expect(defined(map.entries[0]).key.coreValue).toEqual({ kind: 'absent' });
+    expect(defined(map.entries[0]).key.coreValue).toEqual({ kind: 'void' });
   });
 });
 
@@ -444,5 +444,22 @@ describe('streaming: identical result whether input arrives whole or one byte at
     const sync = doc(text);
     const chunked = await parseChunked(text, 1);
     expect(chunked).toEqual(sync);
+  });
+});
+
+describe('a bare "+" is a special token reserved by the schema grammar (§7.2.4, §7.2.5)', () => {
+  it('is a parse error in a data value, where it was a lexer error', () => {
+    expect(() => parse('+')).toThrow(TsonParseError);
+    expect(() => parse('{ a: + }')).toThrow(TsonParseError);
+    expect(() => parse('[1 + 2]')).toThrow(TsonParseError);
+  });
+
+  it('leaves a sign that begins an unquoted token alone: +5 and +0.5 read as before', () => {
+    const root = doc('[+5 +0.5]').root.coreValue;
+    if (root.kind !== 'array') throw new Error('expected an array');
+    expect(root.elements.map((element) => element.value.coreValue)).toEqual([
+      { kind: 'token', text: '+5', form: 'unquoted' },
+      { kind: 'token', text: '+0.5', form: 'unquoted' },
+    ]);
   });
 });

@@ -113,10 +113,9 @@ export interface UtcOffset {
  * shape would silently lose part of the token. The nearest JDK equivalent, confirmed by
  * `CONFORMANCE.md`, is `java.time.OffsetTime`, not `LocalTime`.
  *
- * A leap second (`time-second` of `60`, which RFC 3339 permits) is the one documented gap this vocabulary
- * cannot represent — see `CONFORMANCE.md`, "One accepted, unfixable gap": `java.time` has no leap-second
- * concept, so the reference implementation rejects a leap-second token as a parse error rather than
- * accepting it into any host shape, and this interface follows the same limit (`second` is 0–59).
+ * A leap second (`time-second` of `60`, which RFC 3339's grammar admits) is refused (§5.4): it is neither a
+ * time of day on `[00:00:00, 24:00:00)` nor an instant on the UTC timeline, so it is a resolver error as
+ * hour 25 is, and `second` is 0–59.
  *
  * Verified against
  * `.references/ltr8-io-tson-test-suite/tests/vocabulary/valid/time-utc-expected.tn` and
@@ -309,12 +308,10 @@ export type TsonBinary = Uint8Array;
  * sits well inside `number`'s exact integer range (±2^53), so no precision is at risk and the ordinary
  * arithmetic operators work directly.
  *
- * **`int64`..`int256`, `uint64`..`uint256`, and the four sign-bounded, unbounded-precision refinements
- * (`positive_integer`, `non_negative_integer`, `negative_integer`, `non_positive_integer`) map to
- * `bigint`.** This is the trap a port must not walk into: `int64`'s range alone already exceeds 2^53, so
+ * **`int64`..`int256`, `uint64`..`uint256`, and the unbounded-precision `integer` map to `bigint`.** This is the trap a port must not walk into: `int64`'s range alone already exceeds 2^53, so
  * a value like `9007199254740993n` would silently narrow to `9007199254740992` if read into a `number` —
  * no exception, no visible sign anything went wrong. `bigint` is exact at any width, which is the only
- * property that matters here, and the unbounded refinements have no fixed width to begin with, so
+ * property that matters here, and the unbounded integer has no fixed width to begin with, so
  * `bigint` is their only sound representation as well.
  *
  * These are documentation aliases, not branded/nominal types — nothing at this layer distinguishes
@@ -347,8 +344,7 @@ export type Uint128 = bigint;
 export type Uint256 = bigint;
 
 /**
- * `!positive_integer` / `!non_negative_integer` / `!negative_integer` / `!non_positive_integer` (§5.6):
- * a sign-bounded but otherwise unbounded-precision integer. See {@link Int8} for why this is `bigint`.
+ * `!integer` (§5.6): the arbitrary-precision integer. See {@link Int8} for why this is `bigint`.
  */
 export type UnboundedInteger = bigint;
 

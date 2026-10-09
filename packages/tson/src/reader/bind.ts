@@ -9,7 +9,7 @@
  *
  * **No schema in view, by design.** A `Binding` is authored independently of any schema
  * (`PORT-PLAN.md`, architectural decision 2) and carries none of a `record_field`'s own
- * `optional`/`voidable`/`role` facts (§5.2), `ElementState` (§5.3), or the size/uniqueness facets
+ * `optional`/`voidable`/`role` facts (§5.2), a position's `voidable` (§5.3), or the size/uniqueness facets
  * `ArrayBody`/`MapBody`
  * declare -- those are `schema/meta` questions, and `bind/strictness.ts`'s `checkBinding` already
  * answers the one such question a `Binding` alone can be checked against (does it cover its
@@ -264,7 +264,7 @@ function* skipCoreValue(ctx: ReadContext): Task<void> {
       yield* ctx.next(); // array-end
       return;
     case 'token':
-    case 'absent':
+    case 'void':
     case 'empty-brace':
       return; // leaf, already consumed
     default:
@@ -283,8 +283,8 @@ function describeEvent(e: TsonEvent): string {
       return 'an array';
     case 'empty-brace':
       return '{}';
-    case 'absent':
-      return "the absent sentinel '_'";
+    case 'void':
+      return "the void sentinel '_'";
     case 'token':
       return `a token ('${e.text}')`;
     default:
@@ -394,8 +394,8 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
     }
     case 'token':
       return { kind: 'token', text: e.text, form: e.form };
-    case 'absent':
-      return { kind: 'absent' };
+    case 'void':
+      return { kind: 'void' };
     case 'empty-brace':
       return { kind: 'empty-brace' };
     default:
@@ -510,14 +510,14 @@ function* readRecord<T>(
         yield* ctx.next();
       }
       const valuePeek = yield* ctx.peek();
-      if (valuePeek.kind === 'absent') {
+      if (valuePeek.kind === 'void') {
         yield* ctx.next();
         if (slot.required) {
           fieldCtx.report(
             'FIELD_REQUIRED',
             `missing required field '${fieldNameEvent.name}'`,
             `a value for '${fieldNameEvent.name}'`,
-            '(absent)',
+            '_',
           );
         }
       } else {
@@ -589,7 +589,7 @@ function fillMissingFields<T>(
         'FIELD_REQUIRED',
         `missing required field '${slot.wireName}'`,
         `a value for '${slot.wireName}'`,
-        '(absent)',
+        '(missing)',
       );
   }
 }
@@ -625,7 +625,7 @@ function finishRecord<T>(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tuple (§2.7, §5.3's per-position shape without its ElementState -- see this file's own top
+// Tuple (§2.7, §5.3's per-position shape without its `voidable` -- see this file's own top
 // comment)
 // ---------------------------------------------------------------------------------------------
 
@@ -689,7 +689,7 @@ function* readTuple<T>(binding: TupleBinding<T>, ctx: ReadContext, readAtom: Ato
 }
 
 // ---------------------------------------------------------------------------------------------
-// Array (§2.7) -- no ElementState, no min_items/max_items/unique_items: ArrayBinding carries none
+// Array (§2.7) -- no `voidable`, no min_items/max_items/unique_items: ArrayBinding carries none
 // of §5's ArrayBody facets, so none of that validation happens at this layer. See this file's own
 // top comment.
 // ---------------------------------------------------------------------------------------------
@@ -754,12 +754,12 @@ function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomRea
     for (;;) {
       const keyPeek = yield* ctx.peek();
       if (keyPeek.kind === 'map-end') break;
-      if (keyPeek.kind === 'absent') {
+      if (keyPeek.kind === 'void') {
         yield* ctx.next();
         ctx.report(
           'TYPE_MISMATCH',
-          "the absent sentinel '_' must not appear as a map key (§2.9)",
-          'a real map key, never the absent sentinel',
+          "the void sentinel '_' must not appear as a map key (§2.9)",
+          'a real map key, never the void sentinel',
           '_',
         );
         yield* ctx.next(); // map-arrow

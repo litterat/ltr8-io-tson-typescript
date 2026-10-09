@@ -72,7 +72,7 @@ export const DEFAULT_RESTRICTION_LEVEL: RestrictionLevel = 'HIGHLY_RESTRICTIVE';
 export const DEFAULT_RESTRICTION_UNIT: RestrictionUnit = 'WHOLE_NAME';
 
 /**
- * One script combination a {@link "./policy.js"} `NamePolicy`/`TokenPolicy` admits over and
+ * One script combination a {@link "./policy.js"} `IdentifierPolicy`/`ScriptPolicy` admits over and
  * above its level — the port of the pinned Java reference's `TsonUnicodePolicy.permitting`,
  * e.g. `[SCRIPT_LATIN, SCRIPT_CYRILLIC]` for a deployment that knows it is Russian. A plain
  * array rather than a `ReadonlySet`: a combination is always small (two or three scripts) and a
@@ -200,7 +200,12 @@ function satisfiesLevelOverUnit(
  * leading, trailing, or doubled separator) — a leading/trailing/doubled separator is not itself
  * a script-mixing problem this mechanism exists to catch.
  *
- * `permittedScripts` (default {@link NO_PERMITTED_SCRIPTS}) is `NamePolicy`/`TokenPolicy`'s own
+ * `separates` (default `_` and `-`) names the characters that divide a name into segments: an
+ * identifier profile supplies its own (`identifier-profile.ts`'s `profileSeparates`), since a
+ * character the profile adds is its punctuation and the profile, not the policy, knows which they
+ * are.
+ *
+ * `permittedScripts` (default {@link NO_PERMITTED_SCRIPTS}) is `IdentifierPolicy`/`ScriptPolicy`'s own
  * script-combination admission (§8.2 mechanism 3's relaxation device): a mixed-script unit whose
  * scripts are contained in any one of these combinations satisfies `level` regardless of what
  * `level` alone would say, checked ahead of `level`'s own rules — see {@link covered}.
@@ -210,6 +215,7 @@ export function satisfiesRestrictionLevel(
   level: RestrictionLevel = DEFAULT_RESTRICTION_LEVEL,
   unit: RestrictionUnit = DEFAULT_RESTRICTION_UNIT,
   permittedScripts: readonly ScriptCombination[] = NO_PERMITTED_SCRIPTS,
+  separates: (codePoint: number) => boolean = isDefaultSeparator,
 ): boolean {
   if (level === 'MINIMALLY_RESTRICTIVE' || level === 'UNRESTRICTED') return true;
 
@@ -218,18 +224,23 @@ export function satisfiesRestrictionLevel(
   }
 
   let start = 0;
-  for (let i = 0; i <= text.length; i++) {
-    if (
-      i < text.length &&
-      text.charCodeAt(i) !== 0x5f /* _ */ &&
-      text.charCodeAt(i) !== 0x2d /* - */
-    ) {
+  for (let i = 0; i <= text.length;) {
+    const codePoint = i < text.length ? (text.codePointAt(i) ?? -1) : -1;
+    const width = codePoint > 0xffff ? 2 : 1;
+    if (codePoint !== -1 && !separates(codePoint)) {
+      i += width;
       continue;
     }
     if (i > start && !satisfiesLevelOverUnit(text.slice(start, i), level, permittedScripts)) {
       return false;
     }
-    start = i + 1;
+    i += width;
+    start = i;
   }
   return true;
+}
+
+/** `_` and `-`: the separators of §8.2's per-segment unit when no identifier profile says otherwise. */
+function isDefaultSeparator(codePoint: number): boolean {
+  return codePoint === 0x5f /* _ */ || codePoint === 0x2d; /* - */
 }

@@ -2,16 +2,17 @@
 
 Everything else in this directory is **vendored verbatim** from the reference implementation at
 https://github.com/litterat/ltr8-io-tson-java, pinned to commit
-`0c1512c766a70792b409db3e5f6a717ae68ebd15` (the same commit `scripts/fetch-references.sh` pins).
+`905330e84a29d64ecf9a83db0c12800b9997c1d9` (the same commit `scripts/fetch-references.sh` pins).
 
 | File | What it is |
 | --- | --- |
-| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 36, Working Draft. |
-| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 36, Working Draft. |
-| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 36, its first revision. |
-| `tson-rev36-changelog.md` | The Revision 36 change log: every adjudicated change against Revision 35, by section. |
+| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 37, Working Draft. |
+| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 37, Working Draft. |
+| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 37. |
+| `tson-rev37-changelog.md` | The Revision 37 change log: every adjudicated change against Revision 36, by section. |
 | `m/meta-kernel.tn`, `m/meta.tn`, `m/core.tn` | The three live bundled schemas. |
 | `m/*-resolved.tn` | Resolver-output fixtures for the three above. |
+| `m/policy.tn` | The processor policy's vocabulary (Part 1 §8.2), a companion artifact pinned to meta and core. |
 
 ## Do not edit these files
 

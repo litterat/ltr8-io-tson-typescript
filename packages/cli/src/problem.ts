@@ -26,8 +26,10 @@
  * a library gap as "your document is invalid" is the one answer that is simply false.
  */
 import {
+  diagnosticOfNameRefusal,
   TsonLexError,
   TsonLimitRefusedError,
+  TsonNameHygieneRefusedError,
   TsonNotImplementedError,
   TsonParseError,
   TsonReadError,
@@ -70,12 +72,13 @@ export function classifyReadError(error: unknown): Problem {
   if (error instanceof TsonReadError) {
     return { kind: 'invalid', diagnostic: error.diagnostic };
   }
-  // §8.1's fifth outcome. A refusal is not one of the four categories, but it *is* a verdict --
-  // this processor looked at the document and declined it, and the sender holds the fix -- and
-  // §8.1 requires it to travel in the same report as the four rather than apart from them. So it
-  // is a verdict here for the same reason a name-hygiene refusal already is, and `exit.ts`'s own
-  // note says why that does not collapse the distinction the spec draws: which layer detected a
-  // problem is not what a caller does next, and what a caller does next is edit the document.
+  // A §8.2 name refusal travels as its own code, which `isVerdict` rejects: the document was
+  // declined by policy, not judged, so a run reports it `NOT_CHECKED` and still exits 1.
+  if (error instanceof TsonNameHygieneRefusedError) {
+    return { kind: 'invalid', diagnostic: diagnosticOfNameRefusal(error) };
+  }
+  // A §9.1 limit refusal is the same kind as a name refusal (`isRefusal`): not a verdict, so the
+  // run reports `NOT_CHECKED`, and still exit 1 since the sender holds the fix.
   if (error instanceof TsonLimitRefusedError) {
     return {
       kind: 'invalid',

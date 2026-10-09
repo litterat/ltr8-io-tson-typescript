@@ -25,8 +25,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-dispatch.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   pet => abstract { pet_type: text =?  name: text  nickname?: text? }
   cat => pet & { pet_type: = cat  hunting_skill?: text ~ lazy }
@@ -55,6 +55,7 @@ const SCHEMA_SOURCE = `
   words => set<text>
   fracs => set<rational>
   pinned_fraction => { half: rational = "1/2" }
+  positive_integer => !integer ^ { min: 1 }
 }
 `;
 
@@ -131,9 +132,9 @@ describe('§3.2/§3.3 the annotation object', () => {
     expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema is a resolver error everywhere this package reads (no scoped position built yet, §7.8, §9.4)', () => {
+  it('$schema at a position whose own type is not scoped is SCOPE_NOT_ADMITTED, a resolver error (§8.5, [TSON-SCHEMA] §7.8)', () => {
     const d = refusalJson('dog', '{"$schema": "https://example.test/x.tn", "pet_type": "dog"}');
-    expect(d.code).toBe('UNKNOWN_TYPE_REF');
+    expect(d.code).toBe('SCOPE_NOT_ADMITTED');
   });
 
   it('a $-initial member outside the closed reserved set is a resolver error (§3.2, §9.4)', () => {
@@ -457,8 +458,8 @@ describe('cross-encoding parity: same schema, same verdict', () => {
 describe('a record-bodied template family base', () => {
   const TEMPLATE_SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-dispatch-template.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   box => abstract <T> { kind: text =?  value: T }
   int_box => box<int32> & { kind: = int_box }

@@ -11,7 +11,7 @@ function token(text: string): AtomToken {
   return { text, form: 'single-line' };
 }
 
-const UNCONSTRAINED: EmailType = { kind: 'email_type', spec: 'rfc5322' };
+const UNCONSTRAINED: EmailType = { kind: 'email_type', normalization: 'NONE', spec: 'rfc5322' };
 
 describe('§5.5 !email -- accepts the dot-atom form', () => {
   const parser = createEmailParser('email', UNCONSTRAINED);

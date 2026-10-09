@@ -10,16 +10,10 @@
  * already return, so `compile.ts`'s own resolver never has to know an entry it just built is a
  * leaf.
  *
- * **`unit` has no schema-shape signal of its own.** meta-kernel.tn's own doc for the `unit`
- * constructor states this outright: its three kernel instances (`value`, `token`, `void`) "are
- * opaque atoms distinguished by name and prose-level parsing contract, not by schema shape" --
- * every one of them resolves to the identical empty `{ kind: 'unit' }` body, so nothing in
- * `schema/meta`'s types can tell them apart. This module dispatches those three names
- * specifically (`byUnitName`); a user schema's own `~unit {}` instance under any other name has
- * no established contract to fall back on, and is read the same way `token` is -- its canonical
- * lexeme, verbatim -- as the most general "opaque atom" reading available. This is a real
- * spec-feedback finding worth recording upstream, not a silent guess: the resolved schema model
- * gives a compiler no shape-level way to honour §4.2's own three-way distinction.
+ * **`value` and `void` are recognised by constructor.** `value_type` and `void_type` are atom
+ * constructors with empty vocabularies (§4.2), so a `value_type` body reads its token
+ * uninterpreted for the position to resolve, and a `void_type` body admits only the void sentinel
+ * (§7.3). Nothing here consults a declared name.
  *
  * **`enum` has the same gap for exactly one built-in instance.** `boolean => !enum [true false]`
  * (core.tn) is schema-shape-identical to any other two-member user enum (`status => !enum [UP
@@ -27,19 +21,20 @@
  * reasonably expects back, not the literal strings `"true"`/`"false"`. Recognising the exact
  * `{true, false}` member set and narrowing to a real host `boolean` is this module's own
  * documented reading of that same ambiguity, applied narrowly (a three-member enum that happens
- * to include `true` stays string-valued) rather than guessed at every enum.
+ * to include `true` stays string-valued) rather than guessed at every enum (`atom/enum.ts`).
+ *
+ * **A value of an identifier family is a name** (§8.2), so it meets the per-name mechanisms under
+ * the family's own profile, with the policy this compile was given ({@link AtomReaderOptions}).
  */
-import { TsonAtomValidationError } from '../core/errors.js';
 import type { AtomToken, AtomType } from '../atom/contract.js';
 import type { Atom } from '../schema/meta/typedef.js';
-import type { EnumBody } from '../schema/meta/bodies.js';
-import type { RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { AtomValue, Value } from '../tree/nodes.js';
 import { atomNode } from '../tree/nodes.js';
 import type { Task } from '../io/bytes.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import { atomTreeReader, atomTypeReader } from '../reader/tree/atom.js';
-import { absentTreeReader } from '../reader/tree/absent.js';
+import { voidTreeReader } from '../reader/tree/void.js';
 import { captureAnnotations } from '../reader/tree/annotations.js';
 import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from '../reader/tree/grammar.js';
 import { abandonedValue } from '../reader/tree/support.js';
@@ -54,6 +49,11 @@ import { createRationalParser } from '../atom/numeric/rational.js';
 import { createComplexParser } from '../atom/numeric/complex.js';
 import { createBinaryParser } from '../atom/numeric/binary.js';
 import { createMembershipCheck, createPatternCheck, createTextParser } from '../atom/text/text.js';
+import { createIdentifierParser } from '../atom/text/identifier.js';
+import { createEnumParser } from '../atom/enum.js';
+import { identifierProfileOf } from '../unicode/identifier-profile.js';
+import { DEFAULT_IDENTIFIER_POLICY, judgeName, type IdentifierPolicy } from '../unicode/policy.js';
+import { reportNameViolations } from '../reader/tree/refusal.js';
 import { createUuidParser } from '../atom/network/uuid.js';
 import { createUriParser } from '../atom/network/uri.js';
 import { createEmailParser } from '../atom/network/email.js';
@@ -68,46 +68,12 @@ import { createDateTimeParser } from '../atom/temporal/datetime.js';
 import { createDurationParser } from '../atom/temporal/duration.js';
 import { createPeriodParser } from '../atom/temporal/period.js';
 
-/** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every non-`unit` atom family. */
+/** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every atom family but `void` and `value`. */
 function wrap<T extends AtomValue>(atomType: AtomType<T>, typeRef: string): TypeReader<Value> {
   return atomTreeReader(atomTypeReader(atomType, typeRef), typeRef);
 }
 
-// ── enum ─────────────────────────────────────────────────────────────────────────────────────
-
-/** See this module's own top note on the `{true, false}` special case. */
-function buildEnumAtomType(typeRef: string, body: EnumBody): AtomType<string | boolean> {
-  const members = body.members;
-  const memberSet = new Set(members);
-  const isBoolean = members.length === 2 && memberSet.has('true') && memberSet.has('false');
-  const membership = `one of (${members.join(', ')})`;
-
-  return {
-    read(token: AtomToken): string | boolean {
-      if (!memberSet.has(token.text)) {
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${token.text}' is not a member of '${typeRef}' -- expected ${membership}`,
-          membership,
-        );
-      }
-      return isBoolean ? token.text === 'true' : token.text;
-    },
-    write(value: string | boolean): string {
-      return typeof value === 'boolean' ? (value ? 'true' : 'false') : value;
-    },
-  };
-}
-
-// ── unit ─────────────────────────────────────────────────────────────────────────────────────
-
-/** `token`, and every other schema's own `~unit {}` instance with no established prose contract -- the canonical lexeme, verbatim. See this module's own top note. */
-function tokenTextAtomType(): AtomType<string> {
-  return {
-    read: (token: AtomToken): string => token.text,
-    write: (value: string): string => value,
-  };
-}
+// ── value, void ──────────────────────────────────────────────────────────────────────────────
 
 /** §4's base value narrowed to the natural host value it implies -- this module's own copy of `reader/schemaless/tree.ts`'s `narrowBaseValue`/`narrowNumberForm`, duplicated rather than imported for the same reason that module states its own duplication: a small structural rule, nothing library-specific, and sub-agents share no context to import across. */
 function narrowBaseValue(value: BaseValue): AtomValue {
@@ -137,7 +103,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
  * `value`'s own reading contract (meta-kernel.tn: "the token, uninterpreted, read by the type the
  * position hands it to"). Not routed through {@link wrap} since its host inhabitants span three of
  * `AtomValue`'s cases rather than being fixed to one -- this is the one type whose contract is
- * "carry the token and let the position decide". There is no absent outcome here, since `_` is a
+ * "carry the token and let the position decide". There is no void outcome here, since `_` is a
  * distinct event kind this reader never sees as a `token`.
  *
  * The escape hatch is a *carrier*, not a resolution step: base type resolution applies only in
@@ -146,7 +112,7 @@ function narrowNumberForm(form: NumberForm): AtomValue {
  * that atom is in scope ([TSON-SCHEMA] §5.2, §7.4) -- which is why `decimal_type.min`'s `1` and
  * `1.0` are one number rather than an integer beside a float.
  */
-function unitValueTreeReader(displayName: string): TypeReader<Value> {
+function valueTreeReader(displayName: string): TypeReader<Value> {
   return {
     *read(ctx: ReadContext): Task<Value> {
       const annotations = yield* captureAnnotations(ctx);
@@ -169,13 +135,6 @@ function unitValueTreeReader(displayName: string): TypeReader<Value> {
   };
 }
 
-/** Dispatches `unit`'s three kernel names, and falls back to {@link tokenTextAtomType} for every other `~unit {}` instance. See this module's own top note. */
-function buildUnitReader(name: string): TypeReader<Value> {
-  if (name === 'void') return absentTreeReader(name);
-  if (name === 'value') return unitValueTreeReader(name);
-  return wrap(tokenTextAtomType(), name);
-}
-
 // ── regex_type ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -188,9 +147,10 @@ function buildUnitReader(name: string): TypeReader<Value> {
  * `createTextParser`'s own signature to accept either discriminant.
  */
 function asTextConstraints(atom: RegexType): TextType {
-  const { minLength, maxLength, length, pattern, members } = atom;
+  const { minLength, maxLength, length, pattern, members, normalization } = atom;
   return {
     kind: 'text_type',
+    normalization,
     ...(minLength === undefined ? {} : { minLength }),
     ...(maxLength === undefined ? {} : { maxLength }),
     ...(length === undefined ? {} : { length }),
@@ -232,23 +192,51 @@ function withTextFacets(
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────────────────────
 
+/** What a compile knows about an atom position beyond its body. */
+export interface AtomReaderOptions {
+  /** The `normalization` of an enum's label type (§7.4), recorded by linking (`LinkedSchema.enumForms`); `NONE` when absent. */
+  readonly enumForm?: Normalization;
+  /** [TSON-DATA] §8.2's name-hygiene policy over the values of identifier families; {@link DEFAULT_IDENTIFIER_POLICY} when absent. */
+  readonly identifierPolicy?: IdentifierPolicy;
+}
+
 /**
  * Builds the compiled reader for one resolved {@link Atom} body, under its own compiled entry
  * name `name` -- `compile.ts`'s one call into this module. Exhaustive over {@link Atom}'s own
  * closed union with no `default`, so a new atom family lands here as a type error, not a silent
  * `NOT_IMPLEMENTED` at read time.
  */
-export function buildAtomReader(name: string, atom: Atom): TypeReader<Value> {
+export function buildAtomReader(
+  name: string,
+  atom: Atom,
+  options: AtomReaderOptions = {},
+): TypeReader<Value> {
   switch (atom.kind) {
-    case 'unit':
-      return buildUnitReader(name);
+    case 'value_type':
+      return valueTreeReader(name);
+    case 'void_type':
+      return voidTreeReader(name);
     case 'enum':
-      return wrap(buildEnumAtomType(name, atom), name);
+      return wrap(createEnumParser(name, atom, options.enumForm), name);
     case 'integer_type':
       return wrap(createIntegerParser(name, atom), name);
     case 'text_type':
       return wrap(createTextParser(name, atom), name);
+    case 'identifier_type': {
+      const profile = identifierProfileOf(atom);
+      const policy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
+      return atomTreeReader(
+        atomTypeReader(createIdentifierParser(name, atom), name, (ctx, value) => {
+          const violations = judgeName(value, profile, policy);
+          if (violations.length === 0) return false;
+          reportNameViolations(ctx, value, violations);
+          return true;
+        }),
+        name,
+      );
+    }
     case 'uri_type':
+    case 'iri_type':
       return wrap(
         withTextFacets(createUriParser(name, atom), name, atom.members, atom.pattern),
         name,

@@ -44,8 +44,8 @@ interface SchemaGovernedReadOptions extends NestingLimitOptions {
 interface SchemalessReadOptions extends NestingLimitOptions {
   readonly schema?: undefined;
   readonly preserveUnknownTypeRefs?: boolean;
-  readonly identifierPolicy?: NamePolicy; // §8.2 over names
-  readonly tokenPolicy?: TokenPolicy; // §8.2 over values; scans nothing by default
+  readonly identifierPolicy?: IdentifierPolicy; // §8.2 over names
+  readonly tokenPolicy?: ScriptPolicy; // §8.2 over values; scans nothing by default
 }
 
 interface ValidationResult {
@@ -72,7 +72,7 @@ satisfies. `write` has no async overload — a `Value` is already in memory.
 ### The tree model (also `@ltr8/tson/tree`)
 
 ```ts
-type Value = RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | AbsentNode | MissingNode;
+type Value = RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | VoidNode | MissingNode;
 
 interface RecordNode {
   kind: 'record';
@@ -104,8 +104,8 @@ interface AtomNode {
   typeRef?: string;
   annotations: Annotations;
 }
-interface AbsentNode {
-  kind: 'absent';
+interface VoidNode {
+  kind: 'void';
   typeRef?: string;
   annotations: Annotations;
 }
@@ -152,8 +152,8 @@ type AtomValue =
   | MacAddress;
 ```
 
-Constructors: `recordNode`, `mapNode`, `arrayNode`, `tupleNode`, `atomNode`, `absentNode`,
-`missingNode`, `tsonDocument`, plus the `ABSENT` constant.
+Constructors: `recordNode`, `mapNode`, `arrayNode`, `tupleNode`, `atomNode`, `voidNode`,
+`missingNode`, `tsonDocument`, plus the `VOID` constant.
 
 Accessors — **all total, none throws**:
 
@@ -179,8 +179,8 @@ function createTson(config?: Config): Tson;
 
 interface Config extends NestingLimitOptions {
   readonly schemaSource?: SchemaSource;
-  readonly identifierPolicy?: NamePolicy;   // §8.2 over names
-  readonly tokenPolicy?: TokenPolicy;       // §8.2 over values; scans nothing by default
+  readonly identifierPolicy?: IdentifierPolicy;   // §8.2 over names
+  readonly tokenPolicy?: ScriptPolicy;       // §8.2 over values; scans nothing by default
 }
 
 interface Tson {
@@ -196,10 +196,18 @@ interface Tson {
 }
 
 interface ProcessorPolicy {
-  readonly identifierPolicy: NamePolicy;
-  readonly tokenPolicy: TokenPolicy;
+  readonly identifierPolicy: IdentifierPolicy;
+  readonly tokenPolicy: ScriptPolicy;
+  readonly limits: LimitsPolicy;                             // §9.1
   readonly unicodeDataVersion: string;
 }
+
+// §8.2. ScriptPolicy is the token policy: a level and the combinations admitted over it.
+interface ScriptPolicy { readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[] }
+interface IdentifierPolicy extends ScriptPolicy { readonly perSegment: boolean; readonly skeletonDistinctness: boolean }
+// DEFAULT_IDENTIFIER_POLICY, NO_IDENTIFIER_POLICY, DEFAULT_TOKEN_POLICY; scriptPolicy(level),
+// perSegment(p), permitting(p, ...scripts), withRestrictionLevel(p, level), withSkeletonDistinctness(p, on);
+// withIdentifierPolicy(config, p), withTokenPolicy(config, p). A name refusal is not a verdict: isNameRefusal(code).
 
 interface SchemaSource { fetch(reference: string): Promise<Uint8Array> }
 
@@ -359,7 +367,7 @@ function validateJsonAsync(
 interface ReadJsonOptions extends NestingLimitOptions {
   readonly schema: JsonCompiledSchema;
   readonly root: string;
-  readonly identifierPolicy?: NamePolicy; // §9.4: every $type, and any member matching no declared field
+  readonly identifierPolicy?: IdentifierPolicy; // §9.4: every $type, and any member matching no declared field
 }
 interface ValidateJsonResult {
   readonly value?: JsonValue;
@@ -471,12 +479,6 @@ reasoning about their own patterns.
 
 Real, and worth knowing before you write around them:
 
-- **`NamePolicy`/`TokenPolicy` and their `with*` helpers are not exported.**
-  `Config.identifierPolicy` and `Config.tokenPolicy` are public, but the type names and
-  `withRestrictionLevel`/`perSegment`/`permitting`/`DEFAULT_NAME_POLICY` are not reachable from any
-  entry point. Write the policy as an object literal (every field is required). `scriptNamed` and
-  `scriptName` _are_ exported, because building a `permittedScripts` combination means resolving a
-  script a caller names as text to the `ScriptId` this build assigns it.
 - **`createDataStream` is not exported**, so `bindReader` — which needs an event source — cannot be
   driven from the published package. Use `@ltr8/tson/bind`'s `fromDataValue`/`fromCoreValue` over a
   parsed AST instead.
@@ -486,6 +488,8 @@ Real, and worth knowing before you write around them:
 - **A data document's annotations are preserved but never resolved (§6).** An unknown `@annotation`
   on data, or one whose value does not match its declared type, passes. The schema side does
   enforce this.
-- **`@ltr8/tson/json` has no `objectReader`/bind counterpart, no in-band-only `$schema`/`$type`
-  binding, no `scoped`-position reader, and no schema-directed encoder.** See `STATUS.md`'s Part 3
-  section for the full, current list.
+- **`@ltr8/tson/json` has no `objectReader`/bind counterpart and no schema-directed encoder, and it
+  has no registry of its own.** A `scoped` position's EXTERN `$schema` is looked up through the
+  `foreignSchemas` the caller passes to `compileJsonSchema(linked, { foreignSchemas })`; without
+  one the push reports `SCHEMA_NOT_PERMITTED`. See `STATUS.md`'s Part 3 section for the full,
+  current list.

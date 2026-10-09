@@ -13,7 +13,7 @@ import type { TextType } from '../src/schema/meta/atoms-text.js';
  * was never written by Wave 1's own atom sub-agents).
  */
 
-const UNCONSTRAINED: TextType = { kind: 'text_type' };
+const UNCONSTRAINED: TextType = { kind: 'text_type', normalization: 'NONE' };
 
 describe('createTextParser -- text_type (§5.7)', () => {
   it('unconstrained: every token text is a valid value, verbatim', () => {
@@ -24,7 +24,11 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('enforces an exact length', () => {
-    const parser = createTextParser('text', { kind: 'text_type', length: 3n });
+    const parser = createTextParser('text', {
+      kind: 'text_type',
+      normalization: 'NONE',
+      length: 3n,
+    });
     expect(parser.read({ text: 'abc', form: 'single-line' })).toBe('abc');
     expect(() => parser.read({ text: 'abcd', form: 'single-line' })).toThrow(
       TsonAtomValidationError,
@@ -32,7 +36,12 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('enforces minLength/maxLength', () => {
-    const parser = createTextParser('text', { kind: 'text_type', minLength: 2n, maxLength: 4n });
+    const parser = createTextParser('text', {
+      kind: 'text_type',
+      normalization: 'NONE',
+      minLength: 2n,
+      maxLength: 4n,
+    });
     expect(parser.read({ text: 'ab', form: 'single-line' })).toBe('ab');
     expect(parser.read({ text: 'abcd', form: 'single-line' })).toBe('abcd');
     expect(() => parser.read({ text: 'a', form: 'single-line' })).toThrow(TsonAtomValidationError);
@@ -42,7 +51,11 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('a validation failure carries an ordering-bound `expected` fragment, never the atom name', () => {
-    const parser = createTextParser('text', { kind: 'text_type', maxLength: 1n });
+    const parser = createTextParser('text', {
+      kind: 'text_type',
+      normalization: 'NONE',
+      maxLength: 1n,
+    });
     try {
       parser.read({ text: 'ab', form: 'single-line' });
       expect.fail('expected a TsonAtomValidationError');
@@ -57,6 +70,7 @@ describe('createTextParser -- text_type (§5.7)', () => {
   it('a value outside the declared member set is a validation failure with a membership `expected` fragment', () => {
     const parser = createTextParser('country_code', {
       kind: 'text_type',
+      normalization: 'NONE',
       members: ['SE', 'NO', 'DK'],
     });
     expect(parser.read({ text: 'SE', form: 'single-line' })).toBe('SE');
@@ -74,19 +88,27 @@ describe('createTextParser -- text_type (§5.7)', () => {
     // spellings of the same NFC text.
     const precomposed = 'é';
     const decomposed = 'é';
-    const parser = createTextParser('accented', { kind: 'text_type', members: [precomposed] });
+    const parser = createTextParser('accented', {
+      kind: 'text_type',
+      normalization: 'NONE',
+      members: [precomposed],
+    });
     expect(parser.read({ text: decomposed, form: 'single-line' })).toBe(decomposed);
   });
 
   it('with no `members`, every token is admitted (an absent facet constrains nothing)', () => {
-    const parser = createTextParser('text', { kind: 'text_type' });
+    const parser = createTextParser('text', { kind: 'text_type', normalization: 'NONE' });
     expect(parser.read({ text: 'anything', form: 'single-line' })).toBe('anything');
   });
 
   // ── `text_type.pattern` enforced at read (§7.4, §5.5) ───────────────────────────────────────
 
   it('a value the pattern does not match is a validation failure with a pattern `expected` fragment', () => {
-    const parser = createTextParser('code', { kind: 'text_type', pattern: '[A-Z]{2}' });
+    const parser = createTextParser('code', {
+      kind: 'text_type',
+      normalization: 'NONE',
+      pattern: '[A-Z]{2}',
+    });
     expect(parser.read({ text: 'SE', form: 'single-line' })).toBe('SE');
     try {
       parser.read({ text: 'se', form: 'single-line' });
@@ -98,13 +120,14 @@ describe('createTextParser -- text_type (§5.7)', () => {
   });
 
   it('with no `pattern`, every token is admitted (an absent facet constrains nothing)', () => {
-    const parser = createTextParser('text', { kind: 'text_type' });
+    const parser = createTextParser('text', { kind: 'text_type', normalization: 'NONE' });
     expect(parser.read({ text: 'anything at all', form: 'single-line' })).toBe('anything at all');
   });
 
   it('a `pattern` and a `members` set both apply -- a member outside the pattern is unreachable at load (#22), but read time still enforces both facets independently', () => {
     const parser = createTextParser('code', {
       kind: 'text_type',
+      normalization: 'NONE',
       pattern: '[A-Z]{2}',
       members: ['SE', 'NO'],
     });

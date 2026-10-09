@@ -22,10 +22,10 @@ describe('outcomeOfDiagnostics', () => {
     );
   });
 
-  it('is INVALID for a §8.2 name-hygiene refusal -- a verdict, not a validity call', () => {
-    expect(outcomeOfDiagnostics([diagnostic('CONFUSABLE_NAMES')])).toBe('INVALID');
-    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_CHARACTER')])).toBe('INVALID');
-    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_SCRIPT')])).toBe('INVALID');
+  it('is NOT_CHECKED for a §8.2 name-hygiene refusal -- the fifth outcome, not a verdict', () => {
+    expect(outcomeOfDiagnostics([diagnostic('CONFUSABLE_NAMES')])).toBe('NOT_CHECKED');
+    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_CHARACTER')])).toBe('NOT_CHECKED');
+    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_SCRIPT')])).toBe('NOT_CHECKED');
   });
 
   it('is NOT_CHECKED when a non-verdict code is present alone', () => {

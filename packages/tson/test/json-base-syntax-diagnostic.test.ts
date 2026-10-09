@@ -26,15 +26,12 @@
  * property `is_classified_apart_from_a_syntax_error_and_is_not_a_verdict` exercises; this port's
  * `LIMIT_REFUSED` is never collected at all, so there is nothing there to classify apart from a
  * syntax error in a `Diagnostic[]` -- the two tests collapse into the one below, asserting the
- * throw itself, in both reading modes. `core/diagnostic.ts`'s own `isVerdict` also disagrees with
- * the reference's `Code.verdict()` for this one code, and says so at length in its own TSDoc: a
- * refusal is "the processor looked... and declined", which this port's model puts on the
- * *verdict* side of the split (`isVerdict('LIMIT_REFUSED') === true`), not the reference's
- * "statement about the processor, not about the document" reading. Both are pinned below.
+ * throw itself, in both reading modes. `isVerdict('LIMIT_REFUSED')` is `false`, as the
+ * reference's `Code.verdict()` is (Part 1 §9.1).
  */
 import { describe, expect, it } from 'vitest';
 
-import { isVerdict } from '../src/core/diagnostic.js';
+import { isNameRefusal, isRefusal, isVerdict } from '../src/core/diagnostic.js';
 import { TsonLimitRefusedError, TsonReadError } from '../src/core/errors.js';
 import { parseJson, readJsonTree, validateJson } from '../src/json/index.js';
 import { compileJsonSchema } from '../src/json/schema/compile.js';
@@ -42,8 +39,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-base-syntax.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person => { name: text  age: int32 }
 }
@@ -116,7 +113,10 @@ describe('a resource-limit refusal', () => {
     },
   );
 
-  it("this port's own isVerdict puts a limit refusal on the verdict side of the split, unlike the reference's Code.verdict()", () => {
-    expect(isVerdict('LIMIT_REFUSED')).toBe(true);
+  it('§9.1: a limit refusal is not a verdict, and is a refusal beside the name refusals', () => {
+    expect(isVerdict('LIMIT_REFUSED')).toBe(false);
+    expect(isRefusal('LIMIT_REFUSED')).toBe(true);
+    expect(isNameRefusal('LIMIT_REFUSED')).toBe(false);
+    expect(isRefusal('SCHEMA_NOT_FOUND')).toBe(false);
   });
 });

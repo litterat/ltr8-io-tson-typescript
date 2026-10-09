@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { readTree, validate } from '../src/facade/tree.js';
-import { DEFAULT_NAME_POLICY } from '../src/unicode/policy.js';
+import { DEFAULT_IDENTIFIER_POLICY } from '../src/unicode/policy.js';
 import { compile, type CompiledSchema } from '../src/compiler/compile.js';
 import {
   TsonInternalError,
@@ -73,10 +73,11 @@ describe('readTree/validate: schemaless (Class 1)', () => {
 describe('readTree/validate: schema-governed', () => {
   const SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   reading => { id: uuid label: non_empty_text }
+  non_empty_text => !text ^ { min_length: 1 }
 }
 `;
   const linked: LinkedSchema = resolveUserSchema(SCHEMA);
@@ -246,7 +247,7 @@ describe('name hygiene reaches the facade (§8.2)', () => {
 
   it('honours a relaxed policy, which is a code decision and never ambient', () => {
     const result = validate(bytesOf('{ aec: 1  аес: 2 }'), {
-      identifierPolicy: { ...DEFAULT_NAME_POLICY, skeletonDistinctness: false },
+      identifierPolicy: { ...DEFAULT_IDENTIFIER_POLICY, skeletonDistinctness: false },
     });
     expect(result.diagnostics).toEqual([]);
   });

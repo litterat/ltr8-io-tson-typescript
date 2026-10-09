@@ -1,12 +1,12 @@
 /**
  * Arrays and sets as a JSON array ([TSON-JSON] §6.2): elements at the element type's own reader,
- * in order, an element-optional array (`[T?]`) admitting JSON null at any slot as the absent
+ * in order, a voidable-element array (`[T?]`) admitting JSON null at any slot as the void
  * element — the slot exists and counts ([TSON-DATA] §2.9) — and a set's duplicates judged on the
  * element's own value identity ([TSON-SCHEMA] §7.5), never on its spelling. Size facets validate
  * the slot count.
  *
  * A set-typed position shares this exact reader: `schema/meta/bodies.ts`'s own `ArrayBody` backs
- * both `array` and `set` (a refinement of `array`, never a shape of its own), and `unordered`/
+ * both `array` and `set` (a refinement of `array`, never a shape of its own), and `ordered`/
  * `uniqueItems` are what tell them apart.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
@@ -17,11 +17,15 @@ import { jsonArray, jsonNull, type JsonValue } from '../tree.js';
 import { describeEvent, reportUnreadable, treeAtomKeyedReader } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import type { JsonTypeReader } from './types.js';
+import { reportConfusablePair } from './nameHygiene.js';
+import { declareOrder } from '../../value/orderedness.js';
 import { identityOfNode, isIdentified } from './valueIdentity.js';
+import { createConfusableScope } from '../../unicode/skeleton.js';
+import { terminalDefinition } from '../../link/referenceChain.js';
 
-const ABSENT = Symbol('json.array.absent');
+const VOID = Symbol('json.array.void');
 const REFUSED = Symbol('json.array.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED;
+type Slot = JsonValue | typeof VOID | typeof REFUSED;
 
 export function buildArrayReader(
   name: string,
@@ -29,7 +33,7 @@ export function buildArrayReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader<JsonValue> {
-  const optionalElements = body.state === 'OPTIONAL';
+  const optionalElements = body.voidable;
   const unique = body.uniqueItems;
   const minItems = body.minItems;
   const maxItems = body.maxItems;
@@ -44,6 +48,16 @@ export function buildArrayReader(
   const rawElementReader = unique ? ctx.rawAtomReader(body.elementType.name) : undefined;
   const keyedReader: JsonTypeReader =
     rawElementReader !== undefined ? treeAtomKeyedReader(rawElementReader) : elementReader;
+  // A unique array of an identifier family is a naming scope ([TSON-SCHEMA] §11.4): its elements
+  // are names ([TSON-DATA] §8.2), and two that read alike are refused at the second.
+  const elementsAreNames =
+    unique &&
+    (() => {
+      const element = terminalDefinition(body.elementType.name, (n) =>
+        ctx.linkedSchema.entries.get(n),
+      )?.body;
+      return element !== undefined && 'kind' in element && element.kind === 'identifier_type';
+    })();
 
   return {
     *read(readCtx: JsonReadContext): Task<JsonValue | undefined> {
@@ -64,6 +78,10 @@ export function buildArrayReader(
       const reportedBefore = outer.reported();
       const elements: Slot[] = [];
       const seen = unique ? new Map<string, number>() : undefined;
+      const scope =
+        elementsAreNames && readCtx.identifierPolicy().skeletonDistinctness
+          ? createConfusableScope()
+          : undefined;
 
       for (;;) {
         const peeked = yield* outer.peek();
@@ -81,7 +99,7 @@ export function buildArrayReader(
               'null',
             );
           }
-          elements.push(ABSENT);
+          elements.push(VOID);
           continue;
         }
         const value = yield* keyedReader.read(at);
@@ -101,6 +119,10 @@ export function buildArrayReader(
             );
           } else {
             seen.set(identity, index);
+            if (scope !== undefined && isIdentified(value) && typeof value.value === 'string') {
+              const collision = scope.add(value.value);
+              if (collision !== undefined) reportConfusablePair(at, collision, 'elements');
+            }
           }
           elements.push(node);
           continue;
@@ -112,8 +134,9 @@ export function buildArrayReader(
       checkSize(outer, name, elements.length, minItems, maxItems);
 
       if (outer.reported() !== reportedBefore) return undefined;
-      return jsonArray(
-        elements.map((slot) => (slot === ABSENT ? jsonNull() : (slot as JsonValue))),
+      return declareOrder(
+        jsonArray(elements.map((slot) => (slot === VOID ? jsonNull() : (slot as JsonValue)))),
+        body.ordered,
       );
     },
   };

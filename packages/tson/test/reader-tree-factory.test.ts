@@ -25,7 +25,6 @@ describe('recordReaderFactory', () => {
         supertypes: [],
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
         fields: [
           {
             name: 'name',
@@ -63,7 +62,7 @@ describe('recordReaderFactory', () => {
       supertypes: [],
       subtypes: [],
       annotations: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
     };
     const context: TreeReaderContext = {
       resolve: () => atomTreeReader(atomTypeReader(stubTextType(), 'text'), 'text'),

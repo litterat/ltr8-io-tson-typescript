@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Generates the checked-in copy of the three bundled schemas the standard library ships:
+ * Generates the checked-in copy of the four bundled schemas the standard library ships (the
+ * three schema layers and the processor-policy vocabulary):
  *
  *   packages/tson/src/stdlib/schemas.generated.ts
  *
@@ -34,6 +35,7 @@ const SCHEMAS = [
   { file: 'meta-kernel.tn', constant: 'META_KERNEL_TN' },
   { file: 'meta.tn', constant: 'META_TN' },
   { file: 'core.tn', constant: 'CORE_TN' },
+  { file: 'policy.tn', constant: 'POLICY_TN' },
 ];
 
 const parts = SCHEMAS.map(({ file, constant }) => {
@@ -43,7 +45,7 @@ const parts = SCHEMAS.map(({ file, constant }) => {
 });
 
 const source = `/**
- * The three bundled schemas' exact source text, vendored verbatim from \`spec/m/\` -- generated,
+ * The four bundled schemas' exact source text, vendored verbatim from \`spec/m/\` -- generated,
  * do not hand-edit. See \`scripts/gen-cli-bundled-schemas.mjs\` for how and why.
  *
  * Regenerate with \`npm run gen:cli-schemas\` whenever \`spec/m/\` moves to a new pin.

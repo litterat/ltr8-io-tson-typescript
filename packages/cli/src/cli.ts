@@ -1,6 +1,6 @@
 /**
- * `tson` -- the `@ltr8/tson-cli` entry point. Five commands (`validate`, `compile`, `policy`,
- * `hash`, `init-example`), three output formats (`text`, `json`, `tson`), and the exit-code
+ * `tson` -- the `@ltr8/tson-cli` entry point. Six commands (`validate`, `compile`, `policy`,
+ * `hash`, `strip`, `init-example`), three output formats (`text`, `json`, `tson`), and the exit-code
  * contract `exit.ts` documents in full: **0 checked and nothing to report, 1 checked and
  * rejected, 2 usage error, 69/75 a schema not obtained (permanently/temporarily), 78 a type with
  * no registered binding, 70 a library gap or an internal fault** -- the 1-vs-70 split being the
@@ -10,7 +10,7 @@
  * ranked into whichever non-OK code applies -- this module's only job is calling that and
  * rendering the result, never re-deciding it.
  *
- * **Help is two levels.** `tson --help` lists the five commands and nothing else; `tson <command>
+ * **Help is two levels.** `tson --help` lists the six commands and nothing else; `tson <command>
  * --help` gives that command what it needs -- what it does, its own options (including the
  * shared `POLICY_OPTIONS_HELP` block for `validate`/`compile`/`policy`, the three that judge a
  * name), and its exit codes. A usage *error* (a bad flag, a missing argument) prints the short
@@ -40,6 +40,7 @@ import { runCompile } from './commands/compile.js';
 import { runHash } from './commands/hash.js';
 import { runInitExample } from './commands/initExample.js';
 import { runPolicy } from './commands/policy.js';
+import { runStrip } from './commands/strip.js';
 import { runValidate, type InputKind, type ValidateOptions } from './commands/validate.js';
 
 export { EXIT } from './exit.js';
@@ -51,6 +52,7 @@ Usage:
   tson compile  [<policy options>] [--format text|json|tson] <schema>...
   tson policy   [<policy options>] [--format text|json|tson]
   tson hash     [--format text|json|tson] <schema>...
+  tson strip    [--keep-docs] <schema>
   tson init-example [<dir>]
 
 Commands:
@@ -63,6 +65,9 @@ Commands:
                  document in hand. See 'tson policy --help'.
   hash           Compute a document's canonical content hash ([TSON-DATA] §2.2.1) and, when
                  it declares !!id, the reference pinned with that hash. See 'tson hash --help'.
+  strip          Print a schema document's reading form: no !!id, pins or documentary
+                 annotations, the spec's library shortened, whitespace collapsed. Valid
+                 syntax, not a loadable schema. See 'tson strip --help'.
   init-example   Write an example schema (person.tn) and a matching data document
                  (person-data.tn) into <dir> (default: .), ready to validate.
 
@@ -75,7 +80,7 @@ a mistyped flag is not something to try to open.
 
 Exit codes:
   0  checked, and nothing to report
-  1  checked and rejected -- includes a [TSON-DATA] §8.2 name-hygiene refusal
+  1  checked and rejected -- includes a [TSON-DATA] §8.2 name-hygiene or §9.1 limit refusal
   2  usage error
  69  a schema permanently unavailable -- refused by policy, absent, or too large
  75  a schema temporarily unavailable -- unreachable, or it did not answer in time
@@ -92,6 +97,8 @@ const POLICY_OPTIONS_HELP = `policy options -- [TSON-DATA] §8.2 name hygiene, w
 here but accepted elsewhere. Every report states what it was judged under ('tson policy'
 prints it on its own; 'validate'/'compile' carry it as their own 'policy' field).
   --identifier-policy <level>   level for declared names (default: highly-restrictive)
+  --identifier-allow-look-alikes  turn off skeleton distinctness: two names in one scope that
+                                read alike (UTS #39 skeletons) are no longer refused
   --identifier-per-segment      apply it per _/- segment rather than the whole name, which
                                 admits id_пользователя while still refusing id_pаy
   --identifier-scripts <A+B>    admit one script combination over and above the level,
@@ -202,6 +209,30 @@ who wants the file rewritten pipes the printed reference into their own edit.
 
 options:
   --format text|json|tson  output format (default: text)`;
+
+const STRIP_USAGE = 'usage: tson strip [--keep-docs] <schema>';
+
+const STRIP_HELP = `usage: tson strip [--keep-docs] <schema>
+
+Prints a schema document's reading form to standard output: the same declarations in as few
+tokens as the syntax allows, for a reader that reads a schema rather than resolving it -- a
+language model given one in a prompt. The result is valid syntax and is not a loadable schema;
+the file is never rewritten.
+
+Removed or shortened, and nothing else:
+  !!id                       dropped
+  ?query on a header         dropped (the ?sha256= pin); a #fragment stays
+  meta-kernel, meta, core    shortened to revision and name, "37/core"; other references keep their URL
+  @doc @title @examples @comment   dropped (with --keep-docs only @comment)
+
+Whitespace is collapsed to one space, never removed; one line per header directive and per
+declaration; a quoted string is rewritten single-line.
+
+options:
+  --keep-docs  keep @doc, @title and @examples
+
+exit codes: 0 printed, 1 not a well-formed schema document (reported as file:line:col: message),
+            2 usage error or a file that cannot be read, 70 an internal fault`;
 
 const INIT_USAGE =
   'usage: tson init-example [<dir>]   (writes person.tn and person-data.tn; default dir: .)';
@@ -439,6 +470,39 @@ async function runHashCommand(args: readonly string[]): Promise<number> {
   return run.outcome === 'VALID' ? EXIT.OK : EXIT.INVALID;
 }
 
+// ── strip ────────────────────────────────────────────────────────────────────────────────────
+
+async function runStripCommand(args: readonly string[]): Promise<number> {
+  if (hasHelpFlag(args)) {
+    process.stdout.write(`${STRIP_HELP}\n`);
+    return EXIT.OK;
+  }
+  let keepDocs = false;
+  const files: string[] = [];
+  let literal = false;
+  for (const arg of args) {
+    if (literal) files.push(arg);
+    else if (arg === '--') literal = true;
+    else if (arg === '--keep-docs') keepDocs = true;
+    else if (looksLikeFlag(arg)) rejectUnknownFlag(arg, STRIP_USAGE);
+    else files.push(arg);
+  }
+  const [file, ...extra] = files;
+  if (file === undefined || extra.length > 0) throw new UsageError(STRIP_USAGE);
+  const result = await runStrip(file, keepDocs);
+  switch (result.kind) {
+    case 'stripped':
+      process.stdout.write(result.text);
+      return EXIT.OK;
+    case 'malformed':
+      process.stderr.write(`${result.message}\n`);
+      return EXIT.INVALID;
+    case 'unreadable':
+      process.stderr.write(`${result.message}\n`);
+      return EXIT.USAGE;
+  }
+}
+
 // ── init-example ─────────────────────────────────────────────────────────────────────────────
 
 async function runInitExampleCommand(args: readonly string[]): Promise<number> {
@@ -480,12 +544,13 @@ export async function main(argv: readonly string[]): Promise<number> {
     compile: runCompileCommand,
     policy: runPolicyCommand,
     hash: runHashCommand,
+    strip: runStripCommand,
     'init-example': runInitExampleCommand,
   }[command];
 
   if (run === undefined) {
     process.stderr.write(
-      `tson: unknown command '${command}' -- expected validate, compile, policy, hash, or init-example\n\n${USAGE}`,
+      `tson: unknown command '${command}' -- expected validate, compile, policy, hash, strip, or init-example\n\n${USAGE}`,
     );
     return EXIT.USAGE;
   }

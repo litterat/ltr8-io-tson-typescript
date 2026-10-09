@@ -28,7 +28,6 @@ const RECORD: Top = {
   fields: [],
   groups: [],
   extension: 'OPEN',
-  discriminators: [],
 };
 
 function schema(
@@ -38,7 +37,7 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/36/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/37/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),

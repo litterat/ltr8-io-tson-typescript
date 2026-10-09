@@ -6,12 +6,11 @@
  * renders back).
  */
 import { describe, expect, it } from 'vitest';
-import { consumePolicyOptions, limitsPolicyOf, processorPolicyOf } from '../src/policyOptions.js';
+import { renderPolicy } from '../src/render.js';
+import { stdlibTson } from '../src/stdlib.js';
+import { consumePolicyOptions, processorPolicyOf } from '../src/policyOptions.js';
 import {
   isDefaultPolicy,
-  limitsPolicyJson,
-  limitsPolicyNode,
-  limitsPolicyText,
   policyJson,
   policyNode,
   policySummary,
@@ -111,35 +110,96 @@ describe('isDefaultPolicy: permittedScripts', () => {
   });
 });
 
-// ── [TSON-DATA] §9.1's resource-limits policy -- reported beside the §8.2 one, on the same terms ──
+// ── The report is `policy.tn`'s `policy` type (spec/m/policy.tn) ─────────────────────────────────
 
-describe('limitsPolicyJson / limitsPolicyNode / limitsPolicyText', () => {
-  it('limitsPolicyJson renders all six limits, snake_case', () => {
-    const json = limitsPolicyJson(limitsPolicyOf());
-    expect(json).toEqual({
-      max_nesting_depth: 64,
-      max_import_closure: 64,
-      max_schema_entries: 65_536,
-      max_reference_chain: 64,
-      max_supertype_chain: 64,
-      max_materialisation_depth: 64,
+describe('policy report shape', () => {
+  it('json: identifier_policy has four members, token_policy two, and limits is max_depth alone', () => {
+    const json = policyJson(policyFor([]));
+    expect(Object.keys(json.identifier_policy)).toEqual([
+      'level',
+      'per_segment',
+      'skeleton_distinctness',
+      'permitting',
+    ]);
+    expect(Object.keys(json.token_policy)).toEqual(['level', 'permitting']);
+    expect(json.limits).toEqual({ max_depth: 64 });
+    expect(json).not.toHaveProperty('limits_policy');
+  });
+
+  it('names scripts by their UAX #24 property value alias', () => {
+    const json = policyJson(
+      policyFor(['--identifier-scripts', 'Latin+Old_Italic+SignWriting+Nko']),
+    );
+    expect(json.identifier_policy.permitting).toEqual([
+      ['Latin', 'Old_Italic', 'SignWriting', 'Nko'],
+    ]);
+  });
+
+  it('text: says without skeleton distinctness only when it is off', () => {
+    expect(policyText(policyFor([]))).not.toContain('skeleton');
+    expect(policySummary(policyFor(['--identifier-allow-look-alikes']))).toContain(
+      'HIGHLY_RESTRICTIVE without skeleton distinctness',
+    );
+    expect(isDefaultPolicy(policyFor(['--identifier-allow-look-alikes']))).toBe(false);
+  });
+
+  it.each([
+    ['the defaults', []],
+    ['look-alikes allowed', ['--identifier-allow-look-alikes']],
+    [
+      'per segment, scripts and a token level',
+      [
+        '--identifier-policy',
+        'moderately-restrictive',
+        '--identifier-per-segment',
+        '--identifier-scripts',
+        'Latin+Cyrillic',
+        '--identifier-scripts',
+        'Latin+Greek',
+        '--token-scripts',
+        'Latin+Cyrillic',
+      ],
+    ],
+  ])('a rendered report is valid data under policy.tn: %s', (_name, flags) => {
+    const tson = stdlibTson();
+    const linked = tson.schemas.get('tson.io/2026/37/m/policy.tn');
+    if (linked === undefined)
+      throw new Error('policy.tn is not registered in the standard library');
+    const compiled = tson.compile(linked);
+    const policy = policyFor(flags);
+
+    for (const format of ['tson', 'json'] as const) {
+      const rendered = renderPolicy(policy, format);
+      // JSON text is not TSON, but policy.tn's shape is what `tson` output states; the JSON form
+      // is compared structurally against the same members below.
+      if (format === 'json') {
+        expect(Object.keys(JSON.parse(rendered) as object).sort()).toEqual([
+          'identifier_policy',
+          'limits',
+          'token_policy',
+          'unicode_data_version',
+        ]);
+        continue;
+      }
+      const result = tson.validate(new TextEncoder().encode(rendered), {
+        schema: compiled,
+        root: 'policy',
+      });
+      expect(result.diagnostics).toEqual([]);
+    }
+  });
+
+  it('policy.tn does reject a report missing `limits` (the check above is not vacuous)', () => {
+    const tson = stdlibTson();
+    const linked = tson.schemas.get('tson.io/2026/37/m/policy.tn');
+    if (linked === undefined) throw new Error('policy.tn is not registered');
+    const full = renderPolicy(policyFor([]), 'tson');
+    // `limits` is the last member of the written record: cut it, close the record.
+    const rendered = `${full.slice(0, full.indexOf('limits'))}}`;
+    const result = tson.validate(new TextEncoder().encode(rendered), {
+      schema: tson.compile(linked),
+      root: 'policy',
     });
-  });
-
-  it('limitsPolicyNode renders the same six limits as a tson record', () => {
-    const node = limitsPolicyNode(limitsPolicyOf());
-    expect(node.kind).toBe('record');
-    if (node.kind !== 'record') throw new Error('unreachable');
-    expect(node.fields.get('max_schema_entries')).toMatchObject({ kind: 'atom', value: 65_536n });
-  });
-
-  it('limitsPolicyText states every limit on one line', () => {
-    const text = limitsPolicyText(limitsPolicyOf());
-    expect(text).toContain('nesting depth 64');
-    expect(text).toContain('import closure 64');
-    expect(text).toContain('schema entries 65536');
-    expect(text).toContain('reference chain 64');
-    expect(text).toContain('supertype chain 64');
-    expect(text).toContain('materialisation depth 64');
+    expect(result.diagnostics.length).toBeGreaterThan(0);
   });
 });

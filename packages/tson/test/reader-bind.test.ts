@@ -278,7 +278,7 @@ describe('bindReader -- map (§2.6)', () => {
     expect(readWith(mapReader, '{}')).toEqual(new Map());
   });
 
-  it('rejects the absent sentinel in key position (§2.9)', () => {
+  it('rejects the void sentinel in key position (§2.9)', () => {
     expect(() => readWith(mapReader, '{ _ => 1 }')).toThrow(/TYPE_MISMATCH/);
   });
 

@@ -2,19 +2,19 @@
 
 ← back to the [README](README.md)
 
-Built against TSON Part 1 (lexer + data format), a working draft:
-https://tson.io/raw/2026/36/tson-part1-data.md, Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/36/tson-part2-schema.md, and Part 3 (the JSON encoding,
-`./json`, new in Revision 36): https://tson.io/raw/2026/36/tson-part3-json.md.
+Built against TSON Part 1 (lexer + data format) of the **2026 Revision 37** series, a working draft:
+https://tson.io/raw/2026/37/tson-part1-data.md, Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/37/tson-part2-schema.md, and Part 3 (the JSON encoding,
+`./json`): https://tson.io/raw/2026/37/tson-part3-json.md.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 328 subjects
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 459 subjects
 over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: 328 / 328 subjects passing at the pinned suite commit, Class 1 and Class 2.**
+**Conformance: 459 / 459 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
-Class 1: 35 lexer, 42 parser, 27 reader, 14 resolver, 103 vocabulary. Class 2: 36 schema, 22 link,
-49 validate.
+Class 1 (236): 35 lexer, 44 parser, 27 reader, 14 resolver, 116 vocabulary. Class 2 (223): 86 schema,
+24 link, 113 validate.
 
 `RUNNER.md` in the corpus is normative for runners, and every rule it states is implemented.
 Sidecars are parsed with this implementation's own parser. Subjects are fed as raw bytes —
@@ -57,6 +57,28 @@ day it does not match is the day it matters.
       a sender needs the policy before writing rather than after being refused. Relaxation is an
       `identifierPolicy`/`tokenPolicy` the caller passes in code; nothing is read from the
       environment
+- [x] The bare `+` special token (§7.1, §7.2) — the fifteenth special character, the lexer's first
+      change since Revision 35; the schema grammar's optional-group mark, an ordinary token nowhere
+      else
+- [x] Text normalization (§2.4, §2.6, §8.2) — a `text_type`'s `normalization` form
+      (`NONE`/`NFC`/`NFKC`/`ASCII_CASEFOLD`/`NFKC_CASEFOLD`) puts a value into its form before
+      facets are judged and decides key identity at map, set and `unique_items` positions.
+      `NFKC_CASEFOLD` applies `toNFKC_Casefold(NFD(X))` as Unicode D147 defines it, so two NFC-equal
+      keys never fold apart (`unicode/normalization.ts`)
+- [x] `uri`, `uri_reference`, `iri`, `iri_reference` (§5.2, §5.6) — RFC 3986 and RFC 3987 grammars
+      hand-written (`atom/network/uriGrammar.ts`); `uri` refuses a relative reference and anything
+      beyond US-ASCII, an IRI admits `ucschar`/`iprivate`; a `!!id`/`!!schema` argument and a
+      schema identity are read as IRI-references
+- [x] Identity (§2.2.1) — an identity is parsed as RFC 3987; with no authority it is the absolute
+      path, so `/x.tn`, `file:/x.tn` and `file:///x.tn` are one identity; a relative path with no
+      host, a fragment, userinfo and a port are refused; the host is lowercase
+- [x] Void vocabulary (§2.9) — `_` is the void sentinel throughout: tree node `'void'`, token
+      `'void-token'`, diagnostic `VOID_MAP_KEY`, `VoidNode`/`voidNode`/`VOID`, `VoidValue`,
+      `VoidEvent`, `Emitter.voidValue()`, following the reference's `TsonVoid`/`VoidValue`/
+      `VoidEvent`. **Breaking at 0.37.0:** the Revision 36 names (`AbsentNode`, `absentNode`,
+      `ABSENT`, `'absent'`, `ABSENT_MAP_KEY`, `Emitter.absentValue()`) are gone. A required field not
+      written reads `(missing)`, and "absent" survives only for a field or facet a body does not
+      state
 - [x] Event stream — the Tier 2 pull source
 - [x] Data parser — the Tier 3 AST
 - [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer),
@@ -70,7 +92,8 @@ day it does not match is the day it matters.
       (`value/equality.ts`)
 - [x] Integer types — `int8`–`int256`, `uint8`–`uint256`, `positive_integer` and siblings
 - [x] Decimal/float types — `number`, `float32`, `float64`, `rational`, `complex`
-- [x] Identifier/network types — `uuid`, `uri`, `email`, `ipv4`, `ipv6`, `cidr4`, `cidr6`, `mac`
+- [x] Identifier/network types — `uuid`, `uri`, `uri_reference`, `iri`, `iri_reference`, `email`,
+      `ipv4`, `ipv6`, `cidr4`, `cidr6`, `mac`
 - [x] Binary types — `base64`, `base64url`, `base32`, `hex`
 - [x] Temporal types — `date`, `time`, `datetime`, `duration`
 - [x] Tree model — `Value` nodes, RFC 6901 pointers
@@ -111,7 +134,7 @@ day it does not match is the day it matters.
       beside the four error categories and a §8.2 refusal, located at the reference; a pin
       mismatch stays a resolver error
 - [x] All-or-nothing reads — a document that reported anything yields no value, in tree mode and
-      bind mode alike; there is no tree placeholder for a refused value, so an absent node always
+      bind mode alike; there is no tree placeholder for a refused value, so a void node always
       means a written `_`
 - [x] Name hygiene at the schema layer (§11.4) — the four scopes §11.4 names: one enum's members,
       one record's field names including group labels, one schema's declared names, and the merged
@@ -125,6 +148,46 @@ day it does not match is the day it matters.
 - [x] Subsumption at every governed position (§7.2) — a stray or wrong `!Type` is refused at an
       atom, array, map or tuple position and at a record with no subtypes, not only where a record
       declares subtypes
+- [x] Field groups with options (§5.9–§5.11, #18) — `( a: T | b: U )`, `+` and `?` marks,
+      `optional_members`, and a group as a first-class `field_group` record; the schema parser
+      applies §5.11's declaration rules (Java `checkGroupShape`), the resolver applies them to a
+      group however it is spelled (a `!record { groups: [ … ] }` literal included), and every group
+      refusal reads `FIELD_GROUP`. Removing a group's other options leaves the surviving member's
+      voidability alone; a map's voidable values count for inhabitance (§5.10.1)
+- [x] Typed template parameters (§5.2, §5.10, #9) — `<N, T, V: T>`: a value parameter carries a
+      type, may name an earlier parameter only, and is checked at the call site; a literal type
+      argument is refused at the declaration that wrote it, not at a minted name
+      (`compiler/templateSubstitution.ts`, `compiler/templates.ts`)
+- [x] Declared family members (§5.2, §5.10, §8.2) — a family's members are the declarations that
+      name them; two members pinning one selector value are refused, comparing pins under the
+      selector's own type; only a pin on an _unmarked_ name is a selector
+- [x] Identifier families (§5.4, §5.5, §7.7, #7) — `identifier` is a text family with a profile
+      (`identifier_type`: `start`/`start_add`/`continue`/`continue_add`/`medial`/`exclude`,
+      `normalization`), refinable but fixed once moved; a value of the family is a name, so §8.2's
+      mechanisms reach it under its profile (`unicode/identifier-profile.ts`)
+- [x] `enum_type` (§7.4, #19) — an enum has a label `type`, and its members are judged under that
+      type's profile; a pinned `type` is followed through enum refinements and a template's held
+      body to the constructor that pins it. `!enum`, `!text_enum` and `!enum_type` refine alike;
+      a narrowed member set keeps the inherited order
+- [x] `ordered` (§5.3, §7.5) — part of array and map identity: a unique array of unordered arrays
+      refuses a reordering, a map's entry order matters only when `ordered: true`
+- [x] `value`/`void` constructors and the retired `element_state`/`unit` (#20) — `void_type` and
+      `value_type` in the kernel, no sign-bound or unit core names
+- [x] `scoped.schemas` keys are schema identities (§7.8) — a fragment is refused; a `!!schema`
+      push at a position whose own type is not `scoped` is `SCOPE_NOT_ADMITTED` (resolver)
+- [x] Processor policy (Part 1 §8.2, `m/policy.tn`) — `ScriptPolicy` (a UTS #39 level and its
+      permitted scripts), `IdentifierPolicy` (a script policy plus `perSegment` and
+      `skeletonDistinctness`), a token policy, §9.1's limits and the UTS #39 data version, held in
+      one `ProcessorPolicy`. `policy.tn` is the fourth bundled schema, served by identity; nothing
+      loads a policy document and no document selects its own policy. A name refusal
+      (`CONFUSABLE_NAMES`/`RESTRICTED_*`) and a §9.1 limit refusal (`LIMIT_REFUSED`) are not verdicts (`isRefusal`), and a schema-load
+      refusal carries its §8.2 code and a pointer to the refused key
+- [x] Resolved output names the applied constructor (§8.1) — `enum_set` writes `!set_type { … }`
+      as the fixture does, from the entry's `source`; the three bundled fixtures compare equal in
+      written form with no remaining deferral
+- [x] `tson strip` (`compiler/strip.ts`, the reference's `TsonSchemaStripper`; `tson strip [--keep-docs] <schema>`) — drops `!!id`,
+      a header argument's `?query` and the reader-facing annotations (or only `@comment` under
+      `--keep-docs`), shortens a bundled identity, and re-parses its own output
 - [x] Desugaring — every sugar form lifted to a closed synthetic entry
 - [x] Resolution — composition, refinement, constructor application, templates
 - [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
@@ -135,7 +198,8 @@ day it does not match is the day it matters.
       Registering a schema (`config.ts`'s `resolveSchema`/`preload`) pin-checks it like a fetched
       one either way — its own `!!id` pin against its own content, and a later pinned reference to
       its identity against the recorded hash
-- [x] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end
+- [x] Bundled schemas — `meta-kernel.tn`, `meta.tn`, `core.tn` resolving end to end, and `policy.tn`
+      served by identity
 - [x] Compilation — a compiled, schema-validating reader
 - [x] Diagnostics — the data- and schema-side problem model
 
@@ -157,6 +221,19 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
       and pairs-form maps; the annotation object (§3.3) and its leading-member rule; tag dispatch
       at OPEN/ABSTRACT positions and member dispatch at a sealed family (§6.1.5); the choice kind
       table (§8) over the resolver's `disjoint` fact; all-or-nothing reads (§9.1)
+- [x] Revision 37 changes (§3.1, §5, §6, §8.5, §9.4) — duplicate member names judged after the key
+      type's `normalization`, then NFC; identifier families string-class under their profile;
+      text put into its form before facets; `uri`/`iri` refusing a relative reference; a leap
+      second refused; a set may be empty; `tuple1<T>` a one-element array; an `ordered` map
+      delivered in the order read, object form and pairs form alike; `FIELD_GROUP` for a group
+      that is not optional admitting exactly one option, an optional group at most one, `+` any
+      non-empty subset; an identifier-typed value judged under its family's profile and an
+      identifier-keyed map's keys a look-alike scope
+- [x] Scoped positions (§3.3, §8.5) — `$type` alone selects LOCAL; `$schema` with `$type` selects
+      EXTERN, fetched through the caller's `foreignSchemas`, consumed, and the rest read as a
+      `$type`-led object; a bare value, a missing `$type`, a cell the scope does not admit or a
+      schema or type outside `schemas` is a validation error; `$schema` at a position whose own
+      type is not scoped is `SCOPE_NOT_ADMITTED`
 - [x] Front door (`json/facade.ts`) — `readJsonTree`/`readJsonTreeAsync`,
       `validateJson`/`validateJsonAsync`, sync over bytes and async over a chunked `Task<T>` source
       exactly as the text stack's `readTree`/`validate`; a caller supplies an already-compiled
@@ -215,7 +292,7 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
       (containment checked after `realpath`); both Node-only, reachable only through that
       separate subpath (`src/source/`, its own `types: ["node"]` project) and never from the
       package's default entry
-- [x] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `policy`, `hash`, `init-example`;
+- [x] CLI (`@ltr8/tson-cli`) — `validate`, `compile`, `policy`, `strip`, `hash`, `init-example`;
       `text`/`json`/`tson` output (the `tson` format via `write()`, never string concatenation);
       exit codes `0` valid, `1` invalid input (a §8.2 refusal included — the sender still holds the
       fix), `2` usage error, `69` a schema permanently unobtainable, `75` one temporarily so, `78`
@@ -223,8 +300,10 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
       by who must act first. A run reports `outcome` — `VALID`/`INVALID`/`NOT_CHECKED` — rather
       than a boolean, so a document whose schema was never fetched is not reported invalid. The
       §8.2 policy is configurable from the command line (`--identifier-policy`,
-      `--identifier-per-segment`, `--identifier-scripts`, `--token-policy`, `--token-scripts`),
-      stated once per run on the report, and printable with no document in hand via `tson policy`.
+      `--identifier-per-segment`, `--identifier-allow-look-alikes`, `--identifier-scripts`,
+      `--token-policy`, `--token-scripts`), stated once per run on the report in `policy.tn`'s
+      shape (scripts by their UAX #24 alias), and printable with no document in hand via
+      `tson policy`.
       Bootstraps its own copy of
       meta-kernel/meta.tn/core.tn, embedded at build time from `spec/m/` via a generator script
       under `scripts/`, so `validate --schema`/`compile` work offline with no `SchemaSource`
@@ -252,11 +331,13 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
     call to `readJsonTree`/`validateJson` requires `schema`/`root`. `$type` tag dispatch _inside_
     a document already bound out of band (subsumption, record families, choices) is implemented in
     full; what is missing is starting a read with no binding at all.
-  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`)
-    compile to a `NOT_IMPLEMENTED` reader (`json/schema/compile.ts`'s own top note) — the plan
-    stays total (every entry still compiles), but reading such a position reports the gap rather
-    than a value. A template naming no `extension` — a genuine open template used bare, never
-    applied — takes the same `NOT_IMPLEMENTED` reader.
+  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`) are
+    read (`json/schema/scoped.ts`), but **the JSON front door takes its foreign schemas from the
+    caller**: an EXTERN value's schema is looked up through `compileJsonSchema(linked, {
+foreignSchemas })`, and a compile with no lookup reports `SCHEMA_NOT_PERMITTED`. There is no
+    JSON-side registry or loader; a caller passes its own lookup (a `Tson` instance's `schemas` map
+    serves). A template naming no `extension` — a genuine open template used bare, never applied —
+    still takes a `NOT_IMPLEMENTED` reader in JSON, where the text reader reads it.
   - **The §3.5 `TSON-Schema`/`TSON-Accept-Schema` header fields are not implemented.** They are an
     HTTP-transport convention over §3.4's out-of-band route; nothing in this package or the CLI
     reads or writes them. A caller wiring an HTTP layer implements them itself, on top of the
@@ -300,9 +381,9 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
     names, which §9.4 gives to the identifier policy instead. `identifierPolicy` **is** implemented
     for the schema-directed read (`ReadJsonOptions`, `json/schema/nameHygiene.ts`) and the CLI
     passes `--identifier-policy` through to it for a `.json` input exactly as it does for a `.tn`
-    one; **`--token-policy`/`--token-scripts` do not yet reach a `.json` input** — the CLI
-    (`packages/cli/src/commands/validate.ts`) still only threads `tokenPolicy` to the schemaless
-    _text_ path, a remaining piece of wiring rather than a library gap. The schemaless JSON door
+    one; **`--token-policy`/`--token-scripts` reach only the schemaless _text_ path** — the CLI
+    (`packages/cli/src/commands/validate.ts`) threads `tokenPolicy` to neither a `.json` input nor
+    a schema-governed text read, a remaining piece of wiring rather than a library gap. The schemaless JSON door
     (`parseJson`/`parseJsonAsync`/`parseJsonCollecting`) takes no token or identifier policy
     either, deliberately: §9.4's policies have nothing to reach there in the first place
     ([TSON-JSON] §3.4: no field names, no `$type`, no schema-typed position at all).
@@ -338,14 +419,14 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
     typing the position by the record family instead (Part 3 §8.4's own closing paragraph), or,
     in JSON only, wrapping (`{"$type": "<family>", "$value": {"$type": "<subtype>", ...}}`).
 
-- **`type_argument` is bound as a variant where the kernel declares a field group.** The kernel has
-  `type_argument => { ( name: type_ref | value: value ) }` — one record whose two members form a
-  §5.11 group — and `schema/bindings.ts`'s `typeArgumentBinding` models it as a variant of two wire
-  names, `ref` and `value`. So resolved output writes `!ref scope_kind` where the fixture has
-  `{ name: scope_kind }`, naming a type `ref` the kernel does not declare. §8.1 is explicit that
-  `type_argument` has no positional form and its braced record is load-bearing. Reading is
-  unaffected — every bundled fixture and every corpus vector reads — so this is a write-side gap.
-  Closing it needs a field-group shape in `bind/`, which no binding has yet.
+- **§8.1's ingest has no implementation.** "Ingest verifies a recorded parameter type and re-runs the
+  family checks over the closure", but nothing here reads resolved output back as a schema (the
+  reference does not either). The family checks run over the merged closure, ready for such a path.
+
+- **`strip` holds the whole document in memory.** `compiler/strip.ts` parses the schema, rewrites
+  it and re-lexes its own output, so memory is proportional to the document rather than to its
+  nesting depth. A schema document is small and the command is a one-shot, so this is a deliberate
+  departure from CLAUDE.md's streaming rule rather than an oversight.
 
 - **A template's held application is re-serialised, not preserved as written.** §5.10 holds the
   application _as written_, and `compiler/heldBody.ts` builds the text with
@@ -389,19 +470,6 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
   identity across entries — the read context's cursor is keyed on a `Symbol.for` registry symbol
   for that reason — but a new module-level `Map`, `WeakMap` or `instanceof` across the boundary
   would reintroduce it silently for CJS.
-
-- **A data document's annotations are preserved but never resolved (§6).** §6 says an annotation
-  names a type reachable one hop through the governing target — the `!!schema` target for a data
-  document — that an annotation whose name does not resolve there is an error, and that the value
-  is validated against that type's contract. This port validates neither: `@no_such_annotation`,
-  `@label:42` where `label => text`, a `void`-targeted annotation given a value, and a
-  record-targeted annotation missing a required field all pass. The schema side does enforce
-  resolution — an unknown annotation on a declaration is caught — so it is the data path that is
-  missing the check, and the schema side's own refusal surfaces as an internal error rather than a
-  resolver diagnostic, so it is mis-routed even where it works. Worth knowing why an
-  implementation would get this wrong rather than merely skip it: under a declared `text` _field_
-  an unquoted `42` is the string `"42"` (§7.4), but at an annotation position there is no such
-  re-reading, so reusing field-typed token reading for annotation values accepts what §6 refuses.
 
 - **Each subpath entry is a self-contained bundle, so a shared module can exist twice.**
   `tsup` builds with `splitting: false`, which means `reader/context.ts` (among others) is emitted
@@ -511,58 +579,21 @@ record for 'base', found an array`) names the terminal regardless of how many al
   already registered and never itself needs to suspend. A reference list preloaded out of
   dependency order fails with a clear `TsonSchemaValidationError` naming what wasn't registered
   yet, rather than silently trying to fetch mid-resolution.
-- **All three bundled schemas resolve, link, and match their fixtures up to documented deferrals.**
-  `subtypes` is exact against `meta-kernel-resolved.tn` (top 18, atom 6, product 5, sum 1,
-  text_type 2, atom_specification 2, array 1), and every key annotation (§6) now resolves with its
+- **All three bundled schemas resolve, link, and match their fixtures in written form, with one
+  documented difference.** `subtypes` is exact against `meta-kernel-resolved.tn`, and every key annotation (§6) now resolves with its
   value: `schema/annotationReader.ts` reads one through the governing meta's own compiled reader
   for the annotation's name, over `compiler/dataValueEvents.ts`'s replay of the written value.
   `@synthetic` is compared against the fixture exactly; `@doc` is compared against the **source
   document** instead, because `*-resolved.tn`'s own header says it carries long `@doc` strings
   abbreviated and that "a conforming resolver preserves them verbatim" — so the fixture cannot be
   the oracle for their text, and the source is a stronger one.
-  `packages/tson/test/bundled-schemas-resolve.test.ts` holds each remaining difference as an
-  assertion rather than a skip, so the list can only shrink:
-  - An atom-specification field optional with role FIXED (`spec`, `component`, the `allow_*`
-    flags) is written where the fixture omits it at its default.
-  - `enum_set`, `integer_member_set`, `text_member_set` and the `set_type_*` entries meta mints
-    for `set<T>` are each written `!array { … unordered: true unique_items: true }`, dropping
-    `min_items`, where the fixture writes `!set_type { element_type: … min_items: 1 }` — the
-    constructor the author actually applied, which §8.1 asks for ("a binding record headed by the
-    applied constructor"). `topBinding` discriminates on the host value's own `kind`, and
-    `set_type` is a refinement of `array` sharing its shape, so the applied name is not
-    recoverable from the value being written. It _is_ recorded, one level up, in the same entry's
-    `source`. `scoped.body.v.fields[1].type` and the minted `map_uri_array_type_name_*` name are
-    a consequence of this same gap, not an independent one — the array a map's own key type is
-    minted over carries the `min_items` this drops, so it hashes differently.
+  `packages/tson/test/bundled-schemas-resolve.test.ts` holds the difference as an assertion
+  rather than a skip:
   - `extern_of`/`extern_type`'s held `template` text is re-serialised from the parsed form
     (`compiler/heldBody.ts`'s `writeDataValue(application)`) rather than carried through as
     written, so `[ EXTERN ]` loses its author's spacing. §5.10 and §8.2 make whitespace free for
     identity, so nothing compares wrongly; the resolved output just does not round-trip byte for
     byte. Closing it means carrying the source span through the schema parser to the held body.
-  - `bytes`, `period`, `extern`, `dynamic`, `time`, `datetime` and `duration`'s key annotations
-    disagree between `core.tn` and `core-resolved.tn` in the vendored copy itself, not because of
-    anything this port does: `core.tn` declares `@ordered:NONE @bounded:false` on `bytes`,
-    `extern` and `dynamic` and `@ordered:TOTAL @bounded:false` on `period`, where the fixture
-    gives each no key annotations at all; and `core.tn` declares `@ordered:TOTAL` on `time`,
-    `datetime` and `duration` where the fixture still says `PARTIAL`. §5.5 settles the temporal
-    one against the fixture ("Both families are totally ordered — the mandatory offset is what
-    makes them so"); the resolved fixture was evidently not regenerated for either change.
-    Reported upstream.
-  - `type_argument`'s two-member field group (`{ ( name: type_ref | value: value ) }`) is bound
-    as a variant of two wire names, `ref` and `value`, so writing emits `!ref scope_kind` where
-    the fixture has `{ name: scope_kind }` — see the field-group gap above.
-
-  **The `set_type` gap is writer-side, and shared with the reference implementation** — read there
-  rather than assumed: its `ArrayBody` carries `@Typename(name = "array")` and its own Javadoc says
-  "`state`/`unordered`/`uniqueItems` always appear in written output even at their nominal default
-  — unlike a hand-written writer, generic record binding has no notion of 'this value is the
-  default, omit it'". Its `ResolvedFixtureTest` tolerates no difference at all, and does not have
-  to: it binds the fixture _into the value model_ and compares `TypeDefinition` objects, where both
-  `!set_type` and `!array` arrive as one `ArrayBody` and a field written at its default is
-  indistinguishable from one omitted. This port compares **written form**, which is the stricter
-  comparison and the reason this is visible here at all. Worth reporting upstream: a
-  resolved-output writer that cannot name the applied constructor is a §8.1 conformance gap in
-  both implementations, and the reference's own fixture test is structurally unable to see it.
 
 - **Tree mode's variant dispatch still buffers a value's whole annotation run.** §3.2's
   `!type-ref` sits behind a run of annotations of any length, so a dispatch has to reach past it,
@@ -627,7 +658,7 @@ record for 'base', found an array`) names the terminal regardless of how many al
 - [x] Conformance harness — discovers and pairs every vector at the pinned suite commit, under
       RUNNER.md's six rules
 - [x] Reference fetch — pinned Java source and the vector suite
-- [x] Vendored `spec/` — the two spec parts and the six bundled schemas, byte for byte
+- [x] Vendored `spec/` — the three spec parts, the change log and the bundled schemas, byte for byte
 - [x] Unicode tables — `XID_Start` / `XID_Continue` / `Nd`, generated and checked in
 - [x] UTS #39 tables — `Identifier_Status`, the confusables skeleton map, script data and the
       joining-control properties, generated into `src/unicode/` by `scripts/gen-uts39-tables.mjs`

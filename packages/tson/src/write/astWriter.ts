@@ -103,8 +103,8 @@ function writeCoreValueTo(value: CoreValue, out: Emitter): void {
     case 'array':
       writeArrayTo(value, out);
       break;
-    case 'absent':
-      out.absentValue();
+    case 'void':
+      out.voidValue();
       break;
     case 'empty-brace':
       // `{}` is the empty container of whatever the position's own type is (§2.8), and it is

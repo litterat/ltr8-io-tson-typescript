@@ -24,13 +24,13 @@ import type {
  * quoting) the parse tree keeps.
  *
  * **Naming divergence from the Java, stated here rather than left implicit.** The Java sealed interface
- * is `TsonValue`, with members `TsonRecord`/`TsonMap`/`TsonArray`/`TsonTuple`/`TsonAtom`/`TsonAbsent`/
+ * is `TsonValue`, with members `TsonRecord`/`TsonMap`/`TsonArray`/`TsonTuple`/`TsonAtom`/`TsonVoid`/
  * `TsonMissing` — no `Node` suffix; the Java Javadoc calls the *addition* of one elsewhere "anti-Jackson"
  * naming it deliberately avoids. This port cannot follow suit: `Record` is a TypeScript global utility
  * type and `Map`/`Array` are globals, so a bare `interface Record`/`Map`/`Array` in this module would
  * shadow them for the whole file (and, via re-export, confuse any file importing them unqualified
  * alongside this module's own). Every member of the union therefore takes a `Node` suffix instead —
- * `RecordNode`, `MapNode`, `ArrayNode`, `TupleNode`, `AtomNode`, `AbsentNode`, `MissingNode` — and the
+ * `RecordNode`, `MapNode`, `ArrayNode`, `TupleNode`, `AtomNode`, `VoidNode`, `MissingNode` — and the
  * union itself is named `Value`, matching this file's own requested export name rather than `TsonValue`
  * (the `Tson` prefix is otherwise reserved for error classes in this port; see `core/errors.ts`).
  *
@@ -50,7 +50,7 @@ import type {
  * none.
  */
 export type Value =
-  RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | AbsentNode | MissingNode;
+  RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | VoidNode | MissingNode;
 
 /**
  * A record node — named fields in a stable order (§2.5). Mirrors `TsonRecord`. Duplicate field names are
@@ -140,8 +140,8 @@ export type AtomValue =
  * A scalar leaf node holding a single resolved host value plus its optional type-ref — one node for
  * TSON's whole atom vocabulary (§5), not a class per atom type. Mirrors `TsonAtom`.
  *
- * The value is never absent — {@link AbsentNode} is the node for a position holding no value, exactly as
- * in Java (`TsonAtom`'s constructor rejects `null` "use TsonAbsent" instead).
+ * The value is never void — {@link VoidNode} is the node for a position holding no value, exactly as
+ * in Java (`TsonAtom`'s constructor rejects `null` "use TsonVoid" instead).
  */
 export interface AtomNode {
   readonly kind: 'atom';
@@ -151,9 +151,9 @@ export interface AtomNode {
 }
 
 /**
- * The absent sentinel as a node (§2.9) — a position that was written but holds no value, spelled `_`,
+ * The void sentinel as a node (§2.9) — a position that was written but holds no value, spelled `_`,
  * the format's one spelling of absence. Distinct from {@link MissingNode} (no such node at all): this
- * one was written. Mirrors `TsonAbsent`.
+ * one was written. Mirrors `TsonVoid`.
  *
  * **A written `_` on every schema-governed read, never a stand-in for a value that failed to
  * read.** A schema-governed tree/bind read is all-or-nothing (`reader/tree/support.ts`'s own
@@ -164,8 +164,8 @@ export interface AtomNode {
  * stands this node in for a token an atom rejected, the diagnostic (`core/diagnostic.ts`)
  * carrying what went wrong rather than the node.
  */
-export interface AbsentNode {
-  readonly kind: 'absent';
+export interface VoidNode {
+  readonly kind: 'void';
   readonly typeRef?: string;
   readonly annotations: Annotations;
 }
@@ -173,7 +173,7 @@ export interface AbsentNode {
 /**
  * The result of navigating to something that isn't in the tree — a query artifact, not a real value, so
  * repeated navigation keeps returning it and a deep accessor chain never throws. Distinct from
- * {@link AbsentNode} (the sentinel `_`), which is a position the document actually wrote. Mirrors
+ * {@link VoidNode} (the sentinel `_`), which is a position the document actually wrote. Mirrors
  * `TsonMissing`.
  *
  * `path` is the RFC 6901 pointer of the step that failed, relative to the node navigation started from —
@@ -223,8 +223,8 @@ export interface TsonDocument {
 // Trivial constructors
 // ---------------------------------------------------------------------------------------------
 
-/** The bare absent node, carrying no type-ref or annotations. Mirrors `TsonAbsent.instance()`. */
-export const ABSENT: AbsentNode = { kind: 'absent', annotations: EMPTY_ANNOTATIONS };
+/** The bare void node, carrying no type-ref or annotations. Mirrors `TsonVoid.instance()`. */
+export const VOID: VoidNode = { kind: 'void', annotations: EMPTY_ANNOTATIONS };
 
 /** Constructs a {@link RecordNode}. Mirrors `TsonRecord.of`/its canonical constructor. */
 export function recordNode(
@@ -296,13 +296,13 @@ export function atomNode(
   };
 }
 
-/** Constructs an {@link AbsentNode}; equivalent to {@link ABSENT} when called with no arguments. */
-export function absentNode(
+/** Constructs an {@link VoidNode}; equivalent to {@link VOID} when called with no arguments. */
+export function voidNode(
   typeRef?: string,
   nodeAnnotations: Annotations = EMPTY_ANNOTATIONS,
-): AbsentNode {
+): VoidNode {
   return {
-    kind: 'absent',
+    kind: 'void',
     annotations: nodeAnnotations,
     ...(typeRef !== undefined ? { typeRef } : {}),
   };

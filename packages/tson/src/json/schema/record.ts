@@ -43,9 +43,10 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
+import { selfNames, terminal, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
+  groupRefusals,
   isGroupMember,
   type FieldGroup,
   type FieldOmission,
@@ -69,7 +70,7 @@ import {
   describeEvent,
   enumReader,
   fieldValueParser,
-  identifierReader,
+  enumFormOf,
   type AtomForm,
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
@@ -102,7 +103,12 @@ export interface FieldValue {
  * by its JS `typeof`, which cannot render a `number` family's {@link TsonDecimal} host value at
  * all.
  */
-function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): JsonValue {
+function fieldValueNode(
+  form: AtomForm,
+  hostValue: unknown,
+  tokenText: string,
+  stringClass: boolean,
+): JsonValue {
   switch (form) {
     case 'boolean':
       return jsonBoolean(hostValue as boolean);
@@ -121,7 +127,9 @@ function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): 
     case 'string':
       return jsonString(tokenText);
     case 'enum':
-      return tokenText === 'true' || tokenText === 'false'
+      // §5.2: an enum whose type is not an identifier family is string-class whatever its members
+      // spell, so only an identifier enum's `true`/`false` are JSON booleans.
+      return !stringClass && (tokenText === 'true' || tokenText === 'false')
         ? jsonBoolean(tokenText === 'true')
         : jsonString(tokenText);
   }
@@ -166,10 +174,18 @@ export function fieldValueOf(
   token: { readonly text: string },
 ): FieldValue {
   const body = resolveFieldBody(ctx, fieldTypeName);
-  const { form, parse, write } = fieldValueParser(fieldTypeName, body);
+  const { form, parse, write } = fieldValueParser(
+    fieldTypeName,
+    body,
+    enumFormOf(ctx.linkedSchema, fieldTypeName),
+  );
   const hostValue = parse(token.text);
   const text = write === undefined ? token.text : write(hostValue);
-  return { hostValue, node: fieldValueNode(form, hostValue, text) };
+  const entries = ctx.linkedSchema.entries;
+  const stringClass = ctx.linkedSchema.textEnums.has(
+    terminal(fieldTypeName, (n) => entries.get(n)),
+  );
+  return { hostValue, node: fieldValueNode(form, hostValue, text, stringClass) };
 }
 
 /**
@@ -179,7 +195,7 @@ export function fieldValueOf(
  * node cannot answer that (it is the document's own *spelling*, exactly the thing §6.1.3 says a
  * FIXED comparison must not go by). Built from the same chain walk {@link fieldValueOf} uses, and
  * dispatched the same way `json/schema/compile.ts`'s own `build` dispatches an atom-kind entry —
- * `atomReader`/`enumReader`/`identifierReader` are exactly its non-composite cases, minus the
+ * `atomReader`/`enumReader` are exactly its non-composite cases, minus the
  * `void`/`value` branches §5.2 already rules out for a stated `~`/`=` value (`fieldValueParser`'s
  * own top note).
  */
@@ -189,9 +205,13 @@ function fixedFieldReader(
   schemaLocation: SchemaLocation,
 ): JsonTypeReader {
   const body = resolveFieldBody(ctx, fieldTypeName);
-  if (body.kind === 'enum') return enumReader(fieldTypeName, body, schemaLocation);
-  if (body.kind === 'unit' && fieldTypeName === 'identifier') {
-    return identifierReader(fieldTypeName, schemaLocation);
+  if (body.kind === 'enum') {
+    return enumReader(
+      fieldTypeName,
+      body,
+      schemaLocation,
+      enumFormOf(ctx.linkedSchema, fieldTypeName),
+    );
   }
   return atomReader(fieldTypeName, body, schemaLocation);
 }
@@ -216,7 +236,6 @@ interface RecordPlan {
   readonly stated: readonly (FieldValue | undefined)[];
   readonly index: ReadonlyMap<string, number>;
   readonly groups: readonly FieldGroup[];
-  readonly groupSlots: readonly (readonly number[])[];
 }
 
 function buildRecordPlan(
@@ -249,10 +268,6 @@ function buildRecordPlan(
     );
   });
 
-  const groupSlots = body.groups.map((group) =>
-    group.members.map((member) => index.get(toNfc(member)) ?? -1),
-  );
-
   return {
     displayName: name,
     own: selfNames(name, ctx.linkedSchema.entries),
@@ -266,7 +281,6 @@ function buildRecordPlan(
     stated,
     index,
     groups: body.groups,
-    groupSlots,
   };
 }
 
@@ -274,13 +288,13 @@ function buildRecordPlan(
 // Slots -- what a field's slot in the read loop holds
 // ---------------------------------------------------------------------------------------------
 
-const ABSENT = Symbol('json.record.absent');
+const VOID = Symbol('json.record.void');
 const REFUSED = Symbol('json.record.refused');
-type Slot = JsonValue | typeof ABSENT | typeof REFUSED | undefined;
+type Slot = JsonValue | typeof VOID | typeof REFUSED | undefined;
 
 function slotToNode(slot: Slot): JsonValue | undefined {
   if (slot === undefined || slot === REFUSED) return undefined;
-  return slot === ABSENT ? jsonNull() : slot;
+  return slot === VOID ? jsonNull() : slot;
 }
 
 /**
@@ -341,7 +355,7 @@ function refuseReserved(ctx: JsonReadContext, name: string, displayName: string)
     ctx
       .field(SCHEMA)
       .report(
-        'UNKNOWN_TYPE_REF',
+        'SCOPE_NOT_ADMITTED',
         `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
           `position -- '${displayName}' is a record`,
         'no $schema at this position',
@@ -459,7 +473,7 @@ export function buildRecordReader(
       if (plan.groups.length > 0) {
         validateGroups(outer, plan, slots);
       }
-      fillAbsent(outer, plan, slots);
+      fillMissing(outer, plan, slots);
 
       if (outer.reported() !== reportedBefore) return undefined;
       const members = new Map<string, JsonValue>();
@@ -541,7 +555,7 @@ function* statedNull(
   const field = plan.fields[at];
   if (field === undefined) throw new Error('unreachable');
   if (field.voidable) {
-    return ABSENT;
+    return VOID;
   }
   if (field.role === 'DEFAULT') {
     fctx.report(
@@ -607,33 +621,18 @@ function* verifyFixed(
 }
 
 function validateGroups(ctx: JsonReadContext, plan: RecordPlan, slots: readonly Slot[]): void {
-  for (let g = 0; g < plan.groupSlots.length; g += 1) {
-    const memberSlots = plan.groupSlots[g];
-    const group = plan.groups[g];
-    if (memberSlots === undefined || group === undefined) continue;
-    let present = 0;
-    for (const at of memberSlots) {
-      if (at >= 0 && slots[at] !== undefined) present += 1;
-    }
-    if (present > 1) {
-      ctx.report(
-        'TYPE_MISMATCH',
-        `at most one of (${group.members.join(' | ')}) may be present, and ${String(present)} are`,
-        'at most one',
-        String(present),
-      );
-    } else if (group.state === 'REQUIRED' && present === 0) {
-      ctx.report(
-        'FIELD_REQUIRED',
-        `exactly one of (${group.members.join(' | ')}) is required, and none is present`,
-        'exactly one',
-        'none',
-      );
+  const isPresent = (member: string): boolean => {
+    const at = plan.index.get(toNfc(member));
+    return at !== undefined && slots[at] !== undefined;
+  };
+  for (const group of plan.groups) {
+    for (const refusal of groupRefusals(group, isPresent, plan.displayName)) {
+      ctx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
     }
   }
 }
 
-function fillAbsent(ctx: JsonReadContext, plan: RecordPlan, slots: Slot[]): void {
+function fillMissing(ctx: JsonReadContext, plan: RecordPlan, slots: Slot[]): void {
   for (let i = 0; i < slots.length; i += 1) {
     if (slots[i] !== undefined) continue;
     const omission = plan.omitted[i];
@@ -649,7 +648,7 @@ function fillAbsent(ctx: JsonReadContext, plan: RecordPlan, slots: Slot[]): void
           'nothing',
         );
     } else if (omission === 'INJECTED') {
-      slots[i] = plan.stated[i]?.node ?? ABSENT;
+      slots[i] = plan.stated[i]?.node ?? VOID;
     }
   }
 }

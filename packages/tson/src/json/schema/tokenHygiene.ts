@@ -17,7 +17,7 @@
  * split) and would risk checking a token twice wherever a dispatcher peeks and this package's own
  * reader also consumes it.
  *
- * **Restriction-level only, matching `unicode/policy.ts`'s own {@link TokenPolicy} doc**:
+ * **Restriction-level only, matching `unicode/policy.ts`'s own {@link ScriptPolicy} doc**:
  * {@link tokenHygieneRefusal} can only ever report that one rule, so — unlike
  * {@link import('./nameHygiene.js').nameHygieneRefuses} — there is no mechanism to name.
  */

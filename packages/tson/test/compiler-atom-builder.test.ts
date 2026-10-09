@@ -33,7 +33,7 @@ describe('buildAtomReader -- integer_type (§5.6)', () => {
 
 describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
   it('reads text_type as a plain string', () => {
-    const reader = buildAtomReader('text', { kind: 'text_type' });
+    const reader = buildAtomReader('text', { kind: 'text_type', normalization: 'NONE' });
     expect(runSync(reader.read(bodyContextOver('"hello"')))).toEqual({
       kind: 'atom',
       value: 'hello',
@@ -45,6 +45,7 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
   it("reuses text_type's own length checks for regex_type, which composes the identical facets (§5.7)", () => {
     const atom: Atom = {
       kind: 'regex_type',
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc9485',
       minLength: 3n,
     };
@@ -55,7 +56,7 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
   });
 
   it('enforces text_type.members at read: a value outside the set is ATOM_CONSTRAINT_VIOLATION (§7.4, §5.7, #22)', () => {
-    const atom: Atom = { kind: 'text_type', members: ['SE', 'NO', 'DK'] };
+    const atom: Atom = { kind: 'text_type', normalization: 'NONE', members: ['SE', 'NO', 'DK'] };
     const reader = buildAtomReader('nordic', atom);
     expect(runSync(reader.read(bodyContextOver('SE')))).toEqual({
       kind: 'atom',
@@ -69,7 +70,7 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
   });
 
   it("counts length in Unicode code points, not UTF-16 code units, matching the kernel's own text_type doc (§5.7, §7.4)", () => {
-    const atom: Atom = { kind: 'text_type', length: 1n, members: ['😀'] };
+    const atom: Atom = { kind: 'text_type', normalization: 'NONE', length: 1n, members: ['😀'] };
     const reader = buildAtomReader('emoji', atom);
     // U+1F600 is one code point and a UTF-16 surrogate pair (`.length` is 2); a reader that
     // counted UTF-16 units would refuse the type's own only declared member.
@@ -84,6 +85,7 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
   it("reuses text_type's own members enforcement for regex_type, through the same asTextConstraints composition as its length facets", () => {
     const atom: Atom = {
       kind: 'regex_type',
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc9485',
       members: ['[a-z]+', '[0-9]+'],
     };
@@ -96,7 +98,7 @@ describe('buildAtomReader -- text_type / regex_type (§5.7)', () => {
 
 describe('buildAtomReader -- text_type/regex_type/uri_type/email_type pattern (§7.4, §5.5)', () => {
   it('enforces text_type.pattern at read: a value the I-Regexp pattern does not match is ATOM_CONSTRAINT_VIOLATION', () => {
-    const atom: Atom = { kind: 'text_type', pattern: '[a-z]+' };
+    const atom: Atom = { kind: 'text_type', normalization: 'NONE', pattern: '[a-z]+' };
     const reader = buildAtomReader('lower', atom);
     expect(runSync(reader.read(bodyContextOver('"abc"')))).toEqual({
       kind: 'atom',
@@ -112,6 +114,7 @@ describe('buildAtomReader -- text_type/regex_type/uri_type/email_type pattern (�
   it("reuses text_type's own pattern enforcement for regex_type, through the same asTextConstraints composition as its length/members facets", () => {
     const atom: Atom = {
       kind: 'regex_type',
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc9485',
       pattern: '[0-9]+',
     };
@@ -124,6 +127,9 @@ describe('buildAtomReader -- text_type/regex_type/uri_type/email_type pattern (�
   it('enforces uri_type.pattern at read, on top of its own URI grammar', () => {
     const atom: Atom = {
       kind: 'uri_type',
+      allowRelative: true,
+      allowFragment: true,
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc3986',
       pattern: 'https://.*',
     };
@@ -142,6 +148,7 @@ describe('buildAtomReader -- text_type/regex_type/uri_type/email_type pattern (�
   it('enforces email_type.pattern at read, on top of its own address grammar', () => {
     const atom: Atom = {
       kind: 'email_type',
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc5322',
       pattern: '.*@example\\.com',
     };
@@ -162,6 +169,9 @@ describe('buildAtomReader -- uri_type / email_type members (§7.4, §5.7, #22)',
   it('enforces uri_type.members even though it has no createTextParser-backed reader of its own', () => {
     const atom: Atom = {
       kind: 'uri_type',
+      allowRelative: true,
+      allowFragment: true,
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc3986',
       members: ['https://a.example/', 'https://b.example/'],
     };
@@ -180,6 +190,7 @@ describe('buildAtomReader -- uri_type / email_type members (§7.4, §5.7, #22)',
   it('enforces email_type.members the same way', () => {
     const atom: Atom = {
       kind: 'email_type',
+      normalization: 'NONE',
       spec: 'https://www.rfc-editor.org/rfc/rfc5322',
       members: ['a@example.com'],
     };
@@ -201,7 +212,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('status', {
       kind: 'enum',
       members: ['PENDING', 'SHIPPED', 'DELIVERED'],
-      profile: 'IDENTIFIER',
+      type: 'identifier',
     });
     expect(runSync(reader.read(bodyContextOver('SHIPPED')))).toEqual({
       kind: 'atom',
@@ -215,7 +226,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('status', {
       kind: 'enum',
       members: ['UP', 'DOWN'],
-      profile: 'IDENTIFIER',
+      type: 'identifier',
     });
     const { ctx, diagnostics } = collectingContextOver('SIDEWAYS');
     runSync(reader.read(ctx));
@@ -226,7 +237,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('boolean', {
       kind: 'enum',
       members: ['true', 'false'],
-      profile: 'IDENTIFIER',
+      type: 'identifier',
     });
     expect(runSync(reader.read(bodyContextOver('true')))).toEqual({
       kind: 'atom',
@@ -243,11 +254,11 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
   });
 });
 
-describe('buildAtomReader -- unit (§4.2): value/token/void distinguished by name, not shape', () => {
-  it('reads void as the absent sentinel only, rejecting a real token', () => {
-    const reader = buildAtomReader('void', { kind: 'unit' });
+describe('buildAtomReader -- value_type and void_type (§4.2): told apart by constructor, never by name', () => {
+  it('reads a void_type instance as the void sentinel only, rejecting a real token', () => {
+    const reader = buildAtomReader('void', { kind: 'void_type' });
     expect(runSync(reader.read(bodyContextOver('_')))).toEqual({
-      kind: 'absent',
+      kind: 'void',
       annotations: { values: [] },
     });
     const { ctx, diagnostics } = collectingContextOver('"nope"');
@@ -256,14 +267,14 @@ describe('buildAtomReader -- unit (§4.2): value/token/void distinguished by nam
   });
 
   it("rejects the unquoted token 'null' at a void position -- void admits '_' and nothing else ([TSON-SCHEMA] §7.3)", () => {
-    const reader = buildAtomReader('void', { kind: 'unit' });
+    const reader = buildAtomReader('void', { kind: 'void_type' });
     const { ctx, diagnostics } = collectingContextOver('null');
     runSync(reader.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
   it('reads value through base type resolution (§4), narrowing every token to its base value -- including the unquoted token "null", an ordinary string (§4.4)', () => {
-    const reader = buildAtomReader('value', { kind: 'unit' });
+    const reader = buildAtomReader('value', { kind: 'value_type' });
     expect(runSync(reader.read(bodyContextOver('42')))).toEqual({
       kind: 'atom',
       value: 42n,
@@ -281,14 +292,46 @@ describe('buildAtomReader -- unit (§4.2): value/token/void distinguished by nam
     });
   });
 
-  it('reads token (and any other unnamed ~unit {} instance) as its own canonical lexeme, verbatim', () => {
-    const reader = buildAtomReader('token', { kind: 'unit' });
-    expect(runSync(reader.read(bodyContextOver('some_identifier')))).toEqual({
-      kind: 'atom',
-      value: 'some_identifier',
-      typeRef: 'token',
+  it('recognises both by constructor: an instance under any other name reads the same', () => {
+    const nothing = buildAtomReader('nothing', { kind: 'void_type' });
+    expect(runSync(nothing.read(bodyContextOver('_')))).toEqual({
+      kind: 'void',
       annotations: { values: [] },
     });
+    const anything = buildAtomReader('anything', { kind: 'value_type' });
+    expect(runSync(anything.read(bodyContextOver('42')))).toMatchObject({
+      kind: 'atom',
+      value: 42n,
+    });
+  });
+
+  it('a type named void or value whose body is another constructor is read by that body, not the name', () => {
+    const reader = buildAtomReader('void', { kind: 'text_type', normalization: 'NONE' });
+    expect(runSync(reader.read(bodyContextOver('some_text')))).toMatchObject({
+      kind: 'atom',
+      value: 'some_text',
+    });
+  });
+});
+
+describe('buildAtomReader -- identifier_type (§5.5, §7.7)', () => {
+  it("reads an identifier family's token as its text, with text_type's facets", () => {
+    const reader = buildAtomReader('token', {
+      kind: 'identifier_type',
+      spec: 'https://www.unicode.org/reports/tr31/',
+      normalization: 'NFC',
+      start: 'XID',
+      continue: 'XID',
+      continueAdd: '-',
+      maxLength: 20n,
+    });
+    expect(runSync(reader.read(bodyContextOver('some_identifier')))).toMatchObject({
+      kind: 'atom',
+      value: 'some_identifier',
+    });
+    const { ctx, diagnostics } = collectingContextOver('a_name_far_too_long_to_fit');
+    runSync(reader.read(ctx));
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });
 });
 

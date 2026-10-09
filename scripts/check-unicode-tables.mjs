@@ -30,12 +30,19 @@ import { dirname, join } from 'node:path';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const GENERATED = ['packages/tson/src/unicode/xid.ts', 'packages/tson/src/regex/categories.ts'];
+const GENERATED = [
+  'packages/tson/src/unicode/xid.ts',
+  'packages/tson/src/regex/categories.ts',
+  'packages/tson/src/unicode/normalization-tables.ts',
+];
+
+/** The generator that writes each file; two scripts produce the three tables. */
+const GENERATORS = ['scripts/gen-unicode-tables.mjs', 'scripts/gen-normalization-tables.mjs'];
 
 /** @param {string} relative */
 function recordedVersion(relative) {
   const source = readFileSync(join(REPO_ROOT, relative), 'utf8');
-  const match = /export const UNICODE_VERSION = '([^']+)'/.exec(source);
+  const match = /export const (?:NORMALIZATION_)?UNICODE_VERSION = '([^']+)'/.exec(source);
   if (match === null) {
     throw new Error(`${relative}: no UNICODE_VERSION found — is the file generated?`);
   }
@@ -48,7 +55,9 @@ const distinct = [...new Set(versions.map((v) => v.version))];
 if (distinct.length !== 1) {
   console.error('The generated tables disagree about their Unicode version:');
   for (const v of versions) console.error(`  ${v.file}  ${v.version}`);
-  console.error('\nRegenerate both together with `npm run gen:unicode`.');
+  console.error(
+    '\nRegenerate them together with `npm run gen:unicode` and `npm run gen:normalization`.',
+  );
   process.exit(1);
 }
 
@@ -80,10 +89,9 @@ console.log('\nHost matches; regenerating to confirm the tables are current.');
 // report it as a stale table — which trains everyone to ignore this check.
 const before = new Map(GENERATED.map((f) => [f, readFileSync(join(REPO_ROOT, f), 'utf8')]));
 
-execFileSync('node', [join(REPO_ROOT, 'scripts/gen-unicode-tables.mjs')], {
-  cwd: REPO_ROOT,
-  stdio: 'inherit',
-});
+for (const generator of GENERATORS) {
+  execFileSync('node', [join(REPO_ROOT, generator)], { cwd: REPO_ROOT, stdio: 'inherit' });
+}
 
 const stale = GENERATED.filter((f) => readFileSync(join(REPO_ROOT, f), 'utf8') !== before.get(f));
 

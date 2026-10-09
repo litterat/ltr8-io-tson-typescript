@@ -45,8 +45,14 @@ export function stringSink(): { readonly sink: TextSink; readonly result: () => 
   };
 }
 
-/** Directive arguments are URIs (§3.3); validated with the same grammar the reader enforces. */
-const DIRECTIVE_URI = createUriParser('uri', { kind: 'uri_type', spec: 'RFC 3986' });
+/** Directive arguments are IRI-references (§2.2.1, §3.3); validated with the same grammar the reader enforces. */
+const DIRECTIVE_URI = createUriParser('iri_reference', {
+  kind: 'iri_type',
+  spec: 'RFC 3987',
+  allowRelative: true,
+  allowFragment: true,
+  normalization: 'NONE',
+});
 
 /**
  * TSON's own grammar-level writing primitives -- delimiters, separators, escaping, and the
@@ -106,7 +112,7 @@ export interface Emitter {
    * when present (§2.2). The terminator is not cosmetic: §2.2.1 bounds the content-hash input at
    * the id line's own terminator.
    *
-   * @throws TsonWriteError when `uri` is not a valid URI (§3.3) -- caught at the write that
+   * @throws TsonWriteError when `uri` is not a valid IRI-reference (§3.3) -- caught at the write that
    *   caused it rather than at whoever reads the result.
    */
   documentId(uri: string): void;
@@ -115,7 +121,7 @@ export interface Emitter {
    * Legal in a document header and at a scoped-value position (§3.3); this emits it wherever the
    * caller currently is, exactly like every other method here.
    *
-   * @throws TsonWriteError when `uri` is not a valid URI (§3.3).
+   * @throws TsonWriteError when `uri` is not a valid IRI-reference (§3.3).
    */
   schemaRef(uri: string): void;
 
@@ -131,8 +137,8 @@ export interface Emitter {
   typeRef(name: string): void;
 
   // ── Leaf tokens ─────────────────────────────────────────────────────────────────────────────
-  /** `_`, the absent sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
-  absentValue(): void;
+  /** `_`, the void sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
+  voidValue(): void;
   booleanValue(value: boolean): void;
   /**
    * Writes `text` as-is, unquoted -- the caller is responsible for `text` already being valid
@@ -289,7 +295,7 @@ function validateDirectiveUri(name: string, uri: string): void {
   } catch (error) {
     if (error instanceof TsonAtomParseError || error instanceof TsonAtomValidationError) {
       throw new TsonWriteError(
-        `'!!${name}' argument "${uri}" is not a valid URI (§3.3): ${error.message}`,
+        `'!!${name}' argument "${uri}" is not a valid IRI-reference (§3.3): ${error.message}`,
         { cause: error },
       );
     }
@@ -408,7 +414,7 @@ export function createEmitter(sink: TextSink): Emitter {
       emit(name);
       emit(' ');
     },
-    absentValue: () => {
+    voidValue: () => {
       startCoreValue();
       emit('_');
     },

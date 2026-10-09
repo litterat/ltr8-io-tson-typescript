@@ -12,7 +12,14 @@
  * the same one `wireForm.ts`'s own `heldRecord`/`isApplication`/`typeRefOf` agree on.
  */
 import { TsonNotImplementedError } from '../core/errors.js';
-import type { ArrayValue, CoreValue, DataValue, RecordValue, ScopedValue } from '../ast/value.js';
+import type {
+  ArrayValue,
+  CoreValue,
+  DataValue,
+  MapValue,
+  RecordValue,
+  ScopedValue,
+} from '../ast/value.js';
 import type { TypeArgument } from '../schema/meta/typedef.js';
 import { NAME, VALUE, refValue, rescope, tokenValue } from './wireForm.js';
 import { lexerFormOfMeta } from './tokenForms.js';
@@ -112,9 +119,26 @@ export function substitute(
       };
       return record;
     }
-    case 'map':
+    case 'map': {
+      // A parameter stands wherever a token stands, map keys and values alike: core's
+      // `extern_of => <S> !scoped { scope: [EXTERN] schemas: { S => _ } }` binds `S` as a key.
+      const map: MapValue = {
+        kind: 'map',
+        entries: value.entries.map((entry) => ({
+          key: {
+            ...entry.key,
+            coreValue: substitute(entry.key.coreValue, head, parameters, bindings),
+          },
+          value: rescope(
+            entry.value,
+            substitute(entry.value.value.coreValue, head, parameters, bindings),
+          ),
+        })),
+      };
+      return map;
+    }
     case 'empty-brace':
-    case 'absent':
+    case 'void':
       return value;
   }
 }

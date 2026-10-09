@@ -29,9 +29,9 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { terminal } from './referenceChain.js';
+import { resolvesToConstructor } from './referenceChain.js';
 import { isDataBody } from './bodyKind.js';
-import type { RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
+import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ function isInhabited(
       return recordInhabited(body, namespace, inhabited);
     case 'array':
       return (
-        body.state === 'OPTIONAL' ||
+        body.voidable ||
         isEmptyAllowed(body.minItems) ||
         refInhabited(body.elementType, namespace, inhabited)
       );
@@ -164,7 +164,7 @@ function isInhabited(
       return (
         isEmptyAllowed(body.minItems) ||
         (refInhabited(body.keyType, namespace, inhabited) &&
-          refInhabited(body.valueType, namespace, inhabited))
+          (body.voidable || refInhabited(body.valueType, namespace, inhabited)))
       );
     case 'tuple':
       return body.elements.every((element) => positionInhabited(element, namespace, inhabited));
@@ -180,13 +180,14 @@ function isInhabited(
 }
 
 /**
- * A record needs every part it cannot do without, and one member of every group it must choose
- * from.
+ * A record needs every part it cannot do without, and one satisfiable option of every group it
+ * must choose from (§5.10.1).
  *
  * **The groups are walked separately because their members hide from the field walk**: §5.11
- * makes a group's members uniformly OPTIONAL in `fields`, with the requirement carried by the
- * group's own state. Reading only the field list would find nothing required and call every
- * group satisfied.
+ * makes a group's members uniformly optional in `fields`, with the requirement carried by the
+ * group itself. Reading only the field list would find nothing required and call every group
+ * satisfied. A group that is not optional is satisfied by any option whose unmarked members are
+ * all inhabited — a member marked `?` within its option is not demanded once the option is chosen.
  */
 function recordInhabited(
   record: RecordBody,
@@ -195,7 +196,7 @@ function recordInhabited(
 ): boolean {
   const grouped = new Set<string>();
   for (const group of record.groups) {
-    for (const member of group.members) grouped.add(member);
+    for (const member of group.members.flat()) grouped.add(member);
   }
   for (const field of record.fields) {
     if (grouped.has(field.name) || isOptionalField(field)) {
@@ -215,19 +216,65 @@ function recordInhabited(
     }
   }
   for (const group of record.groups) {
-    if (group.state !== 'REQUIRED') {
+    if (group.optional) {
       continue;
     }
-    const any = group.members.some((member) =>
-      record.fields.some(
-        (field) => field.name === member && refInhabited(field.type, namespace, inhabited),
-      ),
-    );
-    if (!any) {
+    if (!group.members.some((option) => choosable(option, group, record, namespace, inhabited))) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Whether some document can choose `option` (§5.10.1, §5.11): it states every member the group
+ * does not mark `?`, and at least one member, so an option whose members are all marked needs one
+ * of them. A member is stated when its field is voidable (written `_`, which is present and chooses
+ * its option) or has a value of its own type; a member narrowed to `void` and not voidable can be
+ * stated by nothing, so an unmarked one makes the option unchoosable and a marked one drops out of
+ * it. A group that must be chosen is productive when one option is choosable, and a group left
+ * with none is unsatisfiable.
+ */
+function choosable(
+  option: readonly string[],
+  group: FieldGroup,
+  record: RecordBody,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  inhabited: ReadonlySet<string>,
+): boolean {
+  const optionalMembers = group.optionalMembers ?? [];
+  let anyStated = false;
+  for (const member of option) {
+    const stated = memberStatable(member, record, namespace, inhabited);
+    if (!stated && !optionalMembers.includes(member)) return false;
+    anyStated ||= stated;
+  }
+  return anyStated;
+}
+
+/** Whether the member's field can be stated; a member naming no field is the linker's to report, and counts as stated. */
+function memberStatable(
+  member: string,
+  record: RecordBody,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  inhabited: ReadonlySet<string>,
+): boolean {
+  const field = record.fields.find((f) => f.name === member);
+  return field === undefined || statable(field, namespace, inhabited);
+}
+
+/**
+ * Whether some document can state `field`: as `_` where it is voidable, else with a value of its
+ * type. `void`'s only value is `_`, so a `void` field that is not voidable can be stated by
+ * nothing — `a: void` empties its record, where `a?: void` empties only the field.
+ */
+function statable(
+  field: RecordField,
+  namespace: ReadonlyMap<string, TypeDefinition>,
+  inhabited: ReadonlySet<string>,
+): boolean {
+  if (field.voidable) return true;
+  return !refIsVoid(field.type, namespace) && refInhabited(field.type, namespace, inhabited);
 }
 
 /**
@@ -238,7 +285,7 @@ function recordInhabited(
  * type nothing can satisfy does not exist either.
  */
 function isOptionalField(field: RecordField): boolean {
-  return field.optional || field.voidable;
+  return field.voidable || (field.optional && field.value === undefined);
 }
 
 function positionInhabited(
@@ -246,7 +293,7 @@ function positionInhabited(
   namespace: ReadonlyMap<string, TypeDefinition>,
   inhabited: ReadonlySet<string>,
 ): boolean {
-  return element.state === 'OPTIONAL' || refInhabited(element.elementType, namespace, inhabited);
+  return element.voidable || refInhabited(element.elementType, namespace, inhabited);
 }
 
 /**
@@ -277,11 +324,11 @@ function refInhabited(
  * `void` -- what a required, non-voidable field's own `a: void` refusal (§5.10.1, §5.2) must ask
  * rather than comparing `ref.name` by spelling, since a rename (`nothing => void`) is the same
  * type under another name and `void` itself is otherwise an ordinary, trivially satisfiable
- * `unit` atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
+ * atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
  * one position-specific exemption from it, not a fact `void`'s own entry carries.
  */
 function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, TypeDefinition>): boolean {
-  return terminal(ref.name, (n) => namespace.get(n)) === 'void';
+  return resolvesToConstructor(ref.name, (n) => namespace.get(n), 'void_type');
 }
 
 // ── The diagnostic chain ─────────────────────────────────────────────────────────────────────
@@ -329,7 +376,7 @@ function recordDependency(
 ): string | undefined {
   const grouped = new Set<string>();
   for (const group of record.groups) {
-    for (const member of group.members) grouped.add(member);
+    for (const member of group.members.flat()) grouped.add(member);
   }
   for (const field of record.fields) {
     if (
@@ -341,14 +388,13 @@ function recordDependency(
     }
   }
   for (const group of record.groups) {
-    if (group.state !== 'REQUIRED') {
+    if (group.optional) continue;
+    if (group.members.some((option) => choosable(option, group, record, namespace, inhabited))) {
       continue;
     }
-    for (const member of group.members) {
+    for (const member of group.members.flat()) {
       const field = record.fields.find((f) => f.name === member);
-      if (field !== undefined && !refInhabited(field.type, namespace, inhabited)) {
-        return field.type.name;
-      }
+      if (field !== undefined && !statable(field, namespace, inhabited)) return field.type.name;
     }
   }
   return undefined;

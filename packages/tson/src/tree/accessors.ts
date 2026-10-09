@@ -95,7 +95,7 @@ function getByName(node: Value, name: string): Value {
       return missingNode(`/${escapeToken(name)}`);
     }
     default:
-      // Array, tuple, atom, absent, missing: no named field/entry exists at all. Mirrors
+      // Array, tuple, atom, void, missing: no named field/entry exists at all. Mirrors
       // TsonValue's own default `get(String)`, which every non-record/map member inherits unchanged.
       return missingNode(`/${escapeToken(name)}`);
   }
@@ -107,7 +107,7 @@ function getByIndex(node: Value, index: number): Value {
     const element = index >= 0 && index < node.elements.length ? node.elements[index] : undefined;
     return element ?? missingNode(`/${index.toString()}`);
   }
-  // Record, map, atom, absent, missing: no positional element exists. Mirrors TsonValue's own
+  // Record, map, atom, void, missing: no positional element exists. Mirrors TsonValue's own
   // default `get(int)`.
   return missingNode(`/${index.toString()}`);
 }

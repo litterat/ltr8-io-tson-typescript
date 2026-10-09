@@ -45,21 +45,21 @@ export type {
   ArrayNode,
   TupleNode,
   AtomNode,
-  AbsentNode,
+  VoidNode,
   MissingNode,
   AtomValue,
   TsonDocument,
   MapEntry as TreeMapEntry,
 } from './tree/nodes.js';
 export {
-  ABSENT,
+  VOID,
   tsonDocument,
   recordNode,
   mapNode,
   arrayNode,
   tupleNode,
   atomNode,
-  absentNode,
+  voidNode,
   missingNode,
 } from './tree/nodes.js';
 export * from './tree/accessors.js';
@@ -74,17 +74,28 @@ export * from './facade/write.js';
 export * from './config.js';
 export { bootstrapMetaKernel } from './schema/bootstrap.js';
 export type { Schema } from './compiler/schemaResolver.js';
+export { stripSchema, stripSchemaKeepingDocs } from './compiler/strip.js';
 export { linkSchema } from './link/link.js';
 export type { LinkedSchema, LinkDeps } from './link/link.js';
 
-// ── UTS #39 script names -- [TSON-DATA] §8.2 mechanism 3's script-combination admission ────────
+// ── Processor policy -- [TSON-DATA] §8.2 ─────────────────────────────────────────────────────────
 //
-// `NamePolicy`/`TokenPolicy` (`unicode/policy.ts`) are still not exported by name here (a
-// caller configures `Config.identifierPolicy`/`tokenPolicy` with a plain object satisfying their
-// shape, never by importing the interface); `scriptNamed`/`scriptName` are, because building a
-// `permittedScripts` combination at all means resolving a script the caller names as text (e.g.
-// a `--identifier-scripts Latin+Cyrillic` flag) to the {@link ScriptId} this build assigns it,
-// and `unicode/` is not part of this package's public subpath surface for that lookup to live
-// behind instead.
+// The identifier policy (names), the script policy (values: the token policy), and the plain
+// functions that derive a relaxed copy. Relaxation is a code decision at the call site; no
+// document, schema or environment variable selects a policy. `scriptNamed`/`scriptName` resolve a
+// script a caller names as text (e.g. `Latin+Cyrillic`) to the {@link ScriptId} this build assigns.
+export {
+  DEFAULT_IDENTIFIER_POLICY,
+  DEFAULT_TOKEN_POLICY,
+  NO_IDENTIFIER_POLICY,
+  perSegment,
+  permitting,
+  processorPolicy,
+  scriptPolicy,
+  withRestrictionLevel,
+  withSkeletonDistinctness,
+} from './unicode/policy.js';
+export type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/policy.js';
+export type { RestrictionLevel } from './unicode/restriction-level.js';
 export { scriptNamed, scriptName } from './unicode/uts39.js';
 export type { ScriptId } from './unicode/uts39.js';

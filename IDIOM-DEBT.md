@@ -86,7 +86,7 @@ binding API's ergonomics start costing real users.
 `ValueReaderFactory.create` (`reader/contracts.ts:192`),
 `ValueReaderFactoryRegistry.resolve` (`:205`), `ScalarParser.read` (`atom/forType.ts:62`),
 `ReadableByteStreamLike.getReader` (`io/streams.ts:42`),
-`ParameterKindsFailureReporter.report` (`compiler/parameterKinds.ts:286`),
+`ParameterTypesFailureReporter.report` (`compiler/parameterTypes.ts:575`),
 `MaterialisationFailureReporter.reportFailedApplication` (`compiler/templates.ts:152`),
 `MintedNames.claim` (`compiler/mintedNames.ts:28`).
 
@@ -259,7 +259,7 @@ reasons that hold here identically —
   never inspection of the value. A pull-only event source has no channel for the position to say
   so, and giving it one would put the JSON encoding's problem inside the TSON reader stack.
 - **`null` is two things.** In a plain `JsonValue` tree it is a real value (`json/tree.ts`'s
-  `JsonNull`); under a schema it is the absent sentinel and nothing else (§7). Settling that in a
+  `JsonNull`); under a schema it is the void sentinel and nothing else (§7). Settling that in a
   shared event vocabulary would answer a schema's question one layer too early.
 
 Both arguments are about the _event_ layer specifically, and — per the reference's own note — do
@@ -282,7 +282,13 @@ did, so there is no single TSON-side sibling to point at, only the pattern), and
 nameHygiene.ts` calls the _shared_ `unicode/policy.ts#nameHygieneRefusal` with a one-name scope
 rather than duplicating its logic — the one place in this item's list where reuse, not
 duplication, was possible, because that function already lived below both `reader/` and `json/`
-in the import graph.
+in the import graph. A third: `json/schema/scoped.ts` and `json/schema/foreign.ts` are the JSON copy of
+`compiler/compile.ts`'s `buildScopedReader` and its `compileForeign` cache ([TSON-SCHEMA] §7.8,
+[TSON-JSON] §8.5) — the same cell rule, `schemas` narrowing and foreign-schema lookup, where the
+text reader selects the cell off `!type`/`!!schema` and this one off the annotation object's
+leading members. The seam a unification would take is a cell-selection function from "what the
+value said about itself" to a `{ local | extern, schema?, type? }` verdict, with each encoding's
+reader supplying only how it peeks and how it consumes the opening apparatus.
 
 **What is _not_ duplicated, on purpose.** The `src/json/**` ESLint zone (`eslint.config.js`)
 forbids importing `lexer/`, `stream/`, `reader/`, `compiler/`, `tree/`, `write/` or `facade/` at
@@ -409,7 +415,7 @@ full port of the Java reference's own `CrossEncodingParityTest`, are what check 
 drifted). WP4E's own pass over that port found the pair had already drifted twice — `dispatchTag.ts`
 and `json/schema/record.ts#admissibleTag` were reporting a record-family tag mismatch at `/$type`
 where `subsumption.ts` reports at the value (fixed, with the shared reasoning recorded at each
-call site), and `reader/tree/record.ts#valueForStatedAbsentField` was reporting one code
+call site), and `reader/tree/record.ts#valueForStatedVoidField` was reporting one code
 (`ATOM_CONSTRAINT_VIOLATION`) for every non-voidable field written `_` where
 `json/schema/record.ts#statedNull` already split on `role` — proof this item's own risk is not
 theoretical. A repair pass over that same WP found the risk was not exhausted: fixing the split
@@ -427,19 +433,39 @@ work package: it is this port's ongoing defence against the two stacks drifting 
 not the trigger for unifying them — that trigger is still the shared module above, now with three
 named candidate pairs waiting for it rather than one.
 
+## 10. Diagnostic code names and verdicts are held to the Java's, with two known departures
+
+The public names for the void sentinel follow the reference's own (`TsonVoid`, `VoidValue`,
+`VoidEvent`, `VoidTreeReader`): `VoidNode`/`voidNode`/`VOID`, `VoidValue`, `VoidEvent`, the
+`'void'` node, value and event kind, `'void-token'` and `Emitter.voidValue()`. Part 1 §2.9 keeps
+"absent" for a field or facet a body does not state, so `FieldOmission`'s `'ABSENT'` — an internal
+fact with no Java counterpart — keeps its name.
+
+Three places differ from the reference's closed `Diagnostic.Code` set and are held as they are:
+
+- `VOID_MAP_KEY` has no counterpart: the Java's set carries no code for a void key in a map.
+- `LIMIT_REFUSED` is the Java's `LIMIT_EXCEEDED`: the same §9.1 outcome under a different name.
+
+`isVerdict('LIMIT_REFUSED')` answers `false`, as the Java's `Code.verdict()` does: Part 1 §9.1 says
+a limit refusal is not a verdict, and `isRefusal` groups it with the §8.2 name refusals.
+
+**Trigger.** The reference's `Diagnostic.Code` set settles. A rename is then one identifier per
+code.
+
 ## Summary
 
-| #   | Item                                          | Trigger                               | Size                      |
-| --- | --------------------------------------------- | ------------------------------------- | ------------------------- |
-| 1   | `record()` shape inference                    | Additive; can land early              | Medium, one file + tests  |
-| 2   | Single-method interfaces → function types     | Reference's `reader/` settles         | Medium, mechanical        |
-| 3   | `ReadContext` accessors + symbol-keyed cursor | `TsonReadContext` settles             | Large, internal only      |
-| 4   | `setPrototypeOf` dead code                    | None                                  | One line                  |
-| 5   | `defined()` helper for optional spreads       | None                                  | Small, many files         |
-| 6   | `DiagnosticCode` casing                       | None — document, don't rename         | One comment               |
-| 7   | Java-facing TSDoc                             | Reference's structure settles         | Large, 65 files           |
-| 8   | `export *` barrel                             | Before first npm publish              | Small, one file           |
-| 9   | `json/` mirrors the TSON-text read-plan shape | A shared `tson-encoding`-style module | Large, whole `json/` tree |
+| #   | Item                                                  | Trigger                               | Size                      |
+| --- | ----------------------------------------------------- | ------------------------------------- | ------------------------- |
+| 1   | `record()` shape inference                            | Additive; can land early              | Medium, one file + tests  |
+| 2   | Single-method interfaces → function types             | Reference's `reader/` settles         | Medium, mechanical        |
+| 3   | `ReadContext` accessors + symbol-keyed cursor         | `TsonReadContext` settles             | Large, internal only      |
+| 4   | `setPrototypeOf` dead code                            | None                                  | One line                  |
+| 5   | `defined()` helper for optional spreads               | None                                  | Small, many files         |
+| 6   | `DiagnosticCode` casing                               | None — document, don't rename         | One comment               |
+| 7   | Java-facing TSDoc                                     | Reference's structure settles         | Large, 65 files           |
+| 8   | `export *` barrel                                     | Before first npm publish              | Small, one file           |
+| 9   | `json/` mirrors the TSON-text read-plan shape         | A shared `tson-encoding`-style module | Large, whole `json/` tree |
+| 10  | Diagnostic code names and verdicts held to the Java's | The Java's code set settles           | Small, a few identifiers  |
 
-Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7 and 9 are the hold — and 7 is
+Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7, 9 and 10 are the hold — and 7 is
 where most of the "this library is its own thing now" actually lives.

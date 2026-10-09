@@ -51,8 +51,8 @@ const ID = 'https://example.test/json-schema-binding.tn';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"${ID}"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person => { name: text  tries?: int32 ~ 0 }
   alias  => person
@@ -154,11 +154,11 @@ describe('JSON schema binding ([TSON-JSON] §3.4)', () => {
     });
 
     it('an explicit UNRESTRICTED policy admits the look-alike name, which then reports as an unrecognised field instead', async () => {
-      const { DEFAULT_NAME_POLICY } = await import('../src/unicode/policy.js');
+      const { DEFAULT_IDENTIFIER_POLICY } = await import('../src/unicode/policy.js');
       const result = validateJson(LOOK_ALIKE, {
         schema: schema(),
         root: 'person',
-        identifierPolicy: { ...DEFAULT_NAME_POLICY, restrictionLevel: 'UNRESTRICTED' },
+        identifierPolicy: { ...DEFAULT_IDENTIFIER_POLICY, restrictionLevel: 'UNRESTRICTED' },
       });
       expect(result.diagnostics.some((d) => d.code === 'RESTRICTED_SCRIPT')).toBe(false);
       expect(result.diagnostics.some((d) => d.code === 'UNRECOGNIZED_FIELD')).toBe(true);

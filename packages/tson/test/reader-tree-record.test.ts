@@ -61,7 +61,6 @@ function reader(fields: RecordField[], groups: RecordBody['groups'] = []): TypeR
     fields,
     groups,
     extension: 'OPEN',
-    discriminators: [],
   };
   return recordTreeReader(
     'person',
@@ -124,12 +123,12 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     });
   });
 
-  it('a required, voidable field written `_` (§2.9) is present as an AbsentNode -- the key is still required (§5.2)', () => {
+  it('a required, voidable field written `_` (§2.9) is present as an VoidNode -- the key is still required (§5.2)', () => {
     const r = reader([field('name', 'text'), field('age', 'int32', { voidable: true })]);
     const stated = runSync(r.read(bodyContextOver('{ name: "Ada" age: _ }')));
     if (stated.kind !== 'record') throw new Error('unreachable');
     expect(stated.fields.has('age')).toBe(true);
-    expect(stated.fields.get('age')).toEqual({ kind: 'absent', annotations: { values: [] } });
+    expect(stated.fields.get('age')).toEqual({ kind: 'void', annotations: { values: [] } });
     const { ctx, diagnostics } = collectingContextOver('{ name: "Ada" }');
     runSync(r.read(ctx));
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
@@ -144,7 +143,7 @@ describe('recordTreeReader -- shape (§5.2, §5.6)', () => {
     const omitted = runSync(r.read(bodyContextOver('{ name: "Ada" }')));
     if (stated.kind !== 'record' || omitted.kind !== 'record') throw new Error('unreachable');
     expect(stated.fields.has('age')).toBe(true);
-    expect(stated.fields.get('age')).toEqual({ kind: 'absent', annotations: { values: [] } });
+    expect(stated.fields.get('age')).toEqual({ kind: 'void', annotations: { values: [] } });
     expect(omitted.fields.has('age')).toBe(false);
   });
 
@@ -268,26 +267,26 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
   function groupedReader(): TypeReader<Value> {
     return reader(
       [field('a', 'text', { optional: true }), field('b', 'text', { optional: true })],
-      [{ members: ['a', 'b'], state: 'REQUIRED' }],
+      [{ members: [['a'], ['b']], optional: false }],
     );
   }
 
-  it('exactly one member present satisfies a REQUIRED group', () => {
+  it('exactly one member present satisfies a group that is not optional', () => {
     const { ctx, diagnostics } = collectingContextOver('{ a: "x" }');
     runSync(groupedReader().read(ctx));
     expect(diagnostics.diagnostics).toEqual([]);
   });
 
-  it('zero members present reports FIELD_REQUIRED', () => {
+  it('zero members present reports FIELD_GROUP', () => {
     const { ctx, diagnostics } = collectingContextOver('{}');
     runSync(groupedReader().read(ctx));
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_GROUP']);
   });
 
-  it('more than one member present reports TYPE_MISMATCH', () => {
+  it('members of more than one option present report FIELD_GROUP', () => {
     const { ctx, diagnostics } = collectingContextOver('{ a: "x" b: "y" }');
     runSync(groupedReader().read(ctx));
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_GROUP']);
   });
 
   /**
@@ -304,7 +303,7 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
         field('a', 'text', { optional: true, role: 'FIXED' }, 'x'),
         field('b', 'text', { optional: true }),
       ],
-      [{ members: ['a', 'b'], state: 'REQUIRED' }],
+      [{ members: [['a'], ['b']], optional: false }],
     );
   }
 
@@ -312,7 +311,7 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
     const { ctx, diagnostics } = collectingContextOver('{}');
     const value = runSync(pinnedMemberReader().read(ctx));
     expect(value).toBeUndefined();
-    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
+    expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['FIELD_GROUP']);
   });
 
   it('a pinned member satisfies the group when the other member is written, without also injecting the pin', () => {
@@ -330,6 +329,68 @@ describe('recordTreeReader -- field groups (§5.11)', () => {
     if (value.kind !== 'record') throw new Error('unreachable');
     expect(value.fields.get('a')).toMatchObject({ value: 'x' });
     expect(diagnostics.diagnostics).toEqual([]);
+  });
+});
+
+describe('recordTreeReader -- field group options (§5.11, §7.6)', () => {
+  /** `( host: text  port?: text | socket: text )`, optionally with the group's own `?`. */
+  function optionsReader(optionalGroup = false): TypeReader<Value> {
+    return reader(
+      [
+        field('host', 'text', { optional: true }),
+        field('port', 'text', { optional: true }),
+        field('socket', 'text', { optional: true }),
+      ],
+      [
+        {
+          members: [['host', 'port'], ['socket']],
+          optionalMembers: ['port'],
+          optional: optionalGroup,
+        },
+      ],
+    );
+  }
+
+  function codesFor(source: string, optionalGroup = false): string[] {
+    const { ctx, diagnostics } = collectingContextOver(source);
+    runSync(optionsReader(optionalGroup).read(ctx));
+    return diagnostics.diagnostics.map((d) => d.code);
+  }
+
+  it('an option is chosen whole: every unmarked member present, the marked one free', () => {
+    expect(codesFor('{ host: "h" port: "1" }')).toEqual([]);
+    expect(codesFor('{ host: "h" }')).toEqual([]);
+    expect(codesFor('{ socket: "s" }')).toEqual([]);
+  });
+
+  it('a chosen option missing an unmarked member reports FIELD_GROUP', () => {
+    expect(codesFor('{ port: "1" }')).toEqual(['FIELD_GROUP']);
+  });
+
+  it('members of two options at once report FIELD_GROUP, and no option chosen reports FIELD_GROUP', () => {
+    expect(codesFor('{ host: "h" socket: "s" }')).toEqual(['FIELD_GROUP']);
+    expect(codesFor('{}')).toEqual(['FIELD_GROUP']);
+  });
+
+  it('an optional group admits no option chosen, and still at most one', () => {
+    expect(codesFor('{}', true)).toEqual([]);
+    expect(codesFor('{ host: "h" socket: "s" }', true)).toEqual(['FIELD_GROUP']);
+  });
+
+  it('the at-least-one form admits any non-empty subset of its members (§5.11)', () => {
+    const atLeastOne = reader(
+      [field('email', 'text', { optional: true }), field('phone', 'text', { optional: true })],
+      [{ members: [['email', 'phone']], optionalMembers: ['email', 'phone'], optional: false }],
+    );
+    const codes = (source: string): string[] => {
+      const { ctx, diagnostics } = collectingContextOver(source);
+      runSync(atLeastOne.read(ctx));
+      return diagnostics.diagnostics.map((d) => d.code);
+    };
+    expect(codes('{ email: "e" }')).toEqual([]);
+    expect(codes('{ phone: "p" }')).toEqual([]);
+    expect(codes('{ email: "e" phone: "p" }')).toEqual([]);
+    expect(codes('{}')).toEqual(['FIELD_GROUP']);
   });
 });
 

@@ -158,7 +158,6 @@ describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowin
         fields,
         groups: [],
         extension: 'OPEN',
-        discriminators: [],
       },
       annotations: [],
     };
@@ -192,7 +191,7 @@ describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowin
     const definition: TypeDefinition = {
       supertypes: [],
       subtypes: [],
-      body: { kind: 'unit' },
+      body: { kind: 'value_type' },
       annotations: [],
     };
     expect(() => {

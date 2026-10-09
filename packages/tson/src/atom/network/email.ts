@@ -25,6 +25,7 @@
  * `regex.ts` it hands back the text itself rather than a parsed structure.
  */
 
+import { codePointLength } from '../text/codePointLength.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import type { EmailType } from '../../schema/meta/atoms-text.js';
 import type { AtomToken, AtomType } from '../contract.js';
@@ -105,7 +106,7 @@ export function createEmailParser(typeRef: string, constraints: EmailType): Atom
   }
 
   function validate(text: string): void {
-    const length = BigInt(text.length);
+    const length = BigInt(codePointLength(text));
     if (constraints.length !== undefined && length !== constraints.length) {
       throw new TsonAtomValidationError(
         typeRef,

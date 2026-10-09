@@ -39,6 +39,27 @@ Waves 1 and 2 are `pipeline()` — each package is verified the moment it lands,
 in those waves depends on another. Waves 3 to 6 carry real ordering, expressed as sequential stages
 inside the script; the `∥` above marks what genuinely runs concurrently.
 
+## Revision runs
+
+Moving the port to a new spec revision is driven the same way as the original port, one stage at a
+time, and the plan for it is `REVISION-<n>-PLAN.md` (`REVISION-37-PLAN.md` for the current one,
+`REVISION-36-PLAN.md` before it). A stage is a work package or a few, and the shape of every stage
+is the same: **port → adversarial review → repair → gate**. A `tson-porter` writes the
+implementation, a reviewer who has not seen the porter's reasoning reads the diff against the spec
+and the Java, repairs follow, and the gate below decides whether the next stage may start.
+
+A revision run may drive its stages either way:
+
+- **Committed workflow scripts** (Revision 36): one script per stage under `.claude/workflows/`,
+  reviewed and re-runnable like a wave.
+- **Manager-issued agent calls** (Revision 37): the manager calls `tson-porter` directly, and each
+  brief is the plan's own stage section, so the plan is the unit of review rather than a script per
+  stage.
+
+Whichever is used, the brief names the Java sources and the spec sections, states what the shared
+conformance suite should do at that point, and carries the current subject count. At the Revision 37
+corpus pin that is **459 discovered subjects**: a stage that discovers fewer has broken the harness.
+
 ## Running a wave
 
 ```bash

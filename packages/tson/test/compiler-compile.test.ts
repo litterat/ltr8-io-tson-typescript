@@ -23,6 +23,8 @@ function linkedSchema(entries: ReadonlyMap<string, TypeDefinition>): LinkedSchem
     keyAnnotations: new Map(),
     bootstrap: false,
     origins: new Map([...entries.keys()].map((name) => [name, 'test://s.tn'])),
+    textEnums: new Set(),
+    enumForms: new Map(),
   };
 }
 
@@ -34,7 +36,7 @@ const CYCLIC_SCHEMA = linkedSchema(
         supertypes: [],
         subtypes: [],
         annotations: [],
-        body: { kind: 'text_type' },
+        body: { kind: 'text_type', normalization: 'NONE' },
       },
     ],
     [
@@ -48,7 +50,6 @@ const CYCLIC_SCHEMA = linkedSchema(
           supertypes: [],
           groups: [],
           extension: 'OPEN',
-          discriminators: [],
           fields: [
             {
               name: 'value',
@@ -95,10 +96,10 @@ describe('compile -- cycles resolve by tying the knot', () => {
             annotations: { values: [] },
             fields: new Map([
               ['value', { kind: 'atom', value: 'b', typeRef: 'text', annotations: { values: [] } }],
-              // The innermost `next: _` states an absent value rather than omitting the field
+              // The innermost `next: _` states a void value rather than omitting the field
               // (§2.9): distinct from the outer `next`, which the document never mentions at all
               // and so does not appear in its own `fields` map.
-              ['next', { kind: 'absent', annotations: { values: [] } }],
+              ['next', { kind: 'void', annotations: { values: [] } }],
             ]),
           },
         ],
@@ -138,8 +139,8 @@ describe('validate -- collects diagnostics rather than throwing', () => {
 
 const USER_SCHEMA = `
 !!id:"test://person.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   person => {
     name: text

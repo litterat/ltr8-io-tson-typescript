@@ -16,12 +16,12 @@ import { isVerdict, type Diagnostic, type DiagnosticCode } from '@ltr8/tson';
  * diagnostic was not a verdict (`isVerdict`): nothing here judged the document, so this run has no
  * more grounds to call the data invalid than a `NOT_IMPLEMENTED` gap does.
  *
- * A §8.2 name-hygiene refusal is **not** among them. It is exit 1, the same code as any other
- * rejection: §8.2 calls a refusal a "fifth outcome" that must not be reported under one of §8.1's
- * four *categories*, but that rule is about which layer detected the problem, not about what a
- * caller does next -- and what a caller does next is edit the document, here by renaming
- * something. What is genuinely portability-sensitive, that another deployment's policy might
- * accept the same document, is carried by the diagnostic's own code, not by the exit code.
+ * A refusal (`isRefusal`: a §8.2 name-hygiene refusal or a §9.1 limit refusal) is **not** among
+ * them. It is exit 1, the same code as any other rejection, although its report outcome is
+ * `NOT_CHECKED` (it is not a verdict, `isVerdict`): what a caller does next is edit the document,
+ * here by renaming something or sending less. What is portability-
+ * sensitive, that another deployment's policy might accept the same document, is carried by the
+ * diagnostic's own code and the report's policy, not by the exit code.
  */
 export const EXIT = {
   /** Every input was valid (or, for `compile`/`hash`, every schema was well-formed). */
@@ -83,7 +83,8 @@ export function exitCodeFor(diagnostics: readonly Diagnostic[]): ExitCode {
  * Whether every diagnostic in `diagnostics` is a verdict on the document -- so a run carrying any
  * of them has genuinely been checked and rejected, rather than not checked at all.
  *
- * Defers to the library's own {@link isVerdict} rather than keeping a second copy of the set here,
+ * A refusal (§8.2 name, §9.1 limit) is not a verdict, so it answers `false`. Defers to the library's own
+ * {@link isVerdict} rather than keeping a second copy of the set here,
  * which is how two consumers come to disagree about one diagnostic.
  */
 export function allVerdicts(diagnostics: readonly Diagnostic[]): boolean {

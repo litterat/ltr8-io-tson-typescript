@@ -82,7 +82,7 @@ const CLASS_LABEL: Record<DiscriminationClass, string> = {
   BRACKET: 'bracket',
 };
 
-/** §4.2's table, from the wire end: the class an arriving JSON value's own kind names, or `undefined` for one that carries none (`null`, spent as the absent sentinel before any class question arises, §7). */
+/** §4.2's table, from the wire end: the class an arriving JSON value's own kind names, or `undefined` for one that carries none (`null`, spent as the void sentinel before any class question arises, §7). */
 function classOfKind(event: JsonEvent): DiscriminationClass | undefined {
   switch (event.kind) {
     case 'boolean':
@@ -114,7 +114,11 @@ export function buildChoiceReader(
   const byClass = new Map<DiscriminationClass, string>();
   if (disjoint) {
     for (const variantName of variantNames) {
-      const variantClass = discriminationClassOf(variantName, ctx.linkedSchema.entries);
+      const variantClass = discriminationClassOf(
+        variantName,
+        ctx.linkedSchema.entries,
+        ctx.linkedSchema.textEnums,
+      );
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass.clear();
         break;
@@ -209,7 +213,7 @@ function* tagged(
     ctx
       .field(SCHEMA)
       .report(
-        'UNKNOWN_TYPE_REF',
+        'SCOPE_NOT_ADMITTED',
         `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
           `position -- '${displayName}' is a choice, whose variants its own schema declares`,
         'no $schema at this position',
@@ -283,8 +287,8 @@ function* untagged(
   if (peeked.kind === 'null') {
     ctx.report(
       'FIELD_REQUIRED',
-      `'${displayName}' admits no absence, and JSON null is this encoding's spelling of the ` +
-        `absent sentinel (§7)`,
+      `'${displayName}' is not voidable, and JSON null is this encoding's spelling of the ` +
+        `void sentinel (§7)`,
       `a value of one of (${namesList})`,
       'null',
     );

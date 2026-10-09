@@ -26,10 +26,15 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.36.x` implements the **2026 Revision 36** series. A new spec revision moves the
+built against, so `0.37.x` implements the **2026 Revision 37** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
+
+**Breaking at 0.37.0:** the void sentinel's public names follow the reference's. `AbsentNode`,
+`absentNode`, `ABSENT`, the `'absent'` node and value kind, `Emitter.absentValue()` and the
+`ABSENT_MAP_KEY` diagnostic code are now `VoidNode`, `voidNode`, `VOID`, `'void'`,
+`Emitter.voidValue()` and `VOID_MAP_KEY`.
 
 Both packages are released in lockstep at the same version, and `@ltr8/tson-cli` depends on
 `@ltr8/tson` at an exact pin rather than a range: the two are built and tested together, and the CLI
@@ -73,7 +78,7 @@ their contents rather than their brackets:
 - **Records** `{ name: value }` — fields, separated by `:`
 - **Maps** `{ key => value }` — arbitrary keys, separated by `=>`
 - **Arrays** `[ a b c ]` — whitespace or commas
-- **`_`** — the absent sentinel, distinct from `null`, and it occupies an array slot
+- **`_`** — the void sentinel, distinct from `null`, and it occupies an array slot
 - **`@name`** — annotations, ordered and repeatable, preserved verbatim
 - **`!name`** — type annotations
 - **`!!name:"…"`** — directives: `id`, `schema`, `meta`, `import`, and only those
@@ -83,7 +88,7 @@ strings, `[ ]` arrays, `{ name: value }` records, the `\n \r \t \\ \"` escapes �
 each was a good idea on its own. What differs is load-bearing: TSON has no `null` keyword (§4.4),
 field names are identifiers (§2.5), and there are no surrogate-pair escapes (§7.2.2). JSON is read
 through [TSON-JSON] instead — a second, schema-directed encoding of the same model, mapping `null`
-to absence and a non-identifier-keyed object to a map — behind this package's own [`./json`
+to the void sentinel and a non-identifier-keyed object to a map — behind this package's own [`./json`
 subpath](#json-encoding).
 
 Two conformance classes in the shared corpus: **Class 1** implements the data format alone and needs
@@ -171,7 +176,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/36/m/meta.tn', 'https://tson.io/2026/36/m/core.tn']);
+await tson.preload(['https://tson.io/2026/37/m/meta.tn', 'https://tson.io/2026/37/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -220,7 +225,7 @@ return a plain `JsonValue` tree with no type applied — because [TSON-JSON] §3
 no vocabulary-only reading the way TSON text's base type resolution does.
 
 What this subpath does not do, today: read a document's own in-band `$schema`/`$type` binding with
-no schema supplied out of band, read a `scoped` position (`declared`/`extern`/`dynamic`), speak the
+no schema supplied out of band, speak the
 §3.5 `TSON-Schema`/`TSON-Accept-Schema` HTTP header fields, or encode a schema-governed value back
 to JSON. See [STATUS.md](STATUS.md)'s Part 3 section for the full list.
 
@@ -288,7 +293,7 @@ cat person-data.tn | npx @ltr8/tson-cli validate --schema person.tn --root perso
 cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root person --input json -
 ```
 
-Five commands: `validate`, `compile`, `policy`, `hash`, `init-example`. `validate`/`compile`/`hash`
+Six commands: `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`. `validate`/`compile`/`hash`
 register `@ltr8/tson/stdlib`'s embedded `meta-kernel`/`meta.tn`/`core.tn`, so they work offline with
 no `SchemaSource` configured. `--format json`/`--format tson` report an `outcome` of `VALID`,
 `INVALID` or `NOT_CHECKED` — a document whose schema could not be obtained is `NOT_CHECKED`, not
@@ -325,14 +330,14 @@ resolved schema output) and known gaps. Part 3, the JSON encoding, covers a sche
 read and its CLI/package surface — narrower than the reference implementation's own scope, which
 also has an `objectReader` binding a JSON document straight into a host object; this port has no
 JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band-only
-binding, a scoped-position reader, the §3.5 HTTP header fields, or a schema-directed encoder — see
+binding, the §3.5 HTTP header fields, or a schema-directed encoder — see
 [STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/36/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/36/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/36/tson-part3-json.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/37/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/37/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/37/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.

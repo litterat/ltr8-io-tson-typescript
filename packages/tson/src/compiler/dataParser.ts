@@ -2,7 +2,7 @@
  * Tier 3: builds a full {@link Document} AST (§2, §3, §7.4) by pulling {@link TsonEvent}s from
  * Wave 1's Tier 2 {@link EventSource} and reducing that flat sequence back into the nested `ast`
  * tree ({@link RecordValue}, {@link MapValue}, {@link ArrayValue}, {@link EmptyBrace},
- * {@link AbsentValue}, {@link TokenValue}). This module holds no independent implementation of
+ * {@link VoidValue}, {@link TokenValue}). This module holds no independent implementation of
  * the data grammar — `stream/dataStream.js` is the one place that walks source text and resolves
  * things like `{}` record/map disambiguation; everything here is reduction (event sequence ->
  * tree), the streaming counterpart of a DOM builder sitting on top of a SAX/StAX reader.
@@ -29,7 +29,7 @@ import type { ByteInput, Task } from '../io/bytes.js';
 import { createDataStream } from '../stream/dataStream.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
 import type {
-  AbsentValue,
+  VoidValue,
   Annotation,
   ArrayValue,
   CoreValue,
@@ -256,8 +256,8 @@ function* reduceCoreEvent(
   switch (event.kind) {
     case 'token':
       return { kind: 'token', text: event.text, form: event.form } satisfies TokenValue;
-    case 'absent':
-      return { kind: 'absent' } satisfies AbsentValue;
+    case 'void':
+      return { kind: 'void' } satisfies VoidValue;
     case 'empty-brace':
       return { kind: 'empty-brace' } satisfies EmptyBrace;
     case 'record-start':

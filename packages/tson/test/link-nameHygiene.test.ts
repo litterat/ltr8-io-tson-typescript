@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { linkSchema } from '../src/link/link.js';
 import type { ImportedSchema, Schema } from '../src/compiler/schemaResolver.js';
 import { collector } from '../src/core/diagnostic.js';
+import { diagnosticOfNameRefusal, isVerdict } from '../src/core/diagnostic.js';
 import { TsonNameHygieneRefusedError, TsonSchemaValidationError } from '../src/core/errors.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   perSegment,
   withSkeletonDistinctness,
 } from '../src/unicode/policy.js';
@@ -103,7 +104,6 @@ const RECORD: Top = {
   fields: [],
   groups: [],
   extension: 'OPEN',
-  discriminators: [],
 };
 
 function field(name: string, type: TypeRef): RecordField {
@@ -117,32 +117,60 @@ function record(fields: readonly RecordField[]): Top {
     fields,
     groups: [],
     extension: 'OPEN',
-    discriminators: [],
   };
 }
 
 function enumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members, profile: 'IDENTIFIER' };
+  return { kind: 'enum', members, type: 'identifier' };
 }
 
 function textEnumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members, profile: 'TEXT' };
+  return { kind: 'enum', members, type: 'text' };
 }
 
 function choiceOf(variants: readonly TypeRef[]): Top {
   return { kind: 'choice', variants };
 }
 
+/**
+ * The two label types an enum's `type` names (§7.4): `identifier`, which makes its members names,
+ * and `text`, which makes them values. A schema declaring an enum declares the type it draws from,
+ * so the helper adds each unless the test states its own.
+ */
+const LABEL_TYPES: readonly (readonly [string, TypeDefinition])[] = [
+  [
+    'identifier',
+    def({
+      kind: 'identifier_type',
+      spec: 'https://www.unicode.org/reports/tr31/',
+      normalization: 'NFC',
+      start: 'XID',
+      continue: 'XID',
+      continueAdd: '-',
+    }),
+  ],
+  ['text', def({ kind: 'text_type', normalization: 'NONE' })],
+];
+
 function schema(
   id: string,
   entries: Iterable<readonly [string, TypeDefinition]>,
   imports: readonly string[] = [],
 ): Schema {
+  const own = new Map(entries);
+  for (const [name, label] of LABEL_TYPES) {
+    if (
+      !own.has(name) &&
+      [...own.values()].some((d) => 'kind' in d.body && d.body.kind === 'enum')
+    ) {
+      own.set(name, label);
+    }
+  }
   return {
     id,
-    meta: 'https://tson.io/2026/36/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/37/m/meta-kernel.tn',
     imports,
-    entries: new Map(entries),
+    entries: own,
     keyAnnotations: new Map(),
     bootstrap: false,
   };
@@ -311,6 +339,19 @@ describe("checkNameHygiene: a template's own type parameters (this implementatio
     expect(refused.message).toContain('type parameters');
   });
 
+  it('a thrown schema-load refusal carries its §8.2 code and a pointer to the refused declaration', () => {
+    const s = schema('https://x/s.tn', [
+      ['box', def(record([field('v', ref(ID_POLZOVATELYA))]), { parameters: [ID_POLZOVATELYA] })],
+    ]);
+    const refused = refusalOf(() => linkSchema(s));
+    expect(diagnosticOfNameRefusal(refused)).toMatchObject({
+      code: 'RESTRICTED_SCRIPT',
+      schemaId: 'https://x/s.tn',
+      schemaPointer: '/box',
+    });
+    expect(isVerdict(diagnosticOfNameRefusal(refused).code)).toBe(false);
+  });
+
   it('leaves an entry with no type parameters unaffected', () => {
     const s = schema('https://x/s.tn', [['box', def(RECORD, { parameters: [] })]]);
     expect(() => linkSchema(s)).not.toThrow();
@@ -322,7 +363,9 @@ describe("checkNameHygiene: a template's own type parameters (this implementatio
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError);
     expect(() =>
-      linkSchema(s, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
+      linkSchema(s, {
+        identifierPolicy: withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false),
+      }),
     ).not.toThrow();
   });
 });
@@ -370,7 +413,7 @@ describe('checkNameHygiene: the rule never fires on a lone name', () => {
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError); // the default whole-name level refuses one of them
     expect(() =>
-      linkSchema(s, { identifierPolicy: perSegment(DEFAULT_NAME_POLICY) }),
+      linkSchema(s, { identifierPolicy: perSegment(DEFAULT_IDENTIFIER_POLICY) }),
     ).not.toThrow();
   });
 });
@@ -383,7 +426,9 @@ describe('checkNameHygiene: the policy is relaxable by the caller, and enforced 
     ]);
     expect(() => linkSchema(s)).toThrow(TsonNameHygieneRefusedError);
     expect(() =>
-      linkSchema(s, { identifierPolicy: withSkeletonDistinctness(DEFAULT_NAME_POLICY, false) }),
+      linkSchema(s, {
+        identifierPolicy: withSkeletonDistinctness(DEFAULT_IDENTIFIER_POLICY, false),
+      }),
     ).not.toThrow();
   });
 });

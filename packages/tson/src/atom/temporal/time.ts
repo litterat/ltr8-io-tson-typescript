@@ -5,8 +5,8 @@
  * No host `Date`/`Temporal` and no JDK `OffsetTime` to delegate to; `rfc3339.ts`'s
  * `readFullTime` is a single hand-written pass covering both the shape check and the
  * range/leap-second/offset-bound checks the Java original splits between its own shape regex
- * and `OffsetTime.parse`'s own validation. See `rfc3339.ts`'s TSDoc for the leap-second gap
- * (`time-second` of 60 rejected -- `CONFORMANCE.md`'s "one accepted, unfixable gap") and the
+ * and `OffsetTime.parse`'s own validation. See `rfc3339.ts`'s TSDoc for the leap second
+ * (`time-second` of 60, refused by §5.4) and the
  * ±18:00 offset bound this inherits from `java.time.ZoneOffset`.
  *
  * **`precision` bounds the *value*, never the spelling (§5.5).** `precision: N` admits a value

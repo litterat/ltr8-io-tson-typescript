@@ -21,15 +21,15 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-/** The template itself is the base, SEALED by the surviving discriminator -- dispatch by the pin. */
+/** The template itself is the base, SEALED by the surviving discriminator -- dispatch by the pin. A selector is a pin on an unmarked name (§5.10); `type?: text = T` is an injected pin and selects nothing. */
 const SEALED_SCHEMA = `
 !!id:"https://example.test/tsealed.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   dog_type => { breed: text }
   cat_type => { indoor: boolean }
-  pet      => <T, V> { type?: text = T  value: V }
+  pet      => <T, V> { type: text = T  value: V }
   dogpet   => pet<"dog", dog_type>
   catpet   => pet<"cat", cat_type>
   holder   => { p: pet }
@@ -39,8 +39,8 @@ const SEALED_SCHEMA = `
 /** The template itself is the base, ABSTRACT for want of a discriminator -- dispatch by tag. */
 const ABSTRACT_SCHEMA = `
 !!id:"https://example.test/tabstract.tn"
-!!meta:"https://tson.io/2026/36/m/meta.tn"
-!!import:"https://tson.io/2026/36/m/core.tn"
+!!meta:"https://tson.io/2026/37/m/meta.tn"
+!!import:"https://tson.io/2026/37/m/core.tn"
 {
   dog_type => { breed: text }
   cat_type => { indoor: boolean }

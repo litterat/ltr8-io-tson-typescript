@@ -29,7 +29,7 @@ const DIRECT_KINDS: Partial<Record<TokenType, ExpectedToken['kind']>> = {
   'single-line-token': 'single-line-token',
   'multi-line-token': 'multi-line-token',
   'unquoted-token': 'unquoted-token',
-  'absent-token': 'absent-token',
+  'void-token': 'absent-token',
   'map-arrow-token': 'map-arrow-token',
   'directive-token': 'directive-token',
   'range-token': 'range-token',

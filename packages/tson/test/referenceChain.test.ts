@@ -23,7 +23,6 @@ function recordEntry(): TypeDefinition {
     fields: [],
     groups: [],
     extension: 'OPEN',
-    discriminators: [],
   };
   return { supertypes: [], subtypes: [], body, annotations: [] };
 }

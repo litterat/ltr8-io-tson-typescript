@@ -22,13 +22,14 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import {
   fieldOmission,
+  groupRefusals,
   isGroupMember,
   type FieldGroup,
   type RecordBody,
   type RecordField,
 } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
-import { absentNode, recordNode } from '../../tree/nodes.js';
+import { voidNode, recordNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
@@ -95,7 +96,7 @@ export function recordTreeReader(
   const precomputedValue = new Array<Value | undefined>(fields.length);
   const fixedCheck = new Array<FixedCheck | undefined>(fields.length);
   // §5.11: a field-group member's omission is the group's, never the field's own -- computed once
-  // here so {@link valueForAbsentField}/{@link valueForStatedAbsentField} can pass it through to
+  // here so {@link valueForMissingField}/{@link valueForStatedVoidField} can pass it through to
   // {@link fieldOmission} without walking `groups` on every field.
   const memberOfGroup = fields.map((field) => isGroupMember(groups, field.schema.name));
   let solePositionalField = -1;
@@ -164,7 +165,7 @@ export function recordTreeReader(
    * The value a field takes when the document never mentioned it at all -- §5.2's one derivation
    * ({@link fieldOmission}), applied.
    */
-  function valueForAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
+  function valueForMissingField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
     switch (fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'))) {
       case 'MISSING':
@@ -174,7 +175,7 @@ export function recordTreeReader(
             'FIELD_REQUIRED',
             `missing required field '${schema.name}' for '${displayName}'`,
             `a value for '${schema.name}'`,
-            '(absent)',
+            '(missing)',
           );
         return undefined;
       case 'ABSENT':
@@ -190,7 +191,7 @@ export function recordTreeReader(
    * value is even peeked, and a FIXED field is never voidable (§5.2's own refusal), so this
    * function's own `role` is always `'FREE'` or `'DEFAULT'`.
    *
-   * Admitted exactly when `voidable` (§2.9: present with an absent value, distinct from never
+   * Admitted exactly when `voidable` (§2.9: present with a void value, distinct from never
    * written); refused everywhere else, split by `role` on the same terms the JSON encoding's own
    * `json/schema/record.ts#statedNull` already does, both ports of the reference's one shared
    * `RecordDiagnostics.absenceAtRequiredField`/`absenceAtDefaultedField` ([TSON-JSON] §9.4: one
@@ -201,10 +202,10 @@ export function recordTreeReader(
    * *omitted* FREE field already reports ({@link readFields}'s own `FIELD_REQUIRED` for a missing
    * required field) rather than the DEFAULT field's own constraint-violation reading.
    */
-  function valueForStatedAbsentField(ctx: ReadContext, schemaIndex: number): Value | undefined {
+  function valueForStatedVoidField(ctx: ReadContext, schemaIndex: number): Value | undefined {
     const schema = at(fields, schemaIndex, 'field').schema;
     if (schema.voidable) {
-      return absentNode();
+      return voidNode();
     }
     const omission = fieldOmission(schema, at(memberOfGroup, schemaIndex, 'memberOfGroup'));
     if (schema.role === 'DEFAULT') {
@@ -213,7 +214,7 @@ export function recordTreeReader(
         .report(
           'ATOM_CONSTRAINT_VIOLATION',
           `'${schema.name}' on '${displayName}' is always filled from the schema and cannot be ` +
-            `written as absent -- omit the field to take its default (§5.2)`,
+            `written as void -- omit the field to take its default (§5.2)`,
           `the field omitted, or a value for '${schema.name}'`,
           '_',
         );
@@ -249,7 +250,7 @@ export function recordTreeReader(
     yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
     const check = at(fixedCheck, schemaIndex, 'fixed-check');
     const peeked = yield* ctx.peek();
-    if (peeked.kind === 'absent') {
+    if (peeked.kind === 'void') {
       yield* ctx.next();
       // §5.2: a pin on a voidable type is refused at the schema, so a FIXED field is never
       // voidable -- a written `_` is always refused here, never a second spelling of the pin.
@@ -267,7 +268,7 @@ export function recordTreeReader(
       // The token isn't a value of the field's own type at all, already reported against this path.
       return;
     }
-    const fixedValue = check.value ?? absentNode();
+    const fixedValue = check.value ?? voidNode();
     if (!valuesEqual(written, fixedValue)) {
       fieldCtx.report(
         'FIELD_FIXED',
@@ -345,9 +346,9 @@ export function recordTreeReader(
       yield* refuseUnscopedSchemaRef(fieldCtx, field.scoped, field.schema.type.name);
       const valuePeek = yield* ctx.peek();
       let decoded: Value | undefined;
-      if (valuePeek.kind === 'absent') {
+      if (valuePeek.kind === 'void') {
         yield* ctx.next();
-        decoded = valueForStatedAbsentField(ctx, schemaIndex);
+        decoded = valueForStatedVoidField(ctx, schemaIndex);
       } else {
         decoded = yield* field.parser.read(fieldCtx);
       }
@@ -372,29 +373,15 @@ export function recordTreeReader(
     return seen;
   }
 
-  /** Field-group presence check (§5.11): a bare group needs exactly one member present, a `?` group at most one. */
+  /** Field-group presence check (§5.11, {@link groupViolations}): one option chosen, or at most one under `?`, and a chosen option holds every unmarked member. */
   function validateGroups(ctx: ReadContext, seen: readonly boolean[]): void {
+    const isPresent = (member: string): boolean => {
+      const idx = fieldIndex.get(member);
+      return idx !== undefined && seen[idx] === true;
+    };
     for (const group of groups) {
-      let present = 0;
-      for (const member of group.members) {
-        const idx = fieldIndex.get(member);
-        if (idx !== undefined && seen[idx]) present += 1;
-      }
-      const members = group.members.join(' | ');
-      if (present > 1) {
-        ctx.report(
-          'TYPE_MISMATCH',
-          `at most one of (${members}) may be present for '${displayName}', found ${String(present)}`,
-          `at most one of (${members})`,
-          `${String(present)} present`,
-        );
-      } else if (group.state === 'REQUIRED' && present === 0) {
-        ctx.report(
-          'FIELD_REQUIRED',
-          `exactly one of (${members}) must be present for '${displayName}'`,
-          `one of (${members})`,
-          'none present',
-        );
+      for (const refusal of groupRefusals(group, isPresent, displayName)) {
+        ctx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
       }
     }
   }
@@ -432,7 +419,7 @@ export function recordTreeReader(
       const anchoredCtx = recordCtx.withPosition(shapeResult.anchor);
       for (let i = 0; i < fields.length; i += 1) {
         if (!seen[i]) {
-          sink(i, valueForAbsentField(anchoredCtx, i));
+          sink(i, valueForMissingField(anchoredCtx, i));
         }
       }
       validateGroups(anchoredCtx, seen);

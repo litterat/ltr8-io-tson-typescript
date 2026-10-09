@@ -64,6 +64,7 @@ import {
   type DateFields,
 } from '../atom/temporal/rfc3339.js';
 import { toNfc } from '../unicode/nfc.js';
+import { declaredOrder, sameMembers } from './orderedness.js';
 import type { Complex, PlainDateTime, PlainTime, Rational, TsonDecimal } from './types.js';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -225,7 +226,20 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     const aKeys = keysOf(a);
     const bKeys = keysOf(b);
     if (aKeys.length !== bKeys.length) return false;
-    return aKeys.every((key) => Object.hasOwn(b, key) && deepEqual(a[key], b[key]));
+    // [TSON-SCHEMA] §7.5: an array or map node whose type says `ordered: false` is its members,
+    // not their sequence.
+    const unordered = declaredOrder(a) === false || declaredOrder(b) === false;
+    return aKeys.every((key) => {
+      if (!Object.hasOwn(b, key)) return false;
+      const left = a[key];
+      const right = b[key];
+      if (unordered && (key === 'elements' || key === 'entries')) {
+        if (Array.isArray(left) && Array.isArray(right)) {
+          return sameMembers(left as unknown[], right as unknown[], deepEqual);
+        }
+      }
+      return deepEqual(left, right);
+    });
   }
   return false;
 }

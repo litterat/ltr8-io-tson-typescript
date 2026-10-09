@@ -45,10 +45,10 @@ import { TsonInternalError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
 import {
-  DEFAULT_NAME_POLICY,
+  DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
-  type NamePolicy,
-  type TokenPolicy,
+  type IdentifierPolicy,
+  type ScriptPolicy,
 } from '../unicode/policy.js';
 import type { JsonEvent, JsonEventSource } from './stream.js';
 
@@ -79,8 +79,8 @@ interface SchemaAnchor {
 interface Cursor {
   readonly events: JsonEventSource;
   readonly receiver: DiagnosticsReceiver;
-  readonly identifierPolicy: NamePolicy;
-  readonly tokenPolicy: TokenPolicy;
+  readonly identifierPolicy: IdentifierPolicy;
+  readonly tokenPolicy: ScriptPolicy;
   position: Position | undefined;
   reported: number;
   /**
@@ -137,14 +137,14 @@ export interface JsonReadContext {
   /** This context one declared field deeper: extends both the data path and, once anchored, the schema pointer. */
   schemaField(name: string): JsonReadContext;
   /** This read's identifier-hygiene policy ([TSON-DATA] §8.2), for a reader judging a name. */
-  identifierPolicy(): NamePolicy;
+  identifierPolicy(): IdentifierPolicy;
   /**
    * This read's token policy ([TSON-DATA] §8.2's "Values" paragraph), for a reader judging a map
    * key or a string value ([TSON-JSON] §9.4: "the token policy, when a deployment sets one,
    * reaches map keys and string values"). Defaults to {@link DEFAULT_TOKEN_POLICY}, which checks
    * nothing.
    */
-  tokenPolicy(): TokenPolicy;
+  tokenPolicy(): ScriptPolicy;
   /** Hands one problem to this read's receiver, located at this context's pointer and position. */
   report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void;
   /** How many problems this read has reported so far, counting every context derived from it. */
@@ -260,10 +260,10 @@ function makeContext(
         schemaAnchor,
       );
     },
-    identifierPolicy(): NamePolicy {
+    identifierPolicy(): IdentifierPolicy {
       return cursor.identifierPolicy;
     },
-    tokenPolicy(): TokenPolicy {
+    tokenPolicy(): ScriptPolicy {
       return cursor.tokenPolicy;
     },
     report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void {
@@ -294,14 +294,14 @@ function makeContext(
 
 /**
  * A context over `events`, reporting through `receiver`, judging names under `identifierPolicy`
- * (default {@link DEFAULT_NAME_POLICY}) and map keys/string values under `tokenPolicy` (default
+ * (default {@link DEFAULT_IDENTIFIER_POLICY}) and map keys/string values under `tokenPolicy` (default
  * {@link DEFAULT_TOKEN_POLICY}, which checks nothing).
  */
 export function createJsonReadContext(
   events: JsonEventSource,
   receiver: DiagnosticsReceiver,
-  identifierPolicy: NamePolicy = DEFAULT_NAME_POLICY,
-  tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
+  identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
+  tokenPolicy: ScriptPolicy = DEFAULT_TOKEN_POLICY,
 ): JsonReadContext {
   return makeContext(
     {
@@ -373,4 +373,44 @@ export function* lookingAhead<T>(
       for (const event of pending) cursor.rewound.push(event);
     }
   }
+}
+
+/**
+ * Consumes the first member of the object at the cursor -- its name and its scalar value -- and
+ * leaves the object open, so whatever reads next meets it as though that member had never been
+ * written ([TSON-JSON] §8.5's scope push: a scoped position reads `$schema` to open the scope, and
+ * what is left is an annotation object led by `$type` in the foreign namespace, which the foreign
+ * type's reader reads as it reads any tagged value of its own).
+ *
+ * The caller has already peeked at both the object and its leading member, so the buffer holds at
+ * most those three events. Throws {@link TsonInternalError} where a lookahead is running (it would
+ * replay the member this drops) or the cursor is not at an object whose first member has a scalar
+ * value.
+ */
+export function* consumeLeadingMember(ctx: JsonReadContext): Task<void> {
+  const cursor = (ctx as JsonReadContext & CursorCarrier)[CURSOR];
+  if (cursor === undefined) {
+    throw new TsonInternalError(
+      'consumeLeadingMember was called with a JsonReadContext this module did not create',
+    );
+  }
+  if (cursor.recording !== undefined) {
+    throw new TsonInternalError(
+      'a lookahead is running, and it would replay the member consumeLeadingMember drops',
+    );
+  }
+  const open = yield* ctx.next();
+  const name = yield* ctx.next();
+  const value = yield* ctx.next();
+  const scalar =
+    value.kind === 'string' ||
+    value.kind === 'number' ||
+    value.kind === 'boolean' ||
+    value.kind === 'null';
+  if (open.kind !== 'object-start' || name.kind !== 'member-name' || !scalar) {
+    throw new TsonInternalError(
+      `no leading member with a scalar value to consume at '${open.kind}'`,
+    );
+  }
+  cursor.rewound.unshift(open);
 }

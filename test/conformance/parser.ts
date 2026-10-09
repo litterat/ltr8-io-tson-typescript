@@ -80,7 +80,7 @@ function toExpectedCoreValue(core: CoreValue): ExpectedCoreValue {
   switch (core.kind) {
     case 'token':
       return { kind: 'token', form: core.form, text: core.text };
-    case 'absent':
+    case 'void':
       return { kind: 'absent' };
     case 'empty-brace':
       return { kind: 'empty-brace' };

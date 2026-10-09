@@ -106,10 +106,10 @@ export function readFullDate(
  * case-insensitivity is the caller's concern (`datetime.ts` checks the separator itself; the `Z`
  * here is read case-insensitively directly).
  *
- * **`time-second` of 60 (leap-second accommodation) is rejected.** `java.time` has no
- * leap-second concept at all, and `CONFORMANCE.md` documents the reference implementation
- * accepting this as a gap rather than solving it with a from-scratch leap-second-aware time
- * type; this grammar follows the same limit (§5.4, `PlainTime`'s own TSDoc in `value/types.ts`).
+ * **`time-second` of 60 (RFC 3339's leap-second accommodation) is refused** (§5.4): `!time` is a
+ * time of day on `[00:00:00, 24:00:00)` and `!datetime` an instant on the UTC timeline, and a leap
+ * second is neither, so the admitted form is RFC 3339's without it and `23:59:60Z` is a token
+ * neither contract accepts -- a parse error, as hour 25 is.
  *
  * **A numeric offset beyond ±18:00 is rejected**, even though `time-hour`/`time-minute` alone
  * would admit up to 23:59 -- `PlainTime`'s own `UtcOffset` field documents the ±1080-minute

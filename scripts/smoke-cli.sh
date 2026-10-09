@@ -85,6 +85,23 @@ echo "==> hash and compile produce output"
 [ -n "$("$TSON" hash ./demo/person.tn)" ] || fail "hash printed nothing"
 [ -n "$("$TSON" compile ./demo/person.tn)" ] || fail "compile printed nothing"
 
+echo "==> strip: exit codes and the reading form"
+printf '!!id:"https://example.test/t-1.tn"\n!!meta:"https://tson.io/2026/37/m/meta.tn?sha256=00"\n{\n  @doc:"A thing."\n  thing => int32\n}\n' > ./thing.tn
+stripped="$("$TSON" strip ./thing.tn)" || fail "strip of a well-formed schema did not exit 0"
+[ "$stripped" = "$(printf '!!meta:"37/meta"\n{\nthing => int32\n}')" ] || fail "strip printed an unexpected reading form: $stripped"
+printf '!!meta:"https://tson.io/2026/37/m/meta.tn"\n{ thing => }\n' > ./broken.tn
+set +e
+"$TSON" strip ./broken.tn >/dev/null 2>&1
+strip_malformed=$?
+"$TSON" strip ./missing.tn >/dev/null 2>&1
+strip_unreadable=$?
+"$TSON" strip --no-such-flag ./thing.tn >/dev/null 2>&1
+strip_usage=$?
+set -e
+[ "$strip_malformed" -eq 1 ] || fail "strip of a malformed schema exited $strip_malformed, expected 1"
+[ "$strip_unreadable" -eq 2 ] || fail "strip of a missing file exited $strip_unreadable, expected 2"
+[ "$strip_usage" -eq 2 ] || fail "strip with an unrecognized option exited $strip_usage, expected 2"
+
 echo "==> the library resolves for a consumer, ESM and CJS"
 cat > check.mjs <<'JS'
 import { readTree } from '@ltr8/tson';
