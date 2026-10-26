@@ -16,15 +16,15 @@ that touches a name.
 
 ## What moves
 
-|                           | Revision 37                                     | Revision 38                                                   |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
-| `JAVA_PIN`                | `905330e84a29d64ecf9a83db0c12800b9997c1d9`      | `d4bba8f3f0e6cc1ce75fa59e9b6212aca6595b93`                    |
-| `SUITE_PIN`               | `09cbce9f58c833b6f917a24f3fef41bc25c9dff3`      | `1a558b404ecad7b0a2230e21e1de371aac39c0b3`                    |
-| Conformance subjects      | 459                                             | **695**, with a new `class1/identity/` layer (28)             |
-| Spec vendored             | Parts 1–3, Rev 37 change log, `m/policy.tn`     | Parts 1–3, Rev 38 change log, **`m/net.tn`** and its fixture  |
-| Bundled schemas           | meta-kernel, meta, core, policy                 | meta-kernel, meta, core, **net**, policy; every digest new    |
-| Bundled schema identities | `tson.io/2026/37/m/*`                           | `tson.io/2026/38/m/*`                                         |
-| Package version           | 0.37.0                                          | 0.38.0                                                        |
+|                           | Revision 37                                 | Revision 38                                                  |
+| ------------------------- | ------------------------------------------- | ------------------------------------------------------------ |
+| `JAVA_PIN`                | `905330e84a29d64ecf9a83db0c12800b9997c1d9`  | `d4bba8f3f0e6cc1ce75fa59e9b6212aca6595b93`                   |
+| `SUITE_PIN`               | `09cbce9f58c833b6f917a24f3fef41bc25c9dff3`  | `1a558b404ecad7b0a2230e21e1de371aac39c0b3`                   |
+| Conformance subjects      | 459                                         | **695**, with a new `class1/identity/` layer (28)            |
+| Spec vendored             | Parts 1–3, Rev 37 change log, `m/policy.tn` | Parts 1–3, Rev 38 change log, **`m/net.tn`** and its fixture |
+| Bundled schemas           | meta-kernel, meta, core, policy             | meta-kernel, meta, core, **net**, policy; every digest new   |
+| Bundled schema identities | `tson.io/2026/37/m/*`                       | `tson.io/2026/38/m/*`                                        |
+| Package version           | 0.37.0                                      | 0.38.0                                                       |
 
 The reference moved 133 commits (+28.9k/−11.4k over 878 files). The corpus added 240 subjects,
 removed 4 and reshaped 12; its `RUNNER.md` gained rule 3e (the identity layer) and "A meta layer's
@@ -56,7 +56,7 @@ disjoint files and runs concurrently in its own worktree, merged after 1A lands.
 the fixtures to match, and for `tsc` to pass. The model is frozen once Stage 2 starts, so **every**
 Revision 38 kernel field goes in now, including fields whose rules are Stage 2's. Where a Revision
 38 rule is not needed for the bootstrap and the fixtures, map the Revision 37 behaviour across and
-leave the rule to Stage 2 — but the *shape* is this stage's, in full.
+leave the rule to Stage 2 — but the _shape_ is this stage's, in full.
 
 Read, in this order: `spec/tson-rev38-changelog.md` §1 and §4; `spec/m/meta-kernel.tn` whole, and
 `git diff d71661b HEAD -- spec/m/` for what moved; Part 2 §4.1, §4.2, §5.2, §5.10, §8.1, §8.2, §9;
@@ -94,10 +94,10 @@ The kernel is the authority; the list below is what it forces on this model.
   `extension: ABSTRACT` in resolved output, and a direct application of one is refused as any
   abstract record's is.
 - **`namespace` (#23) and its two kernel instances.** `namespace => abstract top & { key_type:
-  identifier_kind  value_type: type_kind  ordered?: boolean ~ false }`. A value of a type IS-A
+identifier_kind  value_type: type_kind  ordered?: boolean ~ false }`. A value of a type IS-A
   `namespace` is written and read as a map from `key_type` to `value_type`, never as a record of
   its facets. `schema => namespace & { key_type: = type_name  value_type: = top }` and `field_map
-  => namespace & { key_type?: ~ field_name  value_type: = record_field  ordered?: = true }` are the
+=> namespace & { key_type?: ~ field_name  value_type: = record_field  ordered?: = true }` are the
   kernel's two. Model a namespace value as one shape — the constructor's name and an ordered map
   from key to value, each key keeping its annotations — and hold the schema map and a record's
   fields as that shape. A meta layer's own namespace type (`api => namespace & { … }`) and an
@@ -105,25 +105,25 @@ The kernel is the authority; the list below is what it forces on this model.
   the map's values into is below under "A meta layer's own records".
 - **A record's fields are a map keyed by name (#12).** `record_field` loses `name`; `record.fields`
   is `field_map`. The author's brace form is unchanged; the explicit form is `!record { fields: { x
-  => { type: int32 } } }`. A spelling written twice is the map's duplicate key; two spellings that
+=> { type: int32 } } }`. A spelling written twice is the map's duplicate key; two spellings that
   are one value of the record's name type are the linker's resolver error (Stage 2A).
 - **A record's field names have a type (#10).** `record.name_type?: identifier_kind`;
   `enum_type.type` is renamed `name_type` and typed `identifier_kind`; `enum => enum_type ^ {
-  name_type?: = identifier }`; **`text_enum` is gone**, and its `EnumBody` discriminator with it.
+name_type?: = identifier }`; **`text_enum` is gone**, and its `EnumBody` discriminator with it.
   `record.discriminators` is `[text; 1..]` and `field_group`'s member slots are `text`, each judged
   by the record's name type. Carry `nameType?: string` on the record body and `nameType: string` on
   the enum body now; the judgement is Stage 2A's. `identifier_base` gains `ASCII` (Start `A–Z a–z`,
   Continue adding `0–9 _`), and `scheme_name` is restated over it (`start: ASCII  continue: ASCII
-  continue_add: "+-."  exclude: "_"  normalization: ASCII_CASEFOLD`, the same set as before).
+continue_add: "+-."  exclude: "_"  normalization: ASCII_CASEFOLD`, the same set as before).
 - **A record template is a `record` with `parameters` (#17).** `record` gains `parameters?:
-  [template_param]`; `template` loses `extension` and `discriminators` and holds every *other* open
+[template_param]`; `template` loses `extension` and `discriminators` and holds every _other_ open
   body. A record template is not held: its fields are resolved with parameters standing in `type`
   and `value` as written, resolved output included, and its `chain.parents` are the parents as
   written, one of which may be an application. The base is ABSTRACT by construction and the record's
   own `extension` is each application's. §5.10's three places a parameter stands, and the operand
   rule (#16), are Stage 2C's checks; the shape is this stage's.
 - **Kinds (#22).** `kind_type => atom & { of: type_name  members?: [type_name] }`, `kind => <T>
-  !kind_type { of: T }`, and the kernel's `identifier_kind`, `atom_kind`, `type_kind`. **Every slot
+!kind_type { of: T }`, and the kernel's `identifier_kind`, `atom_kind`, `type_kind`. **Every slot
   that names the type of a value is `type_kind` and holds one bare name**: `record_field.type`,
   `tuple_element.element_type`, `array.element_type`, `map.key_type`/`value_type`,
   `namespace.value_type`, `choice.variants`, `template_param.type`/`bound`. `type_ref` stands only
@@ -141,9 +141,9 @@ The kernel is the authority; the list below is what it forces on this model.
   application (a declaration naming one, a minted instantiation, the alias a template's application
   closes to), read as stated on ingest, never written by a declaration.
 - **Meta (`spec/m/meta.tn`).** Three atom constructors: `hostname_type => atom & atom_specification
-  & { spec?: = "…rfc5890"  allow_idn?: boolean ~ true }`, `host_type` (`spec?: = "…rfc3987"`) and
+& { spec?: = "…rfc5890"  allow_idn?: boolean ~ true }`, `host_type` (`spec?: = "…rfc3987"`) and
   `media_type_type` (`spec?: = "…rfc6838"  allow_parameters?: boolean ~ false  types?: [text]
-  suffixes?: [text]`). Model all three in `atoms-network.ts`. Their parsers are WP1B's; wire the
+suffixes?: [text]`). Model all three in `atoms-network.ts`. Their parsers are WP1B's; wire the
   constructors to the parsers through whatever seam `atomBuilder.ts` already uses for `ipv4_type`,
   against the function names WP1B's brief fixes below, so the merge is one import.
 - **Core and net.** `ipv4`, `ipv6`, `cidr4`, `cidr6` and `mac` leave `core.tn` for `net.tn`, which
@@ -191,7 +191,7 @@ stay parse errors (§7.7).
   holding a name nothing declares is still an unresolved reference now.
 - The resolved-output writer (`write/`, `TsonObjectWriter`'s port) writes the new shape: an entry
   as its value, `chain` first in a flattened body, `fields` as a map, a record template as `!record
-  { fields: { … }  parameters: [ … ] }`, `@application` on the key, and the `!schema { … }` tag
+{ fields: { … }  parameters: [ … ] }`, `@application` on the key, and the `!schema { … }` tag
   the kernel's fixture writes for the schema map. Set-typed fields stay in declaration order.
 - `test/conformance/resolvedForm.ts` and `schema.ts` compare the new shape and read a `schema/`
   vector's expected side under the sidecar's own `meta` (RUNNER.md: a fixture meta imports `meta.tn`
@@ -320,7 +320,7 @@ Java: `resolver/KindMembers.java`, `compiler/ValuesByName.java`, `reader/KindSlo
   constructor of types — except a namespace constructor, whose instances are maps. Membership is by
   construction, so a kind holds an abstract type and a record template; `top` is a member of
   `type_kind`, `kind<product>` and `kind<record>`; `kind<namespace>` holds `namespace` itself. A
-  namespace *entry* (`myapi => !api { … }`) is listed by its constructor's kinds and by no kind of
+  namespace _entry_ (`myapi => !api { … }`) is listed by its constructor's kinds and by no kind of
   types. `of` resolves in the structure namespace and names `type` or `namespace` or a constructor
   below either; any other (`kind<reference>`) is a resolver error at the declaration. A kind with no
   members admits no value.
@@ -391,9 +391,9 @@ Java: `resolver/Ancestry.java`, `ApplicationCloser.java`, `TemplateMaterialiser.
   with no schema in scope is refused where it was a preserved marker, in the schemaless reader and
   the tree. `@` annotations stay preserved uninterpreted.
 - **Refused and undetermined (#1).** `core/diagnostic.ts` states two outcomes beside §8.1's four
-  categories: *refused* — this processor declined the document under its own configuration (§8.2
+  categories: _refused_ — this processor declined the document under its own configuration (§8.2
   policy and data version, §9.1 limits, a schema it will not fetch or one past its size limit), a
-  rejection and never a finding about validity, naming the rule or limit — and *undetermined* — it
+  rejection and never a finding about validity, naming the rule or limit — and _undetermined_ — it
   could not obtain what it would judge against (nothing at the reference, no answer). `isRefusal`
   counts `SCHEMA_NOT_PERMITTED` and `SCHEMA_TOO_LARGE`; `SCHEMA_NOT_FOUND`, `SCHEMA_UNREACHABLE` and
   `SCHEMA_TIMEOUT` are undetermined. Map the CLI's `NOT_CHECKED`/exit ladder across unchanged unless
