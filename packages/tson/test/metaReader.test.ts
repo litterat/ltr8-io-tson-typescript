@@ -10,8 +10,8 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import type { AtomBinding } from '../src/bind/binding.js';
 import type { TokenValue } from '../src/ast/value.js';
 
-const KERNEL_ID = 'https://tson.io/2026/37/m/meta-kernel.tn';
-const META_ID = 'https://tson.io/2026/37/m/meta.tn';
+const KERNEL_ID = 'https://tson.io/2026/38/m/meta-kernel.tn';
+const META_ID = 'https://tson.io/2026/38/m/meta.tn';
 
 // A `value`-typed schema facet is read under the atom the slot stands for, once that atom is in
 // scope (§7.4). `date_type`/`time_type`/`datetime_type` are the three families the kernel types

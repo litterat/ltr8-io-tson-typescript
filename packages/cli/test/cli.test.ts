@@ -822,8 +822,8 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
 describe('strip', () => {
   const SCHEMA = [
     '!!id:"https://example.test/thing-1.tn"',
-    '!!meta:"https://tson.io/2026/37/m/meta.tn"',
-    '!!import:"https://tson.io/2026/37/m/core.tn"',
+    '!!meta:"https://tson.io/2026/38/m/meta.tn"',
+    '!!import:"https://tson.io/2026/38/m/core.tn"',
     '{',
     '  @doc:"A thing."',
     '  thing => int32',
@@ -865,7 +865,7 @@ describe('strip', () => {
 
   it('a malformed schema is rejected where it breaks, as file:line:col: message, exit 1', async () => {
     const file = join(dir, 'broken.tn');
-    await writeFile(file, '!!meta:"https://tson.io/2026/37/m/meta.tn"\n{ thing => }\n', 'utf8');
+    await writeFile(file, '!!meta:"https://tson.io/2026/38/m/meta.tn"\n{ thing => }\n', 'utf8');
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.INVALID);

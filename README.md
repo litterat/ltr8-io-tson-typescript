@@ -176,7 +176,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
-await tson.preload(['https://tson.io/2026/37/m/meta.tn', 'https://tson.io/2026/37/m/core.tn']);
+await tson.preload(['https://tson.io/2026/38/m/meta.tn', 'https://tson.io/2026/38/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -335,9 +335,9 @@ binding, the §3.5 HTTP header fields, or a schema-directed encoder — see
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/37/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/37/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/37/tson-part3-json.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/38/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/38/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/38/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.

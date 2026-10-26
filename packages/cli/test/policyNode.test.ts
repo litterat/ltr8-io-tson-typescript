@@ -162,7 +162,7 @@ describe('policy report shape', () => {
     ],
   ])('a rendered report is valid data under policy.tn: %s', (_name, flags) => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/37/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/38/m/policy.tn');
     if (linked === undefined)
       throw new Error('policy.tn is not registered in the standard library');
     const compiled = tson.compile(linked);
@@ -191,7 +191,7 @@ describe('policy report shape', () => {
 
   it('policy.tn does reject a report missing `limits` (the check above is not vacuous)', () => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/37/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/38/m/policy.tn');
     if (linked === undefined) throw new Error('policy.tn is not registered');
     const full = renderPolicy(policyFor([]), 'tson');
     // `limits` is the last member of the written record: cut it, close the record.

@@ -30,8 +30,8 @@ import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.j
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   count      => int32
   exact      => number
@@ -831,7 +831,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const map = new Map(Object.entries(entries));
     return {
       id: 'test://json-schema-read/gaps.tn',
-      meta: 'https://tson.io/2026/37/m/meta.tn',
+      meta: 'https://tson.io/2026/38/m/meta.tn',
       imports: [],
       entries: map,
       keyAnnotations: new Map(),
@@ -853,8 +853,8 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it("a scoped position -- core.tn's own `dynamic` -- reads (§8.5): a bare null names no type", () => {
     const gapSchema = resolveUserSchema(`
 !!id:"https://example.test/gaps-scoped.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   either => dynamic
 }

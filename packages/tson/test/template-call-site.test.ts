@@ -4,8 +4,8 @@ import { standardLibrary } from '../src/stdlib/index.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { TypeDefinition } from '../src/schema/meta/typedef.js';
 
-const META = 'https://tson.io/2026/37/m/meta.tn';
-const CORE = 'https://tson.io/2026/37/m/core.tn';
+const META = 'https://tson.io/2026/38/m/meta.tn';
+const CORE = 'https://tson.io/2026/38/m/core.tn';
 
 let counter = 0;
 

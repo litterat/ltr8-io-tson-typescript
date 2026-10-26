@@ -1,16 +1,17 @@
 /**
- * The three schema documents this suite's reference implementation bundles, and the short,
+ * The four schema documents this suite's reference implementation bundles, and the short,
  * unversioned names a vector's sidecar may use to refer to them (`meta`/`import` fields; see
  * the test-suite README's "Schema-governed vectors").
  *
- * Real identities off the test-suite's own README ("Schema-governed vectors" table, Revision 37)
+ * Real identities off the test-suite's own README ("Schema-governed vectors" table, Revision 38)
  * and `ltr8-io-tson-java`'s `TsonBundledSchemas`: a version bump only ever touches this table,
  * never the vectors that reference `core.tn`.
  */
 export const BUNDLED_SCHEMA_IDS = {
-  'meta-kernel.tn': 'https://tson.io/2026/37/m/meta-kernel.tn',
-  'meta.tn': 'https://tson.io/2026/37/m/meta.tn',
-  'core.tn': 'https://tson.io/2026/37/m/core.tn',
+  'meta-kernel.tn': 'https://tson.io/2026/38/m/meta-kernel.tn',
+  'meta.tn': 'https://tson.io/2026/38/m/meta.tn',
+  'core.tn': 'https://tson.io/2026/38/m/core.tn',
+  'net.tn': 'https://tson.io/2026/38/m/net.tn',
 } as const satisfies Record<string, string>;
 
 /** A short, unversioned bundled-schema name usable in a sidecar's `meta`/`import` fields. */
@@ -18,18 +19,18 @@ export type BundledSchemaShortName = keyof typeof BUNDLED_SCHEMA_IDS;
 
 /**
  * The corpus's own schemas (`schemas/` under the suite checkout) are named by path under this
- * prefix — RUNNER.md's "Schema-governed vectors": "a short name that is not one of those three is
+ * prefix — RUNNER.md's "Schema-governed vectors": "a short name that is not one of those four is
  * the corpus's own schema, named by its path under `schemas/`".
  */
 const CORPUS_SCHEMA_PREFIX = 'https://tson.io/test-suite/schemas/';
 
 /**
  * Resolves a sidecar's short schema name to its real identity: one of {@link BUNDLED_SCHEMA_IDS}'s
- * three revision-stamped entries, or — for any other short name — the corpus's own schema at that
+ * four revision-stamped entries, or — for any other short name — the corpus's own schema at that
  * path under `schemas/` (`fixtures/link-money.tn` resolves to
  * `https://tson.io/test-suite/schemas/fixtures/link-money.tn`).
  *
- * **A rule, not a table.** The three bundled names are listed because their identity carries the
+ * **A rule, not a table.** The four bundled names are listed because their identity carries the
  * spec revision and nothing in the short name says so; every other short name's identity is
  * derived, so a new corpus fixture (`schemas/fixtures/*.tn`, the `class2/link/` import-closure
  * vectors' own topology) never needs a change here.

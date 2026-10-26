@@ -139,8 +139,8 @@ describe('validate -- collects diagnostics rather than throwing', () => {
 
 const USER_SCHEMA = `
 !!id:"test://person.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   person => {
     name: text

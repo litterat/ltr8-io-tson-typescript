@@ -52,7 +52,7 @@ function sha256(path: string): string {
 describe.skipIf(!referenceAvailable())('vendored spec files', () => {
   const files = vendoredFiles();
 
-  it('vendors the three spec parts, the revision change log, all six bundled schemas and the policy vocabulary', () => {
+  it('vendors the three spec parts, the revision change log, all eight bundled schemas and the policy vocabulary', () => {
     expect(files).toEqual([
       'm/core-resolved.tn',
       'm/core.tn',
@@ -60,11 +60,13 @@ describe.skipIf(!referenceAvailable())('vendored spec files', () => {
       'm/meta-kernel.tn',
       'm/meta-resolved.tn',
       'm/meta.tn',
+      'm/net-resolved.tn',
+      'm/net.tn',
       'm/policy.tn',
       'tson-part1-data.md',
       'tson-part2-schema.md',
       'tson-part3-json.md',
-      'tson-rev37-changelog.md',
+      'tson-rev38-changelog.md',
     ]);
   });
 
@@ -87,7 +89,7 @@ describe('vendored spec files, without the reference checkout', () => {
   it('record the spec revision the port is written against', () => {
     const part1 = readFileSync(join(VENDORED_ROOT, 'tson-part1-data.md'), 'utf8');
     const part2 = readFileSync(join(VENDORED_ROOT, 'tson-part2-schema.md'), 'utf8');
-    expect(part1).toContain('2026 Revision 37');
-    expect(part2).toContain('2026 Revision 37');
+    expect(part1).toContain('2026 Revision 38');
+    expect(part2).toContain('2026 Revision 38');
   });
 });

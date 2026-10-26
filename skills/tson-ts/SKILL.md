@@ -25,7 +25,7 @@ vectors both are tested against are
 
 **Versioning is `0.<spec revision>.<patch>`.** `0.37.x` implements the **2026 Revision 37** spec
 series. A new revision moves the minor, and the spec is a working draft with no compatibility
-guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/37/m/core.tn` is
+guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/38/m/core.tn` is
 revision-specific and must match the library's own revision. The CLI depends on the library at an
 exact pin, never a range.
 
@@ -133,8 +133,8 @@ import { validate } from '@ltr8/tson';
 import { standardLibrary } from '@ltr8/tson/stdlib';
 
 const SCHEMA = `!!id:"https://example.com/order.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   order => {
     order_id: int32
@@ -226,7 +226,7 @@ import { createTson } from '@ltr8/tson';
 import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
-await tson.preload(['https://tson.io/2026/37/m/meta.tn', 'https://tson.io/2026/37/m/core.tn']);
+await tson.preload(['https://tson.io/2026/38/m/meta.tn', 'https://tson.io/2026/38/m/core.tn']);
 ```
 
 `preload` verifies a `?sha256=` pin whenever one is declared, and cross-checks that the fetched
@@ -549,9 +549,9 @@ as it stands, not how to extend it.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/37/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/37/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/37/tson-part3-json.md (`@ltr8/tson/json`)
+- Part 1 — Text Data Format: https://tson.io/raw/2026/38/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/38/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/38/tson-part3-json.md (`@ltr8/tson/json`)
 
 All are working revisions and change without compatibility guarantees until the spec freezes at
 version 1. Re-fetch and check the revision number at the top rather than trusting a cached copy.

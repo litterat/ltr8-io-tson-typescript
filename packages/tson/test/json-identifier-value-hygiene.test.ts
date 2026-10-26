@@ -29,8 +29,8 @@ const CYRILLIC_PASS = 'раѕѕ';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-names-1.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   identifier => !identifier_type { continue_add: "-" }
   handlers => { identifier => text }

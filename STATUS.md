@@ -3,9 +3,9 @@
 ← back to the [README](README.md)
 
 Built against TSON Part 1 (lexer + data format) of the **2026 Revision 37** series, a working draft:
-https://tson.io/raw/2026/37/tson-part1-data.md, Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/37/tson-part2-schema.md, and Part 3 (the JSON encoding,
-`./json`): https://tson.io/raw/2026/37/tson-part3-json.md.
+https://tson.io/raw/2026/38/tson-part1-data.md, Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/38/tson-part2-schema.md, and Part 3 (the JSON encoding,
+`./json`): https://tson.io/raw/2026/38/tson-part3-json.md.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
 corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 459 subjects

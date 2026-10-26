@@ -17,8 +17,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-atom-rules-1.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   link      => { u: uri }
   link_ref  => { u: uri_reference }

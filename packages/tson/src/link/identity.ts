@@ -19,8 +19,8 @@
  *
  * **An identity without a host is its absolute path.** A reference with no authority (`/x.tn`,
  * `file:/x.tn`) or an empty one (`file:///x.tn`) has an empty host, and its identity is the path
- * alone, which MUST begin with `/`: a relative `tson.io/2026/37/m/core.tn` would be the identity
- * `https://tson.io/2026/37/m/core.tn` reduces to, so the two kinds of identity are disjoint by
+ * alone, which MUST begin with `/`: a relative `tson.io/2026/38/m/core.tn` would be the identity
+ * `https://tson.io/2026/38/m/core.tn` reduces to, so the two kinds of identity are disjoint by
  * their first character. `/x.tn`, `file:/x.tn` and `file:///x.tn` are one identity.
  *
  * **Why this splits by hand rather than using the host `URL`.** The WHATWG `URL` is a

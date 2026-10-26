@@ -5,14 +5,14 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 
 describe('canonicalizeIdentity (§2.2.1)', () => {
   it('strips the scheme and its :// delimiter, keeping lowercase host plus path', () => {
-    expect(canonicalizeIdentity('https://tson.io/2026/37/m/core.tn')).toBe(
-      'tson.io/2026/37/m/core.tn',
+    expect(canonicalizeIdentity('https://tson.io/2026/38/m/core.tn')).toBe(
+      'tson.io/2026/38/m/core.tn',
     );
   });
 
   it('strips the query (a `?sha256=` pin is verification metadata, not identity)', () => {
-    expect(canonicalizeIdentity('https://tson.io/2026/37/m/core.tn?sha256=abc123')).toBe(
-      'tson.io/2026/37/m/core.tn',
+    expect(canonicalizeIdentity('https://tson.io/2026/38/m/core.tn?sha256=abc123')).toBe(
+      'tson.io/2026/38/m/core.tn',
     );
   });
 
@@ -41,8 +41,8 @@ describe('canonicalizeIdentity (§2.2.1)', () => {
   });
 
   it('refuses a relative path with no host, which a host-and-path identity could also spell (§2.2.1)', () => {
-    // `tson.io/2026/37/m/core.tn` is exactly what `https://tson.io/2026/37/m/core.tn` reduces to.
-    expect(() => canonicalizeIdentity('tson.io/2026/37/m/core.tn')).toThrow(
+    // `tson.io/2026/38/m/core.tn` is exactly what `https://tson.io/2026/38/m/core.tn` reduces to.
+    expect(() => canonicalizeIdentity('tson.io/2026/38/m/core.tn')).toThrow(
       TsonSchemaValidationError,
     );
     expect(() => canonicalizeIdentity('mini.tn')).toThrow(TsonSchemaValidationError);

@@ -12,8 +12,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `
 !!id:"https://example.test/enum-labels.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 `;
 
 const HEADER_NAME = `
@@ -99,7 +99,7 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
     };
     const importer: Schema = {
       id: 'https://example.test/importer.tn',
-      meta: 'https://tson.io/2026/37/m/meta.tn',
+      meta: 'https://tson.io/2026/38/m/meta.tn',
       imports: ['https://example.test/imported.tn'],
       entries: new Map(),
       keyAnnotations: new Map(),

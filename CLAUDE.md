@@ -10,10 +10,10 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/37/tson-part1-data.md
+  https://tson.io/raw/2026/38/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/37/tson-part2-schema.md
-- Part 3 — the JSON encoding: https://tson.io/raw/2026/37/tson-part3-json.md
+  https://tson.io/raw/2026/38/tson-part2-schema.md
+- Part 3 — the JSON encoding: https://tson.io/raw/2026/38/tson-part3-json.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than

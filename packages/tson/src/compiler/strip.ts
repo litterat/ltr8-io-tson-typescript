@@ -11,7 +11,7 @@
  * - **A header reference's query** goes, and its `#fragment` stays. In an identifying URI the
  *   query holds nothing but `?sha256=` pins, which are verification metadata (§2.2.1).
  * - **A header reference to the spec's own library** -- `meta-kernel`, `meta` and `core` at any
- *   revision -- is shortened to its revision and name (`"37/meta"`). Any other reference keeps its
+ *   revision -- is shortened to its revision and name (`"38/meta"`). Any other reference keeps its
  *   URL, which is the only thing that tells a reader which schema it names.
  * - **The documentary annotations** (§3.1) go, wherever they are written: `@doc`, `@title` and
  *   `@examples`, which are for the schema's readers, and `@comment`, which is for its maintainers.
