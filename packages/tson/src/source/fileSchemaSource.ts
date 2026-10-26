@@ -47,7 +47,7 @@ import { resolve, sep } from 'node:path';
 
 import { TsonSchemaFetchError } from '../core/errors.js';
 import type { SchemaSource } from '../config.js';
-import { notPermitted, permittedReference } from './reference.js';
+import { hostKey, notPermitted, permittedReference } from './reference.js';
 import { readCapped } from './capped.js';
 
 /** A schema document larger than this is refused. */
@@ -101,7 +101,7 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
     if (!isExistingDirectory(directory)) {
       throw new TypeError(`'${directory}' is not an existing directory`);
     }
-    hosts.set(host.toLowerCase(), directory);
+    hosts.set(hostKey(host), directory);
   }
   const maxDocumentBytes = options.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES;
   const maxCachedSchemas = options.maxCachedSchemas ?? DEFAULT_MAX_CACHED_SCHEMAS;

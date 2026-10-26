@@ -14,3 +14,5 @@ export * from './skeleton.js';
 export * from './joining-controls.js';
 export * from './restriction-level.js';
 export * from './policy.js';
+export * from './bidi.js';
+export * from './idna.js';

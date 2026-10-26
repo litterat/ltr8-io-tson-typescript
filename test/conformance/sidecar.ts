@@ -241,6 +241,21 @@ export interface VocabularySidecar extends CommonSidecarFields {
   readonly value?: ExpectedVocabularyValue;
 }
 
+// ── Identity layer ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * An identity-layer sidecar (`schemas/identity-sidecar.tn`, RUNNER.md rule 3e): [TSON-DATA]
+ * §2.2.1's canonical identity of the subject's first directive. A `valid` vector states the
+ * identity the runner compares byte for byte; an `error` vector's category is `resolver`.
+ */
+export interface IdentitySidecar extends CommonSidecarFields {
+  readonly outcome: 'valid' | 'error';
+  /** Present iff `outcome === 'error'`. */
+  readonly category?: Category;
+  /** Present iff `outcome === 'valid'`: the host's canonical text plus the path, no scheme or query. */
+  readonly identity?: string;
+}
+
 // ── Reader layer ─────────────────────────────────────────────────────────────────────────────
 
 /** One field of an expected reader-layer record, after §2.5's uniqueness rule. */
@@ -878,6 +893,30 @@ export function parseVocabularySidecar(raw: Uint8Array): VocabularySidecar {
     requireField(payloadFields, 'value', 'vocabulary sidecar.valid'),
   );
   return { ...common, outcome, typeRef, value };
+}
+
+/** Parses an identity-layer sidecar (`schemas/identity-sidecar.tn`). */
+export function parseIdentitySidecar(raw: Uint8Array): IdentitySidecar {
+  const fields = parseSidecarBody(raw);
+  const common = toCommonFields(fields);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error']);
+  if (outcome === 'error') {
+    const payloadFields = recordFields(payload, 'identity sidecar.error');
+    return {
+      ...common,
+      outcome,
+      category: toCategory(
+        requiredText(payloadFields, 'category', 'identity sidecar.error'),
+        'identity sidecar.error',
+      ),
+    };
+  }
+  const payloadFields = recordFields(payload, 'identity sidecar.valid');
+  return {
+    ...common,
+    outcome,
+    identity: requiredText(payloadFields, 'identity', 'identity sidecar.valid'),
+  };
 }
 
 /** Parses a reader-layer sidecar (`schemas/reader-sidecar.tn`). */
