@@ -31,7 +31,7 @@ removed 4 and reshaped 12; its `RUNNER.md` gained rule 3e (the identity layer) a
 own records". **This revision does not change the lexer.** What it changes most is the kernel, and
 with it the shape of everything a schema resolves to.
 
-Measured at Stage 0 (`d0b...`): Class 1 is green except the 35 new `hostname`/`host`/`media_type`
+Measured at Stage 0 (`be1e160`): Class 1 is green except the 35 new `hostname`/`host`/`media_type`
 vocabulary vectors and the two reader vectors on field names. **Every Class 2 subject fails for one
 reason**: the kernel no longer bootstraps — `scheme_name` is restated over `identifier_base`'s new
 `ASCII` member, `type_definition` is gone, and the three base kinds are `abstract type & {}`.
