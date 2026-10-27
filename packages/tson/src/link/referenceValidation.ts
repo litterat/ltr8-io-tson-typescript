@@ -40,7 +40,6 @@ import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import { heldOf } from '../compiler/heldBody.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import { resolvesToConstructor, terminal, type EntryLookup } from './referenceChain.js';
-import { isKindMember } from './kindMembers.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -377,7 +376,9 @@ function checkFieldValue(
   const body = target;
   const value = field.value;
   if (body.kind === 'kind_type') {
-    checkKindValue(entryName, field, value, body.of, namespace);
+    // A value at a kind-typed field is a type's name, judged a member of the kind by
+    // `namespaceTypes.ts`'s `checkKindPins` (§4.2), which follows a constructor template to the
+    // constructor it applies; nothing here second-guesses it.
     return;
   }
   if (!isScalarBody(body)) {
@@ -405,34 +406,6 @@ function checkFieldValue(
         "value of the field's own declared type",
     );
   }
-}
-
-/**
- * A `~`/`=` value at a kind-typed field ([TSON-SCHEMA] §4.2, §5.2): a type name, judged a member of
- * the kind by the walk over the entry it resolves to (`kindMembers.ts`) -- `enum => enum_type ^ {
- * name_type?: = identifier }` pins a name, and the pin is judged here, where it is written, rather
- * than at the first schema applying the constructor. A fixed or default value is a value of its
- * field's own type, so a name resolving to nothing, or to an entry not built with the kind's
- * constructor, is refused with the field's two halves named.
- */
-function checkKindValue(
-  entryName: string,
-  field: NamedField,
-  value: Token,
-  of: string,
-  namespace: ReadonlyMap<string, Top>,
-): void {
-  const lookup = lookupIn(namespace);
-  if (isKindMember(value.text, of, lookup, () => undefined, lookup)) return;
-  throw new TsonSchemaValidationError(
-    `'${entryName}': field '${field.name}' is declared '${field.type.name}', but its ` +
-      `${field.role === 'DEFAULT' ? 'default' : 'fixed value'} ${asWritten(value)} is not a ` +
-      'value of that type -- ' +
-      (namespace.has(value.text)
-        ? `'${value.text}' is not a member of the kind, the names of the types built with '${of}'`
-        : 'it names nothing in scope') +
-      ". §5.2 makes a field's fixed or default value a value of the field's own declared type",
-  );
 }
 
 /**

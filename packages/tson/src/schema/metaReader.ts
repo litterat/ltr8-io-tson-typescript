@@ -6,6 +6,12 @@
  * it, `meta.tn` and `core.tn` cannot resolve at all -- every `Instance`/atom-refinement they carry
  * stops at "no compiled reader for '!enum'" (see `bundled-schemas-resolve.test.ts`'s own history).
  *
+ * **A meta layer's own constructors.** One IS-A the kernel's `namespace` has maps for values, which
+ * no binding describes: its payload is read into the generic value model by
+ * `schema/namespaceReader.ts` (§4.1). One refining a constructor of the kernel's or meta.tn's
+ * vocabulary (`text_enum => enum_type ^ { name_type?: = text_identifier }`) builds that
+ * constructor's body, read through its binding with the refinement's own fields' defaults.
+ *
  * **Deliberately outside `schema/meta`**, alongside `bindings.ts` -- the zone rule in
  * `eslint.config.js` reserves `schema/meta` for the value model alone, and this module needs both
  * `bind/` (`fromDataValue`, the read direction `bind/decode.ts` provides) and `compiler/`'s own
@@ -81,6 +87,8 @@ import {
 import type { Top } from './meta/typedef.js';
 import { isTemplateBody } from './meta/typedef.js';
 import { inheritedBindingName } from './inheritedBinding.js';
+import { isNamespaceType } from './meta/namespaces.js';
+import { readNamespaceInstance } from './namespaceReader.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -308,6 +316,12 @@ export function createDefinitionMetaReader(
   decodeAtom: AtomDecoder = metaAtomDecoder,
 ): DefinitionMetaReader {
   return (type, value) => {
+    const constructor = lookupConstructorDef(type);
+    // A meta layer's own namespace type: its value is the map its facets describe, read into the
+    // generic value model rather than bound (§4.1).
+    if (isNamespaceType(constructor, type)) {
+      return readNamespaceInstance(type, value, lookupConstructorDef);
+    }
     const binding =
       metaBindings.get(type) ??
       metaBindings.get(

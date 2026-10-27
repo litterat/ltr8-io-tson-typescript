@@ -303,6 +303,8 @@ function buildReader(
     const enumForm = schema.enumForms.get(name);
     const built = buildAtomReader(name, body, {
       identifierPolicy: policy,
+      // A meta layer's documents name the types of the schema they describe (§4.2).
+      judgesKindMembers: schema.kernelGoverned !== true && !schema.bootstrap,
       ...(enumForm === undefined ? {} : { enumForm }),
     });
     return guardSubsumption(name, definition, built, schema.entries, resolve);

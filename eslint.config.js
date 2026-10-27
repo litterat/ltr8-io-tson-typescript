@@ -11,6 +11,8 @@ export default defineConfig(
       '**/dist/**',
       '**/dist-types/**',
       '.references/**',
+      // Agent worktrees are whole checkouts of this repository; linting them doubles the tree.
+      '.claude/worktrees/**',
       '**/node_modules/**',
       '**/coverage/**',
       // Workflow scripts run in the Workflow runtime against globals this project
