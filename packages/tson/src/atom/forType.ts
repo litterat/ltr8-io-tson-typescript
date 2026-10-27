@@ -21,12 +21,7 @@
  * isScalarBody} first, exactly as {@link atomParserFor}'s own caller does.
  */
 import type { AtomToken } from './contract.js';
-import type {
-  IdentifierType,
-  Normalization,
-  RegexType,
-  TextType,
-} from '../schema/meta/atoms-text.js';
+import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { Product, Sum } from '../schema/meta/algebra.js';
 import type { Atom, Reference } from '../schema/meta/typedef.js';
 
@@ -39,6 +34,7 @@ import { createBinaryParser } from './numeric/binary.js';
 import { createTextParser } from './text/text.js';
 import { createIdentifierParser } from './text/identifier.js';
 import { createEnumParser } from './enum.js';
+import { createKindParser, createQualifiedNameParser } from './reference.js';
 import { createUuidParser } from './network/uuid.js';
 import { createUriParser } from './network/uri.js';
 import { createEmailParser } from './network/email.js';
@@ -115,16 +111,6 @@ export function isScalarBody(body: ScalarCandidate): boolean {
       return false; // record, array, map, tuple, choice, reference, scoped, and Data
   }
 }
-
-/** The name grammar a kind's value is read by: the kernel's `type_name`, an `identifier` (§4.2, §7.7). */
-const KIND_NAME: IdentifierType = {
-  kind: 'identifier_type',
-  spec: 'https://www.unicode.org/reports/tr31/',
-  normalization: 'NFC',
-  start: 'XID',
-  continue: 'XID',
-  continueAdd: '-',
-};
 
 // ── regex_type ───────────────────────────────────────────────────────────────────────────────
 
@@ -212,16 +198,17 @@ export function atomParserFor(
     case 'kind_type':
       // A kind's value is a type name (§4.2): read here by the name grammar, and judged a member
       // of the kind against the linked closure, which a bare-token parser cannot see.
-      return createIdentifierParser(declaredName, KIND_NAME);
+      return createKindParser(declaredName, body, false);
+    case 'ref_type':
+      // A reference's value is a qualified name (§5.12), judged against the linked closure.
+      return createQualifiedNameParser(declaredName);
     case 'hostname_type':
       return createHostnameParser(declaredName, body);
     case 'host_type':
       return createHostParser(declaredName);
     case 'media_type_type':
       return createMediaTypeParser(declaredName, body);
-    // A `ref_type` value is a qualified name judged against the linked closure (§5.12), which a
-    // bare-token parser cannot see.
     default:
-      return undefined; // value_type, void_type, ref_type, containers, choice, reference, scoped
+      return undefined; // value_type, void_type, containers, choice, reference, scoped
   }
 }

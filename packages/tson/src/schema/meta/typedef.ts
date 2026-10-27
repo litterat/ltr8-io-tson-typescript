@@ -332,12 +332,13 @@ export interface RefBody extends TypeBase {
  * A value read from a meta layer's own vocabulary, held generically (§4.1): this model binds
  * nothing to host classes, so the values of a namespace type a meta layer declares (an
  * `interface`'s `method`s, an `api`'s `binding`s) are carried as what they were written as. A
- * record value names the constructor its tag or its position fixes and holds its fields by wire
- * name; a name at a kind- or reference-typed slot is kept as the {@link Token} written, which is
- * what a qualified name's field step reads and what resolved output writes back.
+ * record value holds its fields by wire name ({@link MetaRecordValue}); a token at an atom-typed
+ * slot is kept as written, and a name at a kind- or reference-typed slot is kept as the
+ * {@link Token} written, beside the {@link NameSlot} it was read at -- which is what a qualified
+ * name's field step reads and what resolved output writes back.
  */
 export type MetaValue =
-  | { readonly form: 'token'; readonly token: Token }
+  | { readonly form: 'token'; readonly token: Token; readonly slot?: NameSlot }
   | { readonly form: 'void' }
   | { readonly form: 'list'; readonly elements: readonly MetaValue[] }
   | {
@@ -347,7 +348,26 @@ export type MetaValue =
   | MetaRecordValue
   | { readonly form: 'namespace'; readonly value: Namespace<MetaValue> };
 
-/** A record value of a meta layer's vocabulary: its constructor, where known, and its fields by wire name. */
+/**
+ * The slot a name was read at, as its declaration typed it (§4.2, §5.12): a kind-typed slot holds
+ * a type's name (`kind`, judged a member of the kind of {@link of}), a reference-typed slot a
+ * value's qualified name (`reference`, judged a value IS-A {@link of}), and a `type_ref` slot the
+ * application form (`application`, judged by resolution and arity). `type` names the slot's
+ * declared type in the governing meta's namespace (a kind or a reference entry). A name carries
+ * its slot's type from the read, so judging it never walks back through the meta's declarations.
+ */
+export interface NameSlot {
+  readonly role: 'kind' | 'reference' | 'application';
+  readonly type: string;
+  readonly of: string;
+}
+
+/**
+ * A record value of a meta layer's vocabulary: its fields by wire name, and `type`, the record type
+ * its tag names where that is other than the type its position declares (a member of a family, a
+ * strict subtype) -- the tag resolved output writes. A value read as its position's own type
+ * carries none, whether or not it was written with a tag naming that type.
+ */
 export interface MetaRecordValue {
   readonly form: 'record';
   readonly type?: string;

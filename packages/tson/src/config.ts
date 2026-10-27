@@ -503,7 +503,16 @@ function resolveAgainstRegistry(
     structureFacts: governingMeta.facts,
     resolveImport,
     ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
+    kernelGoverned: isSelfGoverned(governingMeta),
   });
+}
+
+/**
+ * Whether `meta` is the meta-kernel: the one schema naming itself as its own `!!meta` (§1.5), so a
+ * schema it governs is a meta layer, where an entry may hold a value (§2.2.2).
+ */
+function isSelfGoverned(meta: LinkedSchema): boolean {
+  return meta.bootstrap || canonicalizeIdentity(meta.meta) === canonicalizeIdentity(meta.id);
 }
 
 /**

@@ -61,6 +61,8 @@ import { validateReferences } from './referenceValidation.js';
 import { checkEveryEntryIsInhabited } from './typeInhabitance.js';
 import { checkFieldGroups } from './fieldGroups.js';
 import { checkRecordExtension } from './recordExtension.js';
+import { checkKindsReferencesAndNamespaceTypes } from './namespaceTypes.js';
+import { checkValuesByName } from './valuesByName.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -115,6 +117,12 @@ export interface LinkedSchema {
    * `content-type` under a case-folding type. Local and imported enums alike.
    */
   readonly enumForms: ReadonlyMap<string, Normalization>;
+  /**
+   * Whether the meta-kernel governs this schema -- the one level where an entry holds a value and a
+   * kind slot names a type of a schema it describes rather than of its own closure (§2.2.2, §4.2).
+   * Absent where the linker was not told.
+   */
+  readonly kernelGoverned?: boolean;
 }
 
 /** Dependencies {@link linkSchema} needs beyond the {@link Schema} being linked. */
@@ -161,6 +169,8 @@ export interface LinkDeps {
    * bootstrap route) has no such restriction and may take a caller's own policy.
    */
   readonly identifierPolicy?: IdentifierPolicy;
+  /** Whether the meta-kernel governs the schema being linked ({@link LinkedSchema.kernelGoverned}). */
+  readonly kernelGoverned?: boolean;
 }
 
 /**
@@ -291,6 +301,21 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     ...(structureNamespace === undefined ? {} : { structureNamespace }),
     ...(receiver === undefined ? {} : { receiver }),
   });
+  checkKindsReferencesAndNamespaceTypes(merged, localNames, {
+    schemaId: schema.id,
+    facts,
+    ...(structureNamespace === undefined ? {} : { structureNamespace }),
+    ...(deps.kernelGoverned === undefined ? {} : { kernelGoverned: deps.kernelGoverned }),
+    ...(receiver === undefined ? {} : { receiver }),
+  });
+  if (structureNamespace !== undefined) {
+    checkValuesByName(merged, localNames, {
+      schemaId: schema.id,
+      facts,
+      structureNamespace,
+      ...(receiver === undefined ? {} : { receiver }),
+    });
+  }
   checkEveryEntryIsInhabited(merged, localNames, {
     schemaId: schema.id,
     facts,
@@ -324,6 +349,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     origins,
     textEnums,
     enumForms,
+    ...(deps.kernelGoverned === undefined ? {} : { kernelGoverned: deps.kernelGoverned }),
   };
 }
 

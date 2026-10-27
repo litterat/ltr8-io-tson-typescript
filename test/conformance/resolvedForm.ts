@@ -104,6 +104,11 @@ function canonicalJson(value: unknown): string {
   // (`toExactInteger`), which `JSON.stringify` refuses outright -- rendered as its decimal
   // digits, indistinguishable from a same-valued host `number` the way this comparison needs.
   if (typeof value === 'bigint') return value.toString();
+  // A namespace value's entries and a record value's fields are `Map`s, which have no own
+  // enumerable keys: rendered as their entries, in order, so two maps compare by what they hold.
+  if (value instanceof Map) {
+    return `{"$map":${canonicalJson([...(value as Map<unknown, unknown>).entries()])}}`;
+  }
   if (Array.isArray(value)) {
     return `[${value.map((element) => canonicalJson(element)).join(',')}]`;
   }
