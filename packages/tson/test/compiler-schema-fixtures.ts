@@ -1,6 +1,6 @@
 /**
  * Test-only fixtures for `compiler/compile.ts`'s own integration tests -- not itself a `*.test.ts`
- * file, so vitest never tries to run it. Resolves and links the three real, vendored bundled
+ * file, so vitest never tries to run it. Resolves and links three of the real, vendored bundled
  * schemas (`spec/m/*.tn`) the same way `bundled-schemas-resolve.test.ts` does, and resolves a
  * caller-supplied user schema text against `core.tn`'s own governing chain -- the "a user schema
  * importing core.tn" shape Wave 5's own gate is measured against, reused here at unit-test scale.
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { fromBytes, fromString, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
-import { resolveSchema, type Schema } from '../src/compiler/schemaResolver.js';
+import { resolveSchema, type ImportedSchema, type Schema } from '../src/compiler/schemaResolver.js';
 import { compile } from '../src/compiler/compile.js';
 import { createAnnotationValueReader } from '../src/schema/annotationReader.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
@@ -36,6 +36,18 @@ const CHAIN: Record<BundledName, readonly BundledName[]> = {
 
 const cache = new Map<BundledName, LinkedSchema>();
 
+/** `linked` as one of the schemas another imports: its entries with their facts and key annotations. */
+function importedFrom(linked: LinkedSchema): ImportedSchema {
+  return {
+    entries: linked.entries,
+    facts: linked.facts,
+    keyAnnotations: linked.keyAnnotations,
+    originOf: () => linked.id,
+    textEnums: linked.textEnums,
+    enumForms: linked.enumForms,
+  };
+}
+
 function structureNamespaceFor(name: BundledName): DefinitionGetter {
   const chain = [...CHAIN[name]].reverse().map(resolvedBundled); // nearest first
   return (typeName) => {
@@ -57,8 +69,9 @@ function resolveBundled(name: BundledName, meta: LinkedSchema): Schema {
     // the `@doc` on each declaration is lost from the resolved output.
     annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
+    metaFacts: (entry) => meta.facts.get(entry),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
-    resolveImport: () => ({ entries: meta.entries, originOf: () => meta.id }),
+    resolveImport: () => importedFrom(meta),
   });
 }
 
@@ -78,10 +91,8 @@ export function resolvedBundled(name: BundledName): LinkedSchema {
       ? {}
       : {
           structureNamespace: governingMeta.entries,
-          resolveImport: () => ({
-            entries: governingMeta.entries,
-            originOf: () => governingMeta.id,
-          }),
+          structureFacts: governingMeta.facts,
+          resolveImport: () => importedFrom(governingMeta),
         }),
   });
   cache.set(name, linked);
@@ -106,11 +117,13 @@ export function resolveUserSchema(source: string): LinkedSchema {
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
     annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
+    metaFacts: (entry) => meta.facts.get(entry),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
-    resolveImport: () => ({ entries: core.entries, originOf: () => core.id }),
+    resolveImport: () => importedFrom(core),
   });
   return linkSchema(unlinked, {
     structureNamespace: meta.entries,
-    resolveImport: () => ({ entries: core.entries, originOf: () => core.id }),
+    structureFacts: meta.facts,
+    resolveImport: () => importedFrom(core),
   });
 }

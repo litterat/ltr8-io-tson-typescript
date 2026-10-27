@@ -2,14 +2,12 @@
  * §7.2's rule that a value's own type annotation must be admitted by the position it stands in:
  * "at a position whose declared type is `T`, a value annotated `!S` is valid if and only if,
  * after following the reference chain of both (§8.3) to its terminal, `S` is `T` or `T` appears
- * in `S`'s transitive `type_definition.supertypes`". Ported from the reference implementation's
+ * in `S`'s closed chain (`type_chain.supertypes`)". Ported from the reference implementation's
  * `Subsumption` (`tson-compiler/.../reader/Subsumption.java`) and the dispatch half of its
  * `VariantSchemaReader`; see those files' own module docs for the exhaustive rationale.
  *
- * **The guard follows the body, not `definition.kind`.** {@link TypeDefinition.kind} and
- * {@link TypeDefinition.body} are two independent facts about one entry -- a hand-built entry can
- * carry a `ChoiceBody` while claiming `kind: 'PRODUCT'` -- and only an `Atom` or `Product` (record,
- * array, map, tuple) body takes this guard. §7.2 excludes every other shape by name: a `choice`
+ * **The guard follows the value's shape, not a kind.** Only an `Atom` or `Product` (record,
+ * array, map, tuple) value takes this guard. §7.2 excludes every other shape by name: a `choice`
  * discriminates by variant membership (§5.4) and a `scoped` instance by its own value shape
  * (§7.8), each with its own dispatcher whose membership this guard must not override, and a value
  * is never typed by a `Reference` position at all -- every use site's own type resolves through
@@ -75,8 +73,8 @@ import {
   typeRefAhead,
 } from '../reader/tree/grammar.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
-import type { Token, Top, TypeDefinition } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
+import type { Namespace, Token, Top } from '../schema/meta/typedef.js';
+import { isFamilyBase, isTemplateBody, subtypesOf } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
@@ -88,20 +86,17 @@ import { metaFormOfLexer } from './tokenForms.js';
 const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
 
 /**
- * Whether `body` is `Atom`- or `Product`-shaped, or a record-bodied template family base --
- * the bodies §7.2's rule governs. A family base (§5.10) is the one `TemplateBody` shape this rule
- * reaches: it may be named bare at a type position, and a position typed by one dispatches exactly
- * as an ABSTRACT record's own does, over its instantiations.
+ * Whether `body` is `Atom`- or `Product`-shaped -- the bodies §7.2's rule governs. A record
+ * template is one of them: a family base (§5.10) may be named bare at a type position, and a
+ * position typed by one dispatches exactly as an ABSTRACT record's own does, over its members.
  */
 function isGuardedBody(body: Top): boolean {
   if (isAtom(body)) return true;
-  if ('kind' in body) return PRODUCT_KINDS.has(body.kind);
-  return isTemplateBody(body) && body.extension !== undefined;
+  return !isTemplateBody(body) && PRODUCT_KINDS.has(body.kind);
 }
 
-/** `Top`'s open `Data.kind: string` member defeats a plain `'kind' in body && body.kind === 'record'` narrowing (`compiler/compile.ts`'s own note); this guard is this module's own copy. */
 function isRecordBody(body: Top): body is RecordBody {
-  return 'kind' in body && body.kind === 'record';
+  return !isTemplateBody(body) && body.kind === 'record';
 }
 
 /**
@@ -113,7 +108,7 @@ function isRecordBody(body: Top): body is RecordBody {
  *
  * A value with no leading `!type-ref`, or one naming a member of `selfNames`, reads straight
  * through `reader` -- the position's own type is always admitted (§7.2's "S is T"). A value naming
- * one of `definition.subtypes` dispatches to that subtype's own compiled reader via `resolve`,
+ * one of the definition's `subtypes` dispatches to that subtype's own compiled reader via `resolve`,
  * read against the same, still-unconsumed value. Anything else is a refusal, split on whether the
  * written name denotes anything in `entries` at all: one `entries` has no entry for is
  * `UNKNOWN_TYPE_REF` (§7.2's own opening paragraph -- "a built-in annotation name not defined by
@@ -135,16 +130,16 @@ function isRecordBody(body: Top): body is RecordBody {
  */
 export function guardSubsumption(
   name: string,
-  definition: TypeDefinition,
+  definition: Top,
   reader: TypeReader<Value>,
-  entries: ReadonlyMap<string, TypeDefinition>,
+  entries: ReadonlyMap<string, Top>,
   resolve: (name: string) => TypeReader<Value>,
 ): TypeReader<Value> {
-  if (!isGuardedBody(definition.body)) {
+  if (!isGuardedBody(definition)) {
     return reader;
   }
   const own = selfNames(name, entries);
-  const subtypeNames = definition.subtypes;
+  const subtypeNames = subtypesOf(definition);
   // §7.2 follows BOTH chains: the position's own type through `selfNames`, and the annotated name
   // through the same walk. The set is keyed on terminals so that `!d_alias` is admitted wherever
   // the entry it aliases is -- an alias is a hop, not a different type (§8.3) -- while the
@@ -153,19 +148,11 @@ export function guardSubsumption(
     subtypeNames.map((subtype) => [terminal(subtype, (n) => entries.get(n)), subtype] as const),
   );
   const subtypeList = subtypeNames.join(', ');
-  const recordBody = isRecordBody(definition.body) ? definition.body : undefined;
-  // §5.10: a record-bodied template's own (open) entry carries the same two facts on its
-  // `TemplateBody` wrapper instead of on a `RecordBody` -- `isGuardedBody` above is what let one
-  // reach this function at all.
-  const isTemplateFamily = recordBody === undefined && isTemplateBody(definition.body);
-  const isAbstract = recordBody?.extension === 'ABSTRACT' || isTemplateFamily;
-  // A template family base's own `discriminators` mirrors a record base's (§5.10); it has no
-  // reader of its own for `buildMemberDispatchReader`'s fallback to run (a template is never read
-  // as itself), where a record base offers its ordinary record reader.
-  const discriminators =
-    recordBody?.discriminators ??
-    (isTemplateFamily && isTemplateBody(definition.body) ? definition.body.discriminators : []) ??
-    [];
+  const recordBody = isRecordBody(definition) ? definition : undefined;
+  // §5.10: a record template is a family base, ABSTRACT by construction whatever its own
+  // `extension` (each application's) says.
+  const isAbstract = recordBody?.extension === 'ABSTRACT' || isFamilyBase(recordBody);
+  const discriminators = recordBody?.discriminators ?? [];
 
   if (discriminators.length > 0) {
     return buildMemberDispatchReader(
@@ -294,7 +281,7 @@ function candidatePins(
 ): readonly Value[] | undefined {
   const pins: Value[] = [];
   for (const fieldName of discriminators) {
-    const field = member.body.fields.find((candidate) => candidate.name === fieldName);
+    const field = member.body.fields.entries.get(fieldName);
     const parser = fieldReaders.get(fieldName);
     if (field?.role !== 'FIXED' || field.value === undefined || parser === undefined) {
       return undefined;
@@ -341,8 +328,8 @@ const EMPTY_TOKENS: ReadonlyMap<string, Token> = new Map();
 function buildMemberDispatchReader(
   name: string,
   discriminators: readonly string[],
-  baseFields: readonly RecordField[] | undefined,
-  entries: ReadonlyMap<string, TypeDefinition>,
+  baseFields: Namespace<RecordField> | undefined,
+  entries: ReadonlyMap<string, Top>,
   own: ReadonlySet<string>,
   resolve: (name: string) => TypeReader<Value>,
 ): TypeReader<Value> & ChoiceSelfTagReader {
@@ -360,9 +347,9 @@ function buildMemberDispatchReader(
   const fieldReaders = new Map(
     discriminators.map((fieldName) => {
       const typedField =
-        baseFields?.find((candidate) => candidate.name === fieldName) ??
+        baseFields?.entries.get(fieldName) ??
         members
-          .map((member) => member.body.fields.find((candidate) => candidate.name === fieldName))
+          .map((member) => member.body.fields.entries.get(fieldName))
           .find((candidate) => candidate !== undefined);
       if (typedField === undefined) {
         throw new TsonInternalError(
@@ -392,7 +379,7 @@ function buildMemberDispatchReader(
   const familyNames = new Set<string>();
   for (const member of members) {
     familyNames.add(member.name);
-    for (const subtype of entries.get(member.name)?.subtypes ?? []) familyNames.add(subtype);
+    for (const subtype of subtypesOf(entries.get(member.name))) familyNames.add(subtype);
   }
 
   function* readMember(ctx: ReadContext): Task<Value> {
@@ -535,8 +522,7 @@ function buildMemberDispatchReader(
     if (lookahead.tag !== undefined) {
       const annotated = terminal(lookahead.tag, (n) => entries.get(n));
       const matchedDef = entries.get(matched.name);
-      const agrees =
-        annotated === matched.name || (matchedDef?.subtypes.includes(annotated) ?? false);
+      const agrees = annotated === matched.name || subtypesOf(matchedDef).includes(annotated);
       if (!agrees) {
         // §7.2's own two-step resolution rule, asked *before* the agreement question below can
         // even be posed: a tag that resolves nowhere in `entries` has nothing to agree or

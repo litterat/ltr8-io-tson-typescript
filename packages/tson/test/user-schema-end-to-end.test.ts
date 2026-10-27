@@ -31,12 +31,13 @@ import { TsonReadError } from '../src/core/errors.js';
 import { fromBytes, runSync } from '../src/io/bytes.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
-import { typeKind } from '../src/schema/meta/typedef.js';
+import { entryKind } from '../src/schema/meta/typedef.js';
 import { tsonDocument } from '../src/tree/nodes.js';
 import { writeDocument } from '../src/write/astWriter.js';
 import { writeTree, writeTreeValue } from '../src/write/treeWriter.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
 import { requireValue } from './reader-tree-helpers.js';
+import { entry } from './model-fixtures.js';
 
 // ── The user schema, and the two documents it governs ─────────────────────────────────────────
 
@@ -101,15 +102,11 @@ const compiled: CompiledSchema = compile(linked);
  * schema rather than against a hash spelling.
  */
 function fieldTypeName(typeName: string, field: string): string {
-  const body = linked.entries.get(typeName)?.body;
-  // `Top`'s union mixes closed literal-`kind` members with `Data`'s open `kind: string`, so a
-  // plain comparison narrows nothing -- the same runtime guard `compiler/compile.ts` uses.
+  const body = linked.entries.get(typeName);
   const record: RecordBody | undefined =
-    body !== undefined && 'kind' in body && body.kind === 'record'
-      ? (body as RecordBody)
-      : undefined;
+    body !== undefined && 'kind' in body && body.kind === 'record' ? body : undefined;
   if (record === undefined) throw new Error(`'${typeName}' is not a record in the linked schema`);
-  const declared = record.fields.find((candidate) => candidate.name === field);
+  const declared = record.fields.entries.get(field);
   if (declared === undefined) throw new Error(`'${typeName}' declares no field '${field}'`);
   return declared.type.name;
 }
@@ -243,22 +240,19 @@ describe('the governing chain is three schemas deep', () => {
     if (int32 === undefined) throw new Error('unreachable');
     const meta = resolvedBundled('meta');
     const kernel = resolvedBundled('meta-kernel');
-    expect(typeKind(int32, (name) => linked.entries.get(name) ?? kernel.entries.get(name))).toBe(
-      'ATOM',
+    expect(entryKind(int32)).toBe('ATOM');
+    expect(int32).toMatchObject(
+      entry({ kind: 'integer_type', size: { bits: 32n, signed: true } }, ['integer']),
     );
-    expect(int32).toMatchObject({
-      supertypes: ['integer'],
-      body: { kind: 'integer_type', size: { bits: 32n, signed: true } },
-    });
     // `boolean => !enum [true false]` -- the kernel's `enum` constructor, applied in core.
-    expect(linked.entries.get('boolean')).toMatchObject({
-      body: { kind: 'enum', members: ['true', 'false'] },
-    });
+    expect(linked.entries.get('boolean')).toMatchObject(
+      entry({ kind: 'enum', nameType: 'identifier', members: ['true', 'false'] }),
+    );
     // The two layers the constructors actually come from: `integer_type` and `enum` are the
     // kernel's, `uuid_type` and `datetime_type` are meta's, and the document below is validated
     // by all of them at once.
-    expect(linked.entries.get('uuid')).toMatchObject({ source: { name: 'uuid_type' } });
-    expect(linked.entries.get('datetime')).toMatchObject({ source: { name: 'datetime_type' } });
+    expect(linked.facts.get('uuid')?.head).toBe('uuid_type');
+    expect(linked.facts.get('datetime')?.head).toBe('datetime_type');
     for (const constructorName of ['uuid_type', 'datetime_type', 'float_type']) {
       expect(meta.entries.has(constructorName)).toBe(true);
       expect(kernel.entries.has(constructorName)).toBe(false);

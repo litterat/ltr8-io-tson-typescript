@@ -1,5 +1,5 @@
 /**
- * Populates {@link TypeDefinition.subtypes}, the reverse of {@link TypeDefinition.supertypes} —
+ * Populates each type's `chain.subtypes`, the reverse of its `chain.supertypes` —
  * never done anywhere before this (`definitionResolver.ts`'s own doc: "`subtypes` is never
  * populated — the reverse index over a whole resolved schema is a global pass, not a
  * per-declaration concern; deliberately deferred to a later work package (linking)"). This module
@@ -15,23 +15,27 @@
  * includes both `response` and (transitively) `top`, then both gain `success_response` as a
  * subtype here, with no separate transitive-closure step needed.
  */
-import type { TypeDefinition } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
+import { chainOf, isType, subtypesOf, supertypesOf, withChain } from '../schema/meta/typedef.js';
 
 /**
  * `def` plus `newSubtypes`, unioned with whatever subtypes it already had — a new
- * {@link TypeDefinition}, `def` itself untouched. Order is preserved: `def.subtypes` first, then
+ * value, `def` itself untouched. The result is sorted, a chain's one spelling: `def`'s subtypes and
  * any of `newSubtypes` not already present.
  */
 export function withAddedSubtypes(
-  def: TypeDefinition,
+  def: Top,
   newSubtypes: ReadonlySet<string> | readonly string[],
-): TypeDefinition {
-  const combined = new Set(def.subtypes);
+): Top {
+  if (!isType(def)) return def; // a value with no chain has no subtypes to record
+  const existing = subtypesOf(def);
+  const combined = new Set(existing);
   for (const name of newSubtypes) combined.add(name);
-  if (combined.size === def.subtypes.length) {
+  if (combined.size === existing.length) {
     return def; // nothing new -- keep the same reference rather than an equal-but-fresh copy
   }
-  return { ...def, subtypes: [...combined] };
+  const chain = chainOf(def);
+  return withChain(def, { ...chain, subtypes: [...combined].sort() });
 }
 
 /**
@@ -52,14 +56,14 @@ export function withAddedSubtypes(
  * `merged` itself is returned unchanged when nothing has any.
  */
 export function computeSubtypes(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
-): Map<string, TypeDefinition> {
+): Map<string, Top> {
   const newSubtypesByName = new Map<string, Set<string>>();
   for (const localName of localNames) {
     const def = merged.get(localName);
     if (def === undefined) continue;
-    for (const supertype of def.supertypes) {
+    for (const supertype of supertypesOf(def)) {
       if (!merged.has(supertype)) continue;
       let set = newSubtypesByName.get(supertype);
       if (set === undefined) {
@@ -91,9 +95,10 @@ export function computeSubtypes(
  * inverse of `supertypes` across *this* schema's namespace, and this schema can see both routes'
  * subtypes even though neither route could see the other's.
  */
-export function unifySubtypes(incumbent: TypeDefinition, arriving: TypeDefinition): TypeDefinition {
-  if (arriving.subtypes.every((s) => incumbent.subtypes.includes(s))) {
+export function unifySubtypes(incumbent: Top, arriving: Top): Top {
+  const known = subtypesOf(incumbent);
+  if (subtypesOf(arriving).every((s) => known.includes(s))) {
     return incumbent;
   }
-  return withAddedSubtypes(incumbent, arriving.subtypes);
+  return withAddedSubtypes(incumbent, subtypesOf(arriving));
 }

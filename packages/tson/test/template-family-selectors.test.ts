@@ -34,7 +34,7 @@ describe('a family whose base is a record-bodied template is judged (§5.2, §5.
 
 describe('only a pin on an unmarked name is a selector (§5.10, §3.2 item 33)', () => {
   const discriminatorsOf = (linked: ReturnType<typeof load>): unknown =>
-    (linked.entries.get('pet')?.body as { discriminators?: unknown }).discriminators;
+    (linked.entries.get('pet') as { discriminators?: unknown }).discriminators;
 
   it('`type: text = N` is a selector', () => {
     expect(discriminatorsOf(load(`pet => <N, T> { type: text = N  pet: T }`))).toEqual(['type']);

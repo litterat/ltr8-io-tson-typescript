@@ -60,7 +60,7 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { choiceDisjoint, type TypeDefinition } from '../../schema/meta/typedef.js';
+import { choiceDisjoint, type Top } from '../../schema/meta/typedef.js';
 import { discriminationClassOf, type DiscriminationClass } from '../../link/disjointness.js';
 import { admitting, terminal } from '../../link/referenceChain.js';
 import type { ChoiceBody } from '../../schema/meta/bodies.js';
@@ -204,7 +204,7 @@ function* tagged(
   namesList: string,
   routes: ReadonlyMap<string, Route>,
   resolvers: ReadonlyMap<string, () => JsonTypeReader>,
-  entries: ReadonlyMap<string, TypeDefinition>,
+  entries: ReadonlyMap<string, Top>,
 ): Task<unknown> {
   const { schema, type } = lead;
   if (schema) {

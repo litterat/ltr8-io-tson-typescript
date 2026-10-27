@@ -181,7 +181,7 @@ export declare function lookingAhead<T>(
 /**
  * Builds the {@link TypeReader} for one compiled schema entry -- the port of `ValueReaderFactory`.
  *
- * Generic over the schema-entry shape (`Def`, Java's resolved `TypeDefinition`) and the
+ * Generic over the schema-entry shape (`Def`, a resolved entry value) and the
  * compilation environment (`Context`, Java's `ValueReaderContext`) rather than naming
  * `schema/meta`'s concrete types directly: this layer is upstream of `schema/meta` in the module
  * layering (see `eslint.config.js`'s zone list -- `schema/meta` may only be imported from itself,

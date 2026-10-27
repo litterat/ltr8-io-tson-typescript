@@ -52,8 +52,15 @@ import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { TemplateParam } from '../schema/meta/bodies.js';
-import type { Annotations, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
-import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
+import { NO_FIELDS, TYPE_KIND } from '../schema/meta/bodies.js';
+import type { Annotations, EntryFacts, Top, TypeRef } from '../schema/meta/typedef.js';
+import {
+  APPLICATION_ANNOTATION,
+  SYNTHETIC_ANNOTATION,
+  isOpen,
+  typeParameters,
+  withApplication,
+} from '../schema/meta/typedef.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -63,11 +70,11 @@ import type {
   AnnotationValueReader,
   DefinitionGetter,
   DefinitionMetaReader,
+  EntryFactsTable,
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { desugar, lifted, type DesugarFailureReporter } from './desugar.js';
-import { createHeldBody, isHeldBody, withParameters } from './heldBody.js';
-import { heldEmptyRecord } from './wireForm.js';
+import { heldOf, withParametersOf } from './heldBody.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
 import { inferAll, kinds as parameterKindsOf } from './parameterTypes.js';
 import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syntheticMerge.js';
@@ -75,10 +82,15 @@ import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syn
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
 /**
- * A resolved schema (Part 2 §8): the kernel's own `schema` type, `map<type_name,
- * type_definition>` (§9), plus the governing-chain directives the document header carried
- * (`!!id`/`!!meta`/`!!import*`, §2.2). `entries`' insertion order is preserved, matching
- * `SchemaMap.declarations`'s own ordering guarantee.
+ * A resolved schema (Part 2 §8): a value of the kernel's `schema`, the namespace type `{type_name
+ * => top}` (§4.1) -- an entry is its value (§8.1) -- plus the governing-chain directives the
+ * document header carried (`!!id`/`!!meta`/`!!import*`, §2.2). `entries`' insertion order is
+ * preserved, matching `SchemaMap.declarations`'s own ordering guarantee.
+ *
+ * `facts` holds what an entry's value cannot (§8.1's {@link EntryFacts}): where it was declared,
+ * the annotations written on its value, the constructor its tag names -- present only for an
+ * entry with any to record. `keyAnnotations` are the key's: those written before the name, and the
+ * resolver-attached `@synthetic` and `@application` (§8.2).
  *
  * `id` is a plain `string`, not optional -- the grammar itself marks `!!id` optional (a raw
  * parsed {@link SchemaDocument} can genuinely lack one), but a *resolved* schema always needs a
@@ -93,7 +105,7 @@ import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syn
  * own `Annotations` is the *wire* carrier (`{ values: readonly Annotation[] }`, over
  * `ast/value.ts`'s `Annotation`) -- a different, incompatible type from `schema/meta/typedef.ts`'s
  * own local stand-in (`readonly Annotation[]`, over its own `Annotation`) that every other
- * annotation-carrying field in this module already uses (`TypeDefinition.annotations`,
+ * annotation-carrying field in this module already uses (`EntryFacts.annotations`,
  * `RecordField.annotations`, ...). `STATUS.md`'s own "Known gaps" note names this exact mismatch.
  * Reusing `AnnotatedMap` here would force a conversion this module has no reason to perform;
  * spelling the same shape with `schema/meta`'s own `Annotations` keeps every annotation in this
@@ -103,17 +115,23 @@ export interface Schema {
   readonly id: string;
   readonly meta: string;
   readonly imports: readonly string[];
-  /** Every resolved entry, local-only (imported entries are visible during resolution but never part of this). */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
-  /** `entries.get(name)`'s own key-position annotations (§6) -- present only for a name that carries at least one. */
+  /** Every resolved entry's value, local-only (imported entries are visible during resolution but never part of this). */
+  readonly entries: ReadonlyMap<string, Top>;
+  /** `entries.get(name)`'s own key-position annotations (§6, §8.2) -- present only for a name that carries at least one. */
   readonly keyAnnotations: ReadonlyMap<string, Annotations>;
+  /** `entries.get(name)`'s facts beyond its value (§8.1) -- present only for a name with any recorded. */
+  readonly facts: ReadonlyMap<string, EntryFacts>;
   readonly bootstrap: boolean;
 }
 
 /** One `!!import`'s own resolved namespace, and where each of its entries was originally declared. */
 export interface ImportedSchema {
   /** Every entry this import contributes -- its own whole, transitively-merged namespace. */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
+  readonly entries: ReadonlyMap<string, Top>;
+  /** Each contributed entry's facts, where its schema recorded any. Absent means none. */
+  readonly facts?: ReadonlyMap<string, EntryFacts>;
+  /** Each contributed entry's key annotations, where its schema recorded any. Absent means none. */
+  readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
   /**
    * `name`'s origin schema id, for the identity-based collision rule §2.2.3 states: one schema
    * reached by several `!!import` routes unifies (same origin, kept once), two different schemas
@@ -144,6 +162,8 @@ export type ImportResolver = (importUri: string) => ImportedSchema;
 export interface SchemaResolverDeps {
   readonly definitionMetaReader: DefinitionMetaReader;
   readonly metaDefinitions: DefinitionGetter;
+  /** The governing meta's own entry facts, by name -- where a meta constructor's head is read. Omitted means none recorded. */
+  readonly metaFacts?: (name: string) => EntryFacts | undefined;
   readonly annotationValueReader?: AnnotationValueReader;
   readonly encodeSourceBody?: SourceBodyEncoder;
   /** Resolves an `!!import` URI's namespace. Omitted means "no loader": a document with no `!!import` is unaffected; one that writes any reports {@link TsonNotImplementedError}. */
@@ -159,7 +179,7 @@ export interface ResolveSchemaOptions {
    * one exactly. Mirrors `desugar.ts`'s own `DesugarOptions.positions` -- indeed the very same map,
    * threaded through both phases so a declaration desugaring rebuilds keeps its position.
    *
-   * **Omitting this is not "no positions at all".** Every resolved entry's own `position`
+   * **Omitting this is not "no positions at all".** Every resolved entry's `position` fact
    * (§8.1's diagnostic addition) falls back to `declaration.position` -- the position
    * `compiler/schemaParser.ts` already stamps on every declaration it parses -- so a caller that
    * builds no side-table of its own (every caller today) still gets one, via
@@ -238,7 +258,10 @@ export function resolveSchema(
   }
   const { positions, receiver } = options;
 
-  const namespace = mergeImports(document, deps);
+  // Every entry's facts -- an import's as its schema recorded them, a local one's as resolution
+  // learns them. Shared with the definition resolver, which records each declaration's here.
+  const facts: EntryFactsTable = new Map<string, EntryFacts>();
+  const namespace = mergeImports(document, deps, facts);
 
   const reporter: DesugarFailureReporter | undefined =
     receiver === undefined
@@ -316,7 +339,8 @@ export function resolveSchema(
       const position = positionOf(declaration, positions);
       receiver.report(schemaProblem(id, name, e, position));
       failed.add(name);
-      const placeholder = unresolvedPlaceholder(position, typeParamsOfDeclaration(declaration));
+      const placeholder = unresolvedPlaceholder(typeParamsOfDeclaration(declaration));
+      if (position !== undefined) facts.set(name, { position });
       namespace.set(name, placeholder);
       return placeholder;
     } finally {
@@ -336,12 +360,14 @@ export function resolveSchema(
     generatedNames: generated,
     metaTypes: deps.metaDefinitions,
     resolving: () => [...resolving].at(-1),
+    heads: (name) => facts.get(name)?.head ?? deps.metaFacts?.(name)?.head,
   });
 
   resolverBox.current = createDefinitionResolver({
     definitionMetaReader: deps.definitionMetaReader,
     metaDefinitions: deps.metaDefinitions,
     namespaceDefinitions: namespaceGetter,
+    facts,
     applicationCloser: (application) => materialiser.closeApplication(application),
     applicationChecker: (application) => {
       materialiser.checkApplication(application);
@@ -362,7 +388,7 @@ export function resolveSchema(
   // §5.10 materialisation, after every declaration has resolved: a template application reaches
   // here as a type-ref carrying arguments, and closing it needs the template's own *resolved* open
   // form, which only exists once the loop above has run.
-  const beforeMaterialise = new Map<string, TypeDefinition>();
+  const beforeMaterialise = new Map<string, Top>();
   for (const name of declarations.keys()) {
     beforeMaterialise.set(name, requiredGet(namespace, name, 'resolveSchema'));
   }
@@ -441,13 +467,6 @@ export function resolveSchema(
   const materialised = materialiser.materialise(beforeMaterialise, materialiseReporter);
   const resolvedLocals = new Map(materialised.entries);
   const instantiations = new Map(materialised.materialised);
-  // A declaration naming an application is that application's entry (§8.2): the materialiser built
-  // it without knowing where it was written, and a position is what tells a declared member from
-  // one a use site minted.
-  for (const [name, definition] of instantiations) {
-    const position = declarations.has(name) ? resolvedLocals.get(name)?.position : undefined;
-    if (position !== undefined) instantiations.set(name, { ...definition, position });
-  }
   const mintedSynthetic = materialised.synthetics;
   for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
   for (const [name, definition] of instantiations) namespace.set(name, definition);
@@ -501,13 +520,42 @@ export function resolveSchema(
   // further pass once materialisation and the synthetic merge above have settled.
 
   // §6: a declaration's own name-annotations bind to the *name*, never hoisted onto the
-  // definition -- so they, and the derived @synthetic marker, land on entries' key, not its value.
-  const entries = new Map<string, TypeDefinition>();
+  // definition -- so they, and the derived @synthetic and @application markers, land on entries'
+  // key, not its value.
+  const entries = new Map<string, Top>();
   const keyAnnotations = new Map<string, Annotations>();
+  const localFacts = new Map<string, EntryFacts>();
+  /** `name`'s facts as resolution recorded them, with the head the materialiser knows where it closed the entry. */
+  const factsFor = (name: string): EntryFacts => {
+    const known = facts.get(name) ?? {};
+    const head = materialiser.mintedFacts(name)?.head;
+    return head === undefined || known.head !== undefined ? known : { ...known, head };
+  };
+  /** `annotations` with the application `name` closes recorded as its `@application` (§8.2). */
+  const withAppliedKey = (name: string, annotations: Annotations): Annotations => {
+    const application = materialiser.mintedFacts(name)?.application;
+    return application === undefined ? annotations : withApplication(annotations, application);
+  };
+  const keep = (name: string): void => {
+    const recorded = factsFor(name);
+    if (Object.keys(recorded).length > 0) localFacts.set(name, recorded);
+  };
   for (const name of declarations.keys()) {
     let nameAnnotations: Annotations;
     const declaration = requiredGet(declarations, name, 'resolveSchema');
     try {
+      // `@application` is the resolver's (§8.2): it states the application an entry closes, and
+      // a declaration never writes it, as it never writes `chain`. `bx => box<text>` is the
+      // declaration that means it.
+      if (
+        declaration.nameAnnotations.some((annotation) => annotation.name === APPLICATION_ANNOTATION)
+      ) {
+        throw new TsonSchemaValidationError(
+          `'${name}' writes '@${APPLICATION_ANNOTATION}' on its key, which the resolver attaches ` +
+            'wherever an entry closes an application and no declaration writes (§8.2) -- declare ' +
+            "the entry as the application itself ('name => template<args>')",
+        );
+      }
       nameAnnotations = resolver.annotationsFor(name, declaration.nameAnnotations);
     } catch (e: unknown) {
       if (!isReportable(e)) {
@@ -527,19 +575,17 @@ export function resolveSchema(
       continue;
     }
     entries.set(key, requiredGet(resolvedLocals, key, 'resolveSchema'));
-    if (generated.has(key)) {
-      keyAnnotations.set(key, SYNTHETIC);
-    } else if (nameAnnotations.length > 0) {
-      keyAnnotations.set(key, nameAnnotations);
-    }
+    keep(key);
+    const annotated = withAppliedKey(key, generated.has(key) ? SYNTHETIC : nameAnnotations);
+    if (annotated.length > 0) keyAnnotations.set(key, annotated);
   }
   // An entry the materialiser minted has no declared name to carry author annotations from; the
-  // synthetic half still gets the derived marker (§8.2), the rest get none.
-  for (const [name, definition] of instantiations) {
-    entries.set(name, definition);
-    if (mintedSynthetic.has(name)) {
-      keyAnnotations.set(name, SYNTHETIC);
-    }
+  // synthetic half still gets the derived marker (§8.2), and an instantiation its application.
+  for (const [name, value] of instantiations) {
+    entries.set(name, value);
+    keep(name);
+    const annotated = withAppliedKey(name, mintedSynthetic.has(name) ? SYNTHETIC : []);
+    if (annotated.length > 0) keyAnnotations.set(name, annotated);
   }
 
   return {
@@ -548,6 +594,7 @@ export function resolveSchema(
     imports: document.imports,
     entries,
     keyAnnotations,
+    facts: localFacts,
     bootstrap: false,
   };
 }
@@ -555,7 +602,7 @@ export function resolveSchema(
 // ── Small helpers ────────────────────────────────────────────────────────────────────────────
 
 /** [TSON-SCHEMA] §8.2's derived marker, attached to the key of every entry this resolver materialised from a sugar form. */
-const SYNTHETIC: Annotations = [{ name: 'synthetic' }];
+const SYNTHETIC: Annotations = [{ name: SYNTHETIC_ANNOTATION }];
 
 /**
  * The exception types a failed declaration is ever reported under. Every case is a positive
@@ -588,8 +635,9 @@ function isReportable(e: unknown): e is ReportableSchemaError {
 function mergeImports(
   document: SchemaDocument,
   deps: SchemaResolverDeps,
-): Map<string, TypeDefinition> {
-  const merged = new Map<string, TypeDefinition>();
+  facts: EntryFactsTable,
+): Map<string, Top> {
+  const merged = new Map<string, Top>();
   const origins = new Map<string, string>();
   const alreadyImported = new Set<string>();
   for (const importUri of document.imports) {
@@ -618,6 +666,8 @@ function mergeImports(
       }
       merged.set(name, definition);
       origins.set(name, origin);
+      const recorded = imported.facts?.get(name);
+      if (recorded !== undefined) facts.set(name, recorded);
     }
   }
   return merged;
@@ -630,11 +680,11 @@ function mergeImports(
  * parameter away and left either an arity error against a content-derived name nobody typed, or a
  * wire-vocabulary mismatch -- neither naming what the author did).
  */
-function refuseHeadAbstraction(name: string, resolved: TypeDefinition): void {
-  if ('kind' in resolved.body || !isHeldBody(resolved.body)) {
-    return; // not a held TemplateBody
+function refuseHeadAbstraction(name: string, resolved: Top): void {
+  const body = heldOf(resolved);
+  if (body === undefined) {
+    return; // a closed entry
   }
-  const body = resolved.body;
   for (const application of body.applications()) {
     if (body.parameterNames.includes(application.name)) {
       throw new TsonSchemaValidationError(
@@ -679,13 +729,13 @@ function writtenParameterTypes(
  */
 function stampParameters(
   parameters: ReadonlyMap<string, ReadonlyMap<string, TemplateParam>>,
-  views: readonly Map<string, TypeDefinition>[],
+  views: readonly Map<string, Top>[],
 ): void {
   for (const view of views) {
-    for (const [name, definition] of view) {
+    for (const [name, value] of view) {
       const settled = parameters.get(name);
-      if (settled !== undefined && isTemplateBody(definition.body) && isHeldBody(definition.body)) {
-        view.set(name, { ...definition, body: withParameters(definition.body, settled) });
+      if (settled !== undefined && isOpen(value)) {
+        view.set(name, withParametersOf(value, settled));
       }
     }
   }
@@ -702,21 +752,22 @@ function stampParameters(
  * parameters?" with zero is answering wrongly, not absorbing -- a downstream `bl<text>` would then
  * be told `bl` "declares no type parameters", which is a wrong fix for someone else's error.
  */
-function unresolvedPlaceholder(
-  position: Position | undefined,
-  parameters: readonly string[],
-): TypeDefinition {
+function unresolvedPlaceholder(parameters: readonly string[]): Top {
+  // An open placeholder is an open empty record, closing by the process every record template
+  // does, so nothing downstream has to keep a second substitution path for it.
   return {
-    supertypes: [],
-    subtypes: [],
-    // An open placeholder holds its body like every other open entry, so nothing downstream has to
-    // keep a second substitution path for the one shape that did not.
-    body:
-      parameters.length === 0
-        ? { kind: 'record', supertypes: [], fields: [], groups: [] }
-        : createHeldBody(heldEmptyRecord(), parameters),
-    ...(position === undefined ? {} : { position }),
-    annotations: [],
+    kind: 'record',
+    fields: NO_FIELDS,
+    groups: [],
+    extension: 'OPEN',
+    ...(parameters.length === 0
+      ? {}
+      : {
+          parameters: parameters.map((parameter) => ({
+            name: parameter,
+            type: { name: TYPE_KIND, arguments: [], annotations: [] },
+          })),
+        }),
   };
 }
 
@@ -733,12 +784,12 @@ function unresolvedPlaceholder(
  */
 function condemn(
   names: ReadonlySet<string>,
-  resolvedLocals: Map<string, TypeDefinition>,
-  namespace: Map<string, TypeDefinition>,
+  resolvedLocals: Map<string, Top>,
+  namespace: Map<string, Top>,
 ): void {
   for (const name of names) {
     const condemned = requiredGet(resolvedLocals, name, 'condemn');
-    const placeholder = unresolvedPlaceholder(condemned.position, typeParameters(condemned));
+    const placeholder = unresolvedPlaceholder(typeParameters(condemned));
     resolvedLocals.set(name, placeholder);
     namespace.set(name, placeholder);
   }

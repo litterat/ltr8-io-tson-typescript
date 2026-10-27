@@ -1,5 +1,6 @@
 /**
- * Field group declaration rules over a `!record` literal.
+ * Field group declaration rules over a `!record` literal, whose `fields` is a map keyed by name
+ * (§5.2).
  */
 import { describe, expect, it } from 'vitest';
 
@@ -7,7 +8,7 @@ import { load, loadError } from './schema-read-helpers.js';
 
 describe('§5.11 declaration rules hold for a group written as a `!record` literal', () => {
   const fields = (...names: string[]): string =>
-    `fields: [ ${names.map((n) => `{ name: ${n} type: text optional: true }`).join(' ')} ]`;
+    `fields: { ${names.map((n) => `${n} => { type: text optional: true }`).join(' ')} }`;
 
   it('accepts the shapes the sugar accepts', () => {
     expect(() =>
@@ -43,7 +44,7 @@ describe('§5.11 declaration rules hold for a group written as a `!record` liter
     ],
     [
       'a member that is not optional',
-      `fields: [ { name: a type: text } { name: b type: text optional: true } ] groups: [ { members: [[a] [b]] } ]`,
+      `fields: { a => { type: text } b => { type: text optional: true } } groups: [ { members: [[a] [b]] } ]`,
     ],
     ['a member naming no field', `${fields('a')} groups: [ { members: [[a] [z]] } ]`],
   ])('refuses %s', (_label, body) => {

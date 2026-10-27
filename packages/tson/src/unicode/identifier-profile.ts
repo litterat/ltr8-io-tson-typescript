@@ -200,9 +200,21 @@ function inBase(base: IdentifierBase, codePoint: number, start: boolean): boolea
       return start ? isXidStart(codePoint) : isXidContinue(codePoint);
     case 'ID':
       return start ? isIdStart(codePoint) : isIdContinue(codePoint);
+    case 'ASCII':
+      return start ? isAsciiLetter(codePoint) : isAsciiContinue(codePoint);
     case 'NONE':
       return false;
   }
+}
+
+/** `identifier_base`'s `ASCII` Start: `A`-`Z` and `a`-`z` (§7.7). */
+function isAsciiLetter(codePoint: number): boolean {
+  return (codePoint >= 0x41 && codePoint <= 0x5a) || (codePoint >= 0x61 && codePoint <= 0x7a);
+}
+
+/** `identifier_base`'s `ASCII` Continue: the Start set, `0`-`9` and `_` (§7.7). */
+function isAsciiContinue(codePoint: number): boolean {
+  return isAsciiLetter(codePoint) || (codePoint >= 0x30 && codePoint <= 0x39) || codePoint === 0x5f;
 }
 
 function profileStart(profile: IdentifierProfile, codePoint: number): boolean {

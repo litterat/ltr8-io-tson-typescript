@@ -12,6 +12,7 @@ import {
 } from '../src/compiler/wireForm.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { RecordValue } from '../src/ast/value.js';
+import { fieldMapOf } from './model-fixtures.js';
 
 describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", () => {
   it('a no-argument reference is a bare unquoted token, not the record form', () => {
@@ -101,7 +102,7 @@ describe('argumentOf', () => {
 });
 
 describe('heldEmptyRecord', () => {
-  it('is `!record { fields: [] }`', () => {
+  it('is `!record { fields: {} }` -- an empty field map (§5.2)', () => {
     const held = heldEmptyRecord();
     expect(held.typeRef).toBe('record');
     expect(held.coreValue).toEqual({
@@ -109,7 +110,7 @@ describe('heldEmptyRecord', () => {
       fields: [
         {
           name: 'fields',
-          value: { value: { annotations: [], coreValue: { kind: 'array', elements: [] } } },
+          value: { value: { annotations: [], coreValue: { kind: 'empty-brace' } } },
         },
       ],
     });
@@ -120,8 +121,13 @@ describe('heldRecord', () => {
   it("writes fields with optional/voidable/role/value only where they depart from the constructor's own default", () => {
     const body: RecordBody = {
       kind: 'record',
-      supertypes: [{ name: 'base', arguments: [], annotations: [] }],
-      fields: [
+      // The parents as written (§4.1's `type_chain.parents`), which a record template keeps.
+      chain: {
+        parents: [{ name: 'base', arguments: [], annotations: [] }],
+        supertypes: [],
+        subtypes: [],
+      },
+      fields: fieldMapOf([
         {
           name: 'plain',
           type: { name: 'token', arguments: [], annotations: [] },
@@ -139,39 +145,56 @@ describe('heldRecord', () => {
           value: { text: 'INDEX', form: 'UNQUOTED' },
           annotations: [],
         },
-      ],
+      ]),
       groups: [],
       extension: 'OPEN',
     };
     const held = heldRecord(body);
     expect(held.typeRef).toBe('record');
     if (held.coreValue.kind !== 'record') throw new Error('unreachable');
-    const supertypesField = held.coreValue.fields.find((f) => f.name === 'supertypes');
-    expect(supertypesField?.value.value.coreValue).toEqual({
-      kind: 'array',
-      elements: [
+    const chainField = held.coreValue.fields.find((f) => f.name === 'chain');
+    expect(chainField?.value.value.coreValue).toEqual({
+      kind: 'record',
+      fields: [
         {
-          value: { annotations: [], coreValue: { kind: 'token', text: 'base', form: 'unquoted' } },
+          name: 'parents',
+          value: {
+            value: {
+              annotations: [],
+              coreValue: {
+                kind: 'array',
+                elements: [
+                  {
+                    value: {
+                      annotations: [],
+                      coreValue: { kind: 'token', text: 'base', form: 'unquoted' },
+                    },
+                  },
+                ],
+              },
+            },
+          },
         },
       ],
     });
+    // `fields` is a map keyed by name (§5.2): each value a `record_field`, which has no name.
     const fieldsField = held.coreValue.fields.find((f) => f.name === 'fields');
-    if (fieldsField?.value.value.coreValue.kind !== 'array') throw new Error('unreachable');
-    const [plain, fixed] = fieldsField.value.value.coreValue.elements;
-    const plainRecord = plain?.value.coreValue;
+    if (fieldsField?.value.value.coreValue.kind !== 'map') throw new Error('unreachable');
+    const [plain, fixed] = fieldsField.value.value.coreValue.entries;
+    expect(plain?.key.coreValue).toMatchObject({ kind: 'token', text: 'plain' });
+    const plainRecord = plain?.value.value.coreValue;
     if (plainRecord?.kind !== 'record') throw new Error('unreachable');
     // `optional`/`voidable`/`role`/`value` are omitted for a field at its nominal FREE default.
-    expect(plainRecord.fields.map((f) => f.name)).toEqual(['name', 'type']);
-    const fixedRecord = fixed?.value.coreValue;
+    expect(plainRecord.fields.map((f) => f.name)).toEqual(['type']);
+    const fixedRecord = fixed?.value.value.coreValue;
     if (fixedRecord?.kind !== 'record') throw new Error('unreachable');
-    expect(fixedRecord.fields.map((f) => f.name)).toEqual(['name', 'type', 'role', 'value']);
+    expect(fixedRecord.fields.map((f) => f.name)).toEqual(['type', 'role', 'value']);
   });
 
   it('omits `groups` entirely when there are none', () => {
     const body: RecordBody = {
       kind: 'record',
-      supertypes: [],
-      fields: [],
+      fields: fieldMapOf([]),
       groups: [],
       extension: 'OPEN',
     };
@@ -225,7 +248,7 @@ describe('createHeldBody', () => {
     expect(held.names()).toEqual(new Set(['T']));
     expect(held.parameterNames).toEqual(['T']);
     expect(held.parameters).toEqual([
-      { name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } },
+      { name: 'T', type: { name: 'type_kind', arguments: [], annotations: [] } },
     ]);
   });
 

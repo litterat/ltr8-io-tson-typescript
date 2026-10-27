@@ -5,7 +5,7 @@ import {
   type TemplateMaterialiserDeps,
 } from '../src/compiler/templates.js';
 import { createHeldBody } from '../src/compiler/heldBody.js';
-import { heldRecord, refValue } from '../src/compiler/wireForm.js';
+import { refValue } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
 import { inferAll, kinds as parameterKindsOf } from '../src/compiler/parameterTypes.js';
 import {
@@ -14,16 +14,18 @@ import {
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
-import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
-import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 import type {
-  Reference,
-  Top,
-  TypeArgument,
-  TypeDefinition,
-  TypeRef,
-} from '../src/schema/meta/typedef.js';
-import { typeKind } from '../src/schema/meta/typedef.js';
+  ArrayBody,
+  EnumBody,
+  NamedField,
+  RecordBody,
+  RecordField,
+} from '../src/schema/meta/bodies.js';
+import { TYPE_KIND } from '../src/schema/meta/bodies.js';
+import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
+import type { Reference, Top, TypeArgument, TypeRef } from '../src/schema/meta/typedef.js';
+import { entryKind } from '../src/schema/meta/typedef.js';
+import { entry, fieldMapOf, fieldOf, fieldsOf } from './model-fixtures.js';
 
 // ── Test fixtures ────────────────────────────────────────────────────────────────────────────
 
@@ -40,13 +42,14 @@ function literal(text: string): TypeArgument {
   return { kind: 'value', value: { text, form: 'UNQUOTED' } };
 }
 
-/** `<params> => { field: type ... }` -- a record template, held the way `definitionResolver.ts` holds one. */
-function recordTemplate(parameters: readonly string[], body: RecordBody): TypeDefinition {
+/** `<params> => { field: type ... }` -- a record template: the record it is, with its parameters (§5.10). */
+function recordTemplate(parameters: readonly string[], body: RecordBody): RecordBody {
   return {
-    supertypes: [],
-    subtypes: [],
-    body: createHeldBody(heldRecord(body), parameters),
-    annotations: [],
+    ...body,
+    parameters: parameters.map((name) => ({
+      name,
+      type: { name: TYPE_KIND, arguments: [], annotations: [] },
+    })),
   };
 }
 
@@ -54,7 +57,7 @@ function field(
   name: string,
   type: TypeRef,
   marks: { optional?: boolean; voidable?: boolean; role?: RecordField['role'] } = {},
-): RecordField {
+): NamedField {
   return {
     name,
     type,
@@ -106,13 +109,11 @@ function testMetaReader(type: string, value: DataValue): Top {
   const record = value.coreValue as RecordValue;
   if (type === 'record') {
     const fieldsField = record.fields.find((f) => f.name === 'fields');
-    const fields: RecordField[] = [];
-    if (fieldsField?.value.value.coreValue.kind === 'array') {
-      for (const element of fieldsField.value.value.coreValue.elements) {
-        const fieldRecord = element.value.coreValue as RecordValue;
-        const fname = (
-          fieldRecord.fields.find((f) => f.name === 'name')?.value.value.coreValue as TokenValue
-        ).text;
+    const fields: NamedField[] = [];
+    if (fieldsField?.value.value.coreValue.kind === 'map') {
+      for (const mapEntry of fieldsField.value.value.coreValue.entries) {
+        const fieldRecord = mapEntry.value.value.coreValue as RecordValue;
+        const fname = (mapEntry.key.coreValue as TokenValue).text;
         const ftype = readTypeRefField(fieldRecord, 'type');
         const roleWire = fieldRecord.fields.find((f) => f.name === 'role')?.value.value.coreValue;
         const role: RecordField['role'] =
@@ -137,8 +138,7 @@ function testMetaReader(type: string, value: DataValue): Top {
     }
     const body: RecordBody = {
       kind: 'record',
-      supertypes: [],
-      fields,
+      fields: fieldMapOf(fields),
       groups: [],
       extension: 'OPEN',
     };
@@ -169,12 +169,12 @@ interface HarnessOverrides {
 }
 
 function harness(overrides: HarnessOverrides = {}): {
-  namespace: Map<string, TypeDefinition>;
+  namespace: Map<string, Top>;
   materialiser: ReturnType<typeof createTemplateMaterialiser>;
-  published: Map<string, TypeDefinition>;
+  published: Map<string, Top>;
 } {
-  const namespace = new Map<string, TypeDefinition>();
-  const published = new Map<string, TypeDefinition>();
+  const namespace = new Map<string, Top>();
+  const published = new Map<string, Top>();
   const deps: TemplateMaterialiserDeps = {
     namespaceDefinitions: overrides.namespaceDefinitions ?? ((name) => namespace.get(name)),
     publish:
@@ -201,43 +201,6 @@ function thrownBy(fn: () => unknown): unknown {
   throw new Error('expected to throw, but it completed');
 }
 
-/**
- * {@link typeKind} over `namespace`, falling back to a minimal stand-in for the well-known kernel
- * constructor names this file's own fixtures apply -- see `definitionResolver.test.ts`'s own
- * identical helper for the full rationale.
- */
-function kindOf(def: TypeDefinition, namespace: ReadonlyMap<string, TypeDefinition>) {
-  return typeKind(def, (name) => namespace.get(name) ?? stubConstructor(name));
-}
-
-function stubConstructor(name: string): TypeDefinition | undefined {
-  const supertypes =
-    name === 'record' || name === 'array' || name === 'map' || name === 'tuple'
-      ? ['product', 'top']
-      : name === 'choice' || name === 'scoped'
-        ? ['sum', 'top']
-        : name === 'data'
-          ? ['data', 'top']
-          : name === 'enum' || name.endsWith('_type')
-            ? ['atom', 'top']
-            : name === 'reference' || name === 'template'
-              ? ['top']
-              : undefined;
-  if (supertypes === undefined) return undefined;
-  return {
-    supertypes,
-    subtypes: [],
-    body: {
-      kind: 'record',
-      supertypes: [],
-      fields: [],
-      groups: [],
-      extension: 'OPEN',
-    },
-    annotations: [],
-  };
-}
-
 function isRecordBody(body: Top): body is RecordBody {
   return 'fields' in body;
 }
@@ -259,10 +222,9 @@ describe('a record template closes to the instantiation entry itself', () => {
       'box',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
       }),
     );
     const name = materialiser.closeApplication({
@@ -270,11 +232,15 @@ describe('a record template closes to the instantiation entry itself', () => {
       arguments: [ref('text')],
       annotations: [],
     });
-    const entry = namespace.get(name);
-    if (entry === undefined || !isRecordBody(entry.body)) throw new Error('unreachable');
-    expect(kindOf(entry, namespace)).toBe('PRODUCT');
-    expect(entry.source).toEqual({ name: 'box', arguments: [ref('text')], annotations: [] });
-    expect(entry.body.fields[0]).toMatchObject({
+    const found = namespace.get(name);
+    if (found === undefined || !isRecordBody(found)) throw new Error('unreachable');
+    expect(entryKind(found)).toBe('PRODUCT');
+    expect(materialiser.mintedFacts(name)?.application).toEqual({
+      name: 'box',
+      arguments: [ref('text')],
+      annotations: [],
+    });
+    expect(fieldsOf(found)[0]).toMatchObject({
       name: 'value',
       type: { name: 'text', arguments: [] },
     });
@@ -286,10 +252,9 @@ describe('a record template closes to the instantiation entry itself', () => {
       'box',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
       }),
     );
     const first = materialiser.closeApplication({
@@ -315,10 +280,9 @@ describe('a record template closes to the instantiation entry itself', () => {
       'sized',
       recordTemplate(['N'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('n', { name: 'integer', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('n', { name: 'integer', arguments: [], annotations: [] })]),
       }),
     );
     const decimal = materialiser.closeApplication({
@@ -343,32 +307,29 @@ describe('a record template closes to the instantiation entry itself', () => {
 
   it('an argument that is an alias follows its reference chain to its terminal entry, so `box<user_id>` over `user_id => uuid` mints the same entry as `box<uuid>` (§8.2)', () => {
     const { namespace, materialiser } = harness();
-    namespace.set('uuid', {
-      supertypes: ['atom', 'top'],
-      subtypes: [],
-      body: {
-        kind: 'record',
-        supertypes: [],
-        fields: [],
-        groups: [],
-        extension: 'OPEN',
-      },
-      annotations: [],
-    });
-    namespace.set('user_id', {
-      supertypes: [],
-      subtypes: [],
-      body: { kind: 'reference', target: { name: 'uuid', arguments: [], annotations: [] } },
-      annotations: [],
-    });
+    namespace.set(
+      'uuid',
+      entry(
+        {
+          kind: 'record',
+          fields: fieldMapOf([]),
+          groups: [],
+          extension: 'OPEN',
+        },
+        ['atom', 'top'],
+      ),
+    );
+    namespace.set(
+      'user_id',
+      entry({ kind: 'reference', target: { name: 'uuid', arguments: [], annotations: [] } }),
+    );
     namespace.set(
       'box',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
       }),
     );
     const overAlias = materialiser.closeApplication({
@@ -382,11 +343,15 @@ describe('a record template closes to the instantiation entry itself', () => {
       annotations: [],
     });
     expect(overAlias).toBe(overTerminal);
-    // Self-describing (§8.1): the minted entry's own `source` states the canonical application --
-    // the terminal entry `uuid`, not the alias `user_id` the first caller happened to write.
-    const entry = namespace.get(overAlias);
-    if (entry === undefined) throw new Error('unreachable');
-    expect(entry.source).toEqual({ name: 'box', arguments: [ref('uuid')], annotations: [] });
+    // Self-describing (§8.1): the minted entry's `@application` states the canonical application
+    // -- the terminal entry `uuid`, not the alias `user_id` the first caller happened to write.
+    const found = namespace.get(overAlias);
+    if (found === undefined) throw new Error('unreachable');
+    expect(materialiser.mintedFacts(overAlias)?.application).toEqual({
+      name: 'box',
+      arguments: [ref('uuid')],
+      annotations: [],
+    });
   });
 
   it('a refinement or a fresh instance is not an alias and keeps its own identity, even over an otherwise-identical body (§8.2)', () => {
@@ -396,31 +361,19 @@ describe('a record template closes to the instantiation entry itself', () => {
     // immediately rather than following anywhere.
     const atomBody: Top = {
       kind: 'record',
-      supertypes: [],
-      fields: [],
+      fields: fieldMapOf([]),
       groups: [],
       extension: 'OPEN',
     };
-    namespace.set('uuid_refined', {
-      supertypes: ['uuid', 'atom', 'top'],
-      subtypes: [],
-      body: atomBody,
-      annotations: [],
-    });
-    namespace.set('uuid_fresh', {
-      supertypes: ['atom', 'top'],
-      subtypes: [],
-      body: atomBody,
-      annotations: [],
-    });
+    namespace.set('uuid_refined', entry(atomBody, ['uuid', 'atom', 'top']));
+    namespace.set('uuid_fresh', entry(atomBody, ['atom', 'top']));
     namespace.set(
       'box',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
       }),
     );
     const overRefined = materialiser.closeApplication({
@@ -442,10 +395,9 @@ describe('a record template closes to the instantiation entry itself', () => {
       'box',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
       }),
     );
     const outerName = materialiser.closeApplication({
@@ -459,8 +411,8 @@ describe('a record template closes to the instantiation entry itself', () => {
     if (innerName === undefined) throw new Error('unreachable');
     expect(keys.indexOf(innerName)).toBeLessThan(keys.indexOf(outerName));
     const outer = namespace.get(outerName);
-    if (outer === undefined || !isRecordBody(outer.body)) throw new Error('unreachable');
-    expect(outer.body.fields[0]?.type.name).toBe(innerName);
+    if (outer === undefined || !isRecordBody(outer)) throw new Error('unreachable');
+    expect(fieldsOf(outer)[0]?.type.name).toBe(innerName);
   });
 });
 
@@ -471,82 +423,82 @@ describe('an open-instance template mints a synthetic form plus a reference inst
     const { namespace, materialiser } = harness();
     // `<T> !array { element_type: T }` -- held directly, since the array constructor's own
     // vocabulary (not `record`) is what dispatches `closeHeldTemplate` rather than `closeHeldRecord`.
-    namespace.set('wrapped', {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
-        {
-          annotations: [],
-          typeRef: 'array',
-          coreValue: {
-            kind: 'record',
-            fields: [
-              {
-                name: 'element_type',
-                value: {
+    namespace.set(
+      'wrapped',
+      entry(
+        createHeldBody(
+          {
+            annotations: [],
+            typeRef: 'array',
+            coreValue: {
+              kind: 'record',
+              fields: [
+                {
+                  name: 'element_type',
                   value: {
-                    annotations: [],
-                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                    value: {
+                      annotations: [],
+                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                    },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-        ['T'],
+          ['T'],
+        ),
       ),
-      annotations: [],
-    });
+    );
     const instantiationName = materialiser.closeApplication({
       name: 'wrapped',
       arguments: [ref('text')],
       annotations: [],
     });
     const instantiation = namespace.get(instantiationName);
-    if (instantiation === undefined || !isReferenceBody(instantiation.body)) {
+    if (instantiation === undefined || !isReferenceBody(instantiation)) {
       throw new Error('unreachable');
     }
-    expect(kindOf(instantiation, namespace)).toBe('REFERENCE');
-    expect(instantiation.source).toEqual({
+    expect(entryKind(instantiation)).toBe('REFERENCE');
+    expect(materialiser.mintedFacts(instantiationName)?.application).toEqual({
       name: 'wrapped',
       arguments: [ref('text')],
       annotations: [],
     });
-    const formName = instantiation.body.target.name;
+    const formName = instantiation.target.name;
     expect(materialiser.syntheticNames().has(formName)).toBe(true);
     const form = namespace.get(formName);
-    if (form === undefined || !isArrayBody(form.body)) throw new Error('unreachable');
-    expect(form.body.elementType).toEqual({ name: 'text', arguments: [], annotations: [] });
+    if (form === undefined || !isArrayBody(form)) throw new Error('unreachable');
+    expect(form.elementType).toEqual({ name: 'text', arguments: [], annotations: [] });
   });
 
   it('a generated head (desugar-injected) closes to its own form with no extra instantiation entry', () => {
     const { namespace, materialiser } = harness({ generatedNames: new Set(['array_p0']) });
-    namespace.set('array_p0', {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
-        {
-          annotations: [],
-          typeRef: 'array',
-          coreValue: {
-            kind: 'record',
-            fields: [
-              {
-                name: 'element_type',
-                value: {
+    namespace.set(
+      'array_p0',
+      entry(
+        createHeldBody(
+          {
+            annotations: [],
+            typeRef: 'array',
+            coreValue: {
+              kind: 'record',
+              fields: [
+                {
+                  name: 'element_type',
                   value: {
-                    annotations: [],
-                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                    value: {
+                      annotations: [],
+                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                    },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-        ['T'],
+          ['T'],
+        ),
       ),
-      annotations: [],
-    });
+    );
     const result = materialiser.closeApplication({
       name: 'array_p0',
       arguments: [ref('uuid')],
@@ -555,38 +507,38 @@ describe('an open-instance template mints a synthetic form plus a reference inst
     // The form entry *is* the answer -- no second, REFERENCE-kind entry naming `array_p0<uuid>`.
     const resultEntry = namespace.get(result);
     if (resultEntry === undefined) throw new Error('unreachable');
-    expect(kindOf(resultEntry, namespace)).toBe('PRODUCT');
+    expect(entryKind(resultEntry)).toBe('PRODUCT');
     expect(materialiser.syntheticNames().has(result)).toBe(true);
   });
 
   it('throws TsonNotImplementedError closing an open-instance template with no compiled meta reader supplied', () => {
     const { materialiser, namespace } = harness({ omitReader: true });
-    namespace.set('wrapped', {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
-        {
-          annotations: [],
-          typeRef: 'array',
-          coreValue: {
-            kind: 'record',
-            fields: [
-              {
-                name: 'element_type',
-                value: {
+    namespace.set(
+      'wrapped',
+      entry(
+        createHeldBody(
+          {
+            annotations: [],
+            typeRef: 'array',
+            coreValue: {
+              kind: 'record',
+              fields: [
+                {
+                  name: 'element_type',
                   value: {
-                    annotations: [],
-                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                    value: {
+                      annotations: [],
+                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                    },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-        ['T'],
+          ['T'],
+        ),
       ),
-      annotations: [],
-    });
+    );
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'wrapped', arguments: [ref('text')], annotations: [] }),
     );
@@ -603,113 +555,112 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
       'pair',
       recordTemplate(['A', 'B'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [
+        fields: fieldMapOf([
           field('first', { name: 'A', arguments: [], annotations: [] }),
           field('second', { name: 'B', arguments: [], annotations: [] }),
-        ],
+        ]),
       }),
     );
-    namespace.set('uuid_pair', {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
-        {
-          annotations: [],
-          typeRef: 'reference',
-          coreValue: {
-            kind: 'record',
-            fields: [
-              {
-                name: 'target',
-                value: {
+    namespace.set(
+      'uuid_pair',
+      entry(
+        createHeldBody(
+          {
+            annotations: [],
+            typeRef: 'reference',
+            coreValue: {
+              kind: 'record',
+              fields: [
+                {
+                  name: 'target',
                   value: {
-                    annotations: [],
-                    coreValue: {
-                      kind: 'record',
-                      fields: [
-                        {
-                          name: 'name',
-                          value: {
+                    value: {
+                      annotations: [],
+                      coreValue: {
+                        kind: 'record',
+                        fields: [
+                          {
+                            name: 'name',
                             value: {
-                              annotations: [],
-                              coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
-                            },
-                          },
-                        },
-                        {
-                          name: 'arguments',
-                          value: {
-                            value: {
-                              annotations: [],
-                              coreValue: {
-                                kind: 'array',
-                                elements: [
-                                  {
-                                    value: {
-                                      annotations: [],
-                                      coreValue: {
-                                        kind: 'record',
-                                        fields: [
-                                          {
-                                            name: 'name',
-                                            value: {
-                                              value: {
-                                                annotations: [],
-                                                coreValue: {
-                                                  kind: 'token',
-                                                  text: 'uuid',
-                                                  form: 'unquoted',
-                                                },
-                                              },
-                                            },
-                                          },
-                                        ],
-                                      },
-                                    },
-                                  },
-                                  {
-                                    value: {
-                                      annotations: [],
-                                      coreValue: {
-                                        kind: 'record',
-                                        fields: [
-                                          {
-                                            name: 'name',
-                                            value: {
-                                              value: {
-                                                annotations: [],
-                                                coreValue: {
-                                                  kind: 'token',
-                                                  text: 'B',
-                                                  form: 'unquoted',
-                                                },
-                                              },
-                                            },
-                                          },
-                                        ],
-                                      },
-                                    },
-                                  },
-                                ],
+                              value: {
+                                annotations: [],
+                                coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
                               },
                             },
                           },
-                        },
-                      ],
+                          {
+                            name: 'arguments',
+                            value: {
+                              value: {
+                                annotations: [],
+                                coreValue: {
+                                  kind: 'array',
+                                  elements: [
+                                    {
+                                      value: {
+                                        annotations: [],
+                                        coreValue: {
+                                          kind: 'record',
+                                          fields: [
+                                            {
+                                              name: 'name',
+                                              value: {
+                                                value: {
+                                                  annotations: [],
+                                                  coreValue: {
+                                                    kind: 'token',
+                                                    text: 'uuid',
+                                                    form: 'unquoted',
+                                                  },
+                                                },
+                                              },
+                                            },
+                                          ],
+                                        },
+                                      },
+                                    },
+                                    {
+                                      value: {
+                                        annotations: [],
+                                        coreValue: {
+                                          kind: 'record',
+                                          fields: [
+                                            {
+                                              name: 'name',
+                                              value: {
+                                                value: {
+                                                  annotations: [],
+                                                  coreValue: {
+                                                    kind: 'token',
+                                                    text: 'B',
+                                                    form: 'unquoted',
+                                                  },
+                                                },
+                                              },
+                                            },
+                                          ],
+                                        },
+                                      },
+                                    },
+                                  ],
+                                },
+                              },
+                            },
+                          },
+                        ],
+                      },
                     },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-        ['B'],
+          ['B'],
+        ),
       ),
-      annotations: [],
-    });
+    );
     const before = namespace.size;
     const closed = materialiser.closeApplication({
       name: 'uuid_pair',
@@ -718,9 +669,9 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
     });
     // Exactly one new entry (the `pair<uuid, int32>` instantiation) -- no second entry for the alias hop.
     expect(namespace.size).toBe(before + 1);
-    const entry = namespace.get(closed);
-    if (entry === undefined) throw new Error('unreachable');
-    expect(entry.source).toEqual({
+    const found = namespace.get(closed);
+    if (found === undefined) throw new Error('unreachable');
+    expect(materialiser.mintedFacts(closed)?.application).toEqual({
       name: 'pair',
       arguments: [ref('uuid'), ref('int32')],
       annotations: [],
@@ -729,81 +680,81 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
 
   it('a self-applying alias is a reported cycle, not a knot tied on nothing (§5.10)', () => {
     const { namespace, materialiser } = harness();
-    namespace.set('loop', {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
-        {
-          annotations: [],
-          typeRef: 'reference',
-          coreValue: {
-            kind: 'record',
-            fields: [
-              {
-                name: 'target',
-                value: {
+    namespace.set(
+      'loop',
+      entry(
+        createHeldBody(
+          {
+            annotations: [],
+            typeRef: 'reference',
+            coreValue: {
+              kind: 'record',
+              fields: [
+                {
+                  name: 'target',
                   value: {
-                    annotations: [],
-                    coreValue: {
-                      kind: 'record',
-                      fields: [
-                        {
-                          name: 'name',
-                          value: {
+                    value: {
+                      annotations: [],
+                      coreValue: {
+                        kind: 'record',
+                        fields: [
+                          {
+                            name: 'name',
                             value: {
-                              annotations: [],
-                              coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
-                            },
-                          },
-                        },
-                        {
-                          name: 'arguments',
-                          value: {
-                            value: {
-                              annotations: [],
-                              coreValue: {
-                                kind: 'array',
-                                elements: [
-                                  {
-                                    value: {
-                                      annotations: [],
-                                      coreValue: {
-                                        kind: 'record',
-                                        fields: [
-                                          {
-                                            name: 'name',
-                                            value: {
-                                              value: {
-                                                annotations: [],
-                                                coreValue: {
-                                                  kind: 'token',
-                                                  text: 'T',
-                                                  form: 'unquoted',
-                                                },
-                                              },
-                                            },
-                                          },
-                                        ],
-                                      },
-                                    },
-                                  },
-                                ],
+                              value: {
+                                annotations: [],
+                                coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
                               },
                             },
                           },
-                        },
-                      ],
+                          {
+                            name: 'arguments',
+                            value: {
+                              value: {
+                                annotations: [],
+                                coreValue: {
+                                  kind: 'array',
+                                  elements: [
+                                    {
+                                      value: {
+                                        annotations: [],
+                                        coreValue: {
+                                          kind: 'record',
+                                          fields: [
+                                            {
+                                              name: 'name',
+                                              value: {
+                                                value: {
+                                                  annotations: [],
+                                                  coreValue: {
+                                                    kind: 'token',
+                                                    text: 'T',
+                                                    form: 'unquoted',
+                                                  },
+                                                },
+                                              },
+                                            },
+                                          ],
+                                        },
+                                      },
+                                    },
+                                  ],
+                                },
+                              },
+                            },
+                          },
+                        ],
+                      },
                     },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-        ['T'],
+          ['T'],
+        ),
       ),
-      annotations: [],
-    });
+    );
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'loop', arguments: [ref('text')], annotations: [] }),
     );
@@ -821,17 +772,16 @@ describe('recursion (§5.10)', () => {
       'tree',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [
+        fields: fieldMapOf([
           field('value', { name: 'T', arguments: [], annotations: [] }),
           field('child', {
             name: 'tree',
             arguments: [{ kind: 'ref', ref: { name: 'T', arguments: [], annotations: [] } }],
             annotations: [],
           }),
-        ],
+        ]),
       }),
     );
     const name = materialiser.closeApplication({
@@ -840,11 +790,15 @@ describe('recursion (§5.10)', () => {
       annotations: [],
     });
     // Exactly one entry: the knot ties on the entry under construction rather than recursing.
-    expect([...namespace.values()].filter((d) => d.source?.name === 'tree')).toHaveLength(1);
-    const entry = namespace.get(name);
-    if (entry === undefined || !isRecordBody(entry.body)) throw new Error('unreachable');
+    expect(
+      [...namespace.keys()].filter(
+        (key) => materialiser.mintedFacts(key)?.application?.name === 'tree',
+      ),
+    ).toHaveLength(1);
+    const found = namespace.get(name);
+    if (found === undefined || !isRecordBody(found)) throw new Error('unreachable');
     // The self-reference names the very entry it sits inside.
-    expect(entry.body.fields.find((f) => f.name === 'child')?.type.name).toBe(name);
+    expect(fieldOf(found, 'child')?.type.name).toBe(name);
   });
 
   it('non-regular recursion (the argument grows every level) does not close, and fails as a diagnostic rather than a stack overflow', () => {
@@ -853,20 +807,18 @@ describe('recursion (§5.10)', () => {
       'box',
       recordTemplate(['X'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'X', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'X', arguments: [], annotations: [] })]),
       }),
     );
     namespace.set(
       'grow',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [
+        fields: fieldMapOf([
           field('next', {
             name: 'grow',
             arguments: [
@@ -881,7 +833,7 @@ describe('recursion (§5.10)', () => {
             ],
             annotations: [],
           }),
-        ],
+        ]),
       }),
     );
     const error = thrownBy(() =>
@@ -902,18 +854,15 @@ describe('recursion (§5.10)', () => {
 describe('declaration-time checks (§5.10)', () => {
   it('rejects applying arguments to a name that declares no type parameters', () => {
     const { namespace, materialiser } = harness();
-    namespace.set('plain', {
-      supertypes: [],
-      subtypes: [],
-      body: {
+    namespace.set(
+      'plain',
+      entry({
         kind: 'record',
-        supertypes: [],
-        fields: [],
+        fields: fieldMapOf([]),
         groups: [],
         extension: 'OPEN',
-      },
-      annotations: [],
-    });
+      }),
+    );
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'plain', arguments: [ref('text')], annotations: [] }),
     );
@@ -927,13 +876,12 @@ describe('declaration-time checks (§5.10)', () => {
       'pair',
       recordTemplate(['A', 'B'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [
+        fields: fieldMapOf([
           field('first', { name: 'A', arguments: [], annotations: [] }),
           field('second', { name: 'B', arguments: [], annotations: [] }),
-        ],
+        ]),
       }),
     );
     const error = thrownBy(() =>
@@ -954,22 +902,18 @@ describe('declaration-time checks (§5.10)', () => {
       new Map([
         [
           'ghost',
-          {
-            supertypes: [],
-            subtypes: [],
-            source: missingApplication,
-            body: { kind: 'reference' as const, target: missingApplication },
-            annotations: [],
-          },
+          /* source: missingApplication */ entry({
+            kind: 'reference' as const,
+            target: missingApplication,
+          }),
         ],
       ]),
     );
     const rewritten = result.entries.get('ghost');
-    if (rewritten === undefined || !isReferenceBody(rewritten.body)) throw new Error('unreachable');
+    if (rewritten === undefined || !isReferenceBody(rewritten)) throw new Error('unreachable');
     // Left whole -- not stripped to the bare head, which would misreport an author-supplied
     // argument list as none to whoever links this reference next.
-    expect(rewritten.source).toEqual(missingApplication);
-    expect(rewritten.body.target).toEqual(missingApplication);
+    expect(rewritten.target).toEqual(missingApplication);
   });
 });
 
@@ -996,11 +940,9 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
   }
 
   /** `bounded => <N> !integer_type { min: N max: 10 }` -- §7.4's own motivating example. */
-  function boundedTemplate(): TypeDefinition {
-    return {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
+  function boundedTemplate(): Top {
+    return entry(
+      createHeldBody(
         {
           annotations: [],
           typeRef: 'integer_type',
@@ -1030,8 +972,7 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
         },
         ['N'],
       ),
-      annotations: [],
-    };
+    );
   }
 
   it('bounded<20> mints a body whose bounds admit no value, and is refused just as the identical literal declaration would be', () => {
@@ -1056,43 +997,36 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
       arguments: [literal('5')],
       annotations: [],
     });
-    const formName = (namespace.get(name)?.body as Reference).target.name;
+    const formName = (namespace.get(name) as Reference).target.name;
     const form = namespace.get(formName);
-    if (form === undefined || !('kind' in form.body) || form.body.kind !== 'integer_type') {
+    if (form === undefined || !('kind' in form) || form.kind !== 'integer_type') {
       throw new Error('unreachable');
     }
-    expect(form.body).toMatchObject({ min: 5n, max: 10n });
+    expect(form).toMatchObject({ min: 5n, max: 10n });
   });
 });
 
 // ── The whole-schema batch pass ──────────────────────────────────────────────────────────────
 
 describe('materialise (the whole-schema batch pass)', () => {
-  function boxTemplate(): TypeDefinition {
+  function boxTemplate(): Top {
     return recordTemplate(['T'], {
       kind: 'record',
-      supertypes: [],
       groups: [],
       extension: 'OPEN',
-      fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+      fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
     });
   }
 
-  function boxedTextReference(): TypeDefinition {
-    return {
-      supertypes: [],
-      subtypes: [],
-      source: { name: 'box', arguments: [ref('text')], annotations: [] },
-      body: {
-        kind: 'reference',
-        target: { name: 'box', arguments: [ref('text')], annotations: [] },
-      },
-      annotations: [],
-    };
+  function boxedTextReference(): Top {
+    return /* source: { name: 'box', arguments: [ref('text')], annotations: [] } */ entry({
+      kind: 'reference',
+      target: { name: 'box', arguments: [ref('text')], annotations: [] },
+    });
   }
 
   it("skips a template's own entry (non-empty `parameters`) and rewrites every closed application it finds", () => {
-    const entries = new Map<string, TypeDefinition>([
+    const entries = new Map<string, Top>([
       ['box', boxTemplate()],
       ['boxed_text', boxedTextReference()],
     ]);
@@ -1108,10 +1042,9 @@ describe('materialise (the whole-schema batch pass)', () => {
     // The template's own entry passes through unchanged.
     expect(result.entries.get('box')).toBe(entries.get('box'));
     const rewritten = result.entries.get('boxed_text');
-    if (rewritten === undefined || !isReferenceBody(rewritten.body)) throw new Error('unreachable');
-    expect(rewritten.body.target.arguments).toEqual([]);
-    expect(result.materialised.has(rewritten.body.target.name)).toBe(true);
-    expect(rewritten.source).toEqual(rewritten.body.target);
+    if (rewritten === undefined || !isReferenceBody(rewritten)) throw new Error('unreachable');
+    expect(rewritten.target.arguments).toEqual([]);
+    expect(result.materialised.has(rewritten.target.name)).toBe(true);
   });
 
   it("derives the same instantiation name regardless of the map's own iteration order (determinism, §8.2)", () => {
@@ -1120,7 +1053,7 @@ describe('materialise (the whole-schema batch pass)', () => {
       publish: (name, def) => forwardEntries.set(name, def),
       definitionMetaReader: testMetaReader,
     });
-    const forwardEntries = new Map<string, TypeDefinition>([
+    const forwardEntries = new Map<string, Top>([
       ['box', boxTemplate()],
       ['boxed_text', boxedTextReference()],
       ['other', boxedTextReference()],
@@ -1135,26 +1068,23 @@ describe('materialise (the whole-schema batch pass)', () => {
     const backwardEntries = new Map([...forwardEntries.entries()].reverse());
     const backwardResult = backward.materialise(backwardEntries);
 
-    const forwardName = forwardResult.entries.get('boxed_text')?.source?.name;
-    const backwardName = backwardResult.entries.get('boxed_text')?.source?.name;
+    const forwardName = (forwardResult.entries.get('boxed_text') as Reference | undefined)?.target
+      .name;
+    const backwardName = (backwardResult.entries.get('boxed_text') as Reference | undefined)?.target
+      .name;
     expect(forwardName).toBeDefined();
     expect(forwardName).toBe(backwardName);
   });
 
   it('reports a failed application per entry when a reporter is supplied, and leaves that entry as it was', () => {
-    const entries = new Map<string, TypeDefinition>([
+    const entries = new Map<string, Top>([
       ['box', boxTemplate()],
       [
         'bad',
+        // `box` takes one parameter; this applies two.
         {
-          supertypes: [],
-          subtypes: [],
-          // `box` takes one parameter; this applies two.
-          body: {
-            kind: 'reference',
-            target: { name: 'box', arguments: [ref('text'), ref('uuid')], annotations: [] },
-          },
-          annotations: [],
+          kind: 'reference',
+          target: { name: 'box', arguments: [ref('text'), ref('uuid')], annotations: [] },
         },
       ],
     ]);
@@ -1174,19 +1104,14 @@ describe('materialise (the whole-schema batch pass)', () => {
   });
 
   it('without a reporter, the first failing application throws', () => {
-    const entries = new Map<string, TypeDefinition>([
+    const entries = new Map<string, Top>([
       ['box', boxTemplate()],
       [
         'bad',
-        {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            kind: 'reference',
-            target: { name: 'box', arguments: [ref('text'), ref('uuid')], annotations: [] },
-          },
-          annotations: [],
-        },
+        entry({
+          kind: 'reference',
+          target: { name: 'box', arguments: [ref('text'), ref('uuid')], annotations: [] },
+        }),
       ],
     ]);
     const materialiser = createTemplateMaterialiser({
@@ -1204,11 +1129,9 @@ describe('materialise (the whole-schema batch pass)', () => {
 
 describe('an argument bound to a VALUE parameter is reclassified before the application is named', () => {
   /** `e => <M> !enum { members: [a b M] }` -- §5.10's own motivating case for a VALUE parameter. */
-  function enumTemplate(): TypeDefinition {
-    return {
-      supertypes: [],
-      subtypes: [],
-      body: createHeldBody(
+  function enumTemplate(): Top {
+    return entry(
+      createHeldBody(
         {
           annotations: [],
           typeRef: 'enum',
@@ -1237,8 +1160,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         },
         ['M'],
       ),
-      annotations: [],
-    };
+    );
   }
 
   /** `testMetaReader` plus the one constructor these tests close through that it does not bind. */
@@ -1254,50 +1176,40 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         members.push((element.value.coreValue as TokenValue).text);
       }
     }
-    return { kind: 'enum', members, type: 'identifier' } satisfies EnumBody;
+    return { kind: 'enum', members, nameType: 'identifier' } satisfies EnumBody;
   }
 
   /** Just enough of the governing meta's own vocabulary for `enum.members` to resolve to a set of `identifier`. */
-  function metaTypesFor(): (name: string) => TypeDefinition | undefined {
-    const vocabRecord = (fields: readonly { name: string; type: string }[]): TypeDefinition => ({
-      // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
-      supertypes: ['product', 'top'],
-      subtypes: [],
-      body: {
-        kind: 'record',
-        supertypes: [],
-        groups: [],
-        extension: 'OPEN',
-        fields: fields.map((f) => field(f.name, { name: f.type, arguments: [], annotations: [] })),
-      },
-      annotations: [],
-    });
-    const meta = new Map<string, TypeDefinition>([
+  function metaTypesFor(): (name: string) => Top | undefined {
+    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
+    const vocabRecord = (fields: readonly { name: string; type: string }[]): Top =>
+      entry(
+        {
+          kind: 'record',
+          groups: [],
+          extension: 'OPEN',
+          fields: fieldMapOf(
+            fields.map((f) => field(f.name, { name: f.type, arguments: [], annotations: [] })),
+          ),
+        },
+        ['product', 'top'],
+      );
+    const meta = new Map<string, Top>([
       ['enum', vocabRecord([{ name: 'members', type: 'enum_set' }])],
       [
         'enum_set',
-        {
-          supertypes: ['product', 'top'],
-          subtypes: [],
-          body: {
+        entry(
+          {
             kind: 'array',
             elementType: { name: 'identifier', arguments: [], annotations: [] },
             voidable: false,
             ordered: true,
             uniqueItems: false,
           },
-          annotations: [],
-        },
+          ['product', 'top'],
+        ),
       ],
-      [
-        'identifier',
-        {
-          supertypes: ['atom', 'top'],
-          subtypes: [],
-          body: { kind: 'text_type', normalization: 'NONE' },
-          annotations: [],
-        },
-      ],
+      ['identifier', entry({ kind: 'text_type', normalization: 'NONE' }, ['atom', 'top'])],
     ]);
     return (name) => meta.get(name);
   }
@@ -1317,15 +1229,15 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
     if (instantiation === undefined) throw new Error('unreachable');
     // `c` is recorded as the enum member it always meant, not a namespace reference to a type
     // called `c` that does not exist.
-    expect(instantiation.source).toEqual({
+    expect(materialiser.mintedFacts(name)?.application).toEqual({
       name: 'e',
       arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
       annotations: [],
     });
-    const formName = (instantiation.body as { readonly target: TypeRef }).target.name;
+    const formName = (instantiation as { readonly target: TypeRef }).target.name;
     const form = namespace.get(formName);
-    if (form === undefined || !('members' in form.body)) throw new Error('unreachable');
-    expect(form.body.members).toEqual(['a', 'b', 'c']);
+    if (form === undefined || !('members' in form)) throw new Error('unreachable');
+    expect(form.members).toEqual(['a', 'b', 'c']);
   });
 
   it('the batch pass (`setParameterKinds`) classifies just as the on-demand path does', () => {
@@ -1348,8 +1260,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
       arguments: [ref('c')],
       annotations: [],
     });
-    const instantiation = namespace.get(name);
-    expect(instantiation?.source).toEqual({
+    expect(materialiser.mintedFacts(name)?.application).toEqual({
       name: 'e',
       arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
       annotations: [],
@@ -1364,8 +1275,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
       arguments: [ref('c')],
       annotations: [],
     });
-    const instantiation = namespace.get(name);
-    expect(instantiation?.source).toEqual({
+    expect(materialiser.mintedFacts(name)?.application).toEqual({
       name: 'e',
       arguments: [ref('c')],
       annotations: [],
@@ -1378,7 +1288,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
 describe('closedFormName', () => {
   it('agrees with the name a directly-written, already-closed form would derive', () => {
     const { materialiser } = harness();
-    const fields: RecordField[] = [
+    const fields: NamedField[] = [
       {
         name: 'element_type',
         type: { name: 'text', arguments: [], annotations: [] },
@@ -1405,10 +1315,9 @@ describe('closedFormName', () => {
       'box',
       recordTemplate(['T'], {
         kind: 'record',
-        supertypes: [],
         groups: [],
         extension: 'OPEN',
-        fields: [field('value', { name: 'T', arguments: [], annotations: [] })],
+        fields: fieldMapOf([field('value', { name: 'T', arguments: [], annotations: [] })]),
       }),
     );
     // `[box<text>]` written directly: an array binding whose `element_type` slot holds the

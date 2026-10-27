@@ -10,8 +10,15 @@ import type { IdentifierType, IriType } from '../src/schema/meta/atoms-text.js';
 import type { ValueType, VoidType } from '../src/schema/meta/algebra.js';
 import type { CoreValue } from '../src/ast/value.js';
 import type { ArrayBody } from '../src/schema/meta/bodies.js';
-import type { Reference, TypeDefinition } from '../src/schema/meta/typedef.js';
-import { isConstructor, typeKind } from '../src/schema/meta/typedef.js';
+import type { Reference, Top } from '../src/schema/meta/typedef.js';
+import {
+  entryKind,
+  isConstructor,
+  isTemplateBody,
+  supertypesOf,
+  withoutChain,
+} from '../src/schema/meta/typedef.js';
+import { fieldMapOf } from '../src/schema/meta/bodies.js';
 import type { Instance } from '../src/ast/schema/fields.js';
 
 /**
@@ -25,18 +32,15 @@ function loadMetaKernelSource(): Uint8Array {
   return new Uint8Array(readFileSync(path));
 }
 
-function entryOf(
-  schema: { readonly entries: ReadonlyMap<string, TypeDefinition> },
-  name: string,
-): TypeDefinition {
+function entryOf(schema: { readonly entries: ReadonlyMap<string, Top> }, name: string): Top {
   const entry = schema.entries.get(name);
   if (entry === undefined) throw new Error(`bootstrapped meta-kernel has no entry '${name}'`);
   return entry;
 }
 
-/** {@link typeKind}, over the real bootstrapped kernel's own full namespace -- self-sufficient, unlike a hand-built fixture, so no stub fallback is needed. */
-function kindOf(schema: { readonly entries: ReadonlyMap<string, TypeDefinition> }, name: string) {
-  return typeKind(entryOf(schema, name), (n) => schema.entries.get(n));
+/** {@link entryKind} of `name`'s value, read off its chain (§4.1). */
+function kindOf(schema: { readonly entries: ReadonlyMap<string, Top> }, name: string) {
+  return entryKind(entryOf(schema, name));
 }
 
 describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
@@ -50,35 +54,43 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   });
 
   // meta-kernel's declaration count moves with every spec revision that adds or removes a
-  // kernel-level type, so the resolved total is checked against the fixture below: the 59
+  // kernel-level type, so the resolved total is checked against the fixture: the 68
   // declarations the kernel writes plus the nine synthetics its container sugar lifts
   // (`meta-kernel-resolved.tn` lists exactly those nine).
   it('resolves to exactly as many entries as the bundled meta-kernel.tn declares plus its desugar-lifted synthetics', () => {
-    expect(schema.entries.size).toBe(68);
+    expect(schema.entries.size).toBe(77);
   });
 
   it("attaches no @synthetic marker -- the bootstrap route is deliberately unmarked (see this module's own doc)", () => {
     expect(schema.keyAnnotations.size).toBe(0);
   });
 
-  it('resolves the four remaining base kinds composing directly with top, each kind: PRODUCT', () => {
-    for (const name of ['atom', 'product', 'sum', 'data']) {
+  it('resolves the three base kinds through type, each abstract and itself kind PRODUCT (§4.1)', () => {
+    for (const name of ['atom', 'product', 'sum']) {
       const entry = entryOf(schema, name);
       expect(kindOf(schema, name)).toBe('PRODUCT');
-      expect(entry.supertypes).toEqual(['top']);
+      expect(supertypesOf(entry)).toEqual(['top', 'type']);
+      expect((entry as { readonly extension?: string }).extension).toBe('ABSTRACT');
     }
   });
 
-  it('resolves top itself with no supertypes and an empty record body', () => {
+  it('resolves type and namespace composing directly with top, each abstract (§4.1)', () => {
+    for (const name of ['type', 'namespace']) {
+      const entry = entryOf(schema, name);
+      expect(supertypesOf(entry)).toEqual(['top']);
+      expect((entry as { readonly extension?: string }).extension).toBe('ABSTRACT');
+    }
+  });
+
+  it('resolves top itself with an empty chain and an empty, abstract record body', () => {
     const top = entryOf(schema, 'top');
     expect(kindOf(schema, 'top')).toBe('PRODUCT');
-    expect(top.supertypes).toEqual([]);
-    expect(top.body).toEqual({
+    expect(supertypesOf(top)).toEqual([]);
+    expect(withoutChain(top)).toEqual({
       kind: 'record',
-      supertypes: [],
-      fields: [],
+      fields: fieldMapOf([]),
       groups: [],
-      extension: 'OPEN',
+      extension: 'ABSTRACT',
     });
   });
 
@@ -89,7 +101,7 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     const constructor = entryOf(schema, name);
     expect(kindOf(schema, name)).toBe('ATOM');
     expect(isConstructor(constructor)).toBe(true);
-    expect(constructor.supertypes).toEqual(['atom', 'top']);
+    expect(supertypesOf(constructor)).toEqual(['atom', 'top', 'type']);
   });
 
   it('declares no unit: value and void are told apart by constructor, never by name (§4.2)', () => {
@@ -102,15 +114,15 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   ])('resolves %s as a bare, empty instance of %s (§5.5)', (name, target, body) => {
     const entry = entryOf(schema, name);
     expect(kindOf(schema, name)).toBe('ATOM');
-    expect(entry.source).toEqual({ name: target, arguments: [], annotations: [] });
-    expect(entry.body).toEqual(body);
+    expect(schema.facts.get(name)?.head).toBe(target);
+    expect(withoutChain(entry)).toEqual(body);
   });
 
   it('resolves identifier as the identifier_type instance { continue_add: "-" }, the profile of [TSON-DATA] §7.7 (§5.5)', () => {
     const entry = entryOf(schema, 'identifier');
     expect(kindOf(schema, 'identifier')).toBe('ATOM');
-    expect(entry.source).toEqual({ name: 'identifier_type', arguments: [], annotations: [] });
-    expect(entry.body).toEqual({
+    expect(schema.facts.get('identifier')?.head).toBe('identifier_type');
+    expect(withoutChain(entry)).toEqual({
       kind: 'identifier_type',
       spec: 'https://www.unicode.org/reports/tr31/',
       normalization: 'NFC',
@@ -120,24 +132,24 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     } satisfies IdentifierType);
   });
 
-  it('resolves scheme_name as the second identifier_type instance, an ASCII_CASEFOLD profile of its own', () => {
-    expect(entryOf(schema, 'scheme_name').body).toMatchObject({
+  it('resolves scheme_name as the second identifier_type instance, an ASCII_CASEFOLD profile over the ASCII base', () => {
+    expect(entryOf(schema, 'scheme_name')).toMatchObject({
       kind: 'identifier_type',
       normalization: 'ASCII_CASEFOLD',
-      start: 'NONE',
-      continue: 'NONE',
-      startAdd: 'abcdefghijklmnopqrstuvwxyz',
-      continueAdd: 'abcdefghijklmnopqrstuvwxyz0123456789+-.',
+      start: 'ASCII',
+      continue: 'ASCII',
+      continueAdd: '+-.',
+      exclude: '_',
     });
   });
 
   it('resolves boolean as !enum [true false] -- deferred to the second pass, since enum is declared later in the file', () => {
     const boolean = entryOf(schema, 'boolean');
     expect(kindOf(schema, 'boolean')).toBe('ATOM');
-    expect(boolean.source).toEqual({ name: 'enum', arguments: [], annotations: [] });
-    expect(boolean.body).toEqual({
+    expect(schema.facts.get('boolean')?.head).toBe('enum');
+    expect(withoutChain(boolean)).toEqual({
       kind: 'enum',
-      type: 'identifier',
+      nameType: 'identifier',
       members: ['true', 'false'],
     } satisfies EnumBody);
   });
@@ -145,15 +157,15 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
   it('resolves integer as an unconstrained instance of integer_type', () => {
     const integer = entryOf(schema, 'integer');
     expect(kindOf(schema, 'integer')).toBe('ATOM');
-    expect(integer.source).toEqual({ name: 'integer_type', arguments: [], annotations: [] });
-    expect(integer.body).toEqual({ kind: 'integer_type' } satisfies IntegerType);
+    expect(schema.facts.get('integer')?.head).toBe('integer_type');
+    expect(withoutChain(integer)).toEqual({ kind: 'integer_type' } satisfies IntegerType);
   });
 
   it('resolves iri as an instance of iri_type that withdraws relative references, spec composed in from RFC 3987 (§5.5)', () => {
     const iri = entryOf(schema, 'iri');
     expect(kindOf(schema, 'iri')).toBe('ATOM');
-    expect(iri.source).toEqual({ name: 'iri_type', arguments: [], annotations: [] });
-    expect(iri.body).toEqual({
+    expect(schema.facts.get('iri')?.head).toBe('iri_type');
+    expect(withoutChain(iri)).toEqual({
       kind: 'iri_type',
       spec: 'https://www.rfc-editor.org/rfc/rfc3987',
       allowRelative: false,
@@ -172,7 +184,7 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
       const entry = entryOf(schema, name);
       expect(kindOf(schema, name)).toBe('PRODUCT');
       expect(isConstructor(entry)).toBe(true);
-      expect(entry.supertypes).toContain('product');
+      expect(supertypesOf(entry)).toContain('product');
     }
   });
 
@@ -180,26 +192,27 @@ describe('bootstrapMetaKernel, against the real bundled meta-kernel.tn', () => {
     // type_name itself: a single-hop alias entry.
     const typeName = entryOf(schema, 'type_name');
     expect(kindOf(schema, 'type_name')).toBe('REFERENCE');
-    expect((typeName.body as Reference).target).toEqual({
+    expect((typeName as Reference).target).toEqual({
       name: 'identifier',
       arguments: [],
       annotations: [],
     });
 
     // A reference is a hop, not a rewrite: the synthetic array instance meta-kernel's own
-    // `[type_name]?` (e.g. record.supertypes) lifts to still names `type_name`, the entry the
+    // `[type_name]?` (e.g. type_chain.supertypes) lifts to still names `type_name`, the entry the
     // author wrote -- nothing rewrites it onto `identifier`, and no `@alias` annotation appears
     // anywhere to say it did.
-    const synthetic = [...schema.entries.values()].find(
-      (entry) =>
-        entry.source?.name === 'array' &&
-        'elementType' in entry.body &&
-        entry.body.elementType.name === 'type_name',
-    );
+    const synthetic = [...schema.entries].find(
+      ([name, entry]) =>
+        schema.facts.get(name)?.head === 'array' &&
+        !isTemplateBody(entry) &&
+        entry.kind === 'array' &&
+        entry.elementType.name === 'type_name',
+    )?.[1];
     if (synthetic === undefined) {
       throw new Error('expected a synthetic array-of-type_name entry, naming type_name as written');
     }
-    expect((synthetic.body as ArrayBody).elementType.annotations).toEqual([]);
+    expect((synthetic as ArrayBody).elementType.annotations).toEqual([]);
   });
 });
 

@@ -17,12 +17,12 @@
  * case -- a tuple position and an array element carry only the one `voidable` fact (§5.3),
  * with no FIXED counterpart, and a `choice`'s variants (§5.4) are plain type references,
  * not positions that can be pinned to a literal. So {@link checkRecordBinding} is this module's
- * only real check; {@link checkBinding} is the dispatcher a caller holding a `TypeDefinition`
- * uses without narrowing its body by hand, and is a deliberate no-op outside the `record`/`record`
+ * only real check; {@link checkBinding} is the dispatcher a caller holding an entry's value
+ * uses without narrowing it by hand, and is a deliberate no-op outside the `record`/`record`
  * pairing -- see its own doc.
  */
-import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
-import type { TypeDefinition } from '../schema/meta/typedef.js';
+import { namedFields, type NamedField, type RecordField } from '../schema/meta/bodies.js';
+import { isTemplateBody, type Top } from '../schema/meta/typedef.js';
 import { TsonBindMismatchError } from '../core/errors.js';
 import type { Binding, RecordBinding } from './binding.js';
 
@@ -54,7 +54,7 @@ function isFixedField(field: RecordField): boolean {
  */
 export function checkRecordBinding(
   typeName: string,
-  fields: readonly RecordField[],
+  fields: readonly NamedField[],
   binding: RecordBinding<unknown>,
 ): void {
   const uncoveredFields: string[] = [];
@@ -89,37 +89,26 @@ export function checkRecordBinding(
 }
 
 /** True when `wireName` names a FIXED field of `fields` -- a slot bound there is redundant, not wrong, so it is not reported as unmatched. */
-function isFixedFieldName(fields: readonly RecordField[], wireName: string): boolean {
+function isFixedFieldName(fields: readonly NamedField[], wireName: string): boolean {
   return fields.some((f) => f.name === wireName && isFixedField(f));
 }
 
 /**
  * Dispatches {@link checkRecordBinding} for a `(definition, binding)` pair drawn from a schema
  * compiler and a {@link BindingRegistry} respectively, without the caller narrowing
- * `definition.body` by hand first.
+ * `definition` by hand first.
  *
- * A no-op whenever `definition.body.kind` is not `'record'`, or `binding.kind` is not `'record'`
+ * A no-op whenever `definition` is not a `record` body, or `binding.kind` is not `'record'`
  * once any {@link LazyBinding} wrapping it is resolved -- see this module's own top comment for
  * why field-level coverage has no analogous check for the other body kinds. A `record`-kind
  * definition paired with a non-`record`-kind binding (after resolving `lazy`) is itself a
  * mismatch worth reporting rather than silently skipping, since nothing else in this package
  * would ever catch a binding authored against the wrong shape.
  */
-export function checkBinding(
-  typeName: string,
-  definition: TypeDefinition,
-  binding: Binding<unknown>,
-): void {
-  const body = definition.body;
-  // `TemplateBody` (§5.10) carries no `kind` tag at all -- see its own doc -- so membership must
-  // be checked before narrowing, exactly as that doc calls out for any code walking `Top`.
-  if (!('kind' in body) || body.kind !== 'record') return;
-  // `Data.kind` is a plain `string` (a meta-schema's own constructor name), not a literal, so the
-  // check above narrows `body` to `RecordBody | Data` rather than `RecordBody` alone -- an
-  // open-vocabulary `Data` body can never actually equal the literal `'record'` in practice
-  // (that name is the kernel's own PRODUCT constructor), so the remaining `Data` member is
-  // asserted away here rather than left for TypeScript to rule out structurally.
-  const recordBody = body as RecordBody;
+export function checkBinding(typeName: string, definition: Top, binding: Binding<unknown>): void {
+  // `TemplateBody` (§5.10) carries no `kind` tag at all, so it is ruled out before narrowing.
+  if (isTemplateBody(definition) || definition.kind !== 'record') return;
+  const recordBody = definition;
 
   let resolved = binding;
   while (resolved.kind === 'lazy') resolved = resolved.get();
@@ -129,5 +118,5 @@ export function checkBinding(
       `binding for "${typeName}" is a "${resolved.kind}" binding, but the type resolves to a record`,
     );
   }
-  checkRecordBinding(typeName, recordBody.fields, resolved);
+  checkRecordBinding(typeName, namedFields(recordBody), resolved);
 }

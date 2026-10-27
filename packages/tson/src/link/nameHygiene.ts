@@ -65,17 +65,19 @@ import { UTS39_VERSION } from '../unicode/uts39.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
 import { applyNormalization } from '../unicode/normalization.js';
 import { judgeName } from '../unicode/policy.js';
-import { isDataBody } from './bodyKind.js';
 import type { EnumLabelProfile } from './enumLabels.js';
 import type { SourcePosition } from '../schema/meta/position.js';
-import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
-import { typeParameters } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
+import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
+import type { FactsTable } from './facts.js';
 import { terminalDefinition } from './referenceChain.js';
 
 /** Dependencies {@link checkNameHygiene} needs beyond the merged namespace itself. */
 export interface CheckNameHygieneOptions {
   /** This schema's own canonical identity, stamped on every diagnostic. */
   readonly schemaId: string;
+  /** Each entry's facts, for a diagnostic's position. */
+  readonly facts?: FactsTable;
   /**
    * [TSON-DATA] §8.2's name-hygiene policy, applied over every scope this module checks.
    * Defaults to {@link DEFAULT_IDENTIFIER_POLICY} — mechanisms 1 and 2 enforced, mechanism 3 at
@@ -117,10 +119,12 @@ export interface CheckNameHygieneOptions {
  * is otherwise well-formed.
  */
 export function checkNameHygiene(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   options: CheckNameHygieneOptions,
 ): void {
   const { schemaId, receiver } = options;
+  const positionOf = (name: string): SourcePosition | undefined =>
+    options.facts?.get(name)?.position;
   const identifierPolicy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const namespaceRefusal = nameHygieneRefusal(merged.keys(), identifierPolicy);
@@ -130,7 +134,7 @@ export function checkNameHygiene(
       `the namespace of '${schemaId}' is refused under [TSON-DATA] §8.2's name-hygiene policy ` +
       `([TSON-SCHEMA] §11.4's merged-namespace scope): ${namespaceRefusal.detail} (computed ` +
       `against UTS #39 version ${UTS39_VERSION})`;
-    reportOrThrow(namespaceRefusal, message, schemaId, at, merged.get(at)?.position, receiver);
+    reportOrThrow(namespaceRefusal, message, schemaId, at, positionOf(at), receiver);
   }
 
   const textEnums = options.textEnums ?? new Set<string>();
@@ -145,7 +149,15 @@ export function checkNameHygiene(
         ? entryScope(def, textEnums.has(name), refusedEnums.has(name))
         : undefined;
     if (labelProfile !== undefined) {
-      checkEnumMembers(name, def, labelProfile, identifierPolicy, schemaId, receiver);
+      checkEnumMembers(
+        name,
+        def,
+        positionOf(name),
+        labelProfile,
+        identifierPolicy,
+        schemaId,
+        receiver,
+      );
     }
     if (scope !== undefined) {
       const scopePolicy = scope.textProfile
@@ -157,10 +169,10 @@ export function checkNameHygiene(
           `'${name}' has ${scope.noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
           `([TSON-SCHEMA] §11.4's ${scope.noun} scope): ${refusal.detail} (computed against ` +
           `UTS #39 version ${UTS39_VERSION})`;
-        reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
+        reportOrThrow(refusal, message, schemaId, name, positionOf(name), receiver);
       }
     }
-    checkFieldValues(name, def, merged, identifierPolicy, schemaId, receiver);
+    checkFieldValues(name, def, positionOf(name), merged, identifierPolicy, schemaId, receiver);
     const parameters = typeParameters(def);
     if (parameters.length > 0) {
       const refusal = nameHygieneRefusal(parameters, identifierPolicy);
@@ -171,7 +183,7 @@ export function checkNameHygiene(
           `own text declining to make one -- a parameter is a name and the substitution hazard ` +
           `§8.2 exists to refuse applies to it the same as any other declared name): ` +
           `${refusal.detail} (computed against UTS #39 version ${UTS39_VERSION})`;
-        reportOrThrow(refusal, message, schemaId, name, def.position, receiver);
+        reportOrThrow(refusal, message, schemaId, name, positionOf(name), receiver);
       }
     }
   }
@@ -185,14 +197,15 @@ export function checkNameHygiene(
  */
 function checkEnumMembers(
   entry: string,
-  def: TypeDefinition,
+  def: Top,
+  position: SourcePosition | undefined,
   label: EnumLabelProfile,
   policy: IdentifierPolicy,
   schemaId: string,
   receiver: DiagnosticsReceiver | undefined,
 ): void {
-  const body = def.body;
-  if (!('kind' in body) || isDataBody(body) || body.kind !== 'enum') return;
+  const body = def;
+  if (isTemplateBody(body) || body.kind !== 'enum') return;
   const values = body.members.map((member) => applyNormalization(label.form, member));
   const relation = nameHygieneRefusal(values, textProfileScopePolicy(policy));
   if (relation !== undefined) {
@@ -200,7 +213,7 @@ function checkEnumMembers(
       `'${entry}' has enum members refused under [TSON-DATA] §8.2's name-hygiene policy ` +
       `([TSON-SCHEMA] §11.4's enum members scope): ${relation.detail} (computed against ` +
       `UTS #39 version ${UTS39_VERSION})`;
-    reportOrThrow(relation, message, schemaId, entry, def.position, receiver);
+    reportOrThrow(relation, message, schemaId, entry, position, receiver);
   }
   for (const value of values) {
     for (const violation of judgeName(value, label.profile, policy)) {
@@ -213,7 +226,7 @@ function checkEnumMembers(
         `'${entry}' has enum members refused under [TSON-DATA] §8.2's name-hygiene policy ` +
         `([TSON-SCHEMA] §11.4's enum members scope): ${violation.detail} (computed against ` +
         `UTS #39 version ${UTS39_VERSION})`;
-      reportOrThrow(refusal, message, schemaId, entry, def.position, receiver);
+      reportOrThrow(refusal, message, schemaId, entry, position, receiver);
     }
   }
 }
@@ -231,16 +244,16 @@ function textProfileScopePolicy(base: IdentifierPolicy): IdentifierPolicy {
 
 /** One entry's own §11.4 scope — its record field names or its enum members — or `undefined` for every other body shape, which declares no scope of its own. */
 function entryScope(
-  def: TypeDefinition,
+  def: Top,
   isTextEnum: boolean,
   isRefused: boolean,
 ):
   | { readonly names: readonly string[]; readonly noun: string; readonly textProfile: boolean }
   | undefined {
-  const body = def.body;
-  if (!('kind' in body) || isDataBody(body)) {
-    // A held TemplateBody is unresolved (no field/member list exists yet to check), and a Data
-    // body describes something other than a data value -- §11.4 names no scope for either.
+  const body = def;
+  if (isTemplateBody(body)) {
+    // A held TemplateBody is unresolved (no field/member list exists yet to check) -- §11.4 names
+    // no scope for one.
     return undefined;
   }
   switch (body.kind) {
@@ -248,7 +261,7 @@ function entryScope(
       // Group labels are already ordinary `record_field`s here (§5.11's own resolution rule:
       // "each member becomes an ordinary record_field"), so no separate group-label pass exists.
       return {
-        names: body.fields.map((field) => field.name),
+        names: [...body.fields.entries.keys()],
         noun: 'field names',
         textProfile: false,
       };
@@ -273,23 +286,19 @@ function entryScope(
  */
 function checkFieldValues(
   entry: string,
-  def: TypeDefinition,
-  merged: ReadonlyMap<string, TypeDefinition>,
+  def: Top,
+  position: SourcePosition | undefined,
+  merged: ReadonlyMap<string, Top>,
   policy: IdentifierPolicy,
   schemaId: string,
   receiver: DiagnosticsReceiver | undefined,
 ): void {
-  const body: Top = def.body;
-  if (!('kind' in body) || isDataBody(body) || body.kind !== 'record') return;
-  for (const field of body.fields) {
+  const body: Top = def;
+  if (isTemplateBody(body) || body.kind !== 'record') return;
+  for (const [fieldName, field] of body.fields.entries) {
     if (field.value === undefined) continue;
-    const family = terminalDefinition(field.type.name, (n) => merged.get(n))?.body;
-    if (
-      family === undefined ||
-      !('kind' in family) ||
-      isDataBody(family) ||
-      family.kind !== 'identifier_type'
-    ) {
+    const family = terminalDefinition(field.type.name, (n) => merged.get(n));
+    if (family === undefined || isTemplateBody(family) || family.kind !== 'identifier_type') {
       continue;
     }
     const value = applyNormalization(family.normalization, field.value.text);
@@ -301,9 +310,9 @@ function checkFieldValues(
         detail: violation.detail,
       };
       const message =
-        `'${entry}' has ${what} for '${field.name}' where ${violation.detail} (refused under ` +
+        `'${entry}' has ${what} for '${fieldName}' where ${violation.detail} (refused under ` +
         `[TSON-DATA] §8.2's name-hygiene policy; computed against UTS #39 version ${UTS39_VERSION})`;
-      reportOrThrow(refusal, message, schemaId, entry, def.position, receiver);
+      reportOrThrow(refusal, message, schemaId, entry, position, receiver);
     }
   }
 }

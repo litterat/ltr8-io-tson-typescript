@@ -2,6 +2,7 @@
  * The octet-sequence atom family's resolved constraint vocabulary (§9): `bytes_type`, the only
  * binary type there is.
  */
+import type { TypeBase } from './typedef.js';
 
 /**
  * meta.tn's `bytes_encoding` enum (§9) — the RFC 4648 base encodings a text-class encoding may
@@ -42,7 +43,7 @@ export type BytesEncoding = 'BASE64' | 'BASE64URL' | 'BASE32' | 'HEX';
  * constructor-application instance (§5.5) whose resolved body is this shape with every length
  * facet absent.
  */
-export interface BytesType {
+export interface BytesType extends TypeBase {
   readonly kind: 'bytes_type';
   readonly encoding: BytesEncoding;
   readonly length?: bigint;

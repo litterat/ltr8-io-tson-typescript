@@ -1,6 +1,6 @@
 /**
  * Parses and validates against an enum -- an instance of meta-kernel's `enum_type` or a tightening
- * of it such as `enum` or `text_enum` (§7.4). Matches on the token's text directly, never through
+ * of it such as `enum` (§7.4). Matches on the token's text directly, never through
  * base type resolution's boolean/number/string identification: that is what makes `boolean =>
  * !enum [true false]` readable at all, since the token `true` is a member, not a boolean literal
  * to be identified first.

@@ -40,10 +40,14 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
-import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
+import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
+import { isTemplateBody } from '../schema/meta/typedef.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
+import { computeKindMembers } from './kindMembers.js';
+import { checkDefaultFieldNames } from './fieldNames.js';
+import { schemaPositionOf } from './facts.js';
 import { checkDisjointAssertions, computeDisjointness } from './disjointness.js';
 import {
   checkEnumLabels,
@@ -63,7 +67,8 @@ import { checkRecordExtension } from './recordExtension.js';
 /**
  * A linked schema (Part 2 §2.2.3, §8): {@link Schema}'s own three header fields, carried through
  * unchanged, plus the **flat, fully-merged** namespace — every entry this schema can see, local
- * *and* imported, `subtypes`/`disjoint` populated — and the origin schema id each entry's own
+ * *and* imported, its derived indexes (`chain.subtypes`, a choice's `disjoint`, a kind's
+ * `members`) populated — the facts beside each entry, and the origin schema id each entry's own
  * identity is keyed against.
  *
  * Unlike {@link Schema.entries} (local-only, by that interface's own contract), `entries` here is
@@ -75,7 +80,9 @@ export interface LinkedSchema {
   readonly meta: string;
   readonly imports: readonly string[];
   /** Every entry this schema can see: this schema's own declarations plus every `!!import`'s, transitively. */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
+  readonly entries: ReadonlyMap<string, Top>;
+  /** Each entry's facts beyond its value (§8.1), local and imported alike -- present only for a name with any recorded. */
+  readonly facts: ReadonlyMap<string, EntryFacts>;
   /**
    * `entries.get(name)`'s own key-position annotations (§6) — present only for a locally-declared
    * name that carries at least one. Imported names' key annotations are not carried over: §6's
@@ -128,7 +135,9 @@ export interface LinkDeps {
    * assembling both stages typically passes the same governing `LinkedSchema.entries` here that it
    * turned into a `DefinitionGetter` for `resolveSchema`.
    */
-  readonly structureNamespace?: ReadonlyMap<string, TypeDefinition>;
+  readonly structureNamespace?: ReadonlyMap<string, Top>;
+  /** The governing meta's own entry facts, beside {@link structureNamespace} -- where a constructor's head is read. */
+  readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   /**
    * Where a failing entry is reported, letting every other entry still be checked. Omitted means
    * fail-fast: the first {@link TsonSchemaValidationError} propagates, naming the entry that
@@ -165,13 +174,14 @@ export interface LinkDeps {
  * of this schema checkable against something real).
  */
 export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
-  const { resolveImport, structureNamespace, receiver } = deps;
+  const { resolveImport, structureNamespace, structureFacts, receiver } = deps;
   const identifierPolicy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const origins = new Map<string, string>();
   const textEnums = new Set<string>();
   const enumForms = new Map<string, Normalization>();
-  let merged = mergeImports(schema.imports, resolveImport, origins, textEnums, enumForms);
+  const facts = new Map<string, EntryFacts>();
+  let merged = mergeImports(schema.imports, resolveImport, origins, textEnums, enumForms, facts);
 
   const localNames = new Set<string>();
   const selfId = canonicalizeIdentity(schema.id);
@@ -186,38 +196,46 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
         message,
         schemaId: schema.id,
         schemaPointer: `/${name}`,
-        ...(def.position === undefined ? {} : { schemaPosition: def.position }),
+        ...schemaPositionOf(schema.facts, name),
       });
       continue; // the local entry is dropped, not the import's -- see this function's own doc
     }
     merged.set(name, def);
     origins.set(name, selfId);
     localNames.add(name);
+    const recorded = schema.facts.get(name);
+    if (recorded !== undefined) facts.set(name, recorded);
   }
 
   merged = computeSubtypes(merged, localNames);
+  merged = computeKindMembers(
+    merged,
+    (name) => facts.get(name),
+    (name) => structureNamespace?.get(name),
+  );
 
   // Before disjointness: an enum whose members are texts is string-class, and only here can its
-  // `type` be followed into the governing meta, where a constructor's pinned one was written.
-  const entryOf = (name: string): TypeDefinition | undefined => merged.get(name);
+  // `name_type` be followed into the governing meta, where a constructor's pinned one was written.
+  const entryOf = (name: string): Top | undefined => merged.get(name);
   const structureOf =
     structureNamespace === undefined
       ? undefined
-      : (name: string): TypeDefinition | undefined => structureNamespace.get(name);
+      : (name: string): Top | undefined => structureNamespace.get(name);
   const enumProfiles = new Map<string, EnumLabelProfile>();
+  // The constructor an entry applied, from its facts -- the schema's own or the governing meta's.
+  const headOf = (name: string): string | undefined =>
+    facts.get(name)?.head ?? structureFacts?.get(name)?.head;
   for (const name of localNames) {
     const definition = merged.get(name);
-    if (
-      definition === undefined ||
-      !('kind' in definition.body) ||
-      definition.body.kind !== 'enum'
-    ) {
+    if (definition === undefined || isTemplateBody(definition) || definition.kind !== 'enum') {
       continue;
     }
-    if (!membersAreNames(definition, entryOf, structureOf)) textEnums.add(name);
-    const labelProfile = enumLabelProfile(definition, entryOf, structureOf);
+    const head = facts.get(name)?.head;
+    const enumeration = head === undefined ? { value: definition } : { value: definition, head };
+    if (!membersAreNames(enumeration, entryOf, structureOf, headOf)) textEnums.add(name);
+    const labelProfile = enumLabelProfile(enumeration, entryOf, structureOf, headOf);
     if (labelProfile !== undefined) enumProfiles.set(name, labelProfile);
-    const form = enumLabelForm(definition, entryOf, structureOf);
+    const form = enumLabelForm(enumeration, entryOf, structureOf, headOf);
     if (form !== 'NONE') enumForms.set(name, form);
   }
   merged = computeDisjointness(merged, textEnums);
@@ -225,21 +243,34 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   // Before the name checks: a member that is not a value of its enum's type is the more basic
   // verdict, and the per-name rules would otherwise report it as a restricted character.
   const refusedEnums = new Set<string>();
-  for (const violation of checkEnumLabels(merged, localNames, structureOf)) {
+  for (const violation of checkEnumLabels(merged, localNames, structureOf, headOf)) {
     refusedEnums.add(violation.entry);
     if (receiver === undefined) throw new TsonSchemaValidationError(violation.message);
-    const position = merged.get(violation.entry)?.position;
     receiver.report({
       code: 'SCHEMA_ERROR',
       message: violation.message,
       schemaId: schema.id,
       schemaPointer: `/${violation.entry}`,
-      ...(position === undefined ? {} : { schemaPosition: position }),
+      ...schemaPositionOf(facts, violation.entry),
+    });
+  }
+
+  // Before the name checks too: a field name its record's name type does not admit is no name,
+  // and judging it under the hygiene rules as well would report one mistake twice.
+  for (const violation of checkDefaultFieldNames(merged, localNames)) {
+    if (receiver === undefined) throw new TsonSchemaValidationError(violation.message);
+    receiver.report({
+      code: 'SCHEMA_ERROR',
+      message: violation.message,
+      schemaId: schema.id,
+      schemaPointer: `/${violation.entry}`,
+      ...schemaPositionOf(facts, violation.entry),
     });
   }
 
   checkNameHygiene(merged, {
     schemaId: schema.id,
+    facts,
     identifierPolicy,
     textEnums,
     refusedEnums,
@@ -249,26 +280,32 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
 
   checkFieldGroups(merged, localNames, {
     schemaId: schema.id,
+    facts,
     ...(receiver === undefined ? {} : { receiver }),
   });
 
   validateReferences(merged, {
     schemaId: schema.id,
+    facts,
     enumForms,
     ...(structureNamespace === undefined ? {} : { structureNamespace }),
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkEveryEntryIsInhabited(merged, localNames, {
     schemaId: schema.id,
+    facts,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkRecordExtension(merged, localNames, {
     schemaId: schema.id,
+    facts,
+    keyAnnotations: schema.keyAnnotations,
     origins,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkDisjointAssertions(merged, localNames, {
     schemaId: schema.id,
+    facts,
     // §6's name-position channel as well as §3.1's value-position one: `@disjoint` written
     // before a declared name is the same assertion as one written on its body, and a marker
     // this check could not see would be a marker nothing ever contradicts.
@@ -281,6 +318,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     meta: schema.meta,
     imports: schema.imports,
     entries: merged,
+    facts,
     keyAnnotations: schema.keyAnnotations,
     bootstrap: schema.bootstrap,
     origins,
@@ -309,8 +347,9 @@ function mergeImports(
   origins: Map<string, string>,
   textEnums: Set<string>,
   enumForms: Map<string, Normalization>,
-): Map<string, TypeDefinition> {
-  const merged = new Map<string, TypeDefinition>();
+  facts: Map<string, EntryFacts>,
+): Map<string, Top> {
+  const merged = new Map<string, Top>();
   const alreadyImported = new Set<string>();
   for (const importUri of imports) {
     const importIdentity = canonicalizeIdentity(importUri);
@@ -345,6 +384,8 @@ function mergeImports(
       }
       merged.set(name, definition);
       origins.set(name, origin);
+      const recorded = imported.facts?.get(name);
+      if (recorded !== undefined) facts.set(name, recorded);
     }
   }
   return merged;

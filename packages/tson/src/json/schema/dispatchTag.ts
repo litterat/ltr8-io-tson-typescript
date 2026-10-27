@@ -17,7 +17,7 @@
  *   position with nothing to place an untagged value as, not about an admissibility question).
  *
  * **Every name it admits was resolved when the schema compiled** (`json/schema/route.ts`'s own
- * `routeTo`): a base's `subtypes` is its whole family, transitively (`TypeDefinition.subtypes`),
+ * `routeTo`): a base's `subtypes` is its whole family, transitively (the chain's `subtypes`),
  * so a tag naming a type any number of levels down reaches that type's reader in one step, and
  * every alias meaning one of them (`link/referenceChain.ts`'s own `admitting`) reaches the same
  * reader.
@@ -29,7 +29,7 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import type { TypeDefinition } from '../../schema/meta/typedef.js';
+import type { Top } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/referenceChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
@@ -43,8 +43,8 @@ export interface DispatchTagOptions {
   readonly name: string;
   readonly displayName: string;
   /** The whole namespace, for alias flattening (`aliases.ts`). */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
-  /** The family below the base, transitive (`TypeDefinition.subtypes`), not yet alias-flattened. */
+  readonly entries: ReadonlyMap<string, Top>;
+  /** The family below the base, transitive (the chain's `subtypes`), not yet alias-flattened. */
   readonly subtypes: readonly string[];
   /** The OPEN record's own concrete reader, or `undefined` for an ABSTRACT base. */
   readonly untagged: JsonTypeReader | undefined;

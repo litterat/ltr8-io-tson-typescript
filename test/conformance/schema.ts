@@ -155,7 +155,7 @@ export function assertSchemaRefused(
  *
  * `valid`'s comparison never renders this implementation's own output to text: the sidecar's own
  * `resolved` text is read back through this implementation's own meta.tn-governed reader
- * (`resolvedForm.ts`'s `readResolved`) into the same `TypeDefinition` shape the resolver itself
+ * (`resolvedForm.ts`'s `readResolved`) into the same `schema.meta` values the resolver itself
  * produces, and the two are compared structurally.
  */
 export function checkSchemaVector(
@@ -172,9 +172,17 @@ export function checkSchemaVector(
           `${vector.name}: a 'valid' class2/schema vector must state its resolved output`,
         );
       }
-      const metaLinked = tson.schemas.get(canonicalizeIdentity(META_TN_ID));
+      // The expected side is read under the subject's own governing meta: a fixture meta layer
+      // imports meta.tn and adds constructors, and a namespace entry is typed there (RUNNER.md).
+      // RUNNER.md's "A meta layer's own records" asks a binding runner for a host class per record
+      // a fixture meta's namespace types hold; this port binds none -- the schema model holds a
+      // meta layer's records as generic values (`schema/meta`'s `MetaValue`), so the runner
+      // supplies nothing and the rule is met by construction.
+      const metaLinked =
+        tson.schemas.get(canonicalizeIdentity(linked.meta)) ??
+        tson.schemas.get(canonicalizeIdentity(META_TN_ID));
       if (metaLinked === undefined) {
-        throw new Error(`${vector.name}: meta.tn is not registered on this Tson instance`);
+        throw new Error(`${vector.name}: the subject's governing meta is not registered`);
       }
       const ours = ownEntries(linked);
       const expected = readResolved(sidecar.resolved, metaLinked.entries);
@@ -185,7 +193,7 @@ export function checkSchemaVector(
         expect(renderDefinition(ourDefinition)).toBe(renderDefinition(expectedDefinition));
       }
       // §8.2's derived @synthetic marker is a claim of its own -- a key-position annotation, not
-      // part of any TypeDefinition value, so the keys/body comparison above cannot make it.
+      // part of any entry's value, so the keys/body comparison above cannot make it.
       expect(ourSynthetics(linked)).toEqual(markedSynthetics(sidecar.resolved));
       return;
     }

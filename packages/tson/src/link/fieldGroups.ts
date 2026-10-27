@@ -25,12 +25,16 @@
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import type { FieldGroup, RecordBody } from '../schema/meta/bodies.js';
-import type { TypeDefinition } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
+import { isTemplateBody } from '../schema/meta/typedef.js';
+import { schemaPositionOf, type FactsTable } from './facts.js';
 
 /** Dependencies {@link checkFieldGroups} needs beyond the merged namespace. */
 export interface CheckFieldGroupsOptions {
   /** This schema's own canonical identity, stamped on every diagnostic. */
   readonly schemaId: string;
+  /** Each entry's facts, for a diagnostic's position. */
+  readonly facts?: FactsTable;
   /** Where a refused group is reported. Omitted means fail-fast. */
   readonly receiver?: DiagnosticsReceiver;
 }
@@ -99,17 +103,18 @@ export function refuseGroup(
  * entries were judged when their own schema linked.
  */
 export function checkFieldGroups(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckFieldGroupsOptions,
 ): void {
   for (const name of localNames) {
-    const definition = merged.get(name);
-    const body = definition?.body;
-    if (body === undefined || !('kind' in body) || body.kind !== 'record') continue;
-    const record = body as RecordBody;
+    const body = merged.get(name);
+    if (body === undefined || isTemplateBody(body) || body.kind !== 'record') continue;
+    const record: RecordBody = body;
     if (record.groups.length === 0) continue;
-    const fields = new Map(record.fields.map((field) => [field.name, field.optional]));
+    const fields = new Map(
+      [...record.fields.entries].map(([fieldName, field]) => [fieldName, field.optional] as const),
+    );
     const claimed = new Set<string>();
     for (const group of record.groups) {
       const reason = refuseGroup(group, fields, claimed);
@@ -122,7 +127,7 @@ export function checkFieldGroups(
         message,
         schemaId,
         schemaPointer: `/${name}`,
-        ...(definition?.position === undefined ? {} : { schemaPosition: definition.position }),
+        ...schemaPositionOf(options.facts, name),
       });
     }
   }

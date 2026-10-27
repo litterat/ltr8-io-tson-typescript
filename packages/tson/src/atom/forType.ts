@@ -21,7 +21,12 @@
  * isScalarBody} first, exactly as {@link atomParserFor}'s own caller does.
  */
 import type { AtomToken } from './contract.js';
-import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type {
+  IdentifierType,
+  Normalization,
+  RegexType,
+  TextType,
+} from '../schema/meta/atoms-text.js';
 import type { Product, Sum } from '../schema/meta/algebra.js';
 import type { Atom, Reference } from '../schema/meta/typedef.js';
 
@@ -99,11 +104,26 @@ export function isScalarBody(body: ScalarCandidate): boolean {
     case 'ipv4_type':
     case 'ipv6_type':
     case 'complex_type':
+    case 'kind_type':
+    case 'ref_type':
+    case 'hostname_type':
+    case 'host_type':
+    case 'media_type_type':
       return true;
     default:
       return false; // record, array, map, tuple, choice, reference, scoped, and Data
   }
 }
+
+/** The name grammar a kind's value is read by: the kernel's `type_name`, an `identifier` (§4.2, §7.7). */
+const KIND_NAME: IdentifierType = {
+  kind: 'identifier_type',
+  spec: 'https://www.unicode.org/reports/tr31/',
+  normalization: 'NFC',
+  start: 'XID',
+  continue: 'XID',
+  continueAdd: '-',
+};
 
 // ── regex_type ───────────────────────────────────────────────────────────────────────────────
 
@@ -188,7 +208,14 @@ export function atomParserFor(
       return createIpv6Parser(declaredName, body);
     case 'complex_type':
       return createComplexParser(declaredName);
+    case 'kind_type':
+      // A kind's value is a type name (§4.2): read here by the name grammar, and judged a member
+      // of the kind against the linked closure, which a bare-token parser cannot see.
+      return createIdentifierParser(declaredName, KIND_NAME);
+    // TODO(WP1B): `hostname_type`/`host_type`/`media_type_type` take `parseHostname`/`parseHost`/
+    // `parseMediaType` from `atom/network/` here. A `ref_type` value is a qualified name judged
+    // against the linked closure (§5.12), which a bare-token parser cannot see.
     default:
-      return undefined; // value_type, void_type, record, array, map, tuple, choice, reference, scoped, Data
+      return undefined; // value_type, void_type, ref_type, containers, choice, reference, scoped
   }
 }

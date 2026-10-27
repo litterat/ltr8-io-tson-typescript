@@ -29,7 +29,7 @@
  *   about one declaration's own operator, not about a family.
  *
  * **One level, by construction.** {@link directMembers} finds only a base's *direct* composers or
- * refiners — never `TypeDefinition.subtypes`' full transitive closure, which also holds every
+ * refiners — never `the chain's `subtypes``' full transitive closure, which also holds every
  * descendant several generations down. A grandchild inherits its parent's pin unchanged (§5.7's
  * identity rule forbids a restatement from changing one), so it legitimately shares that pin —
  * checking distinctness over the transitive set would flag every such grandchild as a collision
@@ -48,15 +48,23 @@ import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
-import { isTemplateBody, type Top, type TypeDefinition } from '../schema/meta/typedef.js';
+import {
+  applicationOf,
+  isConstructor,
+  isFamilyBase,
+  isOpen,
+  isTemplateBody,
+  supertypesOf,
+  typeParameters,
+  type Annotations,
+  type Top,
+} from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
+import type { FactsTable } from './facts.js';
 
-// `Top`'s own union mixes closed literal-`kind` members with one open one (`Data.kind: string`,
-// `compiler/compile.ts`'s own note) -- a plain `'kind' in body && body.kind === 'record'` cannot
-// exclude `Data` from narrowing, so every check in this module goes through this guard instead,
-// the same pattern `compile.ts`'s own `isRecordBody` uses.
+/** Whether `body` is a record -- a closed one or a record template (§5.10). */
 function isRecordBody(body: Top): body is RecordBody {
-  return 'kind' in body && body.kind === 'record';
+  return !isTemplateBody(body) && body.kind === 'record';
 }
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -75,6 +83,10 @@ export interface CheckRecordExtensionOptions {
    * fail-fast: the first {@link TsonSchemaValidationError} propagates.
    */
   readonly receiver?: DiagnosticsReceiver;
+  /** Each entry's recorded facts (§8.1): a minted entry is one with no source position. */
+  readonly facts?: FactsTable;
+  /** Each entry's key annotations, where a minted entry records its `@application` (§8.2). */
+  readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
 }
 
 /**
@@ -91,17 +103,18 @@ export interface CheckRecordExtensionOptions {
  * Must run after reference validation, so an unresolved selector type is already reported and
  * never re-diagnosed as "not an atom or enum". Does **not** depend on
  * {@link import('./subtypes.js').computeSubtypes}: {@link directMembers} finds a family's members
- * by scanning `merged` directly (see its own note on why `TypeDefinition.subtypes` is not a safe
+ * by scanning `merged` directly (see its own note on why `the chain's `subtypes`` is not a safe
  * shortcut here), so this check needs no particular pass to have run before it beyond that.
  */
 export function checkRecordExtension(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
 ): void {
+  const minted = (name: string): boolean => isMintedApplication(name, options);
   for (const name of localNames) {
     const def = merged.get(name);
-    if (def !== undefined && isUndeclaredMember(def)) {
+    if (def !== undefined && isUndeclaredMember(name, def, options)) {
       checkDeclared(name, def, merged, localNames, options);
     }
   }
@@ -109,68 +122,87 @@ export function checkRecordExtension(
   // schemas that each link cleanly can each add a member to one imported family, and the schema
   // importing both holds a family neither did.
   for (const [name, def] of merged) {
-    const body = def.body;
-    if (isRecordBody(body) && body.discriminators !== undefined) {
-      checkFamily(name, body.discriminators, selectorOf(body), merged, localNames, options);
-    } else if (
-      isTemplateBody(body) &&
-      body.extension !== undefined &&
-      body.discriminators !== undefined &&
-      body.discriminators.length > 0
-    ) {
-      // A record-bodied template family base (§5.10) holds its body unread and so has no fields:
-      // each selector's declared type is the one every member carries, since a selector mentions
-      // no type parameter and so substitution never touches it. A base with no member yet has no
-      // pins to judge.
-      const members = directMembers(name, merged);
-      checkFamily(
-        name,
-        body.discriminators,
-        (fieldName) =>
-          members
-            .map((member) => member.body.fields.find((field) => field.name === fieldName))
-            .find((field) => field !== undefined),
-        merged,
-        localNames,
-        options,
-      );
+    if (!isRecordBody(def) || def.discriminators === undefined) continue;
+    if (!isOpen(def)) {
+      checkFamily(name, def.discriminators, selectorOf(def), merged, localNames, options, minted);
+      continue;
     }
+    if (def.discriminators.length === 0) continue;
+    // A record template family base (§5.10) declares its selectors itself, but one typed by a
+    // parameter has its type only on each member: a selector's declared type is the one every
+    // member carries. A base with no member yet has no pins to judge.
+    const members = directMembers(name, merged, minted);
+    const parameters = new Set(typeParameters(def));
+    const own = selectorOf(def);
+    checkFamily(
+      name,
+      def.discriminators,
+      (fieldName) => {
+        const field = own(fieldName);
+        if (field !== undefined && !parameters.has(field.type.name)) return field;
+        return members
+          .map((member) => member.body.fields.entries.get(fieldName))
+          .find((candidate) => candidate !== undefined);
+      },
+      merged,
+      localNames,
+      options,
+      minted,
+    );
   }
 }
 
 // ── A family member is declared (§5.2, §8.2) ─────────────────────────────────────────────────
 
 /**
- * Whether `def` is an entry a use site minted from a template application: it has no position
- * (nothing declared it) and its `source` is an application. Such an entry is a type read where it
- * is written, never a member of a family.
+ * Whether `name` is an entry a use site minted from a template application: its facts record no
+ * position (nothing declared it) and its key records the application it is the instantiation of
+ * (§8.2). Such an entry is a type read where it is written, never a member of a family.
  */
-export function isMintedApplication(def: TypeDefinition): boolean {
-  return def.position === undefined && def.source !== undefined && def.source.arguments.length > 0;
+function isMintedApplication(name: string, options: CheckRecordExtensionOptions): boolean {
+  const application = applicationOf(options.keyAnnotations?.get(name));
+  return (
+    options.facts?.get(name)?.position === undefined &&
+    application !== undefined &&
+    application.arguments.length > 0
+  );
 }
 
 /**
  * A record a use-site template application minted that composes onto another: a family member
  * with no declared name. A constructor (`top` in its chain) is no member of anything.
  */
-function isUndeclaredMember(def: TypeDefinition): boolean {
+function isUndeclaredMember(name: string, def: Top, options: CheckRecordExtensionOptions): boolean {
   return (
-    isMintedApplication(def) &&
-    isRecordBody(def.body) &&
-    def.supertypes.length > 0 &&
-    !def.supertypes.includes('top')
+    isMintedApplication(name, options) &&
+    isRecordBody(def) &&
+    supertypesOf(def).length > 0 &&
+    !isConstructor(def, name)
   );
 }
 
 /** `name` as the author wrote it: a minted entry as the application that produced it. */
-function shown(name: string, merged: ReadonlyMap<string, TypeDefinition>): string {
-  const def = merged.get(name);
-  const source = def?.source;
-  if (def === undefined || source === undefined || !isMintedApplication(def)) return name;
-  const args = source.arguments.map((argument) =>
-    argument.kind === 'ref' ? shown(argument.ref.name, merged) : argument.value.text,
+function shown(name: string, options: CheckRecordExtensionOptions): string {
+  const application = applicationOf(options.keyAnnotations?.get(name));
+  if (application === undefined || !isMintedApplication(name, options)) return name;
+  const args = application.arguments.map((argument) =>
+    argument.kind === 'ref' ? shown(argument.ref.name, options) : argument.value.text,
   );
-  return `${source.name}<${args.join(', ')}>`;
+  return `${application.name}<${args.join(', ')}>`;
+}
+
+/**
+ * The nearest of `chain`'s members -- the first no other member IS-A, which is a parent the
+ * declaration wrote or reached through one hop -- for a message naming what an entry composes onto.
+ */
+function nearest(chain: readonly string[], merged: ReadonlyMap<string, Top>): string {
+  const found = chain.find((member) =>
+    chain.every((other) => {
+      const value = merged.get(other);
+      return other === member || value === undefined || !supertypesOf(value).includes(member);
+    }),
+  );
+  return found ?? chain[0] ?? '';
 }
 
 /**
@@ -180,30 +212,30 @@ function shown(name: string, merged: ReadonlyMap<string, TypeDefinition>): strin
  */
 function checkDeclared(
   name: string,
-  def: TypeDefinition,
-  merged: ReadonlyMap<string, TypeDefinition>,
+  def: Top,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
 ): void {
-  const base = def.supertypes[0] ?? '';
+  const base = nearest(supertypesOf(def), merged);
   let writer: string | undefined;
   for (const candidate of localNames) {
     const entry = merged.get(candidate);
     if (entry === undefined || candidate === name) continue;
     const mentioned = new Set<string>();
-    collectBodyNames(entry.body, mentioned);
+    collectBodyNames(entry, mentioned);
     if (mentioned.has(name)) {
       writer = candidate;
       // A declared entry is the author's own line; a minted one is a closing, so keep looking.
-      if (entry.position !== undefined) break;
+      if (options.facts?.get(candidate)?.position !== undefined) break;
     }
   }
   fail(
     options,
-    `'${shown(name, merged)}' composes onto '${shown(base, merged)}', so it is a member of that ` +
+    `'${shown(name, options)}' composes onto '${shown(base, options)}', so it is a member of that ` +
       'family, and a member is declared: a read reports the member it selects, a tag names it and ' +
       'a binding maps it, all by a name an application at a use site does not have (§3.3.4, §8.2). ' +
-      `Declare it -- 'my_name => ${shown(name, merged)}' -- and use that name in place of the ` +
+      `Declare it -- 'my_name => ${shown(name, options)}' -- and use that name in place of the ` +
       'application',
     writer ?? name,
   );
@@ -230,7 +262,7 @@ export interface Member {
  * `compiler/subsumption.ts`'s own `selfNames` resolves an annotation's name before comparing it.
  *
  * **Scans `merged` directly rather than `baseDef.subtypes`.** That index is `link/subtypes.ts`'s
- * own reverse of `TypeDefinition.supertypes`, computed over the *un-dereferenced* name each entry
+ * own reverse of `the chain's `supertypes``, computed over the *un-dereferenced* name each entry
  * recorded (`definitionResolver.ts`'s own composition resolver keeps the author's own spelling
  * there deliberately — "the composed vocabulary is the terminal's while the recorded name is the
  * author's"). `m1 => ba & { ... }` above therefore records `supertypes: ['ba']`, never `'b'`, so
@@ -244,20 +276,33 @@ export interface Member {
  */
 export function directMembers(
   baseName: string,
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
+  excluded: (name: string) => boolean = () => false,
 ): readonly Member[] {
-  const lookup = (n: string): TypeDefinition | undefined => merged.get(n);
+  const lookup = (n: string): Top | undefined => merged.get(n);
   const members: Member[] = [];
   for (const [candidateName, candidate] of merged) {
     if (candidateName === baseName) continue;
-    const candidateBody = candidate.body;
-    if (!isRecordBody(candidateBody)) continue;
+    // A record template IS-A the base is no member: its applications are, each pinned once closed.
+    if (!isRecordBody(candidate) || isOpen(candidate)) continue;
     // An application minted at a use site is a type read where it is written and no member.
-    if (isMintedApplication(candidate)) continue;
-    const direct =
-      (candidate.source !== undefined && terminal(candidate.source.name, lookup) === baseName) ||
-      candidateBody.supertypes.some((ref) => terminal(ref.name, lookup) === baseName);
-    if (direct) members.push({ name: candidateName, body: candidateBody });
+    if (excluded(candidateName)) continue;
+    const chain = supertypesOf(candidate);
+    if (!chain.some((ref) => terminal(ref, lookup) === baseName)) continue;
+    // The direct edge: no other entry of the chain is itself a member below the base. A record
+    // template in the chain is no member (its applications are), so an application of one
+    // composing the base is a direct member through it.
+    const throughAnother = chain.some((ref) => {
+      const end = terminal(ref, lookup);
+      if (end === baseName) return false;
+      const value = merged.get(end);
+      return (
+        value !== undefined &&
+        !isOpen(value) &&
+        supertypesOf(value).some((above) => terminal(above, lookup) === baseName)
+      );
+    });
+    if (!throughAnother) members.push({ name: candidateName, body: candidate });
   }
   return members;
 }
@@ -266,16 +311,17 @@ export function directMembers(
 
 /** A closed base's selector field by name: the base declares it itself. */
 function selectorOf(baseBody: RecordBody): (fieldName: string) => RecordField | undefined {
-  return (fieldName) => baseBody.fields.find((candidate) => candidate.name === fieldName);
+  return (fieldName) => baseBody.fields.entries.get(fieldName);
 }
 
 function checkFamily(
   baseName: string,
   discriminators: readonly string[],
   selectorField: (fieldName: string) => RecordField | undefined,
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
+  minted: (name: string) => boolean,
 ): void {
   const fieldReaders = new Map<string, TypeReader<Value>>();
   let selectorsOk = true;
@@ -301,7 +347,7 @@ function checkFamily(
     return;
   }
 
-  const members = directMembers(baseName, merged);
+  const members = directMembers(baseName, merged, minted);
   const pinned: { readonly name: string; readonly values: readonly Value[] }[] = [];
   for (const member of members) {
     const values = pinsFor(baseName, member, discriminators, fieldReaders, options);
@@ -361,7 +407,7 @@ function pinsFor(
 ): readonly Value[] | undefined {
   const values: Value[] = [];
   for (const fieldName of discriminators) {
-    const field = member.body.fields.find((candidate) => candidate.name === fieldName);
+    const field = member.body.fields.entries.get(fieldName);
     if (field?.role !== 'FIXED' || field.value === undefined) {
       fail(
         options,
@@ -414,7 +460,7 @@ function checkSelectorType(
   baseName: string,
   fieldName: string,
   field: RecordField | undefined,
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   options: CheckRecordExtensionOptions,
 ): TypeReader<Value> | undefined {
   if (field === undefined) {
@@ -430,7 +476,7 @@ function checkSelectorType(
     );
   }
   const terminalDef = terminalDefinition(field.type.name, (n) => merged.get(n));
-  if (terminalDef === undefined || !isAtom(terminalDef.body)) {
+  if (terminalDef === undefined || isTemplateBody(terminalDef) || !isAtom(terminalDef)) {
     fail(
       options,
       `'${baseName}': the discriminator '${fieldName}' is typed '${field.type.name}', which is ` +
@@ -440,12 +486,11 @@ function checkSelectorType(
     );
     return undefined;
   }
-  return buildAtomReader(field.type.name, terminalDef.body);
+  return buildAtomReader(field.type.name, terminalDef);
 }
 
-function isTemplateBase(name: string, merged: ReadonlyMap<string, TypeDefinition>): boolean {
-  const body = merged.get(name)?.body;
-  return body !== undefined && isTemplateBody(body);
+function isTemplateBase(name: string, merged: ReadonlyMap<string, Top>): boolean {
+  return isFamilyBase(merged.get(name));
 }
 
 // ── Reporting ────────────────────────────────────────────────────────────────────────────────

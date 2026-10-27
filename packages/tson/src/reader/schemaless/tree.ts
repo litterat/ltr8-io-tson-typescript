@@ -83,6 +83,7 @@ import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/node
 import { voidNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
 import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
 import { toNfc } from '../../unicode/nfc.js';
+import { isIdentifierText } from '../../unicode/identifier-profile.js';
 import {
   DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
@@ -146,6 +147,15 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    * separate here rather than merged incidentally.
    */
   readonly tokenPolicy?: ScriptPolicy;
+  /**
+   * Whether a record's field names are held to the series' identifier, the name type of a
+   * schemaless record (§2.5, Part 2 §7.7). True, the default, for a document that names no
+   * schema. False for one that does: its field names are values of that schema's record types'
+   * name types, which a reader without the schema cannot know, so it holds them to no name rule
+   * -- neither the identifier grammar nor §8.2's hygiene over the record's names -- and judging
+   * them is the schema's.
+   */
+  readonly judgeFieldNames?: boolean;
 }
 
 /**
@@ -160,9 +170,10 @@ export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}):
   const limit = maxNestingDepthOf(options);
   const identifierPolicy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
   const tokenPolicy = options.tokenPolicy ?? DEFAULT_TOKEN_POLICY;
+  const judgeNames = options.judgeFieldNames ?? true;
   return {
     read: (ctx: ReadContext): Task<Value> =>
-      readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, 0),
+      readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, judgeNames, 0),
   };
 }
 
@@ -487,6 +498,7 @@ function* readNode(
   limit: number,
   identifierPolicy: IdentifierPolicy,
   tokenPolicy: ScriptPolicy,
+  judgeNames: boolean,
   depth: number,
 ): Task<Value> {
   if (depth >= limit) {
@@ -511,6 +523,7 @@ function* readNode(
         limit,
         identifierPolicy,
         tokenPolicy,
+        judgeNames,
         depth,
       );
     case 'map-start':
@@ -522,6 +535,7 @@ function* readNode(
         limit,
         identifierPolicy,
         tokenPolicy,
+        judgeNames,
         depth,
       );
     case 'array-start':
@@ -533,6 +547,7 @@ function* readNode(
         limit,
         identifierPolicy,
         tokenPolicy,
+        judgeNames,
         depth,
       );
     case 'empty-brace':
@@ -554,6 +569,13 @@ function* readNode(
  * A field name stated twice is reported (`DUPLICATE_FIELD`, §2.5) and its value still overwrites
  * the earlier one -- last-value-wins, which `Map.set` applies anyway. §2.5's MUST NOT is Part 1's
  * and needs no schema to see, so it holds on this path exactly as it does under a compiled one.
+ *
+ * **A field name is a value of its record's `name_type`** (§2.5, §7.7), and a schemaless record's
+ * is the series' identifier: the grammar admits any single-line token in name position, so a name
+ * the identifier grammar refuses parses and is refused here, as a token an atom's contract
+ * rejects is (`ATOM_FORM_INVALID`, a resolver error, §8.1). Quoting does not change what a name
+ * is. A refused name takes no part in the record's name-hygiene scope (§8.2): it is no name, and
+ * judging it as one too would report one mistake twice.
  */
 function* readRecord(
   ctx: ReadContext,
@@ -563,10 +585,12 @@ function* readRecord(
   limit: number,
   identifierPolicy: IdentifierPolicy,
   tokenPolicy: ScriptPolicy,
+  judgeNames: boolean,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // record-start
   const fields = new Map<string, Value>();
+  const names: string[] = [];
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'record-end') break;
@@ -581,6 +605,22 @@ function* readRecord(
     // §2.5 settles identity on the NFC form of the decoded name, so the two spellings of one
     // character are one field however each was written, and the map is keyed on that form.
     const fieldName = toNfc(fieldNameEvent.name);
+    // A schema-bound document's names are its schema's to judge (`judgeFieldNames`).
+    if (judgeNames && !isIdentifierText(fieldName)) {
+      ctx
+        .field(fieldName)
+        .report(
+          'ATOM_FORM_INVALID',
+          `'${fieldNameEvent.name}' is not an identifier, so it names no field of a schemaless ` +
+            'record (§2.5, §7.7): a name starts with an XID_Start character and continues with ' +
+            "XID_Continue or '-', in NFC -- a key that is not a name belongs in a map " +
+            "('key => value')",
+          'an identifier',
+          `'${fieldNameEvent.name}'`,
+        );
+    } else {
+      names.push(fieldName);
+    }
     if (fields.has(fieldName)) {
       ctx
         .field(fieldName)
@@ -598,12 +638,13 @@ function* readRecord(
       limit,
       identifierPolicy,
       tokenPolicy,
+      judgeNames,
       depth + 1,
     );
     fields.set(fieldName, value);
   }
   yield* ctx.next(); // record-end
-  reportNameHygiene(ctx, fields.keys(), identifierPolicy);
+  if (judgeNames) reportNameHygiene(ctx, new Set(names), identifierPolicy);
   return recordNode(fields, typeRefName, annotations);
 }
 
@@ -703,6 +744,7 @@ function* readArray(
   limit: number,
   identifierPolicy: IdentifierPolicy,
   tokenPolicy: ScriptPolicy,
+  judgeNames: boolean,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // array-start
@@ -720,6 +762,7 @@ function* readArray(
         limit,
         identifierPolicy,
         tokenPolicy,
+        judgeNames,
         depth + 1,
       ),
     );
@@ -742,6 +785,7 @@ function* readMap(
   limit: number,
   identifierPolicy: IdentifierPolicy,
   tokenPolicy: ScriptPolicy,
+  judgeNames: boolean,
   depth: number,
 ): Task<Value> {
   yield* ctx.next(); // map-start
@@ -756,7 +800,15 @@ function* readMap(
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'map-end') break;
-    const key = yield* readNode(ctx, preserve, limit, identifierPolicy, tokenPolicy, depth + 1);
+    const key = yield* readNode(
+      ctx,
+      preserve,
+      limit,
+      identifierPolicy,
+      tokenPolicy,
+      judgeNames,
+      depth + 1,
+    );
     if (key.kind === 'void') {
       // §2.9: the void sentinel states that a position carries no value, and a map key is a
       // position that must. The map-entry production admits any value in key position, so this
@@ -799,6 +851,7 @@ function* readMap(
       limit,
       identifierPolicy,
       tokenPolicy,
+      judgeNames,
       depth + 1,
     );
     entries.push({ key, value });

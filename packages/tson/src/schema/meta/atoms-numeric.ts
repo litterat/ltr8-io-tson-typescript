@@ -2,6 +2,7 @@
  * The numeric atom families' resolved constraint vocabularies (§5.6, §9): `integer`,
  * `number` (exact decimal), `float32`/`float64`, `rational`, and `complex`.
  */
+import type { TypeBase } from './typedef.js';
 import type { Decimal, Rational } from './algebra.js';
 
 /**
@@ -39,7 +40,7 @@ export interface IntegerSize {
  * Also an {@link Atom} variant: `integer => !integer_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
  */
-export interface IntegerType {
+export interface IntegerType extends TypeBase {
   readonly kind: 'integer_type';
   readonly size?: IntegerSize;
   readonly min?: bigint;
@@ -72,7 +73,7 @@ export type FloatFormat = 'BINARY32' | 'BINARY64';
  * are constructor-application instances (§5.5) whose resolved bodies are this shape with
  * every `allow*` flag `true` and no bounds.
  */
-export interface FloatType {
+export interface FloatType extends TypeBase {
   readonly kind: 'float_type';
   readonly format: FloatFormat;
   readonly min?: Decimal;
@@ -104,7 +105,7 @@ export interface FloatType {
  * Also an {@link Atom} variant: `number => !decimal_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
  */
-export interface DecimalType {
+export interface DecimalType extends TypeBase {
   readonly kind: 'decimal_type';
   readonly min?: Decimal;
   readonly exclusiveMin?: Decimal;
@@ -127,7 +128,7 @@ export interface DecimalType {
  * Also an {@link Atom} variant: `rational => !rational_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
  */
-export interface RationalType {
+export interface RationalType extends TypeBase {
   readonly kind: 'rational_type';
   readonly min?: Rational;
   readonly exclusiveMin?: Rational;
@@ -153,7 +154,7 @@ export type ComplexComponent = 'INTEGER' | 'NUMBER' | 'RATIONAL' | 'FLOAT32' | '
  * Also an {@link Atom} variant: `complex => !complex_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with `component: 'NUMBER'`.
  */
-export interface ComplexType {
+export interface ComplexType extends TypeBase {
   readonly kind: 'complex_type';
   readonly component: ComplexComponent;
 }

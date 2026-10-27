@@ -26,7 +26,7 @@
 import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/errors.js';
 import type { CoreValue, RecordField } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
-import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
+import type { Top, TypeRef } from '../schema/meta/typedef.js';
 import { isApplication } from './wireForm.js';
 import { mapBodyRefs, type TemplateMaterialiser } from './templates.js';
 
@@ -73,14 +73,11 @@ export function renames(
  * dropped because the other channel already published it, is `schemaResolver.ts`'s to decide — it
  * is the one holding both the local and the materialised map.
  */
-export function rewrite(
-  entries: Map<string, TypeDefinition>,
-  renamed: ReadonlyMap<string, string>,
-): void {
-  for (const [key, definition] of entries) {
+export function rewrite(entries: Map<string, Top>, renamed: ReadonlyMap<string, string>): void {
+  for (const [key, value] of entries) {
     entries.set(
       key,
-      mapRefs(definition, (ref) => renameRef(ref, renamed)),
+      mapBodyRefs(value, (ref) => renameRef(ref, renamed)),
     );
   }
 }
@@ -91,20 +88,6 @@ function renameRef(ref: TypeRef, renamed: ReadonlyMap<string, string>): TypeRef 
   return to === undefined
     ? ref
     : { name: to, arguments: ref.arguments, annotations: ref.annotations };
-}
-
-/**
- * One definition with every reference it holds mapped -- `source` and whatever its body carries
- * alike. A local twin of `templates.ts`'s own (unexported) helper of the same shape: both walk
- * through that module's exported `mapBodyRefs`, so a body shape added there needs remembering in
- * exactly one place, not two.
- */
-function mapRefs(definition: TypeDefinition, map: (ref: TypeRef) => TypeRef): TypeDefinition {
-  return {
-    ...definition,
-    ...(definition.source === undefined ? {} : { source: map(definition.source) }),
-    body: mapBodyRefs(definition.body, map),
-  };
 }
 
 /**
@@ -131,8 +114,8 @@ function closedName(
 
 /**
  * Whether any slot of the binding record holds an application -- `type_ref`'s record form, the
- * one shape `desugar.ts` writes for an application standing in a slot. Nested records and arrays
- * recurse, so `[[box<text>]]` and `(box<text> | int32)` are found alike.
+ * one shape `desugar.ts` writes for an application standing in a slot. Nested records, maps and
+ * arrays recurse, so `[[box<text>]]` and `(box<text> | int32)` are found alike.
  */
 function holdsApplication(value: CoreValue): boolean {
   switch (value.kind) {
@@ -143,6 +126,8 @@ function holdsApplication(value: CoreValue): boolean {
     case 'array':
       return value.elements.some((e) => holdsApplication(e.value.coreValue));
     case 'map':
+      // A record's `fields` is a map keyed by name (§5.2): each field's slot is a value here.
+      return value.entries.some((e) => holdsApplication(e.value.value.coreValue));
     case 'empty-brace':
     case 'void':
     case 'token':

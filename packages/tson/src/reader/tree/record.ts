@@ -24,9 +24,10 @@ import {
   fieldOmission,
   groupRefusals,
   isGroupMember,
+  namedFields,
   type FieldGroup,
+  type NamedField,
   type RecordBody,
-  type RecordField,
 } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
 import { voidNode, recordNode } from '../../tree/nodes.js';
@@ -42,7 +43,7 @@ import { valuesEqual } from './equality.js';
 import { abandonedValue, readSchemaLiteral, renderValue } from './support.js';
 
 interface CompiledField {
-  readonly schema: RecordField;
+  readonly schema: NamedField;
   readonly parser: TypeReader<Value>;
   /** Whether this field's own declared type resolves to a `scoped` instance (§7.8) -- whether a nested `!!schema` may stand at this field's value at all. */
   readonly scoped: boolean;
@@ -82,11 +83,11 @@ export function recordTreeReader(
   name: string,
   displayName: string,
   body: RecordBody,
-  resolveField: (field: RecordField) => TypeReader<Value>,
+  resolveField: (field: NamedField) => TypeReader<Value>,
   schemaLocation: SchemaLocation,
   isScopedType: (typeName: string) => boolean,
 ): TypeReader<Value> {
-  const fields: CompiledField[] = body.fields.map((schema) => ({
+  const fields: CompiledField[] = namedFields(body).map((schema) => ({
     schema,
     parser: resolveField(schema),
     scoped: isScopedType(schema.type.name),

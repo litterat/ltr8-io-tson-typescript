@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
+import { subtypesIn } from './model-fixtures.js';
 
 /**
  * `link/recordExtension.ts` -- §5.2's discriminated-family coherence, checked over a whole linked
@@ -32,7 +33,7 @@ describe('the discriminated family (§5.2): direct members index and pin distinc
     `);
     const pet = linked.entries.get('pet');
     expect(pet).toBeDefined();
-    expect(new Set(pet?.subtypes)).toEqual(new Set(['dog', 'cat']));
+    expect(new Set(subtypesIn(pet))).toEqual(new Set(['dog', 'cat']));
   });
 
   it('a grandchild sharing its parent pin is not a collision -- a family discriminates one level (§5.2)', () => {

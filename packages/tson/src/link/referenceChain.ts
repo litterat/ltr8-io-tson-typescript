@@ -39,10 +39,11 @@
  * §11.5 schema-side limits are not independently configurable yet.
  */
 import { DEFAULT_MAX_REFERENCE_CHAIN, referenceChainLimitRefusal } from '../core/limits.js';
-import type { Reference, Scoped, Top, TypeDefinition } from '../schema/meta/typedef.js';
+import type { Reference, Scoped, Top } from '../schema/meta/typedef.js';
+import { isTemplateBody } from '../schema/meta/typedef.js';
 
 /** A single-name lookup -- a finished `Map`'s `get`, or a namespace still being built one declaration at a time (`definitionResolver.ts`'s own `DefinitionGetter`). */
-export type EntryLookup = (name: string) => TypeDefinition | undefined;
+export type EntryLookup = (name: string) => Top | undefined;
 
 /** Where the walk stopped, and whether it stopped on a type rather than on nothing or on itself. */
 interface Stop {
@@ -50,12 +51,10 @@ interface Stop {
   readonly reached: boolean;
 }
 
-// Matches `compile.ts`'s own `isReference` guard, which reads the same way for the same reason:
-// a `Reference`-shaped body is REFERENCE-kind by derivation's own second branch
-// (`schema/meta/typedef.ts`'s `typeKind`), with no further lookup needed to tell it apart from a
-// `Data` body that merely happens to share the literal `'reference'` head.
+// A `Reference` value is REFERENCE-kind by its shape alone (`schema/meta/typedef.ts`'s
+// `entryKind`), with no further lookup needed.
 function isReferenceBody(body: Top): body is Reference {
-  return 'kind' in body && body.kind === 'reference';
+  return !isTemplateBody(body) && body.kind === 'reference';
 }
 
 function walk(
@@ -74,7 +73,7 @@ function walk(
     if (definition === undefined) {
       return { name: current, reached: false };
     }
-    const body = definition.body;
+    const body = definition;
     if (isReferenceBody(body) && body.target.arguments.length === 0) {
       current = body.target.name;
       continue;
@@ -110,7 +109,7 @@ export function terminalDefinition(
   name: string,
   entries: EntryLookup,
   maxHops: number = DEFAULT_MAX_REFERENCE_CHAIN,
-): TypeDefinition | undefined {
+): Top | undefined {
   const stop = walk(name, entries, maxHops);
   return stop.reached ? entries(stop.name) : undefined;
 }
@@ -127,13 +126,11 @@ export function resolvesToConstructor(
   constructor: 'void_type' | 'value_type',
 ): boolean {
   const definition = terminalDefinition(name, entries);
-  return (
-    definition !== undefined && 'kind' in definition.body && definition.body.kind === constructor
-  );
+  return definition !== undefined && !isTemplateBody(definition) && definition.kind === constructor;
 }
 
 function isScopedBody(body: Top): body is Scoped {
-  return 'kind' in body && body.kind === 'scoped';
+  return !isTemplateBody(body) && body.kind === 'scoped';
 }
 
 /**
@@ -146,7 +143,7 @@ function isScopedBody(body: Top): body is Scoped {
  */
 export function resolvesToScoped(name: string, entries: EntryLookup): boolean {
   const definition = terminalDefinition(name, entries);
-  return definition !== undefined && isScopedBody(definition.body);
+  return definition !== undefined && isScopedBody(definition);
 }
 
 // ── §7.2's alias flattening: the written names that mean one declared type ─────────────────────
@@ -159,10 +156,7 @@ export function resolvesToScoped(name: string, entries: EntryLookup): boolean {
 // depend on the others -- `link/` is the one zone both sides already reach).
 
 /** The written names that mean `name`: itself, plus every entry whose own reference chain (§8.3) terminates at it. */
-export function selfNames(
-  name: string,
-  entries: ReadonlyMap<string, TypeDefinition>,
-): ReadonlySet<string> {
+export function selfNames(name: string, entries: ReadonlyMap<string, Top>): ReadonlySet<string> {
   const lookup: EntryLookup = (n) => entries.get(n);
   const names = new Set<string>([name]);
   for (const alias of entries.keys()) {
@@ -174,7 +168,7 @@ export function selfNames(
 /** {@link selfNames}, unioned over every name in `names` -- a family base's own aliases plus every subtype's. */
 export function admitting(
   names: readonly string[],
-  entries: ReadonlyMap<string, TypeDefinition>,
+  entries: ReadonlyMap<string, Top>,
 ): ReadonlySet<string> {
   const all = new Set<string>();
   for (const name of names) {

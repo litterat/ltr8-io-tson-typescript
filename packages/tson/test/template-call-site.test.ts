@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { standardLibrary } from '../src/stdlib/index.js';
-import type { RecordBody } from '../src/schema/meta/bodies.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { NamedField, RecordBody } from '../src/schema/meta/bodies.js';
+import { namedField, namedFields } from '../src/schema/meta/bodies.js';
+import type { LinkedSchema } from '../src/link/link.js';
+import type { Top } from '../src/schema/meta/typedef.js';
+import { applicationOf, isTemplateBody } from '../src/schema/meta/typedef.js';
+import { subtypesIn, supertypesIn } from './model-fixtures.js';
 
 const META = 'https://tson.io/2026/38/m/meta.tn';
 const CORE = 'https://tson.io/2026/38/m/core.tn';
@@ -10,20 +14,28 @@ const CORE = 'https://tson.io/2026/38/m/core.tn';
 let counter = 0;
 
 /** Resolves and links `declarations` against the bundled meta and core, as a fresh schema. */
-function resolve(declarations: string): ReadonlyMap<string, TypeDefinition> {
+function linked(declarations: string): LinkedSchema {
   counter += 1;
   const source =
     `!!id:"https://example.com/call-site-${String(counter)}.tn"\n` +
     `!!meta:"${META}"\n!!import:"${CORE}"\n{\n${declarations}\n}\n`;
-  return standardLibrary().resolveSchema(new TextEncoder().encode(source)).entries;
+  return standardLibrary().resolveSchema(new TextEncoder().encode(source));
 }
 
-function record(entries: ReadonlyMap<string, TypeDefinition>, name: string): RecordBody {
-  const body = entries.get(name)?.body;
-  if (body === undefined || !('fields' in body)) {
+function resolve(declarations: string): ReadonlyMap<string, Top> {
+  return linked(declarations).entries;
+}
+
+function record(entries: ReadonlyMap<string, Top>, name: string): RecordBody {
+  const body = entries.get(name);
+  if (body === undefined || isTemplateBody(body) || body.kind !== 'record') {
     throw new Error(`'${name}' is not a closed record`);
   }
   return body;
+}
+
+function firstField(body: RecordBody): NamedField | undefined {
+  return namedFields(body)[0];
 }
 
 describe('§5.10: an application is checked against the parameter list it binds', () => {
@@ -60,7 +72,7 @@ describe('§5.10: an application is checked against the parameter list it binds'
 describe('§5.7 open modifiers: a parametric modifier takes the name mark its literal spelling takes (§3.2 item 33)', () => {
   it('`w?: T ~ N` closes to an optional default', () => {
     const entries = resolve('retry => <N> { attempts?: integer ~ N }\nused => retry<3>');
-    const field = record(entries, 'used').fields.find((f) => f.name === 'attempts');
+    const field = namedField(record(entries, 'used'), 'attempts');
     expect(field).toMatchObject({ optional: true, role: 'DEFAULT', value: { text: '3' } });
   });
 
@@ -69,8 +81,8 @@ describe('§5.7 open modifiers: a parametric modifier takes the name mark its li
       'inject => <N> { status?: integer = N }\nmarker => <N> { status: integer = N }\n' +
         'a => inject<201>\nb => marker<201>',
     );
-    expect(record(entries, 'a').fields[0]).toMatchObject({ optional: true, role: 'FIXED' });
-    expect(record(entries, 'b').fields[0]).toMatchObject({ optional: false, role: 'FIXED' });
+    expect(firstField(record(entries, 'a'))).toMatchObject({ optional: true, role: 'FIXED' });
+    expect(firstField(record(entries, 'b'))).toMatchObject({ optional: false, role: 'FIXED' });
   });
 
   it('`w: T ~ N` is refused for the reason `w: T ~ v` is', () => {
@@ -84,14 +96,16 @@ describe('§5.10, §8.2: a family member is the application a declaration names'
   const family = 'box => <T> { v: T }\n';
 
   it('a declared application carries the template in its supertypes; a use-site one does not', () => {
-    const entries = resolve(`${family}bt => box<int32>\nholder => { k: box<text> }`);
-    expect(entries.get('bt')?.supertypes).toContain('box');
-    const minted = [...entries].find(
-      ([name, def]) =>
-        name !== 'bt' && def.source?.name === 'box' && def.source.arguments.length > 0,
-    );
-    expect(minted?.[1].supertypes).not.toContain('box');
-    expect(entries.get('box')?.subtypes).toEqual(['bt']);
+    const schema = linked(`${family}bt => box<int32>\nholder => { k: box<text> }`);
+    const entries = schema.entries;
+    expect(supertypesIn(entries.get('bt'))).toContain('box');
+    const minted = [...entries].find(([name]) => {
+      const application = applicationOf(schema.keyAnnotations.get(name));
+      return name !== 'bt' && application?.name === 'box' && application.arguments.length > 0;
+    });
+    expect(minted).toBeDefined();
+    expect(supertypesIn(minted?.[1])).not.toContain('box');
+    expect(subtypesIn(entries.get('box'))).toEqual(['bt']);
   });
 
   const pets =
@@ -112,6 +126,6 @@ describe('§5.10, §8.2: a family member is the application a declaration names'
 
   it('the same application, declared, is a member and is admitted', () => {
     const entries = resolve(`${pets}dogs => dog_of<text>\nkennel => { k: dogs }`);
-    expect(entries.get('dogs')?.supertypes).toContain('pet');
+    expect(supertypesIn(entries.get('dogs'))).toContain('pet');
   });
 });

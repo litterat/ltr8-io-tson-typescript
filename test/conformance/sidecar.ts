@@ -966,11 +966,18 @@ export interface ExpectedSubtyping {
   readonly subtypes: readonly string[];
 }
 
+/** A kind and the names its derived `members` index must list ([TSON-SCHEMA] §4.2, `link-sidecar.tn`'s `membership`). */
+export interface ExpectedMembership {
+  readonly name: string;
+  readonly members: readonly string[];
+}
+
 /** The payload of a `class2/link/` `valid` outcome (`link-sidecar.tn`'s `link_valid`). Each list is optional: a vector states only what it is about. */
 export interface LinkValid {
   readonly binds?: readonly string[];
   readonly disjoint?: readonly ExpectedDisjointness[];
   readonly subtypes?: readonly ExpectedSubtyping[];
+  readonly members?: readonly ExpectedMembership[];
 }
 
 export interface LinkSidecar extends CommonSidecarFields {
@@ -1000,6 +1007,16 @@ function toExpectedSubtyping(dv: DataValue): ExpectedSubtyping {
   };
 }
 
+function toExpectedMembership(dv: DataValue): ExpectedMembership {
+  const fields = recordFields(dv, 'membership');
+  return {
+    name: requiredText(fields, 'name', 'membership'),
+    members: arrayElements(requireField(fields, 'members', 'membership'), 'membership.members').map(
+      (el) => tokenText(el.value, 'membership.members entry'),
+    ),
+  };
+}
+
 /** `dv` is a `link_valid` record (`link-sidecar.tn`): every field OPTIONAL, a vector stating only what it is about. */
 function toLinkValid(dv: DataValue): LinkValid {
   const fields = recordFields(dv, 'link sidecar.valid');
@@ -1018,10 +1035,16 @@ function toLinkValid(dv: DataValue): LinkValid {
     subtypesField === undefined || isAbsent(subtypesField)
       ? undefined
       : arrayElements(subtypesField, 'subtypes').map((el) => toExpectedSubtyping(el.value));
+  const membersField = fields.get('members');
+  const members =
+    membersField === undefined || isAbsent(membersField)
+      ? undefined
+      : arrayElements(membersField, 'members').map((el) => toExpectedMembership(el.value));
   return {
     ...(binds !== undefined ? { binds } : {}),
     ...(disjoint !== undefined ? { disjoint } : {}),
     ...(subtypes !== undefined ? { subtypes } : {}),
+    ...(members !== undefined ? { members } : {}),
   };
 }
 

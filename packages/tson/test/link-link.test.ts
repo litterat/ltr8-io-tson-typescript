@@ -4,7 +4,8 @@ import { linkSchema } from '../src/link/link.js';
 import type { ImportedSchema, Schema } from '../src/compiler/schemaResolver.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
-import type { Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
+import { entry, fieldMapOf, subtypesIn } from './model-fixtures.js';
 
 function ref(name: string): TypeRef {
   return { name, arguments: [], annotations: [] };
@@ -13,26 +14,20 @@ function ref(name: string): TypeRef {
 function def(
   body: Top,
   options: { readonly supertypes?: readonly string[]; readonly subtypes?: readonly string[] } = {},
-): TypeDefinition {
-  return {
-    supertypes: options.supertypes ?? [],
-    subtypes: options.subtypes ?? [],
-    body,
-    annotations: [],
-  };
+): Top {
+  return entry(body, options.supertypes ?? [], options.subtypes ?? []);
 }
 
 const RECORD: Top = {
   kind: 'record',
-  supertypes: [],
-  fields: [],
+  fields: fieldMapOf([]),
   groups: [],
   extension: 'OPEN',
 };
 
 function schema(
   id: string,
-  entries: Iterable<readonly [string, TypeDefinition]>,
+  entries: Iterable<readonly [string, Top]>,
   imports: readonly string[] = [],
 ): Schema {
   return {
@@ -41,6 +36,7 @@ function schema(
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),
+    facts: new Map(),
     bootstrap: false,
   };
 }
@@ -53,7 +49,7 @@ describe('linkSchema: a schema with no imports', () => {
     ]);
     const linked = linkSchema(s);
     expect([...linked.entries.keys()].sort()).toEqual(['top', 'widget']);
-    expect(linked.entries.get('top')?.subtypes).toEqual(['widget']);
+    expect(subtypesIn(linked.entries.get('top'))).toEqual(['widget']);
     expect(linked.origins.get('top')).toBe('x/s.tn');
     expect(linked.origins.get('widget')).toBe('x/s.tn');
   });
@@ -67,16 +63,13 @@ describe('linkSchema: a schema with no imports', () => {
 describe('linkSchema: the diamond case (§2.2.3)', () => {
   // base <- (mid_a, mid_b) <- top: `top` imports both mid_a and mid_b, each of which imports
   // base -- so `base` is reached by two routes and must unify rather than conflict.
-  function linkedBase(): { entries: ReadonlyMap<string, TypeDefinition>; id: string } {
+  function linkedBase(): { entries: ReadonlyMap<string, Top>; id: string } {
     const base = schema('https://x/base.tn', [['base_type', def(RECORD)]]);
     const linked = linkSchema(base);
     return { entries: linked.entries, id: linked.id };
   }
 
-  function importedFrom(linked: {
-    entries: ReadonlyMap<string, TypeDefinition>;
-    id: string;
-  }): ImportedSchema {
+  function importedFrom(linked: { entries: ReadonlyMap<string, Top>; id: string }): ImportedSchema {
     return { entries: linked.entries, originOf: () => linked.id };
   }
 
@@ -113,7 +106,7 @@ describe('linkSchema: the diamond case (§2.2.3)', () => {
 
     // base_type arrived via two routes and must appear exactly once, with both widgets' subtypes unioned.
     expect([...linkedTop.entries.keys()].sort()).toEqual(['base_type', 'widget_a', 'widget_b']);
-    expect([...(linkedTop.entries.get('base_type')?.subtypes ?? [])].sort()).toEqual([
+    expect([...subtypesIn(linkedTop.entries.get('base_type'))].sort()).toEqual([
       'widget_a',
       'widget_b',
     ]);

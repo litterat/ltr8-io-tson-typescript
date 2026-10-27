@@ -813,23 +813,26 @@ describe('a field name is not the multi-line form (§2.5, §7.4)', () => {
   });
 });
 
-describe('a field name is an identifier, for both spellings (§2.5, §7.7)', () => {
-  it('rejects an unquoted field name that is not an identifier (starts with a digit)', () => {
-    expect(() => events('{ 42x: 2 }')).toThrow(TsonParseError);
-    expect(() => events('{ 42x: 2 }')).toThrow(/not an identifier/);
+describe("a field name is any single-line token; what it may be is its record's to say (§2.5, §7.7)", () => {
+  it('admits an unquoted field name the identifier grammar refuses (starts with a digit) -- the reader judges it', () => {
+    expect(events('{ 42x: 2 }')[2]).toEqual(
+      expect.objectContaining({ kind: 'field-name', name: '42x' }),
+    );
   });
 
-  it("rejects the quoted field name '_id' -- '_' is XID_Continue only, so no identifier begins with it (§7.7 rule 3)", () => {
-    // The bare spelling '_id' cannot reach this check at all: '_' is not in the unquoted-token
-    // start set (§7.1), so the lexer reads it as its own void-token followed by a separate
-    // 'id' token, which the §2.8 brace dispatch commits to a map on before a field name is ever
-    // in play. Only the quoted spelling reaches the identifier check as one token.
-    expect(() => events('{ "_id": 1 }')).toThrow(/not an identifier/);
+  it("admits the quoted field name '_id' -- the name type, not the grammar, refuses it (§7.7 rule 3)", () => {
+    // The bare spelling '_id' never reaches name position at all: '_' is not in the
+    // unquoted-token start set (§7.1), so the lexer reads it as its own void-token followed by a
+    // separate 'id' token, which the §2.8 brace dispatch commits to a map on.
+    expect(events('{ "_id": 1 }')[2]).toEqual(
+      expect.objectContaining({ kind: 'field-name', name: '_id' }),
+    );
   });
 
-  it('rejects a quoted field name whose decoded text is not an identifier -- quoting is relief from a lexical accident, never a wider name set', () => {
-    expect(() => events('{ "first name": 1 }')).toThrow(TsonParseError);
-    expect(() => events('{ "first name": 1 }')).toThrow(/not an identifier/);
+  it("admits a quoted field name whose decoded text is not an identifier -- a record's name type decides, at the reader", () => {
+    expect(events('{ "first name": 1 }')[2]).toEqual(
+      expect.objectContaining({ kind: 'field-name', name: 'first name' }),
+    );
   });
 
   it('the same non-identifier key is the honest spelling of a map (§2.5)', () => {
@@ -850,9 +853,9 @@ describe('a field name is an identifier, for both spellings (§2.5, §7.7)', () 
   });
 });
 
-describe('the §2.8 brace dispatch tightens with field-name identity (§2.5, §2.8, §7.7)', () => {
-  it("a first value followed by ':' whose decoded text is not an identifier is a parse error, never a silent fallback to a map", () => {
-    expect(() => events('{ "first name": 1 }')).toThrow(TsonParseError);
+describe('the §2.8 brace dispatch reads the separator, never the name (§2.5, §2.8)', () => {
+  it("a first value followed by ':' is a record whatever its decoded text, never a silent fallback to a map", () => {
+    expect(shape('{ "first name": 1 }')).toContain('RecordStart');
   });
 
   it('rewriting the same key with "=>" reads as the honest map', () => {

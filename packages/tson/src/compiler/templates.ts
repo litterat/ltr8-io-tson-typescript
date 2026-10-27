@@ -90,15 +90,25 @@ import {
 } from '../core/errors.js';
 import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '../core/limits.js';
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
-import type { Token, TypeArgument, TypeDefinition, TypeRef, Top } from '../schema/meta/typedef.js';
-import { isDataBody } from '../link/bodyKind.js';
-import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
-import type { RecordBody } from '../schema/meta/bodies.js';
+import type { Token, TypeArgument, TypeRef, Top } from '../schema/meta/typedef.js';
+import {
+  isFamilyBase,
+  isNamespaceValue,
+  isOpen,
+  isTemplateBody,
+  parametersOf,
+  parentsOf,
+  supertypesOf,
+  typeChain,
+  typeParameters,
+  withChain,
+} from '../schema/meta/typedef.js';
+import { mapFields, type RecordBody } from '../schema/meta/bodies.js';
 import { checkAtomCoherence, isAtom } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
-import type { HeldBody } from './heldBody.js';
+import { heldOf, withParametersOf, type HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
 import {
   inferOne,
@@ -110,7 +120,7 @@ import {
 } from './parameterTypes.js';
 import { terminal } from '../link/referenceChain.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
-import { enumLabelForm } from '../link/enumLabels.js';
+import { enumLabelForm, type EnumEntry } from '../link/enumLabels.js';
 import { lexerFormOfMeta } from './tokenForms.js';
 import type { DefinitionGetter, DefinitionMetaReader } from './resolverTypes.js';
 
@@ -137,7 +147,7 @@ export interface TemplateMaterialiserDeps {
    * absorb its fields, which is the very next thing that happens — an entry only in this
    * materialiser's own memo would be invisible to it.
    */
-  readonly publish: (name: string, definition: TypeDefinition) => void;
+  readonly publish: (name: string, value: Top) => void;
 
   /**
    * How a closed held body becomes an ordinary constructor body — the constructor's own compiled
@@ -192,6 +202,9 @@ export interface TemplateMaterialiserDeps {
    * argument check answers to ({@link TemplateMaterialiser.recheckEarly}).
    */
   readonly resolving?: () => string | undefined;
+
+  /** The constructor an entry's value applies (its `head` fact), by name -- the schema's and the governing meta's. */
+  readonly heads?: (name: string) => string | undefined;
 }
 
 /** Where an application this pass cannot close is reported, entry by entry. */
@@ -211,9 +224,18 @@ export interface MaterialisationFailureReporter {
  * derivation rather than declared.
  */
 export interface MaterialiseResult {
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
-  readonly materialised: ReadonlyMap<string, TypeDefinition>;
+  readonly entries: ReadonlyMap<string, Top>;
+  readonly materialised: ReadonlyMap<string, Top>;
   readonly synthetics: ReadonlySet<string>;
+}
+
+/**
+ * What the materialiser knows of an entry it minted beyond its value: the application the entry
+ * closes (its `@application`, §8.2) and the constructor its value's tag names.
+ */
+export interface MintedFacts {
+  readonly application?: TypeRef;
+  readonly head?: string;
 }
 
 export interface TemplateMaterialiser {
@@ -254,7 +276,7 @@ export interface TemplateMaterialiser {
    * even when `application`'s canonical identity was already claimed by an earlier declared name;
    * only the *first* such claim is what a later generic (undeclared) use site resolves to.
    */
-  closeApplicationAs(name: string, application: TypeRef): TypeDefinition | undefined;
+  closeApplicationAs(name: string, application: TypeRef): Top | undefined;
 
   /**
    * Closes every application reachable from `entries`, returning the rewritten entries alongside
@@ -268,9 +290,12 @@ export interface TemplateMaterialiser {
    * run) — omit it to let the first `TsonSchemaValidationError` propagate.
    */
   materialise(
-    entries: ReadonlyMap<string, TypeDefinition>,
+    entries: ReadonlyMap<string, Top>,
     reporter?: MaterialisationFailureReporter,
   ): MaterialiseResult;
+
+  /** The facts of an entry this materialiser minted (or a declaration it closed), by name. */
+  mintedFacts(name: string): MintedFacts | undefined;
 
   /**
    * The subset of every entry this materialiser has minted so far (on-demand closures included)
@@ -325,7 +350,10 @@ const REFERENCE_HEAD = 'reference';
 
 export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): TemplateMaterialiser {
   /** The entries produced, keyed by their derived internal name, in creation order. */
-  const materialised = new Map<string, TypeDefinition>();
+  const materialised = new Map<string, Top>();
+
+  /** Each minted or closed entry's application and head, by name. */
+  const facts = new Map<string, MintedFacts>();
 
   /** Which of {@link materialised} are synthetic entries rather than instantiation entries. */
   const synthetics = new Set<string>();
@@ -410,7 +438,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function byParameterKind(
     head: string,
-    template: TypeDefinition,
+    template: Top,
     parameters: readonly string[],
     args: readonly TypeArgument[],
   ): readonly TypeArgument[] {
@@ -424,13 +452,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // any substitution: a wrong argument is a verdict at the call (§5.10), and would otherwise
       // surface as an invalid body inside the materialised entry.
       const inferred =
-        deps.metaTypes === undefined || !isHeldBody(template.body)
+        deps.metaTypes === undefined || heldOf(template) === undefined
           ? undefined
           : inferOneParameters(template, deps.metaTypes, (n) => deps.namespaceDefinitions(n));
-      if (inferred !== undefined && isTemplateBody(template.body)) {
+      if (inferred !== undefined) {
         checkArguments(
           head,
-          { ...template, body: { ...template.body, parameters: [...inferred] } },
+          withParametersOf(template, new Map(inferred.map((p) => [p.name, p] as const))),
           classified,
           false,
         );
@@ -444,7 +472,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
 
   function classify(
     head: string,
-    template: TypeDefinition,
+    template: Top,
     parameters: readonly string[],
     args: readonly TypeArgument[],
   ): readonly TypeArgument[] {
@@ -509,7 +537,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   }
 
   /** A name in the schema's namespace first, then in the governing meta's: a slot type is the meta's. */
-  function lookup(name: string): TypeDefinition | undefined {
+  function lookup(name: string): Top | undefined {
     return deps.namespaceDefinitions(name) ?? deps.metaTypes?.(name);
   }
 
@@ -526,14 +554,14 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function checkArguments(
     head: string,
-    template: TypeDefinition,
+    template: Top,
     args: readonly TypeArgument[],
     parametersAreSettled = true,
   ): void {
-    if (!isTemplateBody(template.body) || template.body.parameters.length !== args.length) {
+    const parameters = parametersOf(template);
+    if (parameters.length === 0 || parameters.length !== args.length) {
       return;
     }
-    const parameters = template.body.parameters;
     parameters.forEach((parameter, i) => {
       const argument = args[i];
       if (argument === undefined) return;
@@ -570,7 +598,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   }
 
   /** The parameters of `head` that stand in a type position of its own body, memoised per head. */
-  function typePositions(head: string, template: TypeDefinition): ReadonlySet<string> {
+  function typePositions(head: string, template: Top): ReadonlySet<string> {
     let named = typePositionsOf.get(head);
     if (named === undefined) {
       named =
@@ -592,8 +620,8 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     const boundTerminal = terminal(bound, lookup);
     const admitted =
       argumentTerminal === boundTerminal ||
-      target.supertypes.includes(boundTerminal) ||
-      target.supertypes.includes(bound);
+      supertypesOf(target).includes(boundTerminal) ||
+      supertypesOf(target).includes(bound);
     if (!admitted) {
       throw new TsonSchemaValidationError(
         `'${head}<...>' binds '${parameter}' to '${argument}', which is not a type that IS-A ${bound} -- ` +
@@ -630,11 +658,11 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     const resolve: DefinitionGetter = structural ? (n) => deps.metaTypes?.(n) : (n) => lookup(n);
     const name = terminal(type, resolve);
     const definition = resolve(name);
-    const body = definition?.body;
+    const body = definition;
     if (
       body === undefined ||
-      !('kind' in body) ||
-      isDataBody(body) ||
+      isTemplateBody(body) ||
+      isNamespaceValue(body) ||
       body.kind === 'reference' ||
       !isScalarBody(body)
     ) {
@@ -646,9 +674,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       definition === undefined
         ? 'NONE'
         : enumLabelForm(
-            definition,
+            enumEntry(definition, deps.heads?.(name)),
             (n) => deps.namespaceDefinitions(n) ?? deps.metaTypes?.(n),
             deps.metaTypes,
+            deps.heads,
           );
     const parser = atomParserFor(name, body, form);
     if (parser === undefined) return;
@@ -774,16 +803,17 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     }
     heads.push(head);
     try {
-      if (!isHeldBody(template.body)) {
-        // Every open entry's body is held -- a record, composition or refinement template, a
+      const held = heldOf(template);
+      if (held === undefined) {
+        // Every open entry has a held tree -- a record, composition or refinement template, a
         // sugar form's lift, an alias, and an error placeholder alike. So this is a broken
         // invariant, not an author error and not a gap.
         throw new TsonInternalError(
-          `'${head}' declares type parameters but its body is not a held application -- every open entry's ` +
-            'body is held, and nothing else can be substituted into',
+          `'${head}' declares type parameters but has no held tree -- every open entry has one, and ` +
+            'nothing else can be substituted into',
         );
       }
-      const target = template.body.application.typeRef;
+      const target = held.application.typeRef;
       if (target === undefined) {
         throw new TsonInternalError(
           `'${head}' is a held body whose own application carries no constructor name to dispatch on`,
@@ -794,7 +824,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // hands back whatever that denotes.
       if (target === REFERENCE_HEAD) {
         aliasClosing.add(name);
-        return closeHeldAlias(head, template.body, bind(parameters, args));
+        return closeHeldAlias(head, held, bind(parameters, args));
       }
       // A record template's closure is the instantiation itself. This is the ANONYMOUS
       // (use-site, no owning declaration -- `owners` found none for this identity above) path;
@@ -809,23 +839,24 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         const instantiation = closeHeldInstantiation(
           head,
           template,
-          template.body,
-          args,
+          held,
           bind(parameters, args),
           false,
         );
         materialised.set(name, instantiation);
+        facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
         deps.publish(name, instantiation);
         return name;
       }
-      const formName = closeHeldTemplate(head, template.body, bind(parameters, args));
+      const formName = closeHeldTemplate(head, held, bind(parameters, args));
       if (generated.has(head)) {
         // A generated head closing its own intermediate form: the form entry *is* the answer,
         // and an instantiation naming this head would carry an internal name into identity.
         return formName;
       }
-      const alias = instantiationOf(head, args, formName);
+      const alias = instantiationOf(formName);
       materialised.set(name, alias);
+      facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
       deps.publish(name, alias);
       return name;
     } finally {
@@ -905,49 +936,38 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * A fully-bound application's closure: the instantiation entry itself, whatever constructor the
    * template's held body applies -- a record, an array, a refined atom, anything (§5.10, §8.2,
    * §8.3). Substituting yields the type the author named by writing the application, so there is
-   * nothing for a synthetic-plus-reference hop to buy, and the entry carries the application in
-   * its own `source` the way §8.2 says every instantiation does.
+   * nothing for a synthetic-plus-reference hop to buy; the caller records the application as the
+   * entry's `@application`.
    */
   function closeHeldInstantiation(
     head: string,
-    template: TypeDefinition,
+    template: Top,
     open: HeldBody,
-    args: readonly TypeArgument[],
     bindings: ReadonlyMap<string, TypeArgument>,
     declared: boolean,
-  ): TypeDefinition {
+  ): Top {
     const closed = closeHeld(head, open, bindings);
     const body = closeFamilyClaims(closed.body);
-    return {
-      source: { name: head, arguments: args, annotations: [] },
-      supertypes: instantiationSupertypes(head, template, body, declared),
-      subtypes: template.subtypes,
-      body,
-      annotations: [],
-    };
+    return withChain(body, typeChain(instantiationSupertypes(head, template, body, declared)));
   }
 
   /**
-   * §8.1's "Entry shape": an instantiation entry's `supertypes` is "the template's supertypes,
-   * plus the closed parent an open `record.supertypes` application named (§5.8) and, where the
-   * template is a family base, the template itself (§5.10)" — the last **only where a declaration
-   * names the application** (`declared`): an application written at a use site is a type read
-   * where it is written and no member of the template's family (§5.10, §8.2). `template.supertypes` is the OPEN
-   * template's own, pre-closing value, which never carries the IS-A edge an open composition
-   * operand (`ok => <T> result<T> & { ... }`) only gains once its parameter closes: `result<T>`
-   * substitutes to `result<text>` and closes to a bare reference inside `body`'s own (now-closed)
-   * `record.supertypes` -- `closeHeld` (above) already ran that substitution -- so this function
-   * reads the closed parents from there, folds in each parent's own transitive chain, and appends
-   * `head` itself unless the template composes with `top` (the one case §5.10 exempts: a
-   * constructor refinement in a meta-schema, not a family base).
+   * An instantiation's closed chain (§5.8, §5.10): the template's own closed chain, plus each
+   * closed parent its held parents named once substituted (the parents an open composition
+   * operand like `ok => <T> result<T> & { ... }` only gains once its parameter closes, read off the
+   * closed body's `chain.parents`) with that parent's own chain, and, where the template is a
+   * family base, the template itself -- the last **only where a declaration names the
+   * application** (`declared`): an application written at a use site is a type read where it is
+   * written and no member of the template's family (§5.10, §8.2). A template composing `top` (a
+   * constructor template in a meta-schema) is no family base and adds nothing for itself.
    */
   function instantiationSupertypes(
     head: string,
-    template: TypeDefinition,
+    template: Top,
     body: Top,
     declared: boolean,
   ): readonly string[] {
-    const result: string[] = [...template.supertypes];
+    const result: string[] = [...supertypesOf(template)];
     const seen = new Set(result);
     const addOne = (n: string): void => {
       if (!seen.has(n)) {
@@ -955,16 +975,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         result.push(n);
       }
     };
-    if (isRecordTop(body)) {
-      for (const parentRef of body.supertypes) {
-        addOne(parentRef.name);
-        const parentDef = deps.namespaceDefinitions(parentRef.name);
-        if (parentDef !== undefined) {
-          for (const ancestor of parentDef.supertypes) addOne(ancestor);
-        }
+    for (const parentRef of parentsOf(body)) {
+      addOne(parentRef.name);
+      for (const ancestor of supertypesOf(deps.namespaceDefinitions(parentRef.name))) {
+        addOne(ancestor);
       }
     }
-    if (declared && isTemplateBody(template.body) && template.body.extension === 'ABSTRACT') {
+    if (declared && isFamilyBase(template) && !supertypesOf(template).includes('top')) {
       addOne(head);
     }
     return result;
@@ -1007,16 +1024,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     if (deps.namespaceDefinitions(formName) !== undefined) {
       return formName; // already built, here or by the desugar phase -- one entry per form, schema-wide
     }
-    const definition: TypeDefinition = {
-      source: { name: target, arguments: [], annotations: [] },
-      supertypes: [],
-      subtypes: [],
-      body: closed.body,
-      annotations: [],
-    };
-    materialised.set(formName, definition);
+    materialised.set(formName, closed.body);
     synthetics.add(formName);
-    deps.publish(formName, definition);
+    facts.set(formName, { head: target });
+    deps.publish(formName, closed.body);
     return formName;
   }
 
@@ -1075,6 +1086,14 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           ),
         };
       case 'map':
+        // A record's `fields` is a map keyed by name (§5.2): each field's slot is a value here.
+        return {
+          kind: 'map',
+          entries: value.entries.map((entry) => ({
+            key: entry.key,
+            value: rescope(entry.value, closeApplications(entry.value.value.coreValue)),
+          })),
+        };
       case 'empty-brace':
       case 'void':
       case 'token':
@@ -1093,13 +1112,14 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       if (parameters.length === 0 || parameters.length !== application.arguments.length) return;
       byParameterKind(application.name, template, parameters, application.arguments);
     },
-    closeApplicationAs(name: string, application: TypeRef): TypeDefinition | undefined {
+    closeApplicationAs(name: string, application: TypeRef): Top | undefined {
       const head = application.name;
       const template = deps.namespaceDefinitions(head);
-      if (template === undefined || !isHeldBody(template.body)) {
+      const held = heldOf(template);
+      if (template === undefined || held === undefined) {
         return undefined;
       }
-      const target = template.body.application.typeRef;
+      const target = held.application.typeRef;
       if (target === undefined || target === REFERENCE_HEAD) {
         return undefined; // an alias template composes away and mints nothing to own (§5.10)
       }
@@ -1127,15 +1147,12 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         // instantiation entry, whatever the applied constructor -- no minted twin beside it and
         // no `!reference` hop, record-bodied or not.
         const bindings = bind(parameters, canonical);
-        const instantiation = closeHeldInstantiation(
-          head,
-          template,
-          template.body,
-          canonical,
-          bindings,
-          true,
-        );
+        const instantiation = closeHeldInstantiation(head, template, held, bindings, true);
         materialised.set(name, instantiation);
+        facts.set(name, {
+          application: { name: head, arguments: canonical, annotations: [] },
+          ...(target === RECORD_HEAD ? {} : { head: target }),
+        });
         deps.publish(name, instantiation);
         return instantiation;
       } finally {
@@ -1144,10 +1161,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       }
     },
     materialise(
-      entries: ReadonlyMap<string, TypeDefinition>,
+      entries: ReadonlyMap<string, Top>,
       reporter?: MaterialisationFailureReporter,
     ): MaterialiseResult {
-      const rewritten = new Map<string, TypeDefinition>();
+      const rewritten = new Map<string, Top>();
       for (const [key, definition] of entries) {
         if (typeParameters(definition).length > 0) {
           // A template's own body is open: `chain<T>` inside `chain` awaits substitution and is
@@ -1157,7 +1174,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           continue;
         }
         try {
-          rewritten.set(key, mapRefs(definition, close));
+          rewritten.set(key, mapBodyRefs(definition, close));
         } catch (e) {
           if (!(e instanceof TsonSchemaValidationError)) {
             throw e;
@@ -1178,6 +1195,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         synthetics: new Set(synthetics),
       };
     },
+    mintedFacts(name: string): MintedFacts | undefined {
+      return facts.get(name);
+    },
     syntheticNames(): ReadonlySet<string> {
       return new Set(synthetics);
     },
@@ -1189,11 +1209,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       const refused = new Set<string>();
       for (const check of early) {
         const template = deps.namespaceDefinitions(check.head);
-        if (
-          refused.has(check.declaration) ||
-          template === undefined ||
-          !isTemplateBody(template.body)
-        ) {
+        if (refused.has(check.declaration) || template === undefined || !isOpen(template)) {
           continue;
         }
         try {
@@ -1219,19 +1235,19 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
 
 // ── Structural walks ─────────────────────────────────────────────────────────────────────────
 
+/** An enum entry as `enumLabels.ts` reads it: its value and, where recorded, its head. */
+function enumEntry(value: Top, head: string | undefined): EnumEntry {
+  return head === undefined ? { value } : { value, head };
+}
+
 /** A closed held body, and the wire form it was read from -- the one an entry name derives from. */
 interface Closed {
   readonly wire: CoreValue;
   readonly body: Top;
 }
 
-function isHeldBody(body: Top): body is HeldBody {
-  return 'application' in body;
-}
-
-/** `Top`'s open `Data.kind: string` member defeats a plain `body.kind === 'record'` narrowing (`compiler/compile.ts`'s own note); this guard is this module's own copy. */
 function isRecordTop(body: Top): body is RecordBody {
-  return 'kind' in body && body.kind === 'record';
+  return !isTemplateBody(body) && body.kind === 'record';
 }
 
 /**
@@ -1250,9 +1266,7 @@ function isRecordTop(body: Top): body is RecordBody {
  * named type position close one way.
  */
 export function closeFamilyClaims(body: Top): Top {
-  // `'fields' in body`, not `body.kind === 'record'`: see `mapBodyRefs`'s own note on why a
-  // `Data` body's bare-`string` `kind` cannot be excluded by a literal comparison.
-  if (!('fields' in body)) {
+  if (!isRecordTop(body)) {
     return body;
   }
   const { discriminators, ...rest } = body;
@@ -1264,31 +1278,12 @@ export function closeFamilyClaims(body: Top): Top {
 
 /**
  * The entry for a use-site (undeclared) application whose closure is a synthetic: a reference to
- * that synthetic, sourced to the application itself -- §8.2's other lift channel, distinct from a
- * *declared* application, which is its own instantiation entry with no such hop
- * ({@link closeHeldInstantiation}, {@link TemplateMaterialiser.closeApplicationAs}).
+ * that synthetic, its application recorded as its `@application` by the caller -- §8.2's other
+ * lift channel, distinct from a *declared* application, which is its own instantiation entry with
+ * no such hop ({@link TemplateMaterialiser.closeApplicationAs}).
  */
-function instantiationOf(
-  head: string,
-  args: readonly TypeArgument[],
-  formName: string,
-): TypeDefinition {
-  return {
-    source: { name: head, arguments: args, annotations: [] },
-    supertypes: [],
-    subtypes: [],
-    body: { kind: 'reference', target: { name: formName, arguments: [], annotations: [] } },
-    annotations: [],
-  };
-}
-
-/** One definition with every application inside it closed, `source` and whatever its body carries alike. */
-function mapRefs(definition: TypeDefinition, map: (ref: TypeRef) => TypeRef): TypeDefinition {
-  return {
-    ...definition,
-    ...(definition.source === undefined ? {} : { source: map(definition.source) }),
-    body: mapBodyRefs(definition.body, map),
-  };
+function instantiationOf(formName: string): Top {
+  return { kind: 'reference', target: { name: formName, arguments: [], annotations: [] } };
 }
 
 /**
@@ -1296,46 +1291,36 @@ function mapRefs(definition: TypeDefinition, map: (ref: TypeRef) => TypeRef): Ty
  * `TemplateRegularity` port can walk a body by the same code that rewrites one — a body shape
  * added here must not need remembering in a second place.
  *
- * A held body maps nothing: its references are tokens that have not been resolved against
- * anything yet, and rewriting one would be rewriting a name whose meaning is not settled until
- * substitution supplies the arguments. In practice this branch is unreachable from
- * {@link createTemplateMaterialiser}'s own `materialise`, which never scans an entry whose
- * `parameters` is non-empty — the only entries whose body is ever held — but the case is kept
- * total (never a `TsonInternalError`) so a body shape that adds a held variant later fails no
- * differently than an atom body does.
+ * A held body and a namespace value map nothing: a held body's references are tokens not yet
+ * resolved against anything, and a namespace value's are names its own slots judge.
  */
 export function mapBodyRefs(body: Top, map: (ref: TypeRef) => TypeRef): Top {
-  // Narrowed by which field each shape alone carries, not by `body.kind`: `Data.kind` is a bare
-  // `string` (a meta-schema's own constructor name, unknown to this package in advance), so a
-  // `switch` on the discriminant cannot exclude it from any one case the way it can for a closed
-  // union of literal tags. Every check below names a field only its own shape has, so a `Data`
-  // body -- and a held body, which carries none of them either -- falls through to `return body`
-  // unchanged without needing a separate check for either.
-  if ('fields' in body) {
-    return { ...body, fields: body.fields.map((field) => ({ ...field, type: map(field.type) })) };
+  if (isTemplateBody(body)) return body;
+  switch (body.kind) {
+    case 'record':
+      return {
+        ...body,
+        fields: mapFields(body.fields, (field) => ({ ...field, type: map(field.type) })),
+      };
+    case 'array':
+      return { ...body, elementType: map(body.elementType) };
+    case 'map':
+      return { ...body, keyType: map(body.keyType), valueType: map(body.valueType) };
+    case 'tuple':
+      return {
+        ...body,
+        elements: body.elements.map((element) => ({
+          ...element,
+          elementType: map(element.elementType),
+        })),
+      };
+    case 'choice':
+      return { ...body, variants: body.variants.map(map) };
+    case 'reference':
+      return { ...body, target: map(body.target) };
+    default:
+      return body; // an atom body or a namespace value holds no type reference this walk rewrites
   }
-  if ('elementType' in body) {
-    return { ...body, elementType: map(body.elementType) };
-  }
-  if ('keyType' in body) {
-    return { ...body, keyType: map(body.keyType), valueType: map(body.valueType) };
-  }
-  if ('elements' in body) {
-    return {
-      ...body,
-      elements: body.elements.map((element) => ({
-        ...element,
-        elementType: map(element.elementType),
-      })),
-    };
-  }
-  if ('variants' in body) {
-    return { ...body, variants: body.variants.map(map) };
-  }
-  if ('target' in body) {
-    return { ...body, target: map(body.target) };
-  }
-  return body; // an atom body, a Data body, or a held body holds no type reference this walk rewrites
 }
 
 // ── Instantiation names (§8.2) ───────────────────────────────────────────────────────────────

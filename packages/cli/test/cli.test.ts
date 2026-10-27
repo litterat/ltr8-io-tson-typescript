@@ -837,7 +837,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!meta:"37/meta"\n!!import:"37/core"\n{\nthing => int32\n}\n');
+    expect(io.stdout()).toBe('!!meta:"38/meta"\n!!import:"38/core"\n{\nthing => int32\n}\n');
     expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
   });
 
@@ -848,7 +848,7 @@ describe('strip', () => {
     const code = await main(['strip', '--keep-docs', file]);
     expect(code).toBe(EXIT.OK);
     expect(io.stdout()).toBe(
-      '!!meta:"37/meta"\n!!import:"37/core"\n{\n@doc:"A thing." thing => int32\n}\n',
+      '!!meta:"38/meta"\n!!import:"38/core"\n{\n@doc:"A thing." thing => int32\n}\n',
     );
   });
 

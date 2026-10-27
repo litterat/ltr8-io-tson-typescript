@@ -30,7 +30,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import { directMembers, type Member } from '../../link/recordExtension.js';
 import type { RecordField } from '../../schema/meta/bodies.js';
-import type { TypeDefinition } from '../../schema/meta/typedef.js';
+import { subtypesOf, type Namespace, type Top } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/referenceChain.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { lookingAhead, type JsonReadContext } from '../readContext.js';
@@ -54,24 +54,24 @@ interface Selector {
 export interface DispatchMemberOptions {
   readonly name: string;
   readonly displayName: string;
-  /** The discriminator field names, in declaration order (`RecordBody.discriminators`/`TemplateBody.discriminators`). */
+  /** The discriminator field names, in declaration order (`RecordBody.discriminators`). */
   readonly discriminators: readonly string[];
-  /** The base's own declared fields, when it has any of its own (a closed record); `undefined` for a record-bodied template family base, whose selectors are read off any member instead (§5.10 never reads the held body). */
-  readonly baseFields: readonly RecordField[] | undefined;
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
+  /** The base's own declared fields -- a closed record's, or a record template's (§5.10), whose selectors mention no parameter; `undefined` reads each selector off a member instead. */
+  readonly baseFields: Namespace<RecordField> | undefined;
+  readonly entries: ReadonlyMap<string, Top>;
   readonly schemaLocation: SchemaLocation;
   readonly ctx: CompileContext;
 }
 
 function fieldTypeOf(
   fieldName: string,
-  baseFields: readonly RecordField[] | undefined,
+  baseFields: Namespace<RecordField> | undefined,
   members: readonly Member[],
 ): string {
-  const own = baseFields?.find((f) => f.name === fieldName);
+  const own = baseFields?.entries.get(fieldName);
   if (own !== undefined) return own.type.name;
   for (const member of members) {
-    const field = member.body.fields.find((f) => f.name === fieldName);
+    const field = member.body.fields.entries.get(fieldName);
     if (field !== undefined) return field.type.name;
   }
   throw new Error(
@@ -82,7 +82,7 @@ function fieldTypeOf(
 function selectorsOf(
   ctx: CompileContext,
   discriminators: readonly string[],
-  baseFields: readonly RecordField[] | undefined,
+  baseFields: Namespace<RecordField> | undefined,
   members: readonly Member[],
 ): readonly Selector[] {
   return discriminators.map((fieldName) => {
@@ -105,7 +105,9 @@ function pinsOf(
 ): readonly string[] | undefined {
   const key: string[] = [];
   for (const selector of selectors) {
-    const field = member.body.fields.find((f) => toNfc(f.name) === selector.name);
+    const field = [...member.body.fields.entries].find(
+      ([fieldName]) => toNfc(fieldName) === selector.name,
+    )?.[1];
     if (field?.role !== 'FIXED' || field.value === undefined) return undefined;
     try {
       key.push(identityOfHost(fieldValueOf(ctx, field.type.name, field.value).hostValue));
@@ -155,7 +157,7 @@ export function buildMemberDispatcher(
   const routes = new Map<string, Route>();
   for (const member of members) {
     const definition = entries.get(member.name);
-    const under = [member.name, ...(definition?.subtypes ?? [])];
+    const under = [member.name, ...(definition === undefined ? [] : subtypesOf(definition))];
     for (const written of admitting(under, entries)) {
       if (!routes.has(written))
         routes.set(

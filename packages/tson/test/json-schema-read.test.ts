@@ -25,8 +25,10 @@ import { validateJson, type ValidateJsonResult } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
 import { DEFAULT_IDENTIFIER_POLICY } from '../src/unicode/policy.js';
 import type { LinkedSchema } from '../src/link/link.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top } from '../src/schema/meta/typedef.js';
+import { namespaceOf } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
+import { entry } from './model-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
@@ -41,7 +43,7 @@ const SCHEMA = resolveUserSchema(`
   day        => date
   blob       => bytes
   colour     => !enum [ RED GREEN BLUE ]
-  activity   => !text_enum ["sedentary" "lightly active"]
+  activity   => !text ^ { members: ["sedentary" "lightly active"] }
   country    => !text ^ { length: 2  members: ["AU" "NZ"] }
   flag       => boolean
   nothing    => void
@@ -827,7 +829,7 @@ describe('§8.2 name hygiene', () => {
 // building the `LinkedSchema` directly -- the same technique `templates.test.ts` already uses
 // for `compiler/compile.ts`'s own equivalent branches -- to reach `compileJsonSchema` at all.
 describe('gaps (§8.5, one corner of §5.10)', () => {
-  function handLinked(entries: Record<string, TypeDefinition>): LinkedSchema {
+  function handLinked(entries: Record<string, Top>): LinkedSchema {
     const map = new Map(Object.entries(entries));
     return {
       id: 'test://json-schema-read/gaps.tn',
@@ -835,6 +837,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
       imports: [],
       entries: map,
       keyAnnotations: new Map(),
+      facts: new Map(),
       bootstrap: false,
       origins: new Map([...map.keys()].map((k) => [k, 'test://json-schema-read/gaps.tn'])),
       textEnums: new Set(),
@@ -869,15 +872,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(diagnostic.code).toBe('VALIDATION_ERROR');
   });
 
-  it("a meta-layer 'data' construct -- meta-kernel's own `data` entry composed onto -- is a gap and not a verdict", () => {
+  it("a namespace value -- a meta layer's vocabulary, a value and not a type (§4.1) -- is a gap and not a verdict", () => {
     const compiled = compileJsonSchema(
       handLinked({
-        op: {
-          supertypes: ['top'],
-          subtypes: [],
-          body: { kind: 'operation' },
-          annotations: [],
-        },
+        op: namespaceOf('api', new Map()),
       }),
     );
     const result = validateJson('{}', {
@@ -893,19 +891,14 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it('an unmaterialised generic application is a gap and not a verdict', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        box: {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            kind: 'reference',
-            target: {
-              name: 'pair',
-              arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
-              annotations: [],
-            },
+        box: entry({
+          kind: 'reference',
+          target: {
+            name: 'pair',
+            arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
+            annotations: [],
           },
-          annotations: [],
-        },
+        }),
       }),
     );
     const result = validateJson('{}', {
@@ -921,15 +914,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it('an open template family base with no type of its own is a gap and not a verdict', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        box: {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-            template: '[T]',
-          },
-          annotations: [],
-        },
+        box: entry({
+          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+          template: '[T]',
+        }),
       }),
     );
     const result = validateJson('[]', {
@@ -945,21 +933,11 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it('a schema with unreadable entries still compiles: the gap is per entry, not per schema (aSchemaWithUnreadableEntriesStillCompiles)', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        colour: {
-          supertypes: ['top'],
-          subtypes: [],
-          body: { kind: 'enum', members: ['RED', 'GREEN'], type: 'identifier' },
-          annotations: [],
-        },
-        unreadable: {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-            template: '[T]',
-          },
-          annotations: [],
-        },
+        colour: entry({ kind: 'enum', members: ['RED', 'GREEN'], nameType: 'identifier' }, ['top']),
+        unreadable: entry({
+          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+          template: '[T]',
+        }),
       }),
     );
     // The gap does not stop the schema's other entry from compiling, or from reading cleanly.

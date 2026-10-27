@@ -21,7 +21,7 @@ import {
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
-import type { Annotations, TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Annotations, Top } from '../src/schema/meta/typedef.js';
 import {
   TsonContentHashMismatchError,
   TsonInternalError,
@@ -437,8 +437,9 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
       id,
       meta,
       imports,
-      entries: new Map<string, TypeDefinition>(),
+      entries: new Map<string, Top>(),
       keyAnnotations: new Map<string, Annotations>(),
+      facts: new Map(),
       bootstrap: false,
       origins: new Map<string, string>(),
       textEnums: new Set<string>(),

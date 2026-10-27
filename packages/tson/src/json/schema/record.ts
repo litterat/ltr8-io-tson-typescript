@@ -50,10 +50,11 @@ import {
   isGroupMember,
   type FieldGroup,
   type FieldOmission,
+  namedFields,
+  type NamedField,
   type RecordBody,
-  type RecordField,
 } from '../../schema/meta/bodies.js';
-import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
+import { isTemplateBody, type Atom, type Top } from '../../schema/meta/typedef.js';
 import { toNfc } from '../../unicode/nfc.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -150,8 +151,8 @@ export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): At
       `'${fieldTypeName}' does not resolve -- linking should have refused this before compilation`,
     );
   }
-  const body = definition.body;
-  if ('template' in body && 'parameters' in body) {
+  const body = definition;
+  if (isTemplateBody(body)) {
     throw new Error(`'${fieldTypeName}' is an open template, and carries no atom parser`);
   }
   if (body.kind === 'reference') {
@@ -225,10 +226,10 @@ interface RecordPlan {
   /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose reference chain terminates at it (`link/referenceChain.ts`'s `selfNames`). */
   readonly own: ReadonlySet<string>;
   /** The whole linked schema's namespace, for {@link admissibleTag}'s own two-step resolution question ("does the name resolve at all"). */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
+  readonly entries: ReadonlyMap<string, Top>;
   readonly schemaLocation: SchemaLocation;
   readonly names: readonly string[];
-  readonly fields: readonly RecordField[];
+  readonly fields: readonly NamedField[];
   readonly omitted: readonly FieldOmission[];
   readonly schemaReaders: readonly JsonTypeReader[];
   /** A FIXED field's own decoding reader ({@link fixedFieldReader}); `undefined` at every other field's slot. */
@@ -244,7 +245,7 @@ function buildRecordPlan(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): RecordPlan {
-  const fields = body.fields;
+  const fields = namedFields(body);
   const names: string[] = [];
   const omitted: FieldOmission[] = [];
   const schemaReaders: JsonTypeReader[] = [];

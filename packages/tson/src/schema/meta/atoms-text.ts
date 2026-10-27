@@ -2,6 +2,7 @@
  * The text-shaped atom families' resolved constraint vocabularies (§5.5, §5.7, §9): `text`,
  * `identifier`, `regex`, `uri`, `iri`, `email`, and `uuid`.
  */
+import type { TypeBase } from './typedef.js';
 
 /**
  * The form a text value is put into before any facet or comparison judges it (§5.5, §7.2.1): the
@@ -14,9 +15,10 @@ export type Normalization = 'NONE' | 'NFC' | 'NFKC' | 'NFKC_CASEFOLD' | 'ASCII_C
 /**
  * The Unicode property an identifier profile's Start or Continue set is drawn from (§7.7): the
  * kernel's `identifier_base`. `XID` is `XID_Start`/`XID_Continue`, `ID` is `ID_Start`/`ID_Continue`,
- * and `NONE` draws nothing, leaving the set to the profile's own additions.
+ * `ASCII` their ASCII members (Start `A`-`Z` `a`-`z`, Continue adding `0`-`9` and `_`), and `NONE`
+ * draws nothing, leaving the set to the profile's own additions.
  */
-export type IdentifierBase = 'XID' | 'ID' | 'NONE';
+export type IdentifierBase = 'XID' | 'ID' | 'ASCII' | 'NONE';
 
 /**
  * The meta-kernel's `text_type` constructor — the Unicode code point sequence type every
@@ -38,7 +40,7 @@ export type IdentifierBase = 'XID' | 'ID' | 'NONE';
  * Also an {@link Atom} variant: `text => !text_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every optional field absent.
  */
-export interface TextType {
+export interface TextType extends TypeBase {
   readonly kind: 'text_type';
   readonly minLength?: bigint;
   readonly maxLength?: bigint;
@@ -62,7 +64,7 @@ export interface TextType {
  * (§5.8). `identifier => !identifier_type { continue_add: "-" }` is an instance whose resolved body
  * is `start: XID`, `continue: XID`, `continueAdd: "-"`, `normalization: NFC`.
  */
-export interface IdentifierType {
+export interface IdentifierType extends TypeBase {
   readonly kind: 'identifier_type';
   readonly spec: string;
   readonly minLength?: bigint;
@@ -96,7 +98,7 @@ export interface IdentifierType {
  * instance (§5.5) whose resolved body is this shape with `spec` pinned and every other
  * optional field absent.
  */
-export interface RegexType {
+export interface RegexType extends TypeBase {
   readonly kind: 'regex_type';
   readonly spec: string;
   readonly minLength?: bigint;
@@ -116,7 +118,7 @@ export interface RegexType {
  * `allowFragment` default to `true` and narrow as permissions (§5.7). `normalization` is fixed to
  * `NONE`. Every field is flat, for the same reason {@link RegexType}'s are (§5.8).
  */
-export interface UriType {
+export interface UriType extends TypeBase {
   readonly kind: 'uri_type';
   readonly spec: string;
   readonly minLength?: bigint;
@@ -135,7 +137,7 @@ export interface UriType {
  * RFC 3987, admitting characters beyond US-ASCII. The kernel's `iri => !iri_type { allow_relative:
  * false }` types `atom_specification.spec`; meta's `schema_identity` is a second instance.
  */
-export interface IriType {
+export interface IriType extends TypeBase {
   readonly kind: 'iri_type';
   readonly spec: string;
   readonly minLength?: bigint;
@@ -159,7 +161,7 @@ export interface IriType {
  * instance (§5.5) whose resolved body is this shape with `spec` pinned and every other
  * optional field absent.
  */
-export interface EmailType {
+export interface EmailType extends TypeBase {
   readonly kind: 'email_type';
   readonly spec: string;
   readonly minLength?: bigint;
@@ -179,7 +181,7 @@ export interface EmailType {
  * Also an {@link Atom} variant: `uuid => !uuid_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with `version` absent.
  */
-export interface UuidType {
+export interface UuidType extends TypeBase {
   readonly kind: 'uuid_type';
   readonly version?: bigint;
 }

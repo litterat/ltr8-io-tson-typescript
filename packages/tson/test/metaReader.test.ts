@@ -65,7 +65,7 @@ describe('metaAtomDecoder -- date/time/datetime (§7.4)', () => {
 
 // ── Constructor applications read through the governing meta (§5.5, §5.7) ──────────────────────
 
-describe('createDefinitionMetaReader -- the Revision 37 constructors', () => {
+describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
   const tson = standardLibrary();
   const kernel = tson.schemas.get(canonicalizeIdentity(KERNEL_ID));
   if (kernel === undefined) throw new Error('the standard library registers meta-kernel');
@@ -108,20 +108,15 @@ describe('createDefinitionMetaReader -- the Revision 37 constructors', () => {
     });
   });
 
-  it('an enum pins its type to identifier, a text_enum to text, and an enum_type states its own', () => {
+  it('an enum pins its name type to identifier, and an enum_type states its own (§7.4)', () => {
     expect(body('enum', '[A B]')).toEqual({
       kind: 'enum',
-      type: 'identifier',
+      nameType: 'identifier',
       members: ['A', 'B'],
     });
-    expect(body('text_enum', '["a b" c]')).toEqual({
+    expect(body('enum_type', '{ name_type: kebab  members: [a-b] }')).toEqual({
       kind: 'enum',
-      type: 'text',
-      members: ['a b', 'c'],
-    });
-    expect(body('enum_type', '{ type: kebab  members: [a-b] }')).toEqual({
-      kind: 'enum',
-      type: 'kebab',
+      nameType: 'kebab',
       members: ['a-b'],
     });
   });
@@ -144,7 +139,7 @@ describe('createDefinitionMetaReader -- the Revision 37 constructors', () => {
   it('a field group reads its options, its optional members, and defaults optional to false (§5.11)', () => {
     const group = body(
       'record',
-      '{ fields: [ { name: a  type: text  optional: true } { name: b  type: text  optional: true } ]  groups: [ { members: [[a b]]  optional_members: [a b] } ] }',
+      '{ fields: { a => { type: text  optional: true }  b => { type: text  optional: true } }  groups: [ { members: [[a b]]  optional_members: [a b] } ] }',
     );
     expect(group).toMatchObject({
       kind: 'record',

@@ -390,6 +390,8 @@ function requireRegistered(
 function importedFrom(schema: LinkedSchema): ImportedSchema {
   return {
     entries: schema.entries,
+    facts: schema.facts,
+    keyAnnotations: schema.keyAnnotations,
     originOf: (name) => schema.origins.get(name) ?? schema.id,
     textEnums: schema.textEnums,
     enumForms: schema.enumForms,
@@ -486,6 +488,7 @@ function resolveAgainstRegistry(
       compiledMetaFor(governingMeta, identifierPolicy),
     ),
     metaDefinitions,
+    metaFacts: (name) => governingMeta.facts.get(name),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
   });
@@ -497,6 +500,7 @@ function resolveAgainstRegistry(
   }
   return linkSchema(resolved, {
     structureNamespace: governingMeta.entries,
+    structureFacts: governingMeta.facts,
     resolveImport,
     ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
   });

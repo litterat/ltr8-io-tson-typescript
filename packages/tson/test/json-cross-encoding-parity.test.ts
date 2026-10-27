@@ -100,10 +100,10 @@ const SCHEMA_SOURCE = `
   crate      => { b: box }
   local_box  => { v: declared }
   extern_box => { v: extern }
-  port_label  => !text_enum ["80" "443"]
+  port_label  => !text ^ { members: ["80" "443"] }
   port_slot   => ( port_label | int32 )
   ported      => { p: port_slot }
-  answer      => !text_enum ["true" "false"]
+  answer      => !text ^ { members: ["true" "false"] }
   answer_slot => ( answer | boolean )
   answered    => { a: answer_slot }
   port_text   => ( port_label | text )
@@ -122,7 +122,7 @@ const SCHEMA_SOURCE = `
   pinned      => { h: header_name = Idempotency-Key }
   charset     => !text_type { members: [UTF-8 us-ascii]  normalization: NFKC_CASEFOLD }
   encoded     => { c: charset }
-  safe_header => !enum_type { type: header_name  members: [Accept content-type] }
+  safe_header => !enum_type { name_type: header_name  members: [Accept content-type] }
   screened    => { h: safe_header }
   marks      => {
     nickname?: text

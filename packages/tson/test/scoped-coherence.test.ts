@@ -34,7 +34,7 @@ describe('§7.8: `schemas` requires EXTERN in `scope`', () => {
     const linked = load(
       'any => !scoped { scope: [EXTERN]  schemas: { "https://example.com/a.tn" => _ } }',
     );
-    const body = linked.entries.get('any')?.body;
+    const body = linked.entries.get('any');
     expect(body).toMatchObject({ kind: 'scoped' });
     // Absent and the empty list are the same list, and the reader reads both as "any type".
     expect(

@@ -14,6 +14,7 @@ import type { DurationType, PeriodType } from '../src/schema/meta/atoms-temporal
 import type { IdentifierType, IriType, TextType, UriType } from '../src/schema/meta/atoms-text.js';
 import type { Cidr4Type, Ipv4Type } from '../src/schema/meta/atoms-network.js';
 import type { EnumBody } from '../src/schema/meta/bodies.js';
+import { fieldMapOf } from '../src/schema/meta/bodies.js';
 
 const unbounded: IntegerType = { kind: 'integer_type' };
 
@@ -754,12 +755,12 @@ describe('date_type', () => {
 
 describe('enum', () => {
   it('members may only shrink under refinement', () => {
-    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], type: 'identifier' };
+    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], nameType: 'identifier' };
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], type: 'identifier' }),
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], nameType: 'identifier' }),
     ).toEqual([]);
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], type: 'identifier' })
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], nameType: 'identifier' })
         .length,
     ).toBeGreaterThan(0);
   });
@@ -770,13 +771,13 @@ describe('enum', () => {
     const notAName: EnumBody = {
       kind: 'enum',
       members: ['sedentary', 'lightly active'],
-      type: 'identifier',
+      nameType: 'identifier',
     };
     expect(checkAtomCoherence(notAName)).toEqual([]);
     const valueSet: EnumBody = {
       kind: 'enum',
       members: ['sedentary', 'lightly active'],
-      type: 'text',
+      nameType: 'text',
     };
     expect(checkAtomCoherence(valueSet)).toEqual([]);
   });
@@ -1186,12 +1187,12 @@ describe('date_type', () => {
 
 describe('enum', () => {
   it('members may only shrink under refinement', () => {
-    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], type: 'identifier' };
+    const source: EnumBody = { kind: 'enum', members: ['a', 'b', 'c'], nameType: 'identifier' };
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], type: 'identifier' }),
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b'], nameType: 'identifier' }),
     ).toEqual([]);
     expect(
-      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], type: 'identifier' })
+      checkAtomNarrows(source, { kind: 'enum', members: ['a', 'b', 'd'], nameType: 'identifier' })
         .length,
     ).toBeGreaterThan(0);
   });
@@ -1202,7 +1203,7 @@ describe('enum', () => {
     const notAName: EnumBody = {
       kind: 'enum',
       members: ['sedentary', 'lightly active'],
-      type: 'identifier',
+      nameType: 'identifier',
     };
     expect(checkAtomCoherence(notAName)).toEqual([]);
   });
@@ -1211,7 +1212,7 @@ describe('enum', () => {
     const valueSet: EnumBody = {
       kind: 'enum',
       members: ['sedentary', 'lightly active'],
-      type: 'text',
+      nameType: 'text',
     };
     expect(checkAtomCoherence(valueSet)).toEqual([]);
   });
@@ -1220,16 +1221,16 @@ describe('enum', () => {
     const identifierDup: EnumBody = {
       kind: 'enum',
       members: ['OPEN', 'OPEN'],
-      type: 'identifier',
+      nameType: 'identifier',
     };
     expect(checkAtomCoherence(identifierDup).length).toBeGreaterThan(0);
-    const textDup: EnumBody = { kind: 'enum', members: ['x', 'x'], type: 'text' };
+    const textDup: EnumBody = { kind: 'enum', members: ['x', 'x'], nameType: 'text' };
     expect(checkAtomCoherence(textDup).length).toBeGreaterThan(0);
   });
 
   it("narrows: an enum's type is fixed where it is constructed, so a refinement restates it and never changes it, in either direction (§5.7, §7.4)", () => {
-    const identifier: EnumBody = { kind: 'enum', members: ['a', 'b'], type: 'identifier' };
-    const text: EnumBody = { kind: 'enum', members: ['a', 'b'], type: 'text' };
+    const identifier: EnumBody = { kind: 'enum', members: ['a', 'b'], nameType: 'identifier' };
+    const text: EnumBody = { kind: 'enum', members: ['a', 'b'], nameType: 'text' };
     // Restating the same type is always vacuously fine.
     expect(checkAtomNarrows(identifier, identifier)).toEqual([]);
     expect(checkAtomNarrows(text, text)).toEqual([]);
@@ -1431,7 +1432,9 @@ describe('isAtom', () => {
         normalization: 'NONE',
       }),
     ).toBe(true);
-    expect(isAtom({ kind: 'record', supertypes: [], fields: [], groups: [] })).toBe(false);
+    expect(isAtom({ kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' })).toBe(
+      false,
+    );
     expect(
       isAtom({ kind: 'reference', target: { name: 'x', arguments: [], annotations: [] } }),
     ).toBe(false);

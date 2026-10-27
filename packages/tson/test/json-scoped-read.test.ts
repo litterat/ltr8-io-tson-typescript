@@ -305,7 +305,7 @@ describe('§8.5 the cells an instance does not hold', () => {
 describe('§5.10 extern_of and extern_type each mint their own entry', () => {
   it('three applications differing only in their `schemas` map are three entries, not one', () => {
     const bodies = [...host.entries.values()]
-      .map((d) => d.body)
+
       .filter((b): b is Extract<typeof b, { kind: 'scoped' }> => 'kind' in b && b.kind === 'scoped')
       .filter((b) => b.schemas !== undefined);
     const keys = new Set(bodies.map((b) => JSON.stringify([...(b.schemas ?? [])])));

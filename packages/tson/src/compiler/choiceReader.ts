@@ -52,7 +52,7 @@ import type { SchemaLocation } from '../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import { lookingAhead } from '../reader/context.js';
 import type { ChoiceBody } from '../schema/meta/bodies.js';
-import type { TypeDefinition } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
 import { abandonedValue, type TreeTypeResolver } from '../reader/tree/support.js';
@@ -112,7 +112,7 @@ export function choiceTreeReader(
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
   disjoint: boolean,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   textEnums: ReadonlySet<string> = new Set(),
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
@@ -137,7 +137,7 @@ export function choiceTreeReader(
 
   // Untagged recovery's own `class -> variant` map -- built only when `disjoint` says the classes
   // are distinct, and rebuilt from the classes themselves rather than trusted blindly: a
-  // hand-assembled `TypeDefinition` could in principle carry `disjoint: true` over variants the
+  // hand-assembled entry could in principle carry `disjoint: true` over variants the
   // classes disagree with, and the safe reading of that disagreement is no recovery at all (mirrors
   // the reference implementation's own `ChoiceReader.untaggedRecovery`).
   let byClass: Map<DiscriminationClass, (typeof variants)[number]> | undefined;

@@ -3,6 +3,7 @@
  * `datetime` (all RFC 3339), `duration` (RFC 3339 Appendix A, seconds), and `period` (RFC 3339
  * Appendix A, months).
  */
+import type { TypeBase } from './typedef.js';
 
 /**
  * A calendar date with no time-of-day or offset, mirroring `java.time.LocalDate`'s own
@@ -56,7 +57,7 @@ export interface OffsetDateTime {
  * Also an {@link Atom} variant: `date => !date_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with both bounds absent.
  */
-export interface DateType {
+export interface DateType extends TypeBase {
   readonly kind: 'date_type';
   readonly min?: CalendarDate;
   readonly max?: CalendarDate;
@@ -79,7 +80,7 @@ export interface DateType {
  * Also an {@link Atom} variant: `time => !time_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
  */
-export interface TimeType {
+export interface TimeType extends TypeBase {
   readonly kind: 'time_type';
   readonly min?: OffsetTime;
   readonly max?: OffsetTime;
@@ -95,7 +96,7 @@ export interface TimeType {
  * constructor-application instance (§5.5) whose resolved body is this shape with every
  * field absent.
  */
-export interface DateTimeType {
+export interface DateTimeType extends TypeBase {
   readonly kind: 'datetime_type';
   readonly min?: OffsetDateTime;
   readonly max?: OffsetDateTime;
@@ -130,7 +131,7 @@ export interface DateTimeType {
  * constructor-application instance (§5.5) whose resolved body is this shape with every field
  * absent.
  */
-export interface DurationType {
+export interface DurationType extends TypeBase {
   readonly kind: 'duration_type';
   readonly min?: bigint;
   readonly exclusiveMin?: bigint;
@@ -158,7 +159,7 @@ export interface DurationType {
  * Also an {@link Atom} variant: `period => !period_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
  */
-export interface PeriodType {
+export interface PeriodType extends TypeBase {
   readonly kind: 'period_type';
   readonly min?: bigint;
   readonly exclusiveMin?: bigint;

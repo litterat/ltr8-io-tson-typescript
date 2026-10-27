@@ -43,16 +43,18 @@ import type {
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
 import type { FieldGroup, RecordBody } from '../schema/meta/bodies.js';
+import { namedFields } from '../schema/meta/bodies.js';
 import type { TypeArgument, TypeRef } from '../schema/meta/typedef.js';
+import { parentsOf } from '../schema/meta/typedef.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
 import { lexerFormOfMeta, metaFormOfLexer } from './tokenForms.js';
 
 // ── The vocabulary's own member names ───────────────────────────────────────────────────────────
 
 /**
- * The `name` member. One constant for the two records that spell it alike — `type_ref.name`,
- * carrying a reference, and `record_field.name`, carrying a field name. What tells an application
- * from anything else is never this member alone but its pairing with {@link ARGUMENTS}; see
- * {@link isApplication}.
+ * The `name` member of `type_ref` (and of `template_param`). What tells an application from
+ * anything else is never this member alone but its pairing with {@link ARGUMENTS}; see
+ * {@link isApplication}. A field's name is no member: it is the field's key in `fields`.
  */
 export const NAME = 'name';
 
@@ -71,7 +73,11 @@ export const MEMBERS = 'members';
 export const TYPE = 'type';
 /** `field_group.optional_members` — the members marked `?` within their option (§5.11). */
 export const OPTIONAL_MEMBERS = 'optional_members';
-export const SUPERTYPES = 'supertypes';
+/** `type`'s one field, `chain`, and `type_chain.parents` -- the parents as written (§4.1). */
+export const CHAIN = 'chain';
+export const PARENTS = 'parents';
+/** `record.name_type` -- the identifier family the record's field names are drawn from (§5.2). */
+export const NAME_TYPE = 'name_type';
 /** `record_field.optional` — the name's own `?` (§5.2). */
 export const OPTIONAL = 'optional';
 /** `record_field.voidable` — the type's own `?` (§5.2). */
@@ -112,13 +118,35 @@ export function rescope(original: ScopedValue, rewritten: CoreValue): ScopedValu
 // ── Writing: a resolved value as the wire form it was written in ───────────────────────────────
 
 /**
- * The held body an *error placeholder* carries — `!record { fields: [] }`, the zero-field record
- * both absorbing stand-ins already stood for, now held like every other open body.
- *
- * It exists so that "an open entry's body is held or a `Reference`" has no exceptions. A
- * placeholder keeps its declaration's type parameters on purpose (answering "how many?" with zero
- * sends a downstream `bl<text>` to fix the wrong declaration), which is what makes it the last
- * producer of a parameterised `RecordBody`.
+ * A declared field name as a `field_map` key writes it: unquoted where it is an identifier, and
+ * single-line quoted otherwise (`"@id"`, `"first name"`), or the text would not parse back
+ * (§12.1: a declared field name is any single-line token). Quoting never hides a parameter, whose
+ * name is an identifier.
+ */
+export function declaredName(name: string): DataValue {
+  return {
+    annotations: [],
+    coreValue: tokenValue(name, isIdentifierText(name) ? 'unquoted' : 'single-line'),
+  };
+}
+
+/**
+ * A `field_map` value as the wire writes it: a map from each declared name to its field, in
+ * declaration order, `{}` where there is none.
+ */
+export function fieldsValue(fields: readonly (readonly [string, ScopedValue])[]): CoreValue {
+  if (fields.length === 0) return { kind: 'empty-brace' };
+  return {
+    kind: 'map',
+    entries: fields.map(([name, value]) => ({ key: declaredName(name), value })),
+  };
+}
+
+/**
+ * The held body an *error placeholder* carries — `!record { fields: {} }`, the zero-field record
+ * both absorbing stand-ins stand for: an open empty record, so a placeholder keeps its
+ * declaration's type parameters (answering "how many?" with zero sends a downstream `bl<text>` to
+ * fix the wrong declaration) and closes by the process every record template does.
  */
 export function heldEmptyRecord(): DataValue {
   return {
@@ -126,7 +154,7 @@ export function heldEmptyRecord(): DataValue {
     typeRef: RECORD,
     coreValue: {
       kind: 'record',
-      fields: [{ name: FIELDS, value: scoped({ kind: 'array', elements: [] }) }],
+      fields: [{ name: FIELDS, value: scoped(fieldsValue([])) }],
     },
   };
 }
@@ -159,13 +187,19 @@ export function defaultAnnotationValueEncoder(value: unknown): DataValue {
 }
 
 /**
- * The same `!record { ... }` held body, built from a body that is *already resolved* — the form a
- * composition or refinement template arrives in (§5.7, §5.8), since both absorb fields from a
- * source and so cannot be rewritten before there is a namespace to absorb from.
+ * A record template's held tree, built from the record it is (§5.10) -- what closing substitutes
+ * and reads back through the `record` constructor, so a record template closes by the process
+ * every other held body does.
+ *
+ * Its parents as written travel in `chain.parents`, substituted and closed with everything else,
+ * so an application closing reaches an IS-A edge to the instantiation its own arguments name; the
+ * closed chain is recomputed from them. The record's own `extension` (each application's) is
+ * stated where it is not OPEN, and a non-default `name_type` is written too.
  *
  * **Two producers of the held wire form are fine; two spellings of it are not.** This one and
- * `desugar.ts`'s own record binding both go through {@link refValue} and {@link nameField}, which
- * is what makes them one spelling by construction rather than by two authors agreeing.
+ * `desugar.ts`'s own record binding both go through {@link refValue}, {@link declaredName} and
+ * {@link nameField}, which is what makes them one spelling by construction rather than by two
+ * authors agreeing.
  *
  * A canonical writer's output cannot serve here: a held body's own grammar is
  * unquoted-token-as-parameter, and a canonical writer quotes everything, which would make every
@@ -175,11 +209,8 @@ export function heldRecord(
   body: RecordBody,
   encodeAnnotation: AnnotationValueEncoder = defaultAnnotationValueEncoder,
 ): DataValue {
-  const fields = body.fields.map((f) => {
-    const members: RecordField[] = [
-      nameField(NAME, f.name),
-      { name: TYPE, value: scoped(refValue(f.type)) },
-    ];
+  const fields = namedFields(body).map((f) => {
+    const members: RecordField[] = [{ name: TYPE, value: scoped(refValue(f.type)) }];
     if (f.optional) {
       members.push(nameField(OPTIONAL, 'true'));
     }
@@ -193,26 +224,35 @@ export function heldRecord(
       const form = lexerFormOfMeta(f.value.form);
       members.push({ name: VALUE, value: scoped({ kind: 'token', text: f.value.text, form }) });
     }
-    return scoped(
-      { kind: 'record' as const, fields: members },
-      f.annotations.map((a) => ({
-        name: a.name,
-        ...(a.value === undefined ? {} : { value: encodeAnnotation(a.value) }),
-      })),
-    );
+    return [
+      f.name,
+      scoped(
+        { kind: 'record' as const, fields: members },
+        f.annotations.map((a) => ({
+          name: a.name,
+          ...(a.value === undefined ? {} : { value: encodeAnnotation(a.value) }),
+        })),
+      ),
+    ] as const;
   });
   const groups = body.groups.map((group: FieldGroup) => groupValue(group));
   const binding: RecordField[] = [];
-  if (body.supertypes.length > 0) {
+  const parents = parentsOf(body);
+  if (parents.length > 0) {
     binding.push({
-      name: SUPERTYPES,
+      name: CHAIN,
       value: scoped({
-        kind: 'array',
-        elements: body.supertypes.map((s) => scoped(refValue(s))),
+        kind: 'record',
+        fields: [
+          {
+            name: PARENTS,
+            value: scoped({ kind: 'array', elements: parents.map((p) => scoped(refValue(p))) }),
+          },
+        ],
       }),
     });
   }
-  binding.push({ name: FIELDS, value: scoped({ kind: 'array', elements: fields }) });
+  binding.push({ name: FIELDS, value: scoped(fieldsValue(fields)) });
   if (groups.length > 0) {
     binding.push({ name: GROUPS, value: scoped({ kind: 'array', elements: groups }) });
   }
@@ -227,6 +267,9 @@ export function heldRecord(
         elements: body.discriminators.map((d) => scoped(tokenValue(d))),
       }),
     });
+  }
+  if (body.nameType !== undefined) {
+    binding.push(nameField(NAME_TYPE, body.nameType));
   }
   return { annotations: [], typeRef: RECORD, coreValue: { kind: 'record', fields: binding } };
 }

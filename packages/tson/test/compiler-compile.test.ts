@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { LinkedSchema } from '../src/link/link.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top } from '../src/schema/meta/typedef.js';
 import { compile, read, readValue, validate } from '../src/compiler/compile.js';
 import { TsonInternalError } from '../src/core/errors.js';
 import { fromString, runSync } from '../src/io/bytes.js';
 import { collector } from '../src/core/diagnostic.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
+import { entry, fieldMapOf } from './model-fixtures.js';
 
 /**
  * `compiler/compile.ts` -- Work package 17's own whole-schema `name -> reader` table and the two
@@ -14,13 +15,14 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 // ── A hand-built, cyclic LinkedSchema (no resolver/linker involved) ───────────────────────────
 
-function linkedSchema(entries: ReadonlyMap<string, TypeDefinition>): LinkedSchema {
+function linkedSchema(entries: ReadonlyMap<string, Top>): LinkedSchema {
   return {
     id: 'test://s.tn',
     meta: 'test://m.tn',
     imports: [],
     entries,
     keyAnnotations: new Map(),
+    facts: new Map(),
     bootstrap: false,
     origins: new Map([...entries.keys()].map((name) => [name, 'test://s.tn'])),
     textEnums: new Set(),
@@ -29,47 +31,33 @@ function linkedSchema(entries: ReadonlyMap<string, TypeDefinition>): LinkedSchem
 }
 
 const CYCLIC_SCHEMA = linkedSchema(
-  new Map<string, TypeDefinition>([
-    [
-      'text',
-      {
-        supertypes: [],
-        subtypes: [],
-        annotations: [],
-        body: { kind: 'text_type', normalization: 'NONE' },
-      },
-    ],
+  new Map<string, Top>([
+    ['text', entry({ kind: 'text_type', normalization: 'NONE' })],
     [
       'node',
-      {
-        supertypes: [],
-        subtypes: [],
-        annotations: [],
-        body: {
-          kind: 'record',
-          supertypes: [],
-          groups: [],
-          extension: 'OPEN',
-          fields: [
-            {
-              name: 'value',
-              type: { name: 'text', arguments: [], annotations: [] },
-              optional: false,
-              voidable: false,
-              role: 'FREE',
-              annotations: [],
-            },
-            {
-              name: 'next',
-              type: { name: 'node', arguments: [], annotations: [] },
-              optional: true,
-              voidable: true,
-              role: 'FREE',
-              annotations: [],
-            },
-          ],
-        },
-      },
+      entry({
+        kind: 'record',
+        groups: [],
+        extension: 'OPEN',
+        fields: fieldMapOf([
+          {
+            name: 'value',
+            type: { name: 'text', arguments: [], annotations: [] },
+            optional: false,
+            voidable: false,
+            role: 'FREE',
+            annotations: [],
+          },
+          {
+            name: 'next',
+            type: { name: 'node', arguments: [], annotations: [] },
+            optional: true,
+            voidable: true,
+            role: 'FREE',
+            annotations: [],
+          },
+        ]),
+      }),
     ],
   ]),
 );

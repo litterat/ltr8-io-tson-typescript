@@ -36,9 +36,9 @@
  */
 import { TsonInternalError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
-import { isDataBody, type NonDataTop } from '../../link/bodyKind.js';
+import type { NonHeldTop } from '../../link/bodyKind.js';
 import type { LinkedSchema } from '../../link/link.js';
-import { isTemplateBody, type TypeDefinition } from '../../schema/meta/typedef.js';
+import { isFamilyBase, isTemplateBody, subtypesOf, type Top } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import {
   atomReader,
@@ -137,12 +137,12 @@ function locationOf(
   linked: LinkedSchema,
   name: string,
 ): import('../../core/diagnostic.js').SchemaLocation {
-  const def = linked.entries.get(name);
+  const position = linked.facts.get(name)?.position;
   const schemaId = linked.origins.get(name) ?? linked.id;
   return {
     schemaId,
     pointer: `/${name}`,
-    ...(def?.position === undefined ? {} : { position: def.position }),
+    ...(position === undefined ? {} : { position }),
   };
 }
 
@@ -210,24 +210,20 @@ export function compileJsonSchema(
     foreign: lookup,
   };
 
-  function build(name: string, def: TypeDefinition): JsonTypeReader {
-    const body = def.body;
+  function build(name: string, def: Top): JsonTypeReader {
+    const body = def;
     const location = locationOf(linkedSchema, name);
 
-    if (isTemplateBody(body)) {
-      if (body.extension === undefined) {
-        // Not yet a type at all (§5.10): a template is applied, never read directly. Matches the
-        // pinned Java reference's own `OpenTemplateReader`, which this package has not built as a
-        // dedicated "not a type" refusal yet -- reported as a gap rather than misdiagnosed.
-        return notImplementedReader(name, 'an open template family base');
-      }
+    if (isFamilyBase(body)) {
+      // A record template is a family base (§5.10): a position typed by it dispatches over its
+      // members and never reads the template itself.
       const discriminators = body.discriminators ?? [];
       return discriminators.length > 0
         ? buildMemberDispatcher({
             name,
             displayName: name,
             discriminators,
-            baseFields: undefined,
+            baseFields: body.fields,
             entries: linkedSchema.entries,
             schemaLocation: location,
             ctx: context,
@@ -236,16 +232,22 @@ export function compileJsonSchema(
             name,
             displayName: name,
             entries: linkedSchema.entries,
-            subtypes: def.subtypes,
+            subtypes: subtypesOf(def),
             untagged: undefined,
             schemaLocation: location,
             resolve,
           });
     }
-    if (isDataBody(body)) {
-      return notImplementedReader(name, "a meta-layer 'data' construct, which names no value");
+    if (isTemplateBody(body)) {
+      // Not yet a type at all (§5.10): a template is applied, never read directly. Matches the
+      // pinned Java reference's own `OpenTemplateReader`, which this package has not built as a
+      // dedicated "not a type" refusal yet -- reported as a gap rather than misdiagnosed.
+      return notImplementedReader(name, 'an open template');
     }
-    const nonData: NonDataTop = body;
+    if (body.kind === 'namespace') {
+      return notImplementedReader(name, "a namespace value, a meta layer's vocabulary and no type");
+    }
+    const nonData: NonHeldTop = body;
 
     if (nonData.kind === 'reference') {
       if (nonData.target.arguments.length > 0) {
@@ -296,18 +298,18 @@ export function compileJsonSchema(
                 name,
                 displayName: name,
                 entries: linkedSchema.entries,
-                subtypes: def.subtypes,
+                subtypes: subtypesOf(def),
                 untagged: undefined,
                 schemaLocation: location,
                 resolve,
               });
         }
-        if (constructorBody.extension === 'OPEN' && def.subtypes.length > 0) {
+        if (constructorBody.extension === 'OPEN' && subtypesOf(def).length > 0) {
           return buildTagDispatcher({
             name,
             displayName: name,
             entries: linkedSchema.entries,
-            subtypes: def.subtypes,
+            subtypes: subtypesOf(def),
             untagged: buildRecordReader(name, constructorBody, location, context),
             schemaLocation: location,
             resolve,

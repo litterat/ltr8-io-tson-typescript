@@ -3,7 +3,8 @@
  * `map`, `tuple`, `enum` — plus `choice` (SUM-kind) and the held body of an open template
  * (§4.2, §5.2–§5.4, §5.10, §8.1).
  */
-import type { Annotations, Token, TypeRef } from './typedef.js';
+import type { Annotations, Namespace, Token, TypeBase, TypeRef } from './typedef.js';
+import { FIELD_MAP, namespaceOf } from './typedef.js';
 
 /**
  * The meta-kernel's `field_role` enum (§5.2, §8.1) — what a written value at a field may be:
@@ -18,40 +19,34 @@ import type { Annotations, Token, TypeRef } from './typedef.js';
 export type FieldRole = 'FREE' | 'DEFAULT' | 'FIXED';
 
 /**
- * The meta-kernel's `record_field` record (§5.2, §8.1) — a field answers three independent
+ * The meta-kernel's `record_field` record (§5.2, §8.1) -- a field answers three independent
  * questions, one fact each, plus the value a non-`FREE` role carries:
  *
- * 1. **May the key be omitted?** `optional` — the name's own `?`. `false` (unmarked) says the
- *    key MUST be written; `true` says it MAY be omitted.
- * 2. **May a written value be `_`?** `voidable` — the type's own `?`. `true` admits the void
- *    sentinel at this position, exactly as it does at any other voidable position.
- * 3. **What may a written value be?** `role` — `FREE` (any value of the declared type),
+ * 1. **May the key be omitted?** `optional` -- the name's own `?`.
+ * 2. **May a written value be `_`?** `voidable` -- the type's own `?`.
+ * 3. **What may a written value be?** `role` -- `FREE` (any value of the declared type),
  *    `DEFAULT` (`~`, overridable), or `FIXED` (`=`, a written value MUST equal it).
  *
- * `optional`/`voidable` default to `false` and `role` to `FREE`; all three always appear on this
- * host shape (no notion of "omit when at default" applies to the TypeScript type itself — that is
- * a resolved-output *writer*'s concern) and none is optional here for exactly that reason.
+ * **A field's name is not one of its facts.** It is the field's key in `record.fields`, the
+ * kernel's `field_map` namespace ({@link RecordBody.fields}), so the name is said once, by the
+ * position that declares it.
  *
- * **`value` is one slot, and carries a parameter as readily as a literal.** Inside a template
- * body a token there is a parameter exactly when its text resolves against the enclosing entry's
- * declared type parameters; a closed entry has no parameters for one to resolve into, so the same
- * slot is unambiguous at both ends and needs no separate label (§8.1's shadowing rule). `value` is
- * present exactly when `role` is not `FREE` (§8.1's own invariant over this shape).
+ * `type` is typed `type_kind` by the kernel and holds one bare name, judged a member of the kind
+ * when the schema links; in a record template it may name a parameter or an application still
+ * open over one, which is why the host shape is a {@link TypeRef}.
  *
- * **What omission yields is derived, never stored** — see {@link fieldOmission}, the one function
- * every consumer of this shape calls to answer it, rather than re-deriving the three-way branch
- * by hand. A fresh field-group member always flattens to `optional: true, role: FREE` (§5.11), but
- * a *restated* member may carry `role: 'FIXED'` with a value that is checked when written and
- * never injected (§5.11: "the one pin that does not inject") — this shape alone cannot tell the
- * two apart, which is why {@link fieldOmission} takes an explicit `isGroupMember` flag from a
- * caller that knows the enclosing `RecordBody.groups` rather than guessing it from `role` alone.
+ * **`value` is one slot, and carries a parameter as readily as a literal.** In a record template a
+ * token there is a parameter exactly when its text resolves into the record's `parameters`
+ * (§5.10's shadowing rule); a closed entry has none for one to resolve into, so the slot needs no
+ * label. `= P` is `FIXED` where it is written, as `= 201` is, and closing substitutes the value
+ * without changing a fact. `value` is present exactly when `role` is not `FREE`.
  *
- * `annotations` is always an array, never optional — absent-equals-empty, the same
- * convention {@link TypeDefinition} states for its own fields; a builder with none to carry
- * MUST supply `[]`.
+ * **What omission yields is derived, never stored** -- see {@link fieldOmission}.
+ *
+ * `annotations` is always an array, never optional -- absent-equals-empty; a builder with none to
+ * carry supplies `[]`.
  */
 export interface RecordField {
-  readonly name: string;
   readonly type: TypeRef;
   readonly optional: boolean;
   readonly voidable: boolean;
@@ -289,42 +284,103 @@ export function spellGroup(group: FieldGroup): string {
 export type RecordExtensionType = 'ABSTRACT' | 'FINAL' | 'OPEN';
 
 /**
- * The kernel's `record` constructor's own vocabulary, resolved (§5.2, §8.1) —
- * `access_pattern`/`size_type` are fixed by the constructor (`NAMED`/`FIXED`) and never
- * appear in output, so this shape carries neither.
+ * The kernel's `record` constructor's own vocabulary, resolved (§5.2, §8.1) --
+ * `access_pattern`/`size_type` are fixed by the constructor (`NAMED`/`FIXED`) and never appear in
+ * output, so this shape carries neither.
  *
- * **`supertypes` and `groups` are conceptually OPTIONAL** (`[type_ref]?`, `[field_group]?`)
- * but modelled as bare, always-present arrays: **absent and empty are the same list** here,
- * the convention {@link TypeDefinition}'s own note states in full — a resolver MUST supply
- * `[]` for either field rather than leaving it unset. `fields` is REQUIRED and carries no
- * such normalisation question: an absent `fields` is a violation a reader reports and
- * abandons the construction over, never a value that reaches this shape as `[]`.
+ * **`fields` is the kernel's `field_map`**: a namespace value mapping each field's name to its
+ * facts, in declaration order, which is part of the value. A name is written once, as its key.
+ * The keys are values of the record's {@link nameType} -- `field_name` where neither the record
+ * nor a supertype states one.
  *
- * **`supertypes` holds `type_ref`, not a bare name** (§5.8, §8.1): a parent may still be an open
- * application inside a held template body (`<T> result<T> & { ... }`), and a name cannot carry
- * the arguments that say which instantiation is meant. A closed supertype carries no arguments and
- * is written as a bare token, the same spelling a name had; the *derived* index,
- * {@link TypeDefinition.supertypes}, stays plain names, since it is computed only once every
- * parent is an actual type.
+ * **`groups` is conceptually OPTIONAL** but modelled as a bare, always-present array: absent and
+ * empty are the same list.
  *
  * **`extension` and `discriminators` are the two record-only facts §5.2's definition marks and
  * `=?` selector lower into.** `extension` defaults to `OPEN` (see {@link RecordExtensionType});
- * `discriminators` names the fields (in declaration order) this record's members are selected by
- * — empty when the family, if any, is tag-dispatched rather than member-dispatched — and a
- * non-empty list implies `extension: 'ABSTRACT'` (a record its members are selected from has no
- * values of its own). Both are absent-equals-empty/default the same way `supertypes`/`groups` are.
+ * `discriminators` names the fields (in declaration order) this record's members are selected by,
+ * absent when the family, if any, is tag-dispatched; each is judged by the record's name type.
  *
- * Named `RecordBody`, not `Record` — the kernel's own constructor is literally called
- * `record`, but `Record` is a built-in TypeScript utility type and importing that name here
- * would shadow it for the whole module.
+ * **`parameters`, where present, make the record a template** (§5.10) and a **family base**: a
+ * type a position may name, ABSTRACT by construction, a value there being a value of one of its
+ * declared members, each IS-A it. Its fields are resolved with parameters standing in a field's
+ * `type`, a field's `value`, or an argument of an application in either, as written; its chain
+ * keeps the parents as written in {@link TypeChain.parents}. The record's own `extension` is each
+ * application's.
+ *
+ * Named `RecordBody`, not `Record` -- `Record` is a built-in TypeScript utility type and importing
+ * that name here would shadow it for the whole module.
  */
-export interface RecordBody {
+export interface RecordBody extends TypeBase {
   readonly kind: 'record';
-  readonly supertypes: readonly TypeRef[];
-  readonly fields: readonly RecordField[];
+  readonly fields: Namespace<RecordField>;
   readonly groups: readonly FieldGroup[];
   readonly extension: RecordExtensionType;
   readonly discriminators?: readonly string[];
+  readonly nameType?: string;
+  readonly parameters?: readonly TemplateParam[];
+}
+
+/** The kernel's default field-name family, which stands where a record and its supertypes state none (§5.2). */
+export const FIELD_NAME = 'field_name';
+
+/** A `field_map` value holding `fields`, in the order given (§5.2, §8.1). */
+export function fieldMap(
+  fields: Iterable<readonly [string, RecordField]>,
+  keyAnnotations?: ReadonlyMap<string, Annotations>,
+): Namespace<RecordField> {
+  return namespaceOf(FIELD_MAP, fields, keyAnnotations);
+}
+
+/**
+ * A field seen with its name beside its facts -- a view for code that walks a record's fields in
+ * order, never stored: the name is the field's key in {@link RecordBody.fields}.
+ */
+export interface NamedField extends RecordField {
+  readonly name: string;
+}
+
+/** `body`'s fields, in declaration order, each with its name. */
+export function namedFields(body: Pick<RecordBody, 'fields'>): readonly NamedField[] {
+  return [...body.fields.entries].map(([name, field]) => ({ ...field, name }));
+}
+
+/** The field named `name` in `body`, with its name, or `undefined`. */
+export function namedField(body: Pick<RecordBody, 'fields'>, name: string): NamedField | undefined {
+  const field = body.fields.entries.get(name);
+  return field === undefined ? undefined : { ...field, name };
+}
+
+/** `field` without its name -- the facts a `field_map` holds under it. */
+export function unnamed(field: NamedField): RecordField {
+  const { name: _name, ...facts } = field;
+  void _name;
+  return facts;
+}
+
+/** A `field_map` of `fields`, each keyed by its name, in the order given. */
+export function fieldMapOf(
+  fields: Iterable<NamedField>,
+  keyAnnotations?: ReadonlyMap<string, Annotations>,
+): Namespace<RecordField> {
+  return fieldMap(
+    [...fields].map((field) => [field.name, unnamed(field)] as const),
+    keyAnnotations,
+  );
+}
+
+/** The empty `field_map`. */
+export const NO_FIELDS: Namespace<RecordField> = fieldMap([]);
+
+/** `fields` with each field mapped through `map`, keys, order and key annotations unchanged. */
+export function mapFields(
+  fields: Namespace<RecordField>,
+  map: (field: RecordField, name: string) => RecordField,
+): Namespace<RecordField> {
+  return fieldMap(
+    [...fields.entries].map(([name, field]) => [name, map(field, name)] as const),
+    fields.keyAnnotations,
+  );
 }
 
 /**
@@ -342,7 +398,7 @@ export interface RecordBody {
  * `integer` — no built-in bound ever exceeds a small count in practice, but the field type
  * itself is unbounded.
  */
-export interface ArrayBody {
+export interface ArrayBody extends TypeBase {
   readonly kind: 'array';
   readonly elementType: TypeRef;
   readonly voidable: boolean;
@@ -364,7 +420,7 @@ export interface ArrayBody {
  * maps holding the same entries in a different order are distinct values, and defaults to
  * `false`; output keeps the order written either way (§7.5).
  */
-export interface MapBody {
+export interface MapBody extends TypeBase {
   readonly kind: 'map';
   readonly keyType: TypeRef;
   readonly valueType: TypeRef;
@@ -390,26 +446,22 @@ export interface TupleElement {
  * `elements`' positional order is significant (§5.3: a tuple's positions are fixed-arity and
  * ordered), unlike the supertype-style lists elsewhere in this package.
  */
-export interface TupleBody {
+export interface TupleBody extends TypeBase {
   readonly kind: 'tuple';
   readonly elements: readonly TupleElement[];
 }
 
 /**
- * The kernel's `choice` constructor's own vocabulary, resolved (§4.1, §5.4, §8.1): a
- * SUM-kind body backing every declared choice type (`contact_method => (email | phone |
- * address)` and similar). `variants` is ordered as written.
+ * The kernel's `choice` constructor's own vocabulary, resolved (§4.1, §5.4, §8.1): a SUM-kind
+ * body backing every declared choice type (`contact_method => (email | phone | address)` and
+ * similar). `variants` is ordered as written, each typed `type_kind`.
  *
- * `disjoint` is a resolver-derived index over `variants`, parallel to {@link
- * TypeDefinition.subtypes}: `true` or `false` by discrimination-class distinctness (§5.4).
- * Declarations never set it; on ingest it MUST be discarded and recomputed. It lives here
- * rather than on {@link TypeDefinition} because it is a fact about a variant list, and this is
- * the only body that has one — an entry with no variants has nowhere to put it, so "recorded on
- * every choice and absent on every other definition" is structural rather than a rule a
- * document could break (§8.1). Use {@link choiceDisjoint} to read it off a `TypeDefinition`
- * without narrowing `body` by hand.
+ * `disjoint` is a resolver-derived index over `variants`: `true` or `false` by
+ * discrimination-class distinctness (§5.4). Declarations never set it; on ingest it is discarded
+ * and recomputed. It lives here because it is a fact about a variant list, and this is the only
+ * body that has one. Read it off any value with {@link choiceDisjoint}.
  */
-export interface ChoiceBody {
+export interface ChoiceBody extends TypeBase {
   readonly kind: 'choice';
   readonly variants: readonly TypeRef[];
   readonly disjoint?: boolean;
@@ -417,45 +469,40 @@ export interface ChoiceBody {
 
 /**
  * The kernel's `enum_type` constructor's own vocabulary, resolved (§4.1, §7.4, §8.1): a closed
- * set of labels and the text family they are drawn from. `type` names a text family — an
- * atom-family instance whose constructor IS-A `text_type` — and each member is a value of it,
- * distinct from the others under its equality. `enum` pins `type` to `identifier` and `text_enum`
- * to `text`; an author may write `!enum_type { type: kebab  members: [...] }` for a vocabulary of
- * the schema's own. `type` is fixed where an enum is constructed: a refinement narrows `members`
- * and never `type`.
+ * set of names and the identifier family they are drawn from. `nameType` is typed
+ * `identifier_kind` -- an identifier family -- and each member is a value of it, distinct from the
+ * others under its equality. `enum` pins it to `identifier`; an author may write `!enum_type {
+ * name_type: kebab  members: [...] }` for a vocabulary of the schema's own. `nameType` is fixed
+ * where an enum is constructed: a refinement narrows `members` and never `nameType`. A closed set
+ * of text that is no name is `text_type`'s `members` facet, not an enum.
  *
- * `members` is the kernel's `enum_set` — `!set_type { element_type: text  min_items: 1 }`: kept as
- * an ordered array, matching how {@link TypeDefinition.supertypes}/{@link
- * TypeDefinition.subtypes} already represent conceptual sets — member order is preserved for
- * deterministic output, not semantically significant. Members are held as text whatever `type`
- * is; `type` decides which members may be declared and whether they are names that carry the
- * name-hygiene rules ([TSON-DATA] §8.2).
+ * `members` is the kernel's `enum_set` -- `!set_type { element_type: text  min_items: 1 }`: kept
+ * as an ordered array; member order is preserved for deterministic output, not semantically
+ * significant. Members are held as text whatever `nameType` is.
  *
- * **Two constraints this type does not itself enforce**: at least one member (`min_items: 1` — an
- * empty `!enum []` is a schema-load error), and that every member is a value of `type` (a
- * resolver/compiler concern, not this value model's).
+ * **Two constraints this type does not itself enforce**: at least one member (`min_items: 1`),
+ * and that every member is a value of `nameType` -- the linker's.
  */
-export interface EnumBody {
+export interface EnumBody extends TypeBase {
   readonly kind: 'enum';
-  /** The name of the text family the members are drawn from; `identifier` for `!enum`, `text` for `!text_enum`. */
-  readonly type: string;
+  /** The identifier family the members are names of; `identifier` for `!enum`. */
+  readonly nameType: string;
   readonly members: readonly string[];
 }
 
 /**
- * One parameter of an open entry — the kernel's `template_param` (§5.10, §8.1): its name, the type
+ * One parameter of an open entry -- the kernel's `template_param` (§5.10, §8.1): its name, the type
  * an argument for it is read as, and, for a type parameter, the bound an argument's type must IS-A.
  *
- * **`type` is derived from the positions the parameter stands in**: a type slot gives `type_ref`, a
- * scalar slot of the applied constructor gives that slot's declared type, a routed default or fixed
- * value gives the field's own declared type, and a parameter riding another template's argument
- * list takes that template's recorded type for the position. The parameter's kind is therefore not
- * a separate field: it is a type parameter exactly when `type` is `type_ref`.
+ * **`type` is derived from the positions the parameter stands in**: a type slot gives
+ * `type_kind`, a scalar slot of the applied constructor gives that slot's declared type, a routed
+ * default or fixed value gives the field's own declared type, and a parameter riding another
+ * template's argument list takes that template's recorded type for the position. It is a type
+ * parameter exactly when `type` is `type_kind`.
  *
  * **A declaration may narrow what it derives** (`<T: text, N: int8>`), read by the kind the
- * positions give: on a value parameter it narrows `type`; on a type parameter it is `bound`. The two
- * record different facts — a value's type, and a restriction on which types a reference may name —
- * so `bound` is its own field. A `type` may name an earlier parameter of the same template.
+ * positions give: on a value parameter it narrows `type`; on a type parameter it is `bound`. A
+ * `type` may name an earlier parameter of the same template.
  */
 export interface TemplateParam {
   readonly name: string;
@@ -463,74 +510,32 @@ export interface TemplateParam {
   readonly bound?: TypeRef;
 }
 
+/** The kernel's kind of the types, which a type parameter's `type` names (§4.2, §5.10). */
+export const TYPE_KIND = 'type_kind';
+
 /**
- * The kernel's `template` constructor's own vocabulary, resolved (§5.10, §8.1) — the body of an
- * entry that declares type parameters, which §5.10 calls open. **Holds in both directions**: a
- * {@link TypeDefinition.body} that is one of these means the entry declares type parameters
- * (read them with `typeParameters` in `./typedef.js`), and every entry that declares parameters
- * has one.
+ * The kernel's `template` constructor's own vocabulary, resolved (§5.10, §8.1) -- the held body of
+ * an entry that declares type parameters and applies any constructor but `record` (a record
+ * template is a {@link RecordBody} with `parameters`). Composes `top` alone: it is no type, and
+ * naming it at a type position is an error.
  *
- * **A real change of representation, not a rename.** `template` is the constructor application
- * as written, held as **text** and unread until materialisation substitutes the parameters
- * away — not a value of any constructor's own record shape, and cannot be one: a parameter
- * stands wherever a token stands (`min_items: N` in a value slot as readily as `element_type:
- * T` in a type slot), so a body carrying one is not typed by any constructor's vocabulary until
- * it closes. Writing it as though it already had a shape leaves the two halves disagreeing — a
- * value parameter refuses to read at all, and a type parameter reads as a reference to a type
- * nobody declared.
+ * `template` is the constructor application as written, held as **text** and unread until
+ * materialisation substitutes the parameters away: a parameter stands wherever a token stands
+ * (`min_items: N` in a value slot as readily as `element_type: T` in a type slot), so a body
+ * carrying one is typed by no constructor's vocabulary until it closes.
  *
  * **The text is authoritative; the parsed form is what compares.** Identity is derived from the
- * *parsed* application, never the text itself, so two spellings of one form reduce to one entry
- * and whitespace is free (§5.10, §8.2). Parsing that text — and answering the questions §5.10
- * asks of it (which names it mentions, which applications it writes, at any depth) — is a later
- * work package's concern (`compiler`'s own held-body cache), never this package's: `schema/meta`
- * holds the seat, not the parser, the same boundary {@link SourcePosition} draws against
- * `core/position.ts`'s `Position`.
- *
- * **It never serialises as a value of the vocabulary it will close into**, which is a different
- * claim from not serialising at all. An open entry is carried in resolver output as an ordinary
- * `type_definition` whose `body` is a `!template` instance (§8.1) — `spec/m/meta-resolved.tn`
- * writes `set` as `body: !template { parameters: [T]  template: "!set_type { element_type: T }" }`
- * — so `body: top` holds with no exception, and what a resolved-output consumer never meets is a
- * half-closed `!set_type` with a parameter standing in one of its slots.
+ * parsed application, never the text itself, so whitespace is free (§5.10, §8.2). Parsing it is
+ * the compiler's held-body cache's job, never this package's.
  *
  * **It carries no `kind` tag of its own**, because the kernel's `template` declares only
- * `parameters` and `template` and the wire name rides on the value's own `!type-ref`. That makes
- * it the one member of {@link Top} a `kind` discriminant cannot reach, so code switching on `kind`
- * narrows with `isTemplateBody` (in `./typedef.js`) first, as {@link Top}'s own note says, and the
- * binding that writes it tests for the two fields rather than for a tag.
+ * `parameters` and `template`, so code switching on `kind` narrows with `isTemplateBody` (in
+ * `./typedef.js`) first.
  */
 export interface TemplateBody {
-  /**
-   * The parameters this entry binds, in declaration order — the arity and order an application
-   * binds against (§5.10, §8.1), each with the type its argument is read as. Read the names with
-   * `typeParameters` in `./typedef.js`; the kernel has no stored `TypeDefinition.parameters`
-   * field.
-   */
+  /** The parameters this entry binds, in declaration order, each with the type its argument is read as. */
   readonly parameters: readonly TemplateParam[];
 
-  /**
-   * The constructor application as written, held and unread (§5.10). Comparison for identity
-   * is over this text's *parsed* form, never the text itself, so whitespace is free — but the
-   * parse is a later work package's job, not this package's.
-   */
+  /** The constructor application as written, held and unread (§5.10). */
   readonly template: string;
-
-  /**
-   * Present, and always `'ABSTRACT'`, exactly when a **record-bodied** template is a family base
-   * nameable at a type position (§5.10): absent means the template is no type at all, and the
-   * fact is optional with **no default** so a consumer never has to tell "omitted at its default"
-   * from "not a type" by parsing the held text — the same reasoning `RecordBody.extension`'s
-   * default does NOT apply here.
-   */
-  readonly extension?: RecordExtensionType;
-
-  /**
-   * Present, and then non-empty, exactly where a record-bodied template base's members are selected
-   * by reading these fields rather than by tag — whatever selectors survive erasure of the
-   * template's own parameters, in the order their pins are compared as a tuple (§5.10). Optional
-   * with no default, mirroring {@link extension}: whether it is present says how the family is
-   * dispatched.
-   */
-  readonly discriminators?: readonly string[];
 }

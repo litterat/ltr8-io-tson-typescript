@@ -1,19 +1,20 @@
 /**
- * What an enum's `type` obliges ([TSON-SCHEMA] §7.4): that it names a text family, that each member
- * is a value of it, and that no two members are one value under its equality -- and, because the
- * answer lives in a namespace the body cannot see, where `type` resolves at all.
+ * What an enum's `name_type` obliges ([TSON-SCHEMA] §7.4): that it names a text family, that each
+ * member is a value of it, and that no two members are one value under its equality -- and,
+ * because the answer lives in a namespace the body cannot see, where `name_type` resolves at all.
  *
- * **Why the linker and not the body.** `EnumBody` holds `type` as a name, and what the name denotes
- * -- which family, which parser, which equality -- lives in a namespace the body cannot see: the
- * schema's own, where an author-written `type` resolves, or the governing meta's, where a value the
- * constructor pinned (`enum`'s `type: identifier`) was written. The linked closure is the first
- * place both are present.
+ * **Why the linker and not the body.** `EnumBody` holds `nameType` as a name, and what the name
+ * denotes -- which family, which parser, which equality -- lives in a namespace the body cannot
+ * see: the schema's own, where an author-written `name_type` resolves, or the governing meta's,
+ * where a value the constructor pinned (`enum`'s `name_type: identifier`) was written. The linked
+ * closure is the first place both are present.
  *
- * **Where `type` resolves.** A value `type` takes from a constructor resolves where that
+ * **Where `name_type` resolves.** A value `name_type` takes from a constructor resolves where that
  * constructor is declared: `!enum [A B]` names the kernel's `identifier` whatever the schema
- * declares or imports. An author-written `type` resolves in the schema's own namespace, so a
+ * declares or imports. An author-written `name_type` resolves in the schema's own namespace, so a
  * schema may enumerate labels of a naming vocabulary it declares itself -- and a schema's own
- * `identifier` does not retype `!enum`.
+ * `identifier` does not retype `!enum`. Which constructor an enum applied is its entry's `head`
+ * fact, which the caller supplies with the value.
  *
  * **A text family is an atom-family instance whose constructor IS-A `text_type`**: `text_type`
  * itself and the families that compose it (`identifier_type`, `regex_type`, `uri_type`,
@@ -25,27 +26,34 @@ import { TsonAtomParseError, TsonAtomValidationError } from '../core/errors.js';
 import { isHeldBody } from '../compiler/heldBody.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
-import type { Top, TypeDefinition } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import { identifierProfileOf, type IdentifierProfile } from '../unicode/identifier-profile.js';
 import { nfcFloor } from '../unicode/normalization.js';
-import { isDataBody } from './bodyKind.js';
 import { terminal } from './referenceChain.js';
 
 /** Looks an entry up by name; `undefined` for a name that resolves nowhere. */
-export type EntryGetter = (name: string) => TypeDefinition | undefined;
+export type EntryGetter = (name: string) => Top | undefined;
+
+/** Looks up the constructor an entry's value applies (its `head` fact), by name. */
+export type HeadGetter = (name: string) => string | undefined;
+
+/** An enum entry as these checks read it: its value, and the constructor its tag names. */
+export interface EnumEntry {
+  readonly value: Top;
+  readonly head?: string;
+}
 
 /** An enum's label type: its definition, and the namespace the definition's own names resolve in. */
 export interface EnumLabel {
   /** The terminal entry's name. */
   readonly name: string;
-  readonly definition: TypeDefinition;
+  readonly definition: Top;
   readonly lookup: EntryGetter;
 }
 
-function enumBodyOf(definition: TypeDefinition): EnumBody | undefined {
-  const body = definition.body;
-  return 'kind' in body && !isDataBody(body) && body.kind === 'enum' ? body : undefined;
+function enumBodyOf(value: Top): EnumBody | undefined {
+  return !isTemplateBody(value) && value.kind === 'enum' ? value : undefined;
 }
 
 /**
@@ -54,24 +62,25 @@ function enumBodyOf(definition: TypeDefinition): EnumBody | undefined {
  * that resolves in neither.
  */
 export function enumLabelType(
-  enumeration: TypeDefinition,
+  enumeration: EnumEntry,
   local: EntryGetter,
   structure: EntryGetter | undefined,
+  heads: HeadGetter = () => undefined,
 ): EnumLabel | undefined {
-  const body = enumBodyOf(enumeration);
+  const body = enumBodyOf(enumeration.value);
   if (body === undefined) return undefined;
   const both: EntryGetter = (name) => local(name) ?? structure?.(name);
   if (
     structure !== undefined &&
-    pinned(enumeration, body, both) &&
-    structure(body.type) !== undefined
+    pinned(enumeration.head, body, both, heads) &&
+    structure(body.nameType) !== undefined
   ) {
-    const name = terminal(body.type, structure);
+    const name = terminal(body.nameType, structure);
     const definition = structure(name);
     return definition === undefined ? undefined : { name, definition, lookup: structure };
   }
-  if (local(body.type) !== undefined) {
-    const name = terminal(body.type, local);
+  if (local(body.nameType) !== undefined) {
+    const name = terminal(body.nameType, local);
     const definition = local(name);
     return definition === undefined ? undefined : { name, definition, lookup: both };
   }
@@ -79,35 +88,34 @@ export function enumLabelType(
 }
 
 /**
- * Whether `body.type` is the value `enumeration`'s constructor pins -- found through its `source`,
+ * Whether `body.nameType` is the value the enum's constructor pins -- found through its `head`,
  * through a template's held body to the constructor it applies (an entry instantiating `names =>
- * <M> !enum [a b M]` records the template as its source and not `enum`), and through an enum entry
+ * <M> !enum [a b M]` records the template as its head and not `enum`), and through an enum entry
  * it refines to the constructor that entry applied.
  */
-function pinned(enumeration: TypeDefinition, body: EnumBody, lookup: EntryGetter): boolean {
-  let head = enumeration.source?.name;
+function pinned(
+  first: string | undefined,
+  body: EnumBody,
+  lookup: EntryGetter,
+  heads: HeadGetter,
+): boolean {
+  let head = first;
   const seen = new Set<string>();
   while (head !== undefined && !seen.has(head)) {
     seen.add(head);
     const constructor = lookup(head);
     if (constructor === undefined) return false;
-    const held: Top = constructor.body;
-    if (isTemplateBody(held)) {
-      head = isHeldBody(held) ? held.application.typeRef : undefined;
+    if (isTemplateBody(constructor)) {
+      head = isHeldBody(constructor) ? constructor.application.typeRef : undefined;
       continue;
     }
-    if (!('kind' in held) || isDataBody(held)) return false;
-    if (held.kind === 'enum') {
-      head = constructor.source?.name;
+    if (constructor.kind === 'enum') {
+      head = heads(head);
       continue;
     }
-    return (
-      held.kind === 'record' &&
-      held.fields.some(
-        (field) =>
-          field.name === 'type' && field.role === 'FIXED' && field.value?.text === body.type,
-      )
-    );
+    if (constructor.kind !== 'record') return false;
+    const field = constructor.fields.entries.get('name_type');
+    return field?.role === 'FIXED' && field.value?.text === body.nameType;
   }
   return false;
 }
@@ -122,10 +130,11 @@ const TEXT_FAMILIES: ReadonlySet<string> = new Set([
   'email_type',
 ]);
 
-/** The kind of the atom body `definition` holds, or `undefined` for a held template, a Data body or a non-atom. */
-function bodyKindOf(definition: TypeDefinition): string | undefined {
-  const body = definition.body;
-  return 'kind' in body && !isDataBody(body) ? body.kind : undefined;
+/** The kind of the atom body `definition` holds, or `undefined` for a held template or a namespace value. */
+function bodyKindOf(definition: Top): string | undefined {
+  return isTemplateBody(definition) || definition.kind === 'namespace'
+    ? undefined
+    : definition.kind;
 }
 
 /**
@@ -134,12 +143,13 @@ function bodyKindOf(definition: TypeDefinition): string | undefined {
  * reported on its own -- so every per-name rule still applies.
  */
 export function membersAreNames(
-  enumeration: TypeDefinition,
+  enumeration: EnumEntry,
   local: EntryGetter,
   structure: EntryGetter | undefined,
+  heads?: HeadGetter,
 ): boolean {
-  if (enumBodyOf(enumeration) === undefined) return false;
-  const label = enumLabelType(enumeration, local, structure);
+  if (enumBodyOf(enumeration.value) === undefined) return false;
+  const label = enumLabelType(enumeration, local, structure, heads);
   return label === undefined ? true : bodyKindOf(label.definition) === 'identifier_type';
 }
 
@@ -150,14 +160,15 @@ export function membersAreNames(
  * each refused or reported on its own.
  */
 export function enumLabelForm(
-  enumeration: TypeDefinition,
+  enumeration: EnumEntry,
   local: EntryGetter,
   structure: EntryGetter | undefined,
+  heads?: HeadGetter,
 ): Normalization {
-  const label = enumLabelType(enumeration, local, structure);
+  const label = enumLabelType(enumeration, local, structure, heads);
   if (label === undefined) return 'NONE';
-  const body = label.definition.body;
-  if (!('kind' in body) || isDataBody(body)) return 'NONE';
+  const body = label.definition;
+  if (isTemplateBody(body) || body.kind === 'namespace') return 'NONE';
   switch (body.kind) {
     case 'text_type':
     case 'identifier_type':
@@ -184,13 +195,14 @@ export interface EnumLabelProfile {
  * the label type is an identifier family.
  */
 export function enumLabelProfile(
-  enumeration: TypeDefinition,
+  enumeration: EnumEntry,
   local: EntryGetter,
   structure: EntryGetter | undefined,
+  heads?: HeadGetter,
 ): EnumLabelProfile | undefined {
-  const label = enumLabelType(enumeration, local, structure);
-  const body = label?.definition.body;
-  if (body === undefined || !('kind' in body) || isDataBody(body)) return undefined;
+  const label = enumLabelType(enumeration, local, structure, heads);
+  const body = label?.definition;
+  if (body === undefined || isTemplateBody(body) || body.kind === 'namespace') return undefined;
   if (body.kind !== 'identifier_type') return undefined;
   return { profile: identifierProfileOf(body), form: body.normalization };
 }
@@ -207,9 +219,10 @@ export interface EnumLabelViolation {
  * enum, in `localNames`' order.
  */
 export function checkEnumLabels(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: Iterable<string>,
   structure: EntryGetter | undefined,
+  heads: HeadGetter = () => undefined,
 ): EnumLabelViolation[] {
   const violations: EnumLabelViolation[] = [];
   const local: EntryGetter = (name) => merged.get(name);
@@ -217,7 +230,10 @@ export function checkEnumLabels(
     const definition = merged.get(name);
     const body = definition === undefined ? undefined : enumBodyOf(definition);
     if (definition === undefined || body === undefined) continue;
-    const message = checkEnum(name, definition, body, local, structure);
+    const head = heads(name);
+    const entry: EnumEntry =
+      head === undefined ? { value: definition } : { value: definition, head };
+    const message = checkEnum(name, entry, body, local, structure, heads);
     if (message !== undefined) violations.push({ entry: name, message });
   }
   return violations;
@@ -225,26 +241,27 @@ export function checkEnumLabels(
 
 function checkEnum(
   name: string,
-  definition: TypeDefinition,
+  definition: EnumEntry,
   body: EnumBody,
   local: EntryGetter,
   structure: EntryGetter | undefined,
+  heads: HeadGetter,
 ): string | undefined {
-  const label = enumLabelType(definition, local, structure);
+  const label = enumLabelType(definition, local, structure, heads);
   if (label === undefined) {
-    return `'${name}': its type '${body.type}' names nothing in scope (§7.4)`;
+    return `'${name}': its name_type '${body.nameType}' names nothing in scope (§7.4)`;
   }
   const kind = bodyKindOf(label.definition);
   if (kind === undefined || !TEXT_FAMILIES.has(kind)) {
     return (
-      `'${name}': its type '${body.type}' is not a text family -- an enum's labels are drawn ` +
+      `'${name}': its name_type '${body.nameType}' is not a text family -- an enum's labels are drawn ` +
       'from an atom-family instance whose constructor IS-A text_type (§7.4). A value set on ' +
       "another family is that family's own 'members' facet: '!integer ^ { members: [80 443] }', " +
       'not an enum'
     );
   }
-  const labelBody = label.definition.body;
-  if (!('kind' in labelBody) || isDataBody(labelBody)) return undefined;
+  const labelBody = label.definition;
+  if (isTemplateBody(labelBody) || labelBody.kind === 'namespace') return undefined;
   const parser = atomParserFor(label.name, labelBody);
   if (parser === undefined) return undefined; // a text family with no parser: nothing to judge by
   const names = kind === 'identifier_type';
@@ -258,9 +275,9 @@ function checkEnum(
         throw error;
       }
       return (
-        `'${name}': member '${member}' is not a value of its type '${body.type}': ` +
+        `'${name}': member '${member}' is not a value of its name_type '${body.nameType}': ` +
         error.message +
-        (names ? " -- members that are any text are a '!text_enum [...]'" : '')
+        (names ? " -- a closed set of text that is no name is '!text ^ { members: [...] }'" : '')
       );
     }
     // Text values are one when they are NFC-equal, each in its type's form (§5.5).
@@ -268,8 +285,8 @@ function checkEnum(
     const earlier = seen.get(identity);
     if (earlier !== undefined) {
       return (
-        `'${name}': members '${earlier}' and '${member}' are one value of its type ` +
-        `'${body.type}' (§7.4)`
+        `'${name}': members '${earlier}' and '${member}' are one value of its name_type ` +
+        `'${body.nameType}' (§7.4)`
       );
     }
     seen.set(identity, member);

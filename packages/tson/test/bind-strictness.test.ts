@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { field, lazy, record } from '../src/bind/combinators.js';
 import { checkBinding, checkRecordBinding } from '../src/bind/strictness.js';
 import { TsonBindMismatchError } from '../src/core/errors.js';
-import type { RecordField } from '../src/schema/meta/bodies.js';
-import type { TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
+import { fieldMapOf } from '../src/schema/meta/bodies.js';
+import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
 import type { AtomBinding, Binding, RecordBinding } from '../src/bind/binding.js';
 
 /**
@@ -25,7 +26,7 @@ function typeRef(name: string): TypeRef {
 function recordField(
   name: string,
   marks: { optional?: boolean; voidable?: boolean; role?: RecordField['role'] } = {},
-): RecordField {
+): NamedField {
   return {
     name,
     type: typeRef('int32'),
@@ -147,20 +148,9 @@ describe('checkRecordBinding -- every slot needs to fill a field', () => {
   });
 });
 
-describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowing its body', () => {
-  function recordDefinition(fields: readonly RecordField[]): TypeDefinition {
-    return {
-      supertypes: [],
-      subtypes: [],
-      body: {
-        kind: 'record',
-        supertypes: [],
-        fields,
-        groups: [],
-        extension: 'OPEN',
-      },
-      annotations: [],
-    };
+describe("checkBinding -- dispatches from an entry's value without hand-narrowing it", () => {
+  function recordDefinition(fields: readonly NamedField[]): Top {
+    return { kind: 'record', fields: fieldMapOf(fields), groups: [], extension: 'OPEN' };
   }
 
   it('checks a record definition against a record binding', () => {
@@ -188,12 +178,7 @@ describe('checkBinding -- dispatches from a TypeDefinition without hand-narrowin
   });
 
   it('is a no-op for a non-record definition (e.g. an atom-kind type)', () => {
-    const definition: TypeDefinition = {
-      supertypes: [],
-      subtypes: [],
-      body: { kind: 'value_type' },
-      annotations: [],
-    };
+    const definition: Top = { kind: 'value_type' };
     expect(() => {
       checkBinding('void', definition, INT);
     }).not.toThrow();

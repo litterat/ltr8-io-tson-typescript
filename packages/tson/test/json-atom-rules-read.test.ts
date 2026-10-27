@@ -29,8 +29,9 @@ const LINKED = resolveUserSchema(`
   tags      => { t: set<text> }
   single    => { t: tuple1<text> }
   maybe     => { t: voidable_tuple1<text> }
-  answer    => !text_enum ["true" "false"]
-  survey    => { reply?: answer ~ "true"  agreed?: boolean ~ true }
+  answer    => !text ^ { members: ["true" "false"] }
+  verdict   => !enum [true false unsure]
+  survey    => { reply?: answer ~ "true"  agreed?: boolean ~ true  pick?: verdict }
 }
 `);
 const JSON_SCHEMA = compileJsonSchema(LINKED);
@@ -104,8 +105,8 @@ describe('§6.2, §6.3 containers', () => {
   });
 });
 
-describe('§5.2 a text enum member is a string whatever it spells', () => {
-  it('injects "true" and true as the defaults of a text enum and a boolean', () => {
+describe('§5.2 a closed set of text is strings, and an enum matches on content', () => {
+  it('injects "true" and true as the defaults of a closed set of text and a boolean', () => {
     const result = validateJson('{}', { schema: JSON_SCHEMA, root: 'survey' });
     expect(result.diagnostics).toEqual([]);
     expect(result.value === undefined ? '' : jsonValueToText(result.value)).toBe(
@@ -114,8 +115,8 @@ describe('§5.2 a text enum member is a string whatever it spells', () => {
   });
 
   it('an enum position matches on content, not kind (§5.2): the literal true reaches member "true"', () => {
-    expect(jsonCodes('survey', '{"reply": true}')).toEqual([]);
-    expect(jsonCodes('survey', '{"reply": "false"}')).toEqual([]);
-    expect(jsonCodes('survey', '{"reply": "maybe"}')).not.toEqual([]);
+    expect(jsonCodes('survey', '{"pick": true}')).toEqual([]);
+    expect(jsonCodes('survey', '{"pick": "false"}')).toEqual([]);
+    expect(jsonCodes('survey', '{"pick": "maybe"}')).not.toEqual([]);
   });
 });

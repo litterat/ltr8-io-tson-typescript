@@ -27,7 +27,7 @@ function bodyOf(source: string, name = 'q'): unknown {
   const linked = resolveUserSchema(`${HEADER}${source}`);
   const def = linked.entries.get(name);
   if (def === undefined) throw new Error(`declaration '${name}' missing from resolved schema`);
-  return def.body;
+  return def;
 }
 
 function decimalTypeOf(source: string, name = 'q'): DecimalType {

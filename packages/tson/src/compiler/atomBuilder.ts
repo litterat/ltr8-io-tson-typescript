@@ -28,7 +28,13 @@
  */
 import type { AtomToken, AtomType } from '../atom/contract.js';
 import type { Atom } from '../schema/meta/typedef.js';
-import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
+import type {
+  IdentifierType,
+  Normalization,
+  RegexType,
+  TextType,
+} from '../schema/meta/atoms-text.js';
+import { TsonNotImplementedError } from '../core/errors.js';
 import type { AtomValue, Value } from '../tree/nodes.js';
 import { atomNode } from '../tree/nodes.js';
 import type { Task } from '../io/bytes.js';
@@ -285,5 +291,31 @@ export function buildAtomReader(
       return wrap(createIpv6Parser(name, atom), name);
     case 'complex_type':
       return wrap(createComplexParser(name), name);
+    case 'kind_type':
+      // A kind's value is a type name (§4.2): read by the name grammar here, and judged a member
+      // of the kind where the schema links.
+      return buildAtomReader(name, KIND_NAME, options);
+    case 'ref_type':
+      throw new TsonNotImplementedError(
+        `'${name}' is a reference (§5.12), whose values are qualified names judged when the ` +
+          'schema links; reading one is not implemented yet',
+      );
+    // TODO(WP1B): wire `parseHostname`/`parseHost`/`parseMediaType` from `atom/network/` here.
+    case 'hostname_type':
+    case 'host_type':
+    case 'media_type_type':
+      throw new TsonNotImplementedError(
+        `'${name}' is a ${atom.kind} (§5.5), whose parser is not wired in yet`,
+      );
   }
 }
+
+/** The name grammar a kind's value is read by: the kernel's `type_name`, an `identifier` (§4.2, §7.7). */
+const KIND_NAME: IdentifierType = {
+  kind: 'identifier_type',
+  spec: 'https://www.unicode.org/reports/tr31/',
+  normalization: 'NFC',
+  start: 'XID',
+  continue: 'XID',
+  continueAdd: '-',
+};

@@ -50,12 +50,13 @@ import {
   textTypeBinding,
   tokenBinding,
   topBinding,
+  headed,
   tupleBodyBinding,
   tupleElementBinding,
   typeArgumentBinding,
   typeArgumentRefBinding,
   typeArgumentValueBinding,
-  typeDefinitionBinding,
+  typeChainBinding,
   typeRefBinding,
   typeRefAnnotatedBinding,
   templateParamBinding,
@@ -71,14 +72,13 @@ import type {
   Reference,
   Scoped,
   Token,
+  Top,
   TypeArgument,
   TypeArgumentRef,
   TypeArgumentValue,
-  TypeDefinition,
+  TypeChain,
   TypeRef,
-  Top,
 } from '../src/schema/meta/typedef.js';
-import { typeKind } from '../src/schema/meta/typedef.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -208,7 +208,7 @@ const _check50: AssertExact<Infer<typeof cidr4TypeBinding>, Cidr4Type> = true;
 const _check51: AssertExact<Infer<typeof cidr6TypeBinding>, Cidr6Type> = true;
 const _check52: AssertExact<Infer<typeof macTypeBinding>, MacType> = true;
 const _check53: AssertExact<Infer<typeof topBinding>, Top> = true;
-const _check54: AssertExact<Infer<typeof typeDefinitionBinding>, TypeDefinition> = true;
+const _check54: AssertExact<Infer<typeof typeChainBinding>, TypeChain> = true;
 const _check55: AssertExact<Infer<typeof typeRefBinding>, TypeRef> = true;
 const _check56: AssertExact<Infer<typeof typeRefAnnotatedBinding>, TypeRef> = true;
 
@@ -271,7 +271,7 @@ describe('bridge leaves round-trip host <-> wire ([TSON-SCHEMA] §5.6, §9)', ()
   });
 });
 
-describe('topBinding -- the polymorphic type_definition.body ([TSON-SCHEMA] §4.1, §8.1)', () => {
+describe("topBinding -- the polymorphic binding of an entry's value ([TSON-SCHEMA] §4.1, §8.1)", () => {
   it('every member is keyed by the constructor name the resolved wire actually writes', () => {
     const names = topBinding.members.map((m) => m.wireName).sort();
     expect(names).toContain('record');
@@ -288,22 +288,11 @@ describe('topBinding -- the polymorphic type_definition.body ([TSON-SCHEMA] §4.
     }
   });
 
-  // The head of a written body is the constructor the entry's `source` names (§8.1), never a guess
+  // The head of a written value is the constructor its entry's facts name (§8.1), never a guess
   // from the body's shape: `set_type` restates `array`'s fields, so an unordered unique array may
   // equally be `!array { ordered: false unique_items: true }`.
-  const writtenBody = (source: string | undefined, body: Top): DataValue => {
-    const written = toDataValue(typeDefinitionBinding, {
-      ...(source === undefined ? {} : { source: { name: source, arguments: [], annotations: [] } }),
-      supertypes: [],
-      subtypes: [],
-      body,
-      annotations: [],
-    }).coreValue;
-    if (written.kind !== 'record') throw new Error('a type_definition is written as a record');
-    const slot = written.fields.find((f) => f.name === 'body');
-    if (slot === undefined) throw new Error('a type_definition always writes its body');
-    return slot.value.value;
-  };
+  const writtenBody = (head: string | undefined, body: Top): DataValue =>
+    toDataValue(topBinding, headed(body, head));
   const headOf = (source: string | undefined, body: Top): string | undefined =>
     writtenBody(source, body).typeRef;
 
@@ -347,17 +336,15 @@ describe('topBinding -- the polymorphic type_definition.body ([TSON-SCHEMA] §4.
     expect(topBinding.memberFor({ kind: 'void_type' })?.wireName).toBe('void_type');
   });
 
-  it('"enum", "text_enum" and "enum_type" share one binding, and an enum is written under the constructor its source names (§8.1)', () => {
+  it('"enum" and "enum_type" share one binding, and an enum is written under the constructor its facts name (§8.1)', () => {
     const enumMember = topBinding.members.find((m) => m.wireName === 'enum');
-    for (const name of ['text_enum', 'enum_type']) {
-      expect(topBinding.members.find((m) => m.wireName === name)?.binding).toBe(
-        enumMember?.binding,
-      );
-    }
-    const body = (type: string): EnumBody => ({ kind: 'enum', type, members: ['a'] });
-    // An enum is written under the constructor its entry's source names, whatever its `type`.
+    expect(topBinding.members.find((m) => m.wireName === 'enum_type')?.binding).toBe(
+      enumMember?.binding,
+    );
+    expect(topBinding.members.some((m) => m.wireName === 'text_enum')).toBe(false);
+    const body = (nameType: string): EnumBody => ({ kind: 'enum', nameType, members: ['a'] });
+    // An enum is written under the constructor its entry's facts name, whatever its name type.
     expect(headOf('enum', body('identifier'))).toBe('enum');
-    expect(headOf('text_enum', body('text'))).toBe('text_enum');
     expect(headOf('enum_type', body('identifier'))).toBe('enum_type');
     expect(headOf('enum_type', body('text'))).toBe('enum_type');
     expect(headOf('enum_type', body('kebab'))).toBe('enum_type');
@@ -408,11 +395,12 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
   it('is what every type_ref-typed field slot in this module actually binds through', () => {
     expect(typeArgumentRefBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
     expect(referenceBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
-    expect(recordFieldBinding.fields[1]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(recordFieldBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
     expect(tupleElementBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
-    expect(arrayBodyBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
-    expect(mapBodyBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    // A type body's first slot is `type`'s `chain` (§4.1); its type slots follow it.
+    expect(arrayBodyBinding.fields[1]?.binding).toBe(typeRefAnnotatedBinding);
     expect(mapBodyBinding.fields[1]?.binding).toBe(typeRefAnnotatedBinding);
+    expect(mapBodyBinding.fields[2]?.binding).toBe(typeRefAnnotatedBinding);
   });
 
   it('construct() attaches the wire annotations onto TypeRef.annotations, on top of the bare name/arguments typeRefBinding builds', () => {
@@ -471,9 +459,8 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     expect(built).toEqual({ name: 'int32', arguments: [], annotations: [] });
   });
 
-  it('recordFieldBinding wire names match RecordField.java field-for-field (no @Field renames)', () => {
+  it('recordFieldBinding wire names match RecordField.java field-for-field: no name, the field map keys it (§5.2)', () => {
     expect(recordFieldBinding.fields.map((f) => f.wireName)).toEqual([
-      'name',
       'type',
       'optional',
       'voidable',
@@ -485,18 +472,9 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
 
   it('recordFieldBinding.construct omits an absent optional "value" rather than writing undefined (exactOptionalPropertyTypes)', () => {
     const type: TypeRef = { name: 'text', arguments: [], annotations: [] };
-    const withoutValue = recordFieldBinding.construct([
-      'x',
-      type,
-      false,
-      false,
-      'FREE',
-      undefined,
-      [],
-    ]);
+    const withoutValue = recordFieldBinding.construct([type, false, false, 'FREE', undefined, []]);
     expect('value' in withoutValue).toBe(false);
     const withValue = recordFieldBinding.construct([
-      'x',
       type,
       true,
       false,
@@ -509,6 +487,7 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
 
   it('arrayBodyBinding wire names carry the Java @Field renames (element_type, unique_items, min_items, max_items)', () => {
     expect(arrayBodyBinding.fields.map((f) => f.wireName)).toEqual([
+      'chain',
       'element_type',
       'voidable',
       'ordered',
@@ -550,6 +529,7 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     expect(emailTypeBinding.fields.map((f) => f.wireName)).toContain('normalization');
     for (const binding of [uriTypeBinding, iriTypeBinding]) {
       expect(binding.fields.map((f) => f.wireName)).toEqual([
+        'chain',
         'spec',
         'min_length',
         'max_length',
@@ -564,6 +544,7 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     }
     expect(
       iriTypeBinding.construct([
+        undefined,
         'https://www.rfc-editor.org/rfc/rfc3987',
         undefined,
         undefined,
@@ -587,6 +568,7 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
 
   it('identifierTypeBinding names the six profile facets the kernel declares, `continue` among them (§7.7)', () => {
     expect(identifierTypeBinding.fields.map((f) => f.wireName)).toEqual([
+      'chain',
       'spec',
       'min_length',
       'max_length',
@@ -606,6 +588,7 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
   it('tupleElementBinding, arrayBodyBinding and mapBodyBinding carry `voidable` (§5.3)', () => {
     expect(tupleElementBinding.fields.map((f) => f.wireName)).toEqual(['element_type', 'voidable']);
     expect(mapBodyBinding.fields.map((f) => f.wireName)).toEqual([
+      'chain',
       'key_type',
       'value_type',
       'voidable',
@@ -615,28 +598,23 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     ]);
   });
 
-  it('an enum body omits the type its constructor pins on the wire, and writes it under any other (§8.1)', () => {
-    const typeWritten = (source: string, type: string): boolean => {
-      const written = toDataValue(typeDefinitionBinding, {
-        source: { name: source, arguments: [], annotations: [] },
-        supertypes: [],
-        subtypes: [],
-        body: { kind: 'enum', type, members: ['a'] },
-        annotations: [],
-      }).coreValue;
+  it('an enum body omits the name type its constructor pins on the wire, and writes it under any other (§8.1)', () => {
+    const nameTypeWritten = (head: string, nameType: string): boolean => {
+      const written = toDataValue(
+        topBinding,
+        headed({ kind: 'enum', nameType, members: ['a'] }, head),
+      ).coreValue;
       if (written.kind !== 'record') throw new Error('expected a record');
-      const body = written.fields.find((f) => f.name === 'body')?.value.value.coreValue;
-      return body?.kind === 'record' && body.fields.some((f) => f.name === 'type');
+      return written.fields.some((f) => f.name === 'name_type');
     };
-    expect(typeWritten('enum', 'identifier')).toBe(false);
-    expect(typeWritten('text_enum', 'text')).toBe(false);
-    expect(typeWritten('enum_type', 'identifier')).toBe(true);
-    expect(typeWritten('enum_type', 'text')).toBe(true);
-    expect(typeWritten('enum_type', 'kebab')).toBe(true);
+    expect(nameTypeWritten('enum', 'identifier')).toBe(false);
+    expect(nameTypeWritten('enum_type', 'identifier')).toBe(true);
+    expect(nameTypeWritten('enum_type', 'kebab')).toBe(true);
   });
 
   it('integerTypeBinding.construct synthesises kind and omits every absent bound', () => {
     const built = integerTypeBinding.construct([
+      undefined,
       undefined,
       1n,
       undefined,
@@ -647,33 +625,20 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
     expect(built).toEqual({ kind: 'integer_type', min: 1n });
   });
 
-  it("typeDefinitionBinding.construct carries exactly the kernel's own four fields, plus position/annotations, and omits absent optionals -- no kind/parameters/constructor/disjoint of its own (§8.1)", () => {
-    const body = valueTypeBinding.construct([]);
-    const built = typeDefinitionBinding.construct([
-      undefined, // source
-      ['atom', 'top'], // supertypes
-      [], // subtypes
-      body, // body
-      undefined, // position
-      [], // annotations
-    ]);
-    expect(typeKind(built, () => undefined)).toBe('ATOM');
-    expect('source' in built).toBe(false);
-    expect('kind' in built).toBe(false);
-    expect('parameters' in built).toBe(false);
-    // `'constructor' in built` is always `true` -- every object inherits one from
-    // `Object.prototype` -- so `hasOwnProperty` is what actually asks whether this object's own
-    // construction supplied the field.
-    expect(Object.prototype.hasOwnProperty.call(built, 'constructor')).toBe(false);
-    expect('disjoint' in built).toBe(false);
-    expect('position' in built).toBe(false);
-    expect(built.supertypes).toEqual(['atom', 'top']);
+  it("every type body's binding states `type`'s one field, `chain`, first, and omits it when empty (§4.1)", () => {
+    expect(valueTypeBinding.fields.map((f) => f.wireName)).toEqual(['chain']);
+    expect(integerTypeBinding.fields[0]?.wireName).toBe('chain');
+    expect(valueTypeBinding.construct([undefined])).toEqual({ kind: 'value_type' });
+    const chain: TypeChain = { parents: [], supertypes: ['atom', 'top'], subtypes: [] };
+    expect(valueTypeBinding.construct([chain])).toEqual({ kind: 'value_type', chain });
   });
 
-  it('the position slot is unbound (never matched against the wire by name), per @Unbound in TypeDefinition.java', () => {
-    const positionSlot = typeDefinitionBinding.fields.find((f) => f.wireName === 'position');
-    expect(positionSlot?.unbound).toBe(true);
-    expect(typeDefinitionBinding.byWireName.has('position')).toBe(false);
+  it('no member binding carries a position: where an entry sat is a fact beside its value (§8.1)', () => {
+    for (const member of topBinding.members) {
+      const binding = member.binding;
+      if (binding.kind !== 'record') continue;
+      expect(binding.byWireName.has('position')).toBe(false);
+    }
   });
 });
 
@@ -684,8 +649,9 @@ describe('metaBindings -- the constructor-name lookup table ([TSON-SCHEMA] §8.1
     }
   });
 
-  it('resolves "type_definition" to typeDefinitionBinding', () => {
-    expect(metaBindings.get('type_definition')).toBe(typeDefinitionBinding);
+  it('resolves "type_chain" to typeChainBinding, and holds no "type_definition" (an entry is its value, §8.1)', () => {
+    expect(metaBindings.get('type_chain')).toBe(typeChainBinding);
+    expect(metaBindings.get('type_definition')).toBeUndefined();
   });
 
   it('returns undefined for a name outside the kernel/meta/core vocabulary', () => {

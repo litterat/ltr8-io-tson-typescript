@@ -26,19 +26,20 @@
  * first-pass entry whose `signed` field already references `boolean`, which the *second* pass
  * resolves, so there is no moment at which a reader could be compiled against a complete schema.
  * Meta-kernel only ever instantiates constructors in three known shapes -- a bare `{}`, a bare
- * array of tokens (`enum`), and the binding record `desugar.ts` emits for a container application
- * -- so {@link instanceBody} hand-picks all nine of its own real constructor targets uniformly.
+ * array of tokens (`enum`), and a binding record (`desugar.ts`'s container application, a kind's
+ * `{ of: C }`) -- so {@link instanceBody} hand-picks every one of its own real constructor targets
+ * uniformly.
  *
  * **Desugaring needs no equivalent trick.** `desugar.ts`'s own sugar table is fixed by the sugar
  * forms (§5.3) and consults no governing meta at all -- which for meta-kernel would have been the
  * very entries this function is producing -- so the ordinary `desugar()` call runs unmodified.
  *
- * **This function's own output is not linked.** `subtypes` (the transitive inverse of
- * `supertypes` across the whole namespace) and `disjoint` (choice-variant discrimination
- * distinctness) are both resolver-derived *caches*, computed by a later work package's linker over
- * a schema's whole entry graph -- not a per-declaration or even a per-document resolution concern.
- * This function's {@link Schema} is `spec/m/meta-kernel-resolved.tn` minus those two caches; a
- * caller that needs the fully linked form runs this function's output through that later linker.
+ * **This function's own output is not linked.** A chain's `subtypes` (the inverse of `supertypes`
+ * across the whole namespace), a choice's `disjoint` and a kind's `members` are derived indexes,
+ * computed by the linker over a schema's whole entry graph -- not a per-declaration or even a
+ * per-document resolution concern. This function's {@link Schema} is
+ * `spec/m/meta-kernel-resolved.tn` minus those indexes; a caller that needs the fully linked form
+ * runs this function's output through the linker.
  *
  * **Zero I/O, by design.** The reference implementation reads meta-kernel.tn as a packaged
  * classpath resource; this port has no equivalent packaging step yet (a later work package's
@@ -63,7 +64,7 @@ import { parseSchemaDocument } from '../compiler/schemaParser.js';
 import type { Schema } from '../compiler/schemaResolver.js';
 import type { ArrayBody, EnumBody, MapBody } from './meta/bodies.js';
 import type { IdentifierType, IriType } from './meta/atoms-text.js';
-import type { Top, TypeDefinition } from './meta/typedef.js';
+import type { EntryFacts, KindBody, Top } from './meta/typedef.js';
 import { defaultAtomEncoder } from '../write/bindingWriter.js';
 import { topBinding } from './bindings.js';
 
@@ -73,7 +74,8 @@ export function bootstrapMetaKernel(source: Uint8Array): Schema {
   // Meta-kernel desugars like every other schema, and needs no special case -- see this module's
   // own doc.
   const document = desugar(parsed, new Set());
-  const entries = resolveEntries(document);
+  const facts = new Map<string, EntryFacts>();
+  const entries = resolveEntries(document, facts);
   const id = document.id;
   if (id === undefined) {
     throw new TsonInternalError(
@@ -91,6 +93,7 @@ export function bootstrapMetaKernel(source: Uint8Array): Schema {
     // ordinary `resolveSchema` over the same document instead, governed by this function's own
     // output -- ordinary resolution is what everything else meta-kernel produces comes from.
     keyAnnotations: new Map(),
+    facts,
     bootstrap: true,
   };
 }
@@ -148,10 +151,14 @@ function simpleRefName(ref: TypeRef): string | undefined {
  * source order regardless, so a genuine cycle or a genuinely undeclared source reaches the
  * resolver and is reported as the error it is, rather than being silently dropped here.
  */
-function resolveEntries(document: SchemaDocument): Map<string, TypeDefinition> {
-  const entries = new Map<string, TypeDefinition>();
+function resolveEntries(
+  document: SchemaDocument,
+  facts: Map<string, EntryFacts>,
+): Map<string, Top> {
+  const entries = new Map<string, Top>();
   const governing: DefinitionGetter = (name) => entries.get(name);
   const resolver = createDefinitionResolver({
+    facts,
     // Meta-kernel governs itself, so its own accumulating map is both the type-name namespace
     // and the structure namespace a constructor application is read against. The kernel's one
     // atom refinement (`non_negative_integer => !integer ^ { min: 0 }`) reaches the meta reader
@@ -179,37 +186,42 @@ function resolveEntries(document: SchemaDocument): Map<string, TypeDefinition> {
   for (;;) {
     const deferred: Declaration[] = [];
     for (const declaration of pending) {
-      if (ready(declaration)) resolveInto(entries, resolver, declaration);
+      if (ready(declaration)) resolveInto(entries, facts, resolver, declaration);
       else deferred.push(declaration);
     }
     if (deferred.length === 0) return entries;
     if (deferred.length === pending.length) break;
     pending = deferred;
   }
-  for (const declaration of pending) resolveInto(entries, resolver, declaration);
+  for (const declaration of pending) resolveInto(entries, facts, resolver, declaration);
   return entries;
 }
 
 /**
  * Resolves one declaration into `entries`.
  *
- * An `Instance` takes its own route: §5.5's constructor application produces a fresh entry with
- * no supertypes and no parameters of its own -- `kind` is never transferred, since it is derived
- * rather than stored (`schema/meta/typedef.ts`'s own `typeKind`, consulted by a later caller that
- * needs it, not by this bootstrap). Waiting for `target` to exist in `entries`
+ * A closed `Instance` takes its own route: §5.5's constructor application produces a fresh entry
+ * with an empty chain and no parameters of its own -- `kind` is never transferred, since it is
+ * derived rather than stored (`schema/meta/typedef.ts`'s own `entryKind`, consulted by a later
+ * caller that needs it, not by this bootstrap). Waiting for `target` to exist in `entries`
  * before proceeding still matters, though: it is what makes the two-pass sweep converge in
  * declaration order regardless of forward references, since {@link instanceBody} builds the new
  * entry's body directly from the kernel's own vocabulary without consulting `target` any further
- * -- which is why the generic resolver is handed {@link NEVER_CALLED} as its meta reader. An
+ * -- the generic resolver's meta reader is reached only by the kernel's one atom refinement. An
  * instance whose target is unrecognised, or not yet resolved after every sweep, is left out
- * rather than guessed at; `instanceBody`'s own doc says why that is not an error here.
+ * rather than guessed at; `instanceBody`'s own doc says why that is not an error here. The
+ * constructor an instance applied is recorded as its entry's head (§8.1), as ordinary resolution
+ * records it.
  */
 function resolveInto(
-  entries: Map<string, TypeDefinition>,
+  entries: Map<string, Top>,
+  facts: Map<string, EntryFacts>,
   resolver: ReturnType<typeof createDefinitionResolver>,
   declaration: Declaration,
 ): void {
-  if (declaration.typeDef.kind !== 'instance') {
+  // A template instance (`kind => <T> !kind_type { of: T }`) is held, not built: the ordinary
+  // resolver holds it, once its constructor has an entry to be checked against.
+  if (declaration.typeDef.kind !== 'instance' || declaration.typeDef.typeParams.length > 0) {
     entries.set(declaration.name, resolver.resolve(declaration));
     return;
   }
@@ -219,13 +231,8 @@ function resolveInto(
   if (target === undefined) return;
   const body = instanceBody(instance, targetName, declaration.name);
   if (body === undefined) return;
-  entries.set(declaration.name, {
-    source: { name: targetName, arguments: [], annotations: [] },
-    supertypes: [],
-    subtypes: [],
-    body,
-    annotations: [],
-  });
+  entries.set(declaration.name, body);
+  facts.set(declaration.name, { ...facts.get(declaration.name), head: targetName });
 }
 
 function requireTypeRef(value: DataValue, declarationName: string): string {
@@ -256,15 +263,19 @@ const IDENTIFIER: IdentifierType = {
   continueAdd: '-',
 };
 
-/** `scheme_name`, the second `identifier_type` instance, resolved: what `uri_type.schemes` and `iri_type.schemes` read their elements through. */
+/**
+ * `scheme_name`, the second `identifier_type` instance, resolved: what `uri_type.schemes` and
+ * `iri_type.schemes` read their elements through -- RFC 3986's `ALPHA *( ALPHA / DIGIT / "+" /
+ * "-" / "." )`, written over `identifier_base`'s `ASCII` with its `_` excluded.
+ */
 const SCHEME_NAME: IdentifierType = {
   kind: 'identifier_type',
   spec: UAX_31,
   normalization: 'ASCII_CASEFOLD',
-  start: 'NONE',
-  continue: 'NONE',
-  startAdd: 'abcdefghijklmnopqrstuvwxyz',
-  continueAdd: 'abcdefghijklmnopqrstuvwxyz0123456789+-.',
+  start: 'ASCII',
+  continue: 'ASCII',
+  continueAdd: '+-.',
+  exclude: '_',
 };
 
 /** `iri => !iri_type { allow_relative: false }` resolved: the kernel's one IRI instance, which types `atom_specification.spec`. */
@@ -299,10 +310,10 @@ export function instanceBody(instance: Instance, target: string, name = ''): Top
     case 'identifier_type':
       if (name === 'scheme_name') {
         requireStated(instance, target, {
-          start: 'NONE',
-          continue: 'NONE',
-          start_add: SCHEME_NAME.startAdd ?? '',
+          start: 'ASCII',
+          continue: 'ASCII',
           continue_add: SCHEME_NAME.continueAdd ?? '',
+          exclude: SCHEME_NAME.exclude ?? '',
           normalization: 'ASCII_CASEFOLD',
         });
         return SCHEME_NAME;
@@ -323,6 +334,10 @@ export function instanceBody(instance: Instance, target: string, name = ''): Top
       return { kind: 'regex_type', spec: RFC_9485, normalization: 'NONE' };
     case 'enum':
       return toEnumBody(instance.value);
+    // The kernel's three kinds (`identifier_kind`, `atom_kind`, `type_kind`): each names its
+    // constructor; the members are the linker's derived index, computed once the kernel links.
+    case 'kind_type':
+      return toKindBody(instance.value);
     // `array` is emitted by desugar.ts above; `set_type` is written by hand in the kernel too
     // (`integer_member_set`, `enum_set`). They differ only in the defaults `set_type` fixes
     // (§5.7): ordered and duplicating vs unordered and unique.
@@ -391,10 +406,10 @@ function toArrayBody(value: DataValue, unique: boolean): ArrayBody {
 }
 
 /**
- * `!map { key_type: K  value_type: V }` as the body it denotes. Meta-kernel's own sole map
- * instance (`schema => {type_name => type_definition}`) never desugars with the value-optional
- * sugar, so `voidable` is always `false`, its default -- there is no `voidable` field in the
- * binding record to read (§8.1 omits a field at its default).
+ * `!map { key_type: K  value_type: V }` as the body it denotes. Meta-kernel declares no map of its
+ * own today; a map instance there would never desugar with the value-optional sugar, so `voidable`
+ * is `false`, its default -- there is no `voidable` field in the binding record to read (§8.1
+ * omits a field at its default).
  */
 function toMapBody(value: DataValue): MapBody {
   return {
@@ -445,5 +460,10 @@ function toEnumBody(value: DataValue): EnumBody {
     }
     members.push(core.text);
   }
-  return { kind: 'enum', type: 'identifier', members };
+  return { kind: 'enum', nameType: 'identifier', members };
+}
+
+/** `!kind_type { of: C }` as the kind it denotes. */
+function toKindBody(value: DataValue): KindBody {
+  return { kind: 'kind_type', of: bindingField(value, 'of') };
 }

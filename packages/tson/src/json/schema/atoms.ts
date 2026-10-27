@@ -55,7 +55,7 @@ import { isHexFloat, tryParseNumber } from '../../base/numberGrammar.js';
 import { identifierProfileOf, type IdentifierProfile } from '../../unicode/identifier-profile.js';
 import type { Normalization } from '../../schema/meta/atoms-text.js';
 import type { EnumBody } from '../../schema/meta/bodies.js';
-import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
+import type { Atom, Top } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import type { LinkedSchema } from '../../link/link.js';
@@ -250,7 +250,7 @@ export function* reportUnreadable(
  */
 export function withAnnotationObject(
   displayName: string,
-  entries: ReadonlyMap<string, TypeDefinition>,
+  entries: ReadonlyMap<string, Top>,
   inner: JsonTypeReader,
 ): JsonTypeReader {
   const own = selfNames(displayName, entries);

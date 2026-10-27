@@ -68,15 +68,10 @@ export interface Emitter {
   /**
    * `name:` -- inserts the inter-element separator itself; the value follows directly.
    *
-   * A field name is an identifier at every layer, schemaless or governed (§2.5, §7.7), so `name`
-   * is NFC-normalised and held to the identifier grammar, and written unquoted: §7.1 makes every
-   * identifier a well-formed unquoted token, so no identifier needs quoting on its own account
-   * and there is no second spelling to choose between. Quoting is relief from what the unquoted
-   * form cannot spell, never a wider name set, so a `name` that is not an identifier has no legal
-   * spelling at all and throws {@link TsonWriteError} rather than being quoted into a document
-   * this implementation's own parser would reject. `_id` is one such: `_` is `XID_Continue` and
-   * never `XID_Start`, so no identifier begins with one, and a key that is not a name belongs in
-   * a map (§2.5).
+   * A field name is any single-line token (§2.5), so `name` is NFC-normalised and written
+   * unquoted where it is an identifier (§7.1 makes every identifier a well-formed unquoted token)
+   * and as a single-line token otherwise. Whether the name is one its record admits is the
+   * record's `name_type`'s to say (Part 2 §7.7), judged by whoever reads it, never by the writer.
    */
   field(name: string): void;
   /** Call before writing a map entry's key (itself a full data-value, §2.6). */
@@ -261,31 +256,18 @@ function escapeMultiLineContent(line: string): string {
 }
 
 /**
- * `name`, NFC-normalised, checked against §7.7's identifier grammar -- the one form a field name
- * may take at either spelling (§2.5, §7.7). Throws {@link TsonWriteError} when it is not one.
- *
- * There is no spelling choice to make afterwards. §7.1 makes every identifier a well-formed
- * unquoted token, so an identifier never needs quoting on its own account, and quoting would not
- * rescue a name that is not one: quoting escapes a lexical accident -- relief from what the
- * unquoted form cannot spell -- and does not admit a broader name set. Writing a non-identifier
- * key quoted, as a lexical field name once allowed, now produces a document this implementation's
- * own parser rejects (`compiler/cursor.ts`'s `fieldNameText`), which is the silent failure this
- * throw exists to prevent. `_` is `XID_Continue` and never `XID_Start`, so `_id` and `_` fall
- * straight out of the production with no special case; a key that is not a name belongs in a map.
+ * `name`, NFC-normalised, spelled as a field name: unquoted where it is an identifier (§7.1 makes
+ * every identifier a well-formed unquoted token), and as a single-line token otherwise (§2.5: a
+ * field name is any single-line token). What a field name may be is its record's to say -- a
+ * value of the record's `name_type` (Part 2 §7.7) -- so the writer spells the name it is given and
+ * leaves the judgement to whoever reads it under its record.
  *
  * The normalised text is what is written, because that is what identity and every later
  * comparison between names sees (§7.7).
  */
 function fieldNameSpelling(name: string): string {
   const text = toNfc(name);
-  if (!isIdentifierText(text)) {
-    throw new TsonWriteError(
-      `'${name}' is not an identifier, so it names no field (§2.5, §7.7): a name starts with an ` +
-        "XID_Start character and continues with XID_Continue or '-', in NFC -- a key that is not " +
-        "a name belongs in a map ('key => value')",
-    );
-  }
-  return text;
+  return isIdentifierText(text) ? text : `"${escapeSingleLine(text)}"`;
 }
 
 /** Validates a directive argument against the same URI grammar the reader enforces (§3.3). */

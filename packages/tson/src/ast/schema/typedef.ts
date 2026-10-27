@@ -39,7 +39,7 @@ export type TypeDef = AtomRefinement | Instance | StructuralTypeDef | ReferenceT
  *
  * Whether the entry this resolves to is a *constructor* is never a fact this shape carries: an
  * entry IS-A `top` (§4.2) by what it composes or refines, transitively — derived from the
- * resolved `TypeDefinition.supertypes` (`schema/meta/typedef.ts`'s `isConstructor`), never
+ * resolved entry's `chain.supertypes` (`schema/meta/typedef.ts`'s `isConstructor`), never
  * marked at the declaration.
  */
 export interface StructuralTypeDef {

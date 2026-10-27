@@ -135,7 +135,11 @@ describe('createIdentifierParser (§5.5, §7.7)', () => {
 });
 
 describe('createEnumParser -- matched in the label type’s form (§7.4)', () => {
-  const body = { kind: 'enum', type: 'header_name', members: ['Accept', 'content-type'] } as const;
+  const body = {
+    kind: 'enum',
+    nameType: 'header_name',
+    members: ['Accept', 'content-type'],
+  } as const;
 
   it('matches a member however it is cased under a folding label type, and returns the value', () => {
     const parser = createEnumParser('safe_header', body, 'NFKC_CASEFOLD');
@@ -161,14 +165,14 @@ describe('createEnumParser -- matched in the label type’s form (§7.4)', () =>
   it('narrows the {true, false} member set to a host boolean and nothing else', () => {
     const boolean = createEnumParser('boolean', {
       kind: 'enum',
-      type: 'identifier',
+      nameType: 'identifier',
       members: ['true', 'false'],
     });
     expect(boolean.read(token('true'))).toBe(true);
     expect(boolean.read(token('false'))).toBe(false);
     const three = createEnumParser('e', {
       kind: 'enum',
-      type: 'identifier',
+      nameType: 'identifier',
       members: ['true', 'false', 'maybe'],
     });
     expect(three.read(token('true'))).toBe('true');
