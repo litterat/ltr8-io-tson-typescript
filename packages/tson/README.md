@@ -23,7 +23,7 @@ proportional to nesting depth either way — nothing materialises a whole docume
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
-`0.37.x` is built against the 2026 Revision 37 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+`0.38.x` is built against the 2026 Revision 38 series. `@ltr8/tson` and `@ltr8/tson-cli` are
 released in lockstep at the same version.
 
 ## Entry points
@@ -65,7 +65,7 @@ cannot tell that your schema only uses three of the thirty-three, and none of th
 If you only need **syntax and structure diagnostics** — malformed documents, unknown built-in
 types — the schemaless row is the whole cost, and you never load the compiler at all.
 
-`@ltr8/tson/stdlib` adds ~14 KB gzipped for the three bundled schemas as embedded text. Dropping it
+`@ltr8/tson/stdlib` adds ~30 KB gzipped for the five bundled schemas as embedded text. Dropping it
 means fetching them at runtime instead, which is a `SchemaSource` and a network round trip rather
 than a saving.
 
@@ -74,7 +74,7 @@ the `node` condition, so a bundler cannot resolve it even by accident.
 
 ## Conformance
 
-328 / 328 vectors of the shared, language-agnostic
+695 / 695 vectors of the shared, language-agnostic
 [TSON conformance suite](https://github.com/litterat/ltr8-io-tson-test-suite).
 
 ## Documentation

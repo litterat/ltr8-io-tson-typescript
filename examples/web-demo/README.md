@@ -32,14 +32,15 @@ npx serve examples/web-demo/dist      # or python3 -m http.server, or your own
 
 - **`validate()` collects.** A fail-fast read stops at the first problem; this reports all of them,
   which for an LLM retry loop is the difference between one round trip and ten.
-- **The whole pipeline runs client-side.** `@ltr8/tson/stdlib` embeds `meta-kernel`, `meta.tn` and
-  `core.tn` as source text, so a user schema compiles in the browser with no fetch.
+- **The whole pipeline runs client-side.** `@ltr8/tson/stdlib` embeds `meta-kernel`, `meta.tn`,
+  `core.tn`, `net.tn` and `policy.tn` as source text, so a user schema compiles in the browser with
+  no fetch.
 - **A schema is optional.** Clear the _read against_ box and the document is read with no schema at
   all — base syntax and the built-in type vocabulary (Class 1). That path never loads the compiler.
 - **A library gap is not a verdict.** `NOT_IMPLEMENTED` is styled differently and worded
   differently, because it says nothing was checked rather than that the document is wrong.
 
-The schema and the scenarios are written against the **2026 Revision 37** spec series, which the
+The schema and the scenarios are written against the **2026 Revision 38** spec series, which the
 `!!meta`/`!!import` identities in the schema name. Moving to a new revision means moving those two
 lines with the bundled schemas they name, or every schema-layer scenario stops resolving.
 

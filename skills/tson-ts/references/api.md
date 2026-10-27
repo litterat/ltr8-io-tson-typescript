@@ -152,6 +152,9 @@ type AtomValue =
   | MacAddress;
 ```
 
+`hostname`, `host` and `media_type` (from `net.tn`) read to their canonical text as a `string`: two
+values are one exactly when their canonical texts are equal.
+
 Constructors: `recordNode`, `mapNode`, `arrayNode`, `tupleNode`, `atomNode`, `voidNode`,
 `missingNode`, `tsonDocument`, plus the `VOID` constant.
 
@@ -230,7 +233,8 @@ interface LinkedSchema {
   readonly id: string;
   readonly meta: string;
   readonly imports: readonly string[];
-  readonly entries: ReadonlyMap<string, TypeDefinition>; // local + every import's, transitively
+  readonly entries: ReadonlyMap<string, Top>; // local + every import's, transitively; an entry is its value
+  readonly facts: ReadonlyMap<string, EntryFacts>; // position, value annotations and the applied constructor, per entry
   readonly keyAnnotations: ReadonlyMap<string, Annotations>; // local declarations only
   readonly bootstrap: boolean;
   readonly origins: ReadonlyMap<string, string>; // entry name → home schema id (§2.2.3)
@@ -297,8 +301,12 @@ are **not** the writers to take a content hash over.
 
 ## `@ltr8/tson/schema`
 
-The §8 resolver output as a value model: `TypeDefinition` and its bodies (`schema/meta/typedef.ts`,
-`bodies.ts`, `algebra.ts`, the four atom families, and `position.ts`). It **names no compiler type**,
+The §8 resolver output as a value model. An entry **is its value** (§8.1): `Top` is the closed union
+of a type (`Type`: every atom, product and sum body, each carrying a `TypeChain` of `parents`,
+`supertypes` and `subtypes`), a `Reference`, a held `TemplateBody` and a `Namespace` value. A record's
+`fields` is a `Namespace` keyed by field name, and a meta layer's own namespace entries are held as
+generic `MetaValue`s. `EntryFacts` carries what an entry has beyond its value (`schema/meta/typedef.ts`,
+`bodies.ts`, `algebra.ts`, the atom families, `atoms-network.ts` and `position.ts`). It **names no compiler type**,
 which is what lets the schema model ship to a browser that never compiles a schema.
 
 ---
@@ -332,11 +340,14 @@ function registerStandardLibrary(tson: Tson): Tson; // returns the same instance
 const META_KERNEL_TN: string;
 const META_TN: string;
 const CORE_TN: string;
+const NET_TN: string;
+const POLICY_TN: string;
 ```
 
-**No I/O on any platform** — the three documents are string constants generated from `spec/m/`, not
+**No I/O on any platform** — the five documents are string constants generated from `spec/m/`, not
 files read at run time. Registration order is the algorithm: kernel (bootstrapped, then re-resolved
-under its own output), then `meta.tn`, then `core.tn`.
+under its own output), then `meta.tn`, then `core.tn`, then `net.tn` (the network atoms, `hostname`,
+`host` and `media_type` among them), then `policy.tn`.
 
 ---
 
