@@ -44,7 +44,7 @@
  * a value parameter *means* standing in a scalar slot, and a slot is what grounds a parameter.
  */
 import { TsonSchemaValidationError } from '../core/errors.js';
-import type { ArrayValue, CoreValue, MapValue, RecordValue } from '../ast/value.js';
+import type { ArrayValue, CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
 import {
   TYPE_KIND,
   namedFields,
@@ -59,9 +59,18 @@ import {
   supertypesOf,
   withoutChain,
 } from '../schema/meta/typedef.js';
-import { heldOf, type HeldBody } from './heldBody.js';
+import { createHeldBody, heldOf, type HeldBody } from './heldBody.js';
 import type { DefinitionGetter } from './resolverTypes.js';
-import { ARGUMENTS, NAME, TYPE, VALUE, field, isApplication, typeRefOf } from './wireForm.js';
+import {
+  ARGUMENTS,
+  NAME,
+  RECORD as RECORD_HEAD,
+  TYPE,
+  VALUE,
+  field,
+  isApplication,
+  typeRefOf,
+} from './wireForm.js';
 
 /** What a parameter's type makes it (§5.10). */
 export type Kind = 'TYPE' | 'VALUE';
@@ -414,7 +423,12 @@ function currentOf(
 interface WalkContext {
   readonly occurrences: Occurrences;
   readonly meta: DefinitionGetter;
+  /** Whether the body walked is a record template's, whose parameters stand in three places only (§5.10). */
+  readonly recordTemplate?: boolean;
 }
+
+/** The one slot a parameter token stands in, in a record template, apart from a routed value. */
+const FIELD_TYPE_SLOT = `${RECORD_FIELD}.${TYPE}`;
 
 /** One held body walked against the vocabulary of the constructor it applies. */
 function walkBody(held: HeldBody, ctx: WalkContext): void {
@@ -422,8 +436,29 @@ function walkBody(held: HeldBody, ctx: WalkContext): void {
   if (head === undefined) return;
   const vocabulary = resolveSlot(head, ctx.meta);
   if (vocabulary !== undefined && isRecordBody(vocabulary)) {
-    walkPayload(held.application.coreValue, head, vocabulary, ctx);
+    walkPayload(held.application.coreValue, head, vocabulary, {
+      ...ctx,
+      recordTemplate: head === RECORD_HEAD,
+    });
   }
+}
+
+/**
+ * §5.10's slot rule over a record template's payload as written, before `record`'s reader is
+ * asked to bind it: in a `!record` body a parameter stands only at a field's type, a field's
+ * default or fixed value, or an argument of an application, and anywhere else is a resolver error
+ * naming the slot -- so a parameter in a scalar slot is refused for where it stands rather than for
+ * the token it is. Throws `TsonSchemaValidationError`.
+ */
+export function checkSlots(
+  parameters: readonly string[],
+  payload: DataValue,
+  meta: DefinitionGetter,
+): void {
+  walkBody(createHeldBody(payload, parameters), {
+    occurrences: createOccurrences(parameters, new Map(), false),
+    meta,
+  });
 }
 
 /**
@@ -443,7 +478,7 @@ function walkPayload(
   const unmarked = namedFields(vocabulary).filter((f) => !f.optional);
   const only = unmarked[0];
   if (unmarked.length === 1 && only !== undefined) {
-    walkValue(payload, only.type, ctx);
+    walkValue(payload, only.type, `${constructor}.${only.name}`, ctx);
   }
 }
 
@@ -467,7 +502,7 @@ function walkRecord(
     }
     const slotField = vocabulary.fields.entries.get(written.name);
     if (slotField !== undefined) {
-      walkValue(value, slotField.type, ctx);
+      walkValue(value, slotField.type, `${constructor}.${written.name}`, ctx);
     }
   }
 }
@@ -489,34 +524,35 @@ function walkRouted(parameter: string, fieldRecord: RecordValue, ctx: WalkContex
   observe(ctx.occurrences, parameter, { type, local: true });
 }
 
-/** One written value against the type its slot declares. */
-function walkValue(written: CoreValue, declared: TypeRef, ctx: WalkContext): void {
-  const slot = declared.name;
-  const type = resolveSlot(slot, ctx.meta);
+/** One written value at `slot` (`constructor.field`), against the type the slot declares. */
+function walkValue(written: CoreValue, declared: TypeRef, slot: string, ctx: WalkContext): void {
+  const type = resolveSlot(declared.name, ctx.meta);
   if (written.kind === 'token' && declares(ctx.occurrences, written.text)) {
-    walkToken(written.text, declared, type, ctx);
+    walkToken(written.text, declared, type, slot, ctx);
     return;
   }
   switch (written.kind) {
     case 'array':
-      walkElements(written, type, ctx);
+      walkElements(written, type, slot, ctx);
       return;
     case 'map': {
       if (type !== undefined && 'keyType' in type) {
-        walkEntries(written, type, ctx);
+        walkEntries(written, type, slot, ctx);
         return;
       }
       const valueType = namespaceValueType(type);
       if (valueType !== undefined) {
-        for (const entry of written.entries) walkValue(entry.value.value.coreValue, valueType, ctx);
+        for (const entry of written.entries) {
+          walkValue(entry.value.value.coreValue, valueType, slot, ctx);
+        }
       }
       return;
     }
     case 'record':
-      if (isTypeSlot(slot)) {
+      if (isTypeSlot(declared.name)) {
         walkApplication(written, ctx);
       } else if (type !== undefined && isRecordBody(type)) {
-        walkRecord(written, slot, type, ctx);
+        walkRecord(written, declared.name, type, ctx);
       }
       return;
     default:
@@ -532,11 +568,12 @@ function walkValue(written: CoreValue, declared: TypeRef, ctx: WalkContext): voi
 function walkEntries(
   map: MapValue,
   declared: { keyType: TypeRef; valueType: TypeRef },
+  slot: string,
   ctx: WalkContext,
 ): void {
   for (const entry of map.entries) {
-    walkValue(entry.key.coreValue, declared.keyType, ctx);
-    walkValue(entry.value.value.coreValue, declared.valueType, ctx);
+    walkValue(entry.key.coreValue, declared.keyType, `a key of ${slot}`, ctx);
+    walkValue(entry.value.value.coreValue, declared.valueType, slot, ctx);
   }
 }
 
@@ -545,25 +582,36 @@ function walkToken(
   parameter: string,
   declared: TypeRef,
   type: Top | undefined,
+  slot: string,
   ctx: WalkContext,
 ): void {
-  if (isTypeSlot(declared.name)) {
-    observe(ctx.occurrences, parameter, { type: TYPE_REF, local: false });
-  } else if (type !== undefined && isAtomBody(type)) {
-    observe(ctx.occurrences, parameter, { type: declared, local: false });
-  } else {
+  const typeSlot = isTypeSlot(declared.name);
+  if (!typeSlot && (type === undefined || !isAtomBody(type))) {
     throw new TsonSchemaValidationError(
       `parameter '${parameter}' stands where '${declared.name}' is declared, which is neither a type ` +
         'reference nor a scalar -- §5.10 binds a value parameter to scalars only and a type ' +
         'parameter to references, so nothing could be applied here',
     );
   }
+  if (ctx.recordTemplate === true && slot !== FIELD_TYPE_SLOT) {
+    throw new TsonSchemaValidationError(
+      `parameter '${parameter}' stands at ${slot} -- a record template's parameters stand only in a ` +
+        "field's type, a field's default or fixed value, or an argument of an application, so that " +
+        'every application of it shares one shape (§5.10)',
+    );
+  }
+  observe(ctx.occurrences, parameter, { type: typeSlot ? TYPE_REF : declared, local: false });
 }
 
-function walkElements(array: ArrayValue, type: Top | undefined, ctx: WalkContext): void {
+function walkElements(
+  array: ArrayValue,
+  type: Top | undefined,
+  slot: string,
+  ctx: WalkContext,
+): void {
   if (type !== undefined && 'elementType' in type) {
     for (const element of array.elements) {
-      walkValue(element.value.coreValue, type.elementType, ctx);
+      walkValue(element.value.coreValue, type.elementType, slot, ctx);
     }
     return;
   }
@@ -572,7 +620,7 @@ function walkElements(array: ArrayValue, type: Top | undefined, ctx: WalkContext
     array.elements.forEach((element, i) => {
       const position = positions[Math.min(i, positions.length - 1)];
       if (position !== undefined) {
-        walkValue(element.value.coreValue, position.elementType, ctx);
+        walkValue(element.value.coreValue, position.elementType, slot, ctx);
       }
     });
   }

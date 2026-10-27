@@ -9,56 +9,56 @@
  * **It runs over the resolved form, not the AST.** An application reaches here as a
  * `schema/meta` {@link TypeRef} carrying `arguments` — the one thing that shape means, a closed
  * form always being an entry named by a bare reference — so substitution is a walk over
- * `schema/meta` values, and the entry it mints can record its own `source`, which §8.2 keys
- * identity on.
+ * `schema/meta` values, and the entry a declaration closes into records its application on its
+ * key (`@application`), which §8.2 keys identity on.
  *
  * **A held body closes by one process, whatever wrote it.** `<T> [T]` and `<T> { x: T }` are both
  * an application with a parameter standing in a slot, so both substitute by the same walk
  * ({@link substitute}, `templateSubstitution.ts`) and are read back through their own
- * constructor's reader. What the result *is* then splits three ways:
+ * constructor's reader. What the result *is* then turns on who is asking:
  *
- * - **A record template's closure is the instantiation entry itself**
- *   ({@link closeHeldInstantiation}), declared or not: a substituted record is the type the
- *   author named by writing the application, so there is nothing for a synthetic hop to buy
- *   (§5.10, §8.2).
- * - **Every other author-written template's closure depends on who is asking.** A *declaration*
- *   naming a fully-bound application ({@link TemplateMaterialiser.closeApplicationAs}) is that
- *   application's entry too, whatever it applies, exactly like a record — "nothing minted beside
- *   it and no `!reference` hop" (§5.10's last paragraph, §8.2, §8.3). A *use site* with no owning
- *   declaration ({@link instantiate}, reached through {@link close}) has no author-given name to
- *   carry that identity, so it keeps §8.2's older two-entry shape instead: the substituted body
- *   closes to a *synthetic* named for its content — mergeable with an identical form written
- *   directly elsewhere — and the use site's own instantiation entry is a `!reference` to it, kept
- *   distinct so two applications that happen to close to the same content still get their own
- *   entries ({@link closeHeldTemplate}, {@link instantiationOf}).
- * - **A compiler-generated form** — desugar's own lift of a sugar shape (`[T]`'s own `<T> [T]`),
- *   never an author-written template — has no author-given name at all, so closing it produces
- *   only the content-keyed synthetic, with no instantiation entry wrapping it.
+ * - **A declaration naming a fully-bound application is that entry**
+ *   ({@link TemplateMaterialiser.closeApplicationAs}), whatever it applies: nothing minted beside
+ *   it and no `!reference` hop, its key recording the canonical application (§5.10, §8.2, §8.3). A
+ *   declared application of a record template is a member of its family: its chain names the
+ *   template and everything the template IS-A.
+ * - **An application nothing declares is its expansion** ({@link instantiate}, reached through
+ *   {@link close}): a closed synthetic entry keyed on its content, named for its binding record as
+ *   every closed form is ({@link closeHeldTemplate}, {@link mintedRecord}), so `rows<text>` and
+ *   `[text; 1..]` are one entry, and so are `box<int32>` and `crate<int32>` over two templates with
+ *   one field list. No instantiation entry is minted and no `@application` recorded (§8.2). A
+ *   minted record is a member of nothing: one whose chain would name a declared type is refused
+ *   where it is minted ({@link refuseMintedMember}).
+ * - **The exception is an expansion that names its own application** — the knot tied on the
+ *   application-derived name while the entry was under construction (`nested => <T> ( T |
+ *   [nested<T>] )`) — whose content cannot be written without a name, so the application keeps an
+ *   entry of its own: the record itself, or a `!reference` to the synthetic ({@link
+ *   instantiationOf}), recording the application.
+ * - **A compiler-generated form** — desugar's own lift of a sugar shape — closes to its
+ *   content-keyed synthetic alone.
  *
- * **An alias closes by a fourth path and mints nothing.** §5.10's partial application,
+ * **An alias closes by a further path and mints nothing.** §5.10's partial application,
  * `uuid_pair => <B> pair<uuid, B>`, holds `!reference { target: pair<uuid, B> }` like any other
  * open entry, but it *is* the application it names with some arguments still open — so closing it
  * composes the two argument lists and hands back what that denotes, minting no entry of its own
  * (§5.10: "no intermediate entry per alias hop"). See {@link closeHeldAlias}.
  *
- * **So the cases are told apart by the constructor head and by provenance, not by the body's
- * shape.** Every open entry's body is a `HeldBody` (`heldBody.ts`) — a record, composition or
- * refinement template, a sugar form's lift, an alias, and an error placeholder alike. `reference`
- * closes to a name; a generated head always closes to a synthetic; a record head always closes to
- * the instantiation; everything else closes to the instantiation only when a declaration owns it,
- * and to a synthetic-plus-reference pair otherwise.
+ * **A parent written as an application is left as written.** Composition needs the operand's
+ * fields, which substitution produces, and nothing else; the IS-A edge to the entry the
+ * application denotes is `schemaResolver.ts`'s fold, run once every declaration has resolved, so
+ * the answer never depends on declaration order. A minted record's applications are indexed for
+ * it ({@link TemplateMaterialiser.expansionsByApplication}), an expansion recording none itself.
  *
- * **Identity (§8.2).** An instantiation entry is keyed on the application recorded in `source`, so
- * two `box<text>` anywhere land on one entry — and, since §8.2's identity follows a *reference*
- * argument to its terminal entry (§8.3), `box<user_id>` over `user_id => uuid` lands on that same
- * entry too ({@link canonicalArgs}, this module's own WP4.8). The derived name is built by
- * `derivedName.ts`'s own `ofApplication`, called only after `canonicalArgs` has walked every bare
- * reference argument through `deps.namespaceDefinitions` to its chain's terminal — so the name is
- * a function of the head and the argument list's *resolved* identities, not of the spelling the
- * author wrote, which is what makes the dedup fall out of naming rather than needing a second
- * table: the same application derives the same name whichever declaration happens to reach it
- * first, and an aliased spelling of one derives it too. `mintedNames.ts`'s own instance below
- * decides §8.2's freshness MUST over every name this materialiser mints.
+ * **Identity (§8.2).** An application's derived name is keyed on its canonical form, so two
+ * `box<text>` anywhere land on one entry — and, since §8.2's identity follows a *reference*
+ * argument to its terminal entry (§8.3), `box<user_id>` over `user_id => uuid` is that same
+ * application ({@link canonicalArgs}). The derived name is built by `derivedName.ts`'s own
+ * `ofApplication`, called only after `canonicalArgs` has walked every bare reference argument
+ * through `deps.namespaceDefinitions` to its chain's terminal — so the name is a function of the
+ * head and the argument list's *resolved* identities, not of the spelling the author wrote: the
+ * same application derives the same name whichever declaration happens to reach it first, and an
+ * aliased spelling of one derives it too. `mintedNames.ts`'s own instance below decides §8.2's
+ * freshness MUST over every name this materialiser mints.
  *
  * **Knot-tying.** The memo entry is registered *before* the body is substituted, so a recursive
  * application reached during substitution (`tree<T>` inside `tree`, which becomes `tree<text>`
@@ -92,6 +92,8 @@ import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
 import type { Token, TypeArgument, TypeRef, Top } from '../schema/meta/typedef.js';
 import {
+  chainOf,
+  isConstructor,
   isFamilyBase,
   isNamespaceValue,
   isOpen,
@@ -107,7 +109,8 @@ import { mapFields, type RecordBody } from '../schema/meta/bodies.js';
 import { checkAtomCoherence, isAtom } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
-import { field, isApplication, rescope, typeRefOf } from './wireForm.js';
+import { CHAIN, field, heldRecord, isApplication, rescope, typeRefOf } from './wireForm.js';
+import { chainOfParents } from './ancestry.js';
 import { heldOf, withParametersOf, type HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
 import {
@@ -156,12 +159,9 @@ export interface TemplateMaterialiserDeps {
    * have to grow.
    *
    * **Needed for every held shape except a reference template** — record templates included:
-   * `closeHeldInstantiation` calls the same shared `closeHeld` every other held form does, so a
-   * record's own substituted field set is bound through the `record` constructor's reader too,
-   * not merely assumed well-formed. (The Java reference's own Javadoc on the equivalent field
-   * claims a record template "needs none of this and is unaffected" — its own `closeHeld` method
-   * calls the reader unconditionally, so that line does not describe the code beside it; this
-   * port follows the code.) Only {@link closeHeldAlias}'s composition path never touches this
+   * `closeHeldRecord` calls the same shared `closeHeld` every other held form does, so a record's
+   * own substituted field set is bound through the `record` constructor's reader too, not merely
+   * assumed well-formed. Only {@link closeHeldAlias}'s composition path never touches this
    * dependency, since a reference template mints no body to bind.
    *
    * Omitted for a caller with no compiled meta reader to offer — a hand-built test that never
@@ -173,12 +173,11 @@ export interface TemplateMaterialiserDeps {
 
   /**
    * The entry names desugaring generated rather than the author writing them (`desugar.ts`'s own
-   * `lifted`). An application of one is machinery, not a use site: closing an authored template
-   * records the application in an instantiation entry, because `grid<pixel, 3>` is something
-   * someone wrote and §8.2 keys identity on it. Closing a generated open synthetic records
-   * nothing — nobody wrote `array_p0_p1_06c4e11f<pixel, 3>`, and an entry named for it would key
-   * identity on an internal name §8.2 says must not be relied on. Omitted means "none", the
-   * ordinary case for a hand-built test.
+   * `lifted`). An application of one is machinery, not a use site: closing a generated open
+   * synthetic always answers with its form entry and records nothing, even where its expansion
+   * reaches itself — nobody wrote `array_p0_p1_06c4e11f<pixel, 3>`, and an entry named for it
+   * would key identity on an internal name §8.2 says must not be relied on. Omitted means "none",
+   * the ordinary case for a hand-built test.
    */
   readonly generatedNames?: ReadonlySet<string>;
 
@@ -215,9 +214,11 @@ export interface MaterialisationFailureReporter {
 /**
  * What {@link TemplateMaterialiser.materialise} hands back: `entries` is the caller's own map,
  * every application inside it closed to a bare reference; `materialised` is every entry this
- * pass minted to do that (instantiations and synthetics alike, in the order they were first
- * built); `synthetics` is the subset of `materialised`'s keys that are synthetic rather than
- * instantiation entries (§8.2 — see {@link TemplateMaterialiser.syntheticNames}).
+ * pass minted to do that (expansions, and the instantiation entries a self-reaching expansion
+ * keeps, in the order they were first built); `synthetics` is the subset of `materialised`'s keys
+ * that are synthetic rather than instantiation entries (§8.2 — see
+ * {@link TemplateMaterialiser.syntheticNames}). A declaration naming an application is never
+ * among them: it is the caller's own entry ({@link TemplateMaterialiser.closeApplicationAs}).
  *
  * `materialised`/`synthetics` are separate from `entries` because the caller decides where the
  * new entries land — they are local to this schema and carry no source position, being named by
@@ -252,14 +253,15 @@ export interface TemplateMaterialiser {
    * The argument check of {@link closeApplication} for an application that denotes no entry — a
    * composition operand (§5.8) — so a bound or a value type holds there as it does at a field.
    * Throws the same `TsonSchemaValidationError`; does nothing for a head that is not a template
-   * or an arity that does not match, which the position reports.
+   * or an arity that does not match, which the position reports. Returns the arguments as the
+   * parameters each binds classify them (§5.10), or as written where nothing was judged.
    */
-  checkApplication(application: TypeRef): void;
+  checkApplication(application: TypeRef): readonly TypeArgument[];
 
   /**
    * §8.2's "a declaration whose body denotes a type is that type's entry": closes `application`
    * (as {@link closeApplication} would) but publishes the result under `name` — the declaration's
-   * own name — instead of a content-derived one, and registers `name` so every *other* occurrence
+   * own name — instead of as its expansion, and registers `name` so every *other* occurrence
    * of the identical canonical application, reached generically through {@link closeApplication}
    * or {@link materialise}'s own walk, resolves to `name` too rather than minting a second entry
    * beside it (§5.10, §8.2: "a use-site application resolves to a declaration that owns it where
@@ -280,10 +282,11 @@ export interface TemplateMaterialiser {
 
   /**
    * Closes every application reachable from `entries`, returning the rewritten entries alongside
-   * everything this pass minted to do it. Only a *closed* entry is scanned — one whose own
-   * `parameters` is empty — since a template's own body is open (`chain<T>` inside `chain` awaits
-   * substitution and is not an application to close); closing those would mint an entry per
-   * level, keyed on the literal parameter name.
+   * everything this pass minted to do it. A template's own body is open (`chain<T>` inside
+   * `chain` awaits substitution and is not an application to close; closing it would mint an entry
+   * per level, keyed on the literal parameter name), so a held body is not scanned, and a record
+   * template closes only the field types that name none of its parameters at any depth -- those
+   * mean the same in every application, so the base names the entry each member names.
    *
    * Failures report per entry, through `reporter` when one is given (two bad applications in one
    * schema are both reported against their own declarations rather than the first aborting the
@@ -296,6 +299,14 @@ export interface TemplateMaterialiser {
 
   /** The facts of an entry this materialiser minted (or a declaration it closed), by name. */
   mintedFacts(name: string): MintedFacts | undefined;
+
+  /**
+   * The minted record each canonical application (`derivedName.ts`'s `canonicalApplication`)
+   * closed to, for `schemaResolver.ts`'s applied-parent fold: an application at a composition
+   * operand reaches the entry a use site's application of it expanded to, since a minted
+   * expansion records no `@application` of its own.
+   */
+  expansionsByApplication(): ReadonlyMap<string, string>;
 
   /**
    * The subset of every entry this materialiser has minted so far (on-demand closures included)
@@ -391,6 +402,30 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * module's own top note on {@link TemplateMaterialiser.closeApplicationAs}), just not this slot.
    */
   const owners = new Map<string, string>();
+
+  /**
+   * The entry each use-site application denotes, by its application-derived name: the synthetic its
+   * closing produced (§8.2). An application nothing declares is its expansion, so a later sight of
+   * it names the same synthetic rather than closing it again.
+   */
+  const expansions = new Map<string, string>();
+
+  /**
+   * The minted record each canonical application closed to, keyed on §8.2's canonical
+   * application: a minted expansion records no `@application`, so `schemaResolver.ts`'s
+   * applied-parent fold reads the edge an operand `& box<int32>` reaches from here.
+   */
+  const expansionsByApplication = new Map<string, string>();
+
+  /**
+   * The applications whose closing reached themselves -- the knot tied on the application-derived
+   * name while the entry was under construction. Such an expansion names itself, so its content
+   * cannot be written without a name, and the application keeps an entry of its own.
+   */
+  const tied = new Set<string>();
+
+  /** What each declaration naming an application closed to ({@link TemplateMaterialiser.closeApplicationAs}). */
+  const declared = new Map<string, Top>();
 
   /**
    * §5.10's parameter kinds, by entry name then parameter name — empty until
@@ -519,10 +554,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * equivalence is `derivedName.ts`'s concern, untouched here.
    *
    * Applied once, to the same `args` that go on to name the application, hash it, bind its
-   * template's parameters, and record the minted entry's own `source` -- so `source` states the
-   * canonical application (§8.1's own "`source` is structured provenance"), and the body a
-   * canonicalised bind substitutes is the same recomputation an ingesting reader would perform
-   * from that `source`.
+   * template's parameters, and record the application an entry closes (`@application`) -- so
+   * what the key states is the canonical application, and the body a canonicalised bind
+   * substitutes is the same recomputation an ingesting reader would perform from it.
    */
   function canonicalArgs(args: readonly TypeArgument[]): readonly TypeArgument[] {
     return args.map((argument) => {
@@ -756,17 +790,26 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       );
     }
     // §5.10's parameter kinds, applied before the application is named: a bare reference bound to
-    // a VALUE parameter reclassifies to a literal here, so the name and every downstream `source`
+    // a VALUE parameter reclassifies to a literal here, so the name and every recorded application
     // record what the parameter always meant rather than what the argument's own token shape
     // suggested at parse time. Chain-following (§8.2) applies after that reclassification, over
     // only what is left a reference by it -- see `canonicalArgs`'s own doc on why the order
     // matters.
     const args = canonicalArgs(byParameterKind(head, template, parameters, rawArgs));
-    const identityKey = ofApplication(head, args);
+    const name = ofApplication(head, args);
     // §8.2: "a use-site application resolves to a declaration that owns it where one exists" --
-    // `owners` is populated by `closeApplicationAs`, ahead of any generic occurrence reaching the
-    // identical canonical application through this path.
-    const name = owners.get(identityKey) ?? identityKey;
+    // `owners` is populated by `closeApplicationAs`. A recursive application inside a
+    // declaration-owned closure ties the knot on the declared name, and a use site writing the
+    // same application names the declaration instead of a derived entry.
+    const owner = owners.get(name);
+    if (owner !== undefined) {
+      return owner;
+    }
+    // An application nothing declares is its expansion: a later sight names the same synthetic.
+    const expansion = expansions.get(name);
+    if (expansion !== undefined) {
+      return expansion;
+    }
     if (aliasClosing.has(name)) {
       throw new TsonSchemaValidationError(
         `'${head}<...>' is a reference template whose own body applies it again, so composing it never ` +
@@ -780,7 +823,10 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // construction must be *this* application, not another that happens to derive the same name.
     minted.claim(name, canonicalApplication(head, args));
     if (materialised.has(name) || closing.has(name)) {
-      return name; // already built, or under construction -- the knot-tying case
+      // Already built, or under construction -- the knot-tying case. Under construction, the
+      // expansion names its own application, so the application keeps an entry of its own.
+      if (!materialised.has(name)) tied.add(name);
+      return name;
     }
     closing.add(name);
     if (closing.size > MAX_CLOSING_DEPTH) {
@@ -826,26 +872,18 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         aliasClosing.add(name);
         return closeHeldAlias(head, held, bind(parameters, args));
       }
-      // A record template's closure is the instantiation itself. This is the ANONYMOUS
-      // (use-site, no owning declaration -- `owners` found none for this identity above) path;
-      // {@link closeApplicationAs} is the declared one, and the two agree here because a
-      // record's own substituted body IS the type an application denotes either way (§5.10,
-      // §8.2). Every other held form closes to a *synthetic* the instantiation then references
-      // (below): unlike a record, a non-record form has no author-written body of its own to be
-      // -- it is what §8.2 calls a synthetic's own content identity, kept separately mergeable
-      // with an identically-shaped sugar form written elsewhere -- and only a *declaration*
-      // naming the application collapses that hop (§8.2, §8.3, §5.10 last paragraph).
+      // A record template's closure is a record, named for its content like every other closed
+      // form unless it names its own application (§8.2): a use site's application is its
+      // expansion, a closed synthetic record, with no instantiation entry and no `@application`.
       if (target === RECORD_HEAD) {
-        const instantiation = closeHeldInstantiation(
-          head,
-          template,
-          held,
-          bind(parameters, args),
-          false,
-        );
-        materialised.set(name, instantiation);
+        const closed = closeHeldRecord(head, held, bind(parameters, args));
+        refuseMintedMember(head, args, closed);
+        if (!tied.has(name)) {
+          return mintedRecord(name, canonicalApplication(head, args), closed);
+        }
+        materialised.set(name, closed);
         facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
-        deps.publish(name, instantiation);
+        deps.publish(name, closed);
         return name;
       }
       const formName = closeHeldTemplate(head, held, bind(parameters, args));
@@ -854,6 +892,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         // and an instantiation naming this head would carry an internal name into identity.
         return formName;
       }
+      if (!tied.has(name)) {
+        // An application nothing declares is its expansion: the use site names the synthetic.
+        expansions.set(name, formName);
+        return formName;
+      }
+      // The expansion names this application, so it is named by the application: a reference to
+      // the synthetic, which the compiler collapses, so it costs nothing at read time.
       const alias = instantiationOf(formName);
       materialised.set(name, alias);
       facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
@@ -883,7 +928,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // collection are all the same thing here -- a token in a tree -- because the body was never
     // read against the constructor's vocabulary in the first place.
     const substituted = substitute(open.application.coreValue, head, open.parameterNames, bindings);
-    const wire = closeApplications(substituted);
+    const wire = closeApplicationsOutsideChain(substituted);
     if (deps.definitionMetaReader === undefined) {
       throw new TsonNotImplementedError(
         `'${head}<...>' closes to a '${target}' body, and this materialiser was built without a compiled ` +
@@ -933,71 +978,109 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   }
 
   /**
-   * A fully-bound application's closure: the instantiation entry itself, whatever constructor the
-   * template's held body applies -- a record, an array, a refined atom, anything (§5.10, §8.2,
-   * §8.3). Substituting yields the type the author named by writing the application, so there is
-   * nothing for a synthetic-plus-reference hop to buy; the caller records the application as the
-   * entry's `@application`.
+   * §5.10's membership: a **declared** application of a family base -- `bt => box<int32>` over
+   * `box => <T> { v: T }` -- is a member, so its chain names the template and everything it IS-A,
+   * and the linker's inverse makes it one of the template's members. An application minted at a
+   * use site is not ({@link mintedRecord}). A template composing `top` (a constructor template in a
+   * meta-schema) is no family base, and adds nothing for itself.
    */
-  function closeHeldInstantiation(
+  function asDeclaredMember(head: string, template: Top, closed: Top): Top {
+    if (!isFamilyBase(template) || isConstructor(template, head)) return closed;
+    const chain = chainOf(closed);
+    return withChain(
+      closed,
+      typeChain([...chain.supertypes, head, ...supertypesOf(template)], chain.parents),
+    );
+  }
+
+  /**
+   * A **record** template's closure: the record body itself, which a declaration owns under its
+   * name and which {@link mintedRecord} names for its content where nothing declares it. A held
+   * body's chain is the parents as written, so closing it is where the chain is completed
+   * (`ancestry.ts`): a parent applied to the template's own parameter stays in `parents` beside its
+   * template's ancestors, for `schemaResolver.ts`'s fold to turn into the edge to the entry the
+   * closed application denotes -- `ok<text>` IS-A `result<text>` and not `result<int32>`, whatever
+   * order the declarations were written in. A declaration carrying a removal wrote no parent, its
+   * chain being empty (§5.9). Minted with no subtypes, like every resolved entry: `subtypes` is
+   * linking's.
+   */
+  function closeHeldRecord(
     head: string,
-    template: Top,
     open: HeldBody,
     bindings: ReadonlyMap<string, TypeArgument>,
-    declared: boolean,
   ): Top {
-    const closed = closeHeld(head, open, bindings);
-    const body = closeFamilyClaims(closed.body);
-    return withChain(body, typeChain(instantiationSupertypes(head, template, body, declared)));
+    const body = closeFamilyClaims(closeHeld(head, open, bindings).body);
+    return isRecordTop(body)
+      ? withChain(body, chainOfParents(parentsOf(body), deps.namespaceDefinitions))
+      : body;
   }
 
   /**
-   * An instantiation's closed chain (§5.8, §5.10): the template's own closed chain, plus each
-   * closed parent its held parents named once substituted (the parents an open composition
-   * operand like `ok => <T> result<T> & { ... }` only gains once its parameter closes, read off the
-   * closed body's `chain.parents`) with that parent's own chain, and, where the template is a
-   * family base, the template itself -- the last **only where a declaration names the
-   * application** (`declared`): an application written at a use site is a type read where it is
-   * written and no member of the template's family (§5.10, §8.2). A template composing `top` (a
-   * constructor template in a meta-schema) is no family base and adds nothing for itself.
+   * A minted record application as its expansion (§8.2): a closed synthetic record, named by its
+   * binding record as every closed form is, so two applications closing to one record --
+   * `box<int32>` and `crate<int32>` over two templates with one field list -- are one entry, and
+   * one an inline `{ v: int32 }` written out is too. Built once; a later application with the
+   * same content names the entry already there.
    */
-  function instantiationSupertypes(
-    head: string,
-    template: Top,
-    body: Top,
-    declared: boolean,
-  ): readonly string[] {
-    const result: string[] = [...supertypesOf(template)];
-    const seen = new Set(result);
-    const addOne = (n: string): void => {
-      if (!seen.has(n)) {
-        seen.add(n);
-        result.push(n);
-      }
-    };
-    for (const parentRef of parentsOf(body)) {
-      addOne(parentRef.name);
-      for (const ancestor of supertypesOf(deps.namespaceDefinitions(parentRef.name))) {
-        addOne(ancestor);
-      }
+  function mintedRecord(name: string, canonical: string, closed: Top): string {
+    const wire = isRecordTop(closed) ? heldRecord(closed).coreValue : undefined;
+    const fields = wire?.kind === 'record' ? wire.fields : [];
+    const formName = ofBinding(RECORD_HEAD, fields);
+    minted.claim(formName, canonicalBinding(RECORD_HEAD, fields));
+    expansions.set(name, formName);
+    if (!expansionsByApplication.has(canonical)) expansionsByApplication.set(canonical, formName);
+    if (deps.namespaceDefinitions(formName) === undefined) {
+      materialised.set(formName, closed);
+      synthetics.add(formName);
+      facts.set(formName, { head: RECORD_HEAD });
+      deps.publish(formName, closed);
     }
-    if (declared && isFamilyBase(template) && !supertypesOf(template).includes('top')) {
-      addOne(head);
-    }
-    return result;
+    return formName;
   }
 
   /**
-   * The entry an application of an open *instance* denotes — a template whose body is neither a
-   * record nor an alias. Two entries come out of it, because one cannot carry two identities: the
-   * body itself is a closed *synthetic*, named for the form and sourced to the constructor it
-   * builds (§8.2) — an open synthetic's own name is internal, so keying it on the application
-   * would make identity depend on an unstable name. But the same closure is also an
-   * *instantiation* of the template, and §8.2 keys that on the application itself (this module's
-   * own top note on {@link canonicalArgs}). So this
-   * publishes the synthetic and returns the name of a reference entry pointing at it, whose
-   * `source` is the application (built by {@link instantiate}'s own caller, {@link
-   * instantiationOf}).
+   * A minted record whose chain names a declared type is a family member with no declared name
+   * (§3.3.4, §8.2): a read reports the member it selects, a tag names it and a binding maps it, all
+   * by a name an application at a use site does not have. Its chain names one through a supertype,
+   * or through a parent application a declaration owns (`& result<text>` beside `rt =>
+   * result<text>`), which is the edge the fold would otherwise add. Refused here, where the
+   * application is in hand to name, against the declaration that wrote it. A constructor -- a
+   * record IS-A the kernel's `top` -- is no member of anything.
+   */
+  function refuseMintedMember(head: string, args: readonly TypeArgument[], closed: Top): void {
+    if (!isRecordTop(closed) || isConstructor(closed, head)) return;
+    const onto: string[] = [...supertypesOf(closed)];
+    for (const parent of parentsOf(closed)) {
+      if (parent.arguments.length === 0) continue;
+      const owner = owners.get(ofApplication(parent.name, canonicalArgs(parent.arguments)));
+      if (owner !== undefined) onto.push(owner);
+    }
+    const first = onto[0];
+    if (first === undefined) return;
+    const written = `${head}<${args.map((a) => (a.kind === 'ref' ? a.ref.name : a.value.text)).join(', ')}>`;
+    const base =
+      onto.find(
+        (member) =>
+          !onto.some(
+            (other) =>
+              other !== member && supertypesOf(deps.namespaceDefinitions(other)).includes(member),
+          ),
+      ) ?? first;
+    throw new TsonSchemaValidationError(
+      `'${written}' composes onto '${base}', so it is a member of that family, and a member is ` +
+        'declared: a read reports the member it selects, a tag names it and a binding maps it, all ' +
+        'by a name an application at a use site does not have (§3.3.4, §8.2). Declare it -- ' +
+        `'my_name => ${written}' -- and use that name in place of the application`,
+    );
+  }
+
+  /**
+   * The expansion of an application of an open *instance* — a template whose body is neither a
+   * record nor an alias: a closed *synthetic*, named for its binding record and built by its
+   * constructor (§8.2), so `[text]` written directly and `[T]` closed to `text` are one entry. An
+   * application nothing declares is that expansion, and the use site names the synthetic; one
+   * whose expansion names its own application keeps a reference entry under the
+   * application-derived name ({@link instantiate}, {@link instantiationOf}).
    */
   function closeHeldTemplate(
     head: string,
@@ -1055,6 +1138,30 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
   }
 
   /**
+   * The held body's applications closed -- **except the ones standing in its chain's `parents`**,
+   * which are left exactly as written. A composition operand denotes no entry (§8.2): composition
+   * needs the operand's fields, which substitution has already produced, and nothing else; closing
+   * it here would mint the entry that composition exists to avoid (`vip => <T> customer & box<T>`
+   * closed at `vip<text>` would produce a `box<text>` nothing named). Resolving the operand to the
+   * entry it denotes belongs to `schemaResolver.ts`'s fold, which runs after every declaration and so
+   * cannot make the answer depend on declaration order.
+   */
+  function closeApplicationsOutsideChain(value: CoreValue): CoreValue {
+    if (value.kind !== 'record' || isApplication(value)) return closeApplications(value);
+    return {
+      kind: 'record',
+      fields: value.fields.map((field) =>
+        field.name === CHAIN
+          ? field
+          : {
+              name: field.name,
+              value: rescope(field.value, closeApplications(field.value.value.coreValue)),
+            },
+      ),
+    };
+  }
+
+  /**
    * Every application still written in `type_ref`'s record form, closed to a bare reference to
    * the entry it denotes — the inverse of the shape `wireForm.ts`'s `refValue` writes when a
    * slot holds one. Runs on the wire value rather than on the body read from it because the
@@ -1105,12 +1212,14 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     closeApplication(application: TypeRef): string {
       return close(application).name;
     },
-    checkApplication(application: TypeRef): void {
+    checkApplication(application: TypeRef): readonly TypeArgument[] {
       const template = deps.namespaceDefinitions(application.name);
-      if (template === undefined) return;
+      if (template === undefined) return application.arguments;
       const parameters = typeParameters(template);
-      if (parameters.length === 0 || parameters.length !== application.arguments.length) return;
-      byParameterKind(application.name, template, parameters, application.arguments);
+      if (parameters.length === 0 || parameters.length !== application.arguments.length) {
+        return application.arguments;
+      }
+      return byParameterKind(application.name, template, parameters, application.arguments);
     },
     closeApplicationAs(name: string, application: TypeRef): Top | undefined {
       const head = application.name;
@@ -1136,19 +1245,21 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         owners.set(identityKey, name);
       }
       minted.claim(name, canonicalApplication(head, canonical));
-      const already = materialised.get(name);
+      const already = declared.get(name);
       if (already !== undefined) {
         return already;
       }
-      closing.add(name);
       heads.push(head);
       try {
         // §8.2, §8.3: a declaration naming a fully-bound application IS that application's
         // instantiation entry, whatever the applied constructor -- no minted twin beside it and
         // no `!reference` hop, record-bodied or not.
         const bindings = bind(parameters, canonical);
-        const instantiation = closeHeldInstantiation(head, template, held, bindings, true);
-        materialised.set(name, instantiation);
+        const instantiation =
+          target === RECORD_HEAD
+            ? asDeclaredMember(head, template, closeHeldRecord(head, held, bindings))
+            : closeHeld(head, held, bindings).body;
+        declared.set(name, instantiation);
         facts.set(name, {
           application: { name: head, arguments: canonical, annotations: [] },
           ...(target === RECORD_HEAD ? {} : { head: target }),
@@ -1156,7 +1267,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         deps.publish(name, instantiation);
         return instantiation;
       } finally {
-        closing.delete(name);
         heads.pop();
       }
     },
@@ -1166,15 +1276,24 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     ): MaterialiseResult {
       const rewritten = new Map<string, Top>();
       for (const [key, definition] of entries) {
-        if (typeParameters(definition).length > 0) {
-          // A template's own body is open: `chain<T>` inside `chain` awaits substitution and is
-          // not an application to close. Closing it here would mint an entry per level, keyed on
-          // the literal parameter name.
-          rewritten.set(key, definition);
-          continue;
-        }
+        const parameters = typeParameters(definition);
         try {
-          rewritten.set(key, mapBodyRefs(definition, close));
+          // A template's own body is open: `chain<T>` inside `chain` awaits substitution and is
+          // not an application to close -- closing it would mint an entry per level, keyed on the
+          // literal parameter name. A field type in a record template that names none of its
+          // parameters, at any depth (`kind: bounded<9>`), means the same in every application, so
+          // it is closed in place and the base names the entry each member names. A held body is
+          // not scanned: its references are tokens until substitution.
+          rewritten.set(
+            key,
+            parameters.length === 0
+              ? mapBodyRefs(definition, close)
+              : isFamilyBase(definition)
+                ? mapBodyRefs(definition, (ref) =>
+                    mentionsParameter(ref, parameters) ? ref : close(ref),
+                  )
+                : definition,
+          );
         } catch (e) {
           if (!(e instanceof TsonSchemaValidationError)) {
             throw e;
@@ -1197,6 +1316,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     },
     mintedFacts(name: string): MintedFacts | undefined {
       return facts.get(name);
+    },
+    expansionsByApplication(): ReadonlyMap<string, string> {
+      return new Map(expansionsByApplication);
     },
     syntheticNames(): ReadonlySet<string> {
       return new Set(synthetics);
@@ -1276,11 +1398,22 @@ export function closeFamilyClaims(body: Top): Top {
   return rest.extension === 'ABSTRACT' ? { ...rest, extension: 'OPEN' } : rest;
 }
 
+/** Whether `ref` names one of `parameters`, as its head or in an argument, at any depth. */
+function mentionsParameter(ref: TypeRef, parameters: readonly string[]): boolean {
+  return (
+    parameters.includes(ref.name) ||
+    ref.arguments.some(
+      (argument) =>
+        (argument.kind === 'ref' && mentionsParameter(argument.ref, parameters)) ||
+        (argument.kind === 'value' && parameters.includes(argument.value.text)),
+    )
+  );
+}
+
 /**
- * The entry for a use-site (undeclared) application whose closure is a synthetic: a reference to
- * that synthetic, its application recorded as its `@application` by the caller -- §8.2's other
- * lift channel, distinct from a *declared* application, which is its own instantiation entry with
- * no such hop ({@link TemplateMaterialiser.closeApplicationAs}).
+ * The instantiation entry a self-reaching expansion keeps (§8.2): a reference to the synthetic,
+ * its application recorded as its `@application` by the caller. The compiler collapses the hop, so
+ * it costs nothing at read time.
  */
 function instantiationOf(formName: string): Top {
   return { kind: 'reference', target: { name: formName, arguments: [], annotations: [] } };

@@ -242,7 +242,6 @@ function narrowingSchema(): LinkedSchema {
     origins: new Map(
       [...entries.keys()].map((name) => [name, 'test://scoped-reader/narrowing.tn']),
     ),
-    textEnums: new Set(),
     enumForms: new Map(),
     nameTypes: new Map(),
   };

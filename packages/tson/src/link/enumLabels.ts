@@ -124,29 +124,6 @@ function pinned(
   return false;
 }
 
-/** The kind of the atom body `definition` holds, or `undefined` for a held template or a namespace value. */
-function bodyKindOf(definition: Top): string | undefined {
-  return isTemplateBody(definition) || definition.kind === 'namespace'
-    ? undefined
-    : definition.kind;
-}
-
-/**
- * Whether `enumeration`'s members are names: its `type` is an identifier family. A type that
- * resolves to nothing is taken to have names, the stricter reading -- the unresolved name is
- * reported on its own -- so every per-name rule still applies.
- */
-export function membersAreNames(
-  enumeration: EnumEntry,
-  local: EntryGetter,
-  structure: EntryGetter | undefined,
-  heads?: HeadGetter,
-): boolean {
-  if (enumBodyOf(enumeration.value) === undefined) return false;
-  const label = enumLabelType(enumeration, local, structure, heads);
-  return label === undefined ? true : bodyKindOf(label.definition) === 'identifier_type';
-}
-
 /**
  * The form `enumeration` matches its members in: its label type's `normalization` ([TSON-SCHEMA]
  * §5.5), followed into the governing meta where the enum's constructor pinned the type. `NONE` for

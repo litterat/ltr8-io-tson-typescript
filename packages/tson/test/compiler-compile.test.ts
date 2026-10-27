@@ -25,7 +25,6 @@ function linkedSchema(entries: ReadonlyMap<string, Top>): LinkedSchema {
     facts: new Map(),
     bootstrap: false,
     origins: new Map([...entries.keys()].map((name) => [name, 'test://s.tn'])),
-    textEnums: new Set(),
     enumForms: new Map(),
     nameTypes: new Map(),
   };

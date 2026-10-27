@@ -295,14 +295,15 @@ cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root per
 
 Six commands: `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`. `validate`/`compile`/`hash`
 register `@ltr8/tson/stdlib`'s embedded `meta-kernel`/`meta.tn`/`core.tn`, so they work offline with
-no `SchemaSource` configured. `--format json`/`--format tson` report an `outcome` of `VALID`,
-`INVALID` or `NOT_CHECKED` — a document whose schema could not be obtained is `NOT_CHECKED`, not
-`INVALID`, since nothing here read it.
+no `SchemaSource` configured. `--format json`/`--format tson` report an `outcome` of `ACCEPTED`,
+`REJECTED` or `UNDETERMINED` — a document is rejected by an invalidity or by a refusal under this
+run's own policy and limits, and a document whose schema could not be obtained is `UNDETERMINED`,
+since nothing here read it.
 
-Exit codes, ranked `70 > 78 > 69 > 75 > 1` by who must act first: `0` checked and nothing to
+Exit codes, ranked `70 > 78 > 69 > 1 > 75` by who must act first: `0` checked and nothing to
 report, `1` checked and rejected (including a §8.2 name-hygiene refusal), `2` usage error, `69` a
 schema permanently unavailable (refused by policy, absent, or too large), `75` a schema
-temporarily unavailable (unreachable, or it timed out), `78` a type the schema needs with no
+temporarily unavailable (unreachable, or it timed out) and nothing else wrong, `78` a type the schema needs with no
 registered binding, `70` a library gap or an internal fault.
 
 ### Resource limits

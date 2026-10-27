@@ -7,6 +7,7 @@ import {
 import { createHeldBody } from '../src/compiler/heldBody.js';
 import { refValue } from '../src/compiler/wireForm.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
+import { canonicalApplication } from '../src/compiler/derivedName.js';
 import { inferAll, kinds as parameterKindsOf } from '../src/compiler/parameterTypes.js';
 import {
   TsonLimitRefusedError,
@@ -215,8 +216,8 @@ function isReferenceBody(body: Top): body is Reference {
 
 // ── Record templates close to the instantiation itself (§5.10) ─────────────────────────────
 
-describe('a record template closes to the instantiation entry itself', () => {
-  it('substitutes a value argument into a field type, and the entry carries the flattened application as `source`', () => {
+describe('a use-site record application is its expansion (§8.2)', () => {
+  it('substitutes an argument into a field type, closing to a synthetic record keyed on its content with no `@application`', () => {
     const { namespace, materialiser } = harness();
     namespace.set(
       'box',
@@ -235,11 +236,13 @@ describe('a record template closes to the instantiation entry itself', () => {
     const found = namespace.get(name);
     if (found === undefined || !isRecordBody(found)) throw new Error('unreachable');
     expect(entryKind(found)).toBe('PRODUCT');
-    expect(materialiser.mintedFacts(name)?.application).toEqual({
-      name: 'box',
-      arguments: [ref('text')],
-      annotations: [],
-    });
+    expect(name).toMatch(/^record_value_text_[0-9a-f]{8}$/);
+    expect(materialiser.syntheticNames().has(name)).toBe(true);
+    expect(materialiser.mintedFacts(name)?.application).toBeUndefined();
+    expect(materialiser.mintedFacts(name)?.head).toBe('record');
+    expect(
+      materialiser.expansionsByApplication().get(canonicalApplication('box', [ref('text')])),
+    ).toBe(name);
     expect(fieldsOf(found)[0]).toMatchObject({
       name: 'value',
       type: { name: 'text', arguments: [] },
@@ -274,7 +277,7 @@ describe('a record template closes to the instantiation entry itself', () => {
     expect([...namespace.keys()].filter((k) => k === first)).toHaveLength(1);
   });
 
-  it('is independent of §4.3-equivalent argument spellings: `<255>` and `<0xFF>` name one entry', () => {
+  it('is independent of §4.3-equivalent argument spellings: `<255>` and `<0xFF>` are one application', () => {
     const { namespace, materialiser } = harness();
     namespace.set(
       'sized',
@@ -296,13 +299,16 @@ describe('a record template closes to the instantiation entry itself', () => {
       annotations: [],
     });
     expect(hex).toBe(decimal);
-    // `1` and `1.0` resolve to different base types (§4) and stay two entries despite one magnitude.
+    // `1` and `1.0` resolve to different base types (§4) and stay two applications despite one
+    // magnitude -- though here both expand to one record, the template naming no parameter in its
+    // body, and an expansion is keyed on its content (§8.2).
     const asFloat = materialiser.closeApplication({
       name: 'sized',
       arguments: [literal('255.0')],
       annotations: [],
     });
-    expect(asFloat).not.toBe(decimal);
+    expect(asFloat).toBe(decimal);
+    expect(materialiser.expansionsByApplication().size).toBe(2);
   });
 
   it('an argument that is an alias follows its reference chain to its terminal entry, so `box<user_id>` over `user_id => uuid` mints the same entry as `box<uuid>` (§8.2)', () => {
@@ -343,15 +349,11 @@ describe('a record template closes to the instantiation entry itself', () => {
       annotations: [],
     });
     expect(overAlias).toBe(overTerminal);
-    // Self-describing (§8.1): the minted entry's `@application` states the canonical application
-    // -- the terminal entry `uuid`, not the alias `user_id` the first caller happened to write.
-    const found = namespace.get(overAlias);
-    if (found === undefined) throw new Error('unreachable');
-    expect(materialiser.mintedFacts(overAlias)?.application).toEqual({
-      name: 'box',
-      arguments: [ref('uuid')],
-      annotations: [],
-    });
+    // The application is keyed canonically -- the terminal entry `uuid`, not the alias `user_id`
+    // the first caller happened to write.
+    const expansions = materialiser.expansionsByApplication();
+    expect(expansions.get(canonicalApplication('box', [ref('uuid')]))).toBe(overAlias);
+    expect(expansions.has(canonicalApplication('box', [ref('user_id')]))).toBe(false);
   });
 
   it('a refinement or a fresh instance is not an alias and keeps its own identity, even over an otherwise-identical body (§8.2)', () => {
@@ -418,8 +420,8 @@ describe('a record template closes to the instantiation entry itself', () => {
 
 // ── Open-instance templates close to a synthetic plus an instantiation reference ────────────
 
-describe('an open-instance template mints a synthetic form plus a reference instantiation', () => {
-  it('produces two entries: a REFERENCE instantiation naming the synthetic array form', () => {
+describe('a use-site application of an open-instance template is its expansion (§8.2)', () => {
+  it('names the synthetic array form directly, minting no instantiation entry', () => {
     const { namespace, materialiser } = harness();
     // `<T> !array { element_type: T }` -- held directly, since the array constructor's own
     // vocabulary (not `record`) is what dispatches `closeHeldTemplate` rather than `closeHeldRecord`.
@@ -449,22 +451,14 @@ describe('an open-instance template mints a synthetic form plus a reference inst
         ),
       ),
     );
-    const instantiationName = materialiser.closeApplication({
+    const before = namespace.size;
+    const formName = materialiser.closeApplication({
       name: 'wrapped',
       arguments: [ref('text')],
       annotations: [],
     });
-    const instantiation = namespace.get(instantiationName);
-    if (instantiation === undefined || !isReferenceBody(instantiation)) {
-      throw new Error('unreachable');
-    }
-    expect(entryKind(instantiation)).toBe('REFERENCE');
-    expect(materialiser.mintedFacts(instantiationName)?.application).toEqual({
-      name: 'wrapped',
-      arguments: [ref('text')],
-      annotations: [],
-    });
-    const formName = instantiation.target.name;
+    expect(namespace.size).toBe(before + 1);
+    expect(materialiser.mintedFacts(formName)?.application).toBeUndefined();
     expect(materialiser.syntheticNames().has(formName)).toBe(true);
     const form = namespace.get(formName);
     if (form === undefined || !isArrayBody(form)) throw new Error('unreachable');
@@ -667,15 +661,17 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
       arguments: [ref('int32')],
       annotations: [],
     });
-    // Exactly one new entry (the `pair<uuid, int32>` instantiation) -- no second entry for the alias hop.
+    // Exactly one new entry (the expansion `pair<uuid, int32>` closes to) -- no second entry for
+    // the alias hop, and no instantiation entry beside the expansion.
     expect(namespace.size).toBe(before + 1);
     const found = namespace.get(closed);
     if (found === undefined) throw new Error('unreachable');
-    expect(materialiser.mintedFacts(closed)?.application).toEqual({
-      name: 'pair',
-      arguments: [ref('uuid'), ref('int32')],
-      annotations: [],
-    });
+    expect(materialiser.syntheticNames().has(closed)).toBe(true);
+    expect(
+      materialiser
+        .expansionsByApplication()
+        .get(canonicalApplication('pair', [ref('uuid'), ref('int32')])),
+    ).toBe(closed);
   });
 
   it('a self-applying alias is a reported cycle, not a knot tied on nothing (§5.10)', () => {
@@ -997,8 +993,7 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
       arguments: [literal('5')],
       annotations: [],
     });
-    const formName = (namespace.get(name) as Reference).target.name;
-    const form = namespace.get(formName);
+    const form = namespace.get(name);
     if (form === undefined || !('kind' in form) || form.kind !== 'integer_type') {
       throw new Error('unreachable');
     }
@@ -1039,8 +1034,8 @@ describe('materialise (the whole-schema batch pass)', () => {
       definitionMetaReader: testMetaReader,
     });
     const result = materialiser.materialise(entries);
-    // The template's own entry passes through unchanged.
-    expect(result.entries.get('box')).toBe(entries.get('box'));
+    // The template's own entry passes through unchanged: its one field names its parameter.
+    expect(result.entries.get('box')).toEqual(entries.get('box'));
     const rewritten = result.entries.get('boxed_text');
     if (rewritten === undefined || !isReferenceBody(rewritten)) throw new Error('unreachable');
     expect(rewritten.target.arguments).toEqual([]);
@@ -1220,22 +1215,18 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
       metaTypes: metaTypesFor(),
     });
     namespace.set('e', enumTemplate());
-    const name = materialiser.closeApplication({
+    const form = materialiser.closeApplicationAs('e_c', {
       name: 'e',
       arguments: [ref('c')],
       annotations: [],
     });
-    const instantiation = namespace.get(name);
-    if (instantiation === undefined) throw new Error('unreachable');
     // `c` is recorded as the enum member it always meant, not a namespace reference to a type
     // called `c` that does not exist.
-    expect(materialiser.mintedFacts(name)?.application).toEqual({
+    expect(materialiser.mintedFacts('e_c')?.application).toEqual({
       name: 'e',
       arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
       annotations: [],
     });
-    const formName = (instantiation as { readonly target: TypeRef }).target.name;
-    const form = namespace.get(formName);
     if (form === undefined || !('members' in form)) throw new Error('unreachable');
     expect(form.members).toEqual(['a', 'b', 'c']);
   });
@@ -1255,12 +1246,12 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
         }),
       ),
     );
-    const name = materialiser.closeApplication({
+    materialiser.closeApplicationAs('e_c', {
       name: 'e',
       arguments: [ref('c')],
       annotations: [],
     });
-    expect(materialiser.mintedFacts(name)?.application).toEqual({
+    expect(materialiser.mintedFacts('e_c')?.application).toEqual({
       name: 'e',
       arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
       annotations: [],
@@ -1270,12 +1261,12 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
   it('with no `metaTypes` and no batch pass, an argument keeps its parsed reference channel (no regression)', () => {
     const { namespace, materialiser } = harness({ definitionMetaReader: enumAwareMetaReader });
     namespace.set('e', enumTemplate());
-    const name = materialiser.closeApplication({
+    materialiser.closeApplicationAs('e_c', {
       name: 'e',
       arguments: [ref('c')],
       annotations: [],
     });
-    expect(materialiser.mintedFacts(name)?.application).toEqual({
+    expect(materialiser.mintedFacts('e_c')?.application).toEqual({
       name: 'e',
       arguments: [ref('c')],
       annotations: [],

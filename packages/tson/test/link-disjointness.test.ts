@@ -108,17 +108,15 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('op', ns)).toBeUndefined();
   });
 
-  it('an enum whose type is not an identifier family is always STRING, whatever its members spell (§7.4)', () => {
+  it('an enum’s class is its members’ shared base-type class, its members being identifiers (§5.4, §7.4)', () => {
     const ns = new Map<string, Top>([
-      ['ports', def({ kind: 'enum', members: ['80', '443'], nameType: 'text' })],
-      ['bools', def({ kind: 'enum', members: ['true', 'false'], nameType: 'text' })],
+      ['bools', def({ kind: 'enum', members: ['true', 'false'], nameType: 'identifier' })],
+      ['states', def({ kind: 'enum', members: ['OPEN', 'DONE'], nameType: 'identifier' })],
+      ['mixed', def({ kind: 'enum', members: ['true', 'OPEN'], nameType: 'identifier' })],
     ]);
-    // Linking decides which enums are text enums -- `type` resolves in a namespace the body cannot
-    // see -- and records them in `textEnums`; the class is read from that, never from the name.
-    const textEnums = new Set(['ports', 'bools']);
-    expect(discriminationClassOf('ports', ns, textEnums)).toBe('STRING');
-    expect(discriminationClassOf('bools', ns, textEnums)).toBe('STRING');
-    expect(discriminationClassOf('ports', ns)).toBe('NUMBER');
+    expect(discriminationClassOf('bools', ns)).toBe('BOOLEAN');
+    expect(discriminationClassOf('states', ns)).toBe('STRING');
+    expect(discriminationClassOf('mixed', ns)).toBeUndefined();
   });
 
   // ── §5.4's no-class list gains two straddling kinds (#17) ───────────────────────────────────

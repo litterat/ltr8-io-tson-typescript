@@ -16,6 +16,10 @@
  *   HttpSchemaSourceOptions.mapHosts} default to empty — nothing is fetched until a host is
  *   named. A host is matched exactly: no suffix or wildcard matching, because a `.example.com`
  *   suffix test also matches `evil-example.com`, which is how this control is usually defeated.
+ * - **A refusal does not disclose the allow-list** ([TSON-SCHEMA] §11.2). It names the reference
+ *   and that this deployment will not supply it, never the hosts it would, nor the base a host is
+ *   mapped to: telling an untrusted sender which hosts this source fetches from is reconnaissance
+ *   for request forgery.
  * - **The reference must be a legal identity** (`reference.ts`'s own {@link permittedReference}),
  *   checked before any connection is opened.
  * - **Redirects are never followed.** `fetch` is called with `redirect: 'manual'`, so a 3xx
@@ -141,8 +145,8 @@ export function httpSchemaSource(options: HttpSchemaSourceOptions = {}): HttpSch
       throw notPermitted(
         reference,
         hosts.size === 0
-          ? 'no host is allowed by this source'
-          : `host '${identity.host}' is not one of ${[...hosts.keys()].join(', ')}`,
+          ? 'no host is allowed by this source, so this deployment will not supply it'
+          : `host '${identity.host}' is not an allowed host, so this deployment will not supply it`,
       );
     }
     // Concatenate, then VERIFY against the parser that will actually be used. `fetch` re-parses
@@ -157,7 +161,7 @@ export function httpSchemaSource(options: HttpSchemaSourceOptions = {}): HttpSch
     if (parsed === undefined || !isWithin(parsed, base)) {
       throw notPermitted(
         reference,
-        `resolves to '${parsed?.href ?? location}', which is outside the mapped base '${base}'`,
+        'resolves outside the base its host is mapped to, so this deployment will not supply it',
       );
     }
     return { canonical: identity.canonical, location: parsed.href };

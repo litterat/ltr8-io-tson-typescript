@@ -6,7 +6,7 @@
  * for the Java's `TsonObjectWriter` field (see this file's own note on it below).
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
-import type { EntryFacts, Top, TypeRef } from '../schema/meta/typedef.js';
+import type { EntryFacts, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
 
 /**
  * A single-name entry lookup -- the entry's value (§8.1: an entry is its value), `undefined` when
@@ -116,11 +116,13 @@ export type DeclaredApplicationCloser = (name: string, application: TypeRef) => 
  * its template's fields by value and mints nothing, so it never reaches the materialiser's closing
  * path, which is where an application's arguments are otherwise judged against the parameters they
  * bind. Throws a `TsonSchemaValidationError` when an argument is outside its parameter's bound or
- * type; an argument it cannot judge is left to the position, as everywhere else.
+ * type; an argument it cannot judge is left to the position, as everywhere else. Returns the
+ * arguments as §5.10 classifies them by the parameter each binds -- what the operand's chain
+ * records, so the applied-parent fold keys it as the owning declaration's `@application` is keyed.
  *
  * Optional on the same terms as {@link ApplicationCloser}.
  */
-export type ApplicationChecker = (application: TypeRef) => void;
+export type ApplicationChecker = (application: TypeRef) => readonly TypeArgument[];
 
 /**
  * Converts an already-bound `Top` body back to a bare wire `CoreValue` — this port's own

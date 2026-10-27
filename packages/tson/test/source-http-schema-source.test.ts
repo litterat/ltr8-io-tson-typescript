@@ -52,6 +52,20 @@ describe('httpSchemaSource: deny by default', () => {
     );
   });
 
+  it('a refusal names the reference and not the allow-list (TSON-SCHEMA §11.2)', async () => {
+    const source = httpSchemaSource({ allowHosts: ['schemas.example.com', 'mirror.example.org'] });
+    let message = '';
+    try {
+      await source.fetch('https://evil.example.net/a.tn');
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('https://evil.example.net/a.tn');
+    expect(message).toContain('will not supply');
+    expect(message).not.toContain('schemas.example.com');
+    expect(message).not.toContain('mirror.example.org');
+  });
+
   it('never opens a connection for a refused reference', async () => {
     const fetchSpy = vi.fn();
     globalThis.fetch = fetchSpy;

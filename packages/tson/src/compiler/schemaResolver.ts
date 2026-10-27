@@ -42,26 +42,35 @@
 import {
   TsonBindMismatchError,
   TsonInternalError,
+  TsonNameHygieneRefusedError,
   TsonNotImplementedError,
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import { diagnosticCodeForFetch } from '../core/diagnostic.js';
+import { diagnosticCodeForFetch, diagnosticCodeForMechanism } from '../core/diagnostic.js';
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { FieldNameType } from '../link/fieldNames.js';
+import { checkImportLevel, type ImportLevel } from '../link/importLevel.js';
 import type { TemplateParam } from '../schema/meta/bodies.js';
 import { NO_FIELDS, TYPE_KIND } from '../schema/meta/bodies.js';
 import type { Annotations, EntryFacts, Top, TypeRef } from '../schema/meta/typedef.js';
 import {
   APPLICATION_ANNOTATION,
   SYNTHETIC_ANNOTATION,
+  applicationOf,
+  chainOf,
   isOpen,
+  isType,
+  supertypesOf,
+  typeChain,
   typeParameters,
   withApplication,
+  withChain,
 } from '../schema/meta/typedef.js';
+import { canonicalApplication } from './derivedName.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -140,11 +149,10 @@ export interface ImportedSchema {
    */
   readonly originOf: (name: string) => string;
   /**
-   * The names among `entries` whose enum members are texts rather than names -- linking's
-   * `LinkedSchema.textEnums`, carried so an importer classifies an imported enum as its own schema
-   * did ([TSON-SCHEMA] §7.4). Absent means none.
+   * The imported schema's identity, `!!meta` and governing level, for §2.2.3's import-level rule
+   * (`link/importLevel.ts`). Absent means the edge is not judged -- a hand-assembled import only.
    */
-  readonly textEnums?: ReadonlySet<string>;
+  readonly level?: ImportLevel;
   /** Each enum among `entries` that matches in a form other than `NONE`, by name -- `LinkedSchema.enumForms`. Absent means none. */
   readonly enumForms?: ReadonlyMap<string, Normalization>;
   /** Each record among `entries` that states a `name_type`, with its identifier family -- `LinkedSchema.nameTypes`. Absent means none. */
@@ -171,6 +179,8 @@ export interface SchemaResolverDeps {
   readonly encodeSourceBody?: SourceBodyEncoder;
   /** Resolves an `!!import` URI's namespace. Omitted means "no loader": a document with no `!!import` is unaffected; one that writes any reports {@link TsonNotImplementedError}. */
   readonly resolveImport?: ImportResolver;
+  /** Whether the meta-kernel governs the document being resolved, for §2.2.3's import-level rule. Omitted means the rule is not judged here. */
+  readonly kernelGoverned?: boolean;
 }
 
 /** Options for {@link resolveSchema}. */
@@ -264,7 +274,10 @@ export function resolveSchema(
   // Every entry's facts -- an import's as its schema recorded them, a local one's as resolution
   // learns them. Shared with the definition resolver, which records each declaration's here.
   const facts: EntryFactsTable = new Map<string, EntryFacts>();
-  const namespace = mergeImports(document, deps, facts);
+  // The application each imported entry closes, from its `@application` -- what the applied-parent
+  // fold keys an imported instantiation on, as it keys a local one (§8.2).
+  const importedApplications = new Map<string, TypeRef>();
+  const namespace = mergeImports(document, deps, facts, importedApplications);
 
   const reporter: DesugarFailureReporter | undefined =
     receiver === undefined
@@ -372,9 +385,7 @@ export function resolveSchema(
     namespaceDefinitions: namespaceGetter,
     facts,
     applicationCloser: (application) => materialiser.closeApplication(application),
-    applicationChecker: (application) => {
-      materialiser.checkApplication(application);
-    },
+    applicationChecker: (application) => materialiser.checkApplication(application),
     declaredApplicationCloser: (declaredName, application) =>
       materialiser.closeApplicationAs(declaredName, application),
     ...(deps.annotationValueReader === undefined
@@ -473,6 +484,19 @@ export function resolveSchema(
   const mintedSynthetic = materialised.synthetics;
   for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
   for (const [name, definition] of instantiations) namespace.set(name, definition);
+
+  // §5.8's IS-A edge for a parent written as an application, derived once every declaration has
+  // resolved, and every closed chain then dropped of the applications it no longer needs.
+  const applicationOfEntry = (name: string): TypeRef | undefined =>
+    materialiser.mintedFacts(name)?.application ?? importedApplications.get(name);
+  appliedParentEdges(
+    namespace,
+    [resolvedLocals, instantiations],
+    applicationOfEntry,
+    materialiser.expansionsByApplication(),
+    mintedSynthetic,
+  );
+  closeChains(namespace, [resolvedLocals, instantiations]);
 
   // §8.2's merge, at the moment that section names -- "identity settles after Pass 2, when
   // references have resolved". A form the desugar phase lifted with an application in one of its
@@ -602,6 +626,110 @@ export function resolveSchema(
   };
 }
 
+// ── Applied parents (§5.8) ───────────────────────────────────────────────────────────────────
+
+/**
+ * §5.8's IS-A edge for a **parent written as an application**, derived once every declaration has
+ * resolved, and the chains made complete through it.
+ *
+ * Composition needs the operand's *fields* and nothing else, so a closed declaration and a closed
+ * template both keep the application in their chain's `parents` and mint no entry for it (§8.2).
+ * The edge is the half that has to wait: the entry an application denotes is whichever declaration
+ * names the same application, and asking that *during* materialisation would make the answer depend
+ * on declaration order -- `text_box` declared before the composition found, declared after it not.
+ *
+ * **Nothing is created here.** The pass derives an index over entries that already exist, keyed on
+ * §8.2's canonical application so two spellings of one application agree -- the application each
+ * instantiation records, an imported one's included, and for a use site's minted expansion (which
+ * records none) the materialiser's own index. Where no entry denotes the application there is no
+ * name to record, and that is the right answer: nobody declared that type, so nothing can be
+ * declared as it. {@link closeChains} then drops every application left standing.
+ *
+ * **Complete means transitively closed**: an entry IS-A every entry its supertypes are IS-A, so a
+ * declaration composing `okt => ok<text>` reaches the edge `okt` gained here, though it holds no
+ * application of its own. The fold runs to a fixed point over every local chain, bounded by the
+ * entry count since each round adds at least one name or stops. A minted synthetic gains no edge:
+ * it is a member of nothing (`templates.ts`'s `refuseMintedMember`).
+ */
+function appliedParentEdges(
+  namespace: Map<string, Top>,
+  maps: readonly Map<string, Top>[],
+  applicationOf: (name: string) => TypeRef | undefined,
+  expansions: ReadonlyMap<string, string>,
+  synthetics: ReadonlySet<string>,
+): void {
+  const byApplication = new Map<string, string>();
+  for (const name of namespace.keys()) {
+    const application = applicationOf(name);
+    if (application === undefined || application.arguments.length === 0) continue;
+    const key = canonicalApplication(application.name, application.arguments);
+    if (!byApplication.has(key)) byApplication.set(key, name);
+  }
+  for (const [key, name] of expansions) if (!byApplication.has(key)) byApplication.set(key, name);
+  const bound = [...maps].reduce((total, map) => total + map.size, 0);
+  for (let round = 0; round <= bound; round++) {
+    let changed = false;
+    for (const entries of maps) {
+      for (const [name, definition] of entries) {
+        if (synthetics.has(name)) continue;
+        const folded = completed(definition, byApplication, namespace);
+        if (folded !== definition) {
+          entries.set(name, folded);
+          namespace.set(name, folded);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return;
+  }
+}
+
+/**
+ * One chain made complete: a type's every applied parent's owning entry folded in, and for any
+ * chain every member's own supertypes. The application stays in `parents` until
+ * {@link closeChains}, so a later round still finds it when the owner's chain has grown.
+ * `definition` itself where nothing grew.
+ */
+function completed(
+  definition: Top,
+  byApplication: ReadonlyMap<string, string>,
+  namespace: ReadonlyMap<string, Top>,
+): Top {
+  if (!isType(definition)) return definition;
+  const chain = chainOf(definition);
+  const names = new Set(chain.supertypes);
+  for (const parent of chain.parents) {
+    if (parent.arguments.length === 0) continue;
+    const owner = byApplication.get(canonicalApplication(parent.name, parent.arguments));
+    if (owner !== undefined) names.add(owner);
+  }
+  for (const member of [...names]) {
+    for (const ancestor of supertypesOf(namespace.get(member))) names.add(ancestor);
+  }
+  return names.size === chain.supertypes.length
+    ? definition
+    : withChain(definition, typeChain([...names], chain.parents, chain.subtypes));
+}
+
+/**
+ * Every closed chain with the applications the fold left standing dropped: an application no
+ * entry denotes is one nothing can be declared as, so it reaches no edge, and a closed type's
+ * parents are not part of it ([TSON-SCHEMA] §4.1). A template keeps its written parents: they may
+ * still name its own parameters, and closing each application completes that application's chain
+ * from them.
+ */
+function closeChains(namespace: Map<string, Top>, maps: readonly Map<string, Top>[]): void {
+  for (const entries of maps) {
+    for (const [name, definition] of entries) {
+      const chain = chainOf(definition);
+      if (!isType(definition) || chain.parents.length === 0 || isOpen(definition)) continue;
+      const closed = withChain(definition, typeChain(chain.supertypes, [], chain.subtypes));
+      entries.set(name, closed);
+      namespace.set(name, closed);
+    }
+  }
+}
+
 // ── Small helpers ────────────────────────────────────────────────────────────────────────────
 
 /** [TSON-SCHEMA] §8.2's derived marker, attached to the key of every entry this resolver materialised from a sugar form. */
@@ -617,14 +745,16 @@ type ReportableSchemaError =
   | TsonSchemaValidationError
   | TsonNotImplementedError
   | TsonBindMismatchError
-  | TsonSchemaFetchError;
+  | TsonSchemaFetchError
+  | TsonNameHygieneRefusedError;
 
 function isReportable(e: unknown): e is ReportableSchemaError {
   return (
     e instanceof TsonSchemaValidationError ||
     e instanceof TsonNotImplementedError ||
     e instanceof TsonBindMismatchError ||
-    e instanceof TsonSchemaFetchError
+    e instanceof TsonSchemaFetchError ||
+    e instanceof TsonNameHygieneRefusedError
   );
 }
 
@@ -639,6 +769,7 @@ function mergeImports(
   document: SchemaDocument,
   deps: SchemaResolverDeps,
   facts: EntryFactsTable,
+  applications: Map<string, TypeRef>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
   const origins = new Map<string, string>();
@@ -654,6 +785,12 @@ function mergeImports(
       );
     }
     const imported = deps.resolveImport(importUri);
+    checkImportLevel(
+      deps.kernelGoverned === undefined || document.id === undefined
+        ? undefined
+        : { id: document.id, meta: document.meta, kernelGoverned: deps.kernelGoverned },
+      imported.level,
+    );
     for (const [name, definition] of imported.entries) {
       const origin = imported.originOf(name);
       const incumbent = origins.get(name);
@@ -671,6 +808,8 @@ function mergeImports(
       origins.set(name, origin);
       const recorded = imported.facts?.get(name);
       if (recorded !== undefined) facts.set(name, recorded);
+      const application = applicationOf(imported.keyAnnotations?.get(name));
+      if (application !== undefined) applications.set(name, application);
     }
   }
   return merged;
@@ -841,6 +980,8 @@ function schemaProblem(
 }
 
 function schemaProblemCode(error: ReportableSchemaError): Diagnostic['code'] {
+  if (error instanceof TsonNameHygieneRefusedError)
+    return diagnosticCodeForMechanism(error.mechanism);
   if (error instanceof TsonBindMismatchError) return 'BIND_MISMATCH';
   if (error instanceof TsonNotImplementedError) return 'NOT_IMPLEMENTED';
   if (error instanceof TsonSchemaFetchError) return diagnosticCodeForFetch(error.reason);

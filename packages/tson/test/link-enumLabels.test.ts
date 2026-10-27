@@ -38,16 +38,14 @@ function loadFailure(body: string): string {
 }
 
 describe('an enum’s class and form are read from its type (§7.4, §5.4)', () => {
-  it('`!enum` is an enum of names, matched in the kernel identifier’s form (NFC): not a text enum', () => {
+  it('`!enum` is an enum of names, matched in the kernel identifier’s form (NFC)', () => {
     const linked = schema('status => !enum [OPEN DONE]');
-    expect(linked.textEnums.has('status')).toBe(false);
     expect(linked.enumForms.get('status')).toBe('NFC');
   });
 
   it('a closed set of text is `!text ^ { members }`, string-class whatever its members spell', () => {
     const linked = schema('ports => !text ^ { members: ["80" "443"] }');
-    expect(linked.textEnums.has('ports')).toBe(false);
-    expect(discriminationClassOf('ports', linked.entries, linked.textEnums)).toBe('STRING');
+    expect(discriminationClassOf('ports', linked.entries)).toBe('STRING');
   });
 
   it('an enum over a folding identifier family records that family’s form', () => {
@@ -55,7 +53,6 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
       `${HEADER_NAME}\n  safe_header => !enum_type { name_type: header_name  members: [Accept content-type] }`,
     );
     expect(linked.enumForms.get('safe_header')).toBe('NFKC_CASEFOLD');
-    expect(linked.textEnums.has('safe_header')).toBe(false);
   });
 
   it('an enum over a text family is refused: a closed set of text is `text`’s own `members` facet', () => {
@@ -71,7 +68,6 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
       `identifier => !identifier_type { start: NONE  continue: NONE  start_add: "z"  continue_add: "z"  normalization: NFKC_CASEFOLD }\n  status => !enum [OPEN DONE]`,
     );
     expect(linked.enumForms.get('status')).toBe('NFC');
-    expect(linked.textEnums.has('status')).toBe(false);
   });
 
   it('an author-written type resolves in the schema’s own namespace', () => {
@@ -81,13 +77,12 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
     expect(linked.enumForms.get('safe_header')).toBe('NFKC_CASEFOLD');
   });
 
-  it('carries an imported enum’s class and form to the importer', () => {
+  it('carries an imported enum’s form to the importer', () => {
     const imported: ImportedSchema = {
       entries: new Map([
         ['ports', entry({ kind: 'enum' as const, nameType: 'text', members: ['80'] })],
       ]),
       originOf: () => 'https://example.test/imported.tn',
-      textEnums: new Set(['ports']),
       enumForms: new Map([['ports', 'NFKC_CASEFOLD' as const]]),
     };
     const importer: Schema = {
@@ -100,7 +95,6 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
       bootstrap: false,
     };
     const linked = linkSchema(importer, { resolveImport: () => imported });
-    expect(linked.textEnums.has('ports')).toBe(true);
     expect(linked.enumForms.get('ports')).toBe('NFKC_CASEFOLD');
   });
 });

@@ -346,8 +346,9 @@ async function validateOne(
  * `commands/compile.ts`/`commands/hash.ts` leave one to their own callers.
  *
  * **A `--schema` no configured source would supply is its own outcome, not a usage error.** No
- * file is opened either way, but every requested file comes back `NOT_CHECKED`, carrying the
- * fetch diagnostic, rather than the run simply throwing -- the same shape a per-file
+ * file is opened either way, but every requested file comes back with the outcome its fetch
+ * diagnostic denotes -- `REJECTED` for a schema this run will not supply, `UNDETERMINED` for one
+ * it could not obtain -- rather than the run simply throwing -- the same shape a per-file
  * `NOT_IMPLEMENTED` already takes, so a caller reading `diagnostics` sees one consistent story
  * regardless of how early the run stopped.
  *

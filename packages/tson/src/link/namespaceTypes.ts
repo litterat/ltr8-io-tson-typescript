@@ -32,7 +32,7 @@ import {
   isNamespaceType,
   namespaceMapOf,
 } from '../schema/meta/namespaces.js';
-import { schemaPositionOf } from './facts.js';
+import { schemaPositionOf, spellingOf } from './facts.js';
 import { isKindMember } from './kindMembers.js';
 import { terminal, type EntryLookup } from './referenceChain.js';
 
@@ -65,17 +65,19 @@ export function checkKindsReferencesAndNamespaceTypes(
   const structure: EntryLookup = (name) => structureNamespace?.get(name);
   const inReach: EntryLookup = (name) => merged.get(name) ?? structureNamespace?.get(name);
   const heads = (name: string): string | undefined => options.facts.get(name)?.head;
+  const spelled = (name: string): string => spellingOf(name, merged.get(name), options.facts);
   for (const name of localNames) {
     const value = merged.get(name);
     if (value === undefined || isTemplateBody(value) || isOpen(value)) continue;
     try {
       switch (value.kind) {
         case 'kind_type':
-          if (structureNamespace !== undefined) checkKindOf(name, value, structure);
+          if (structureNamespace !== undefined) checkKindOf(spelled(name), value, structure);
           break;
         case 'ref_type':
-          if (options.kernelGoverned === false) throw referenceOutsideTheKernelLevel(name, options);
-          checkReferenceOf(name, value, local, structure);
+          if (options.kernelGoverned === false)
+            throw referenceOutsideTheKernelLevel(spelled(name), options);
+          checkReferenceOf(spelled(name), value, local, structure);
           break;
         case 'record':
           if (isKernelNamespaceType(value, name, inReach)) {
@@ -83,7 +85,7 @@ export function checkKindsReferencesAndNamespaceTypes(
               throw namespaceTypeOutsideTheKernelLevel(name, options);
             checkNamespaceType(name, value, merged, inReach);
           }
-          checkKindPins(name, value, inReach, local, heads, structure);
+          checkKindPins(name, value, inReach, local, heads, structure, spelled);
           break;
         default:
           break;
@@ -259,6 +261,7 @@ function checkKindPins(
   local: EntryLookup,
   heads: (name: string) => string | undefined,
   structure: EntryLookup,
+  spelled: (name: string) => string,
 ): void {
   for (const field of namedFields(record)) {
     const value = field.value;
@@ -267,7 +270,7 @@ function checkKindPins(
     if (kind === undefined || isTemplateBody(kind) || kind.kind !== 'kind_type') continue;
     if (isKindMember(value.text, kind.of, local, heads, structure)) continue;
     throw new TsonSchemaValidationError(
-      `'${name}': field '${field.name}' is typed '${field.type.name}', the names of the types built ` +
+      `'${name}': field '${field.name}' is typed '${spelled(field.type.name)}', the names of the types built ` +
         `with '${kind.of}', and its ${field.role === 'DEFAULT' ? 'default' : 'fixed value'} ` +
         `'${value.text}' is no member of it (§4.2)`,
     );

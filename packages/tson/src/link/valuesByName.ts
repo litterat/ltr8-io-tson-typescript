@@ -43,7 +43,7 @@ import {
   typeParameters,
 } from '../schema/meta/typedef.js';
 import { isNamespaceType, namespaceMapOf } from '../schema/meta/namespaces.js';
-import { schemaPositionOf } from './facts.js';
+import { schemaPositionOf, spellingOf } from './facts.js';
 import { isKindMember } from './kindMembers.js';
 import { terminal, type EntryLookup } from './referenceChain.js';
 
@@ -53,6 +53,8 @@ export interface ValuesByNameOptions {
   readonly facts: ReadonlyMap<string, EntryFacts>;
   /** The governing meta's namespace, where every slot's declared type is named. */
   readonly structureNamespace: ReadonlyMap<string, Top>;
+  /** The governing meta's entry facts, so a slot type it minted is named as its author wrote it. */
+  readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   readonly receiver?: DiagnosticsReceiver;
 }
 
@@ -143,6 +145,11 @@ class Judge {
     this.structure = (name) => options.structureNamespace.get(name);
   }
 
+  /** A slot's declared type as the meta's author wrote it (`kind<record>`, `link/facts.ts`). */
+  private slotSpelling(type: string): string {
+    return spellingOf(type, this.structure(type), this.options.structureFacts);
+  }
+
   judge(where: string, held: HeldName): void {
     const { name, slot } = held;
     if (slot.role === 'application') {
@@ -193,7 +200,8 @@ class Judge {
     referent: Top,
     entry: string,
   ): void {
-    const wants = `${where} wants the name of a type built with '${slot.of}' (a member of '${slot.type}'), and `;
+    const kind = this.slotSpelling(slot.type);
+    const wants = `${where} wants the name of a type built with '${slot.of}' (a member of '${kind}'), and `;
     if (segments.length > 1 && isNamespaceValue(referent)) {
       throw new TsonSchemaValidationError(
         `${wants}'${name}' reaches into ${entry}, which is ${aValueNoType(referent)} -- and what a further segment selects in a value is a value too`,
@@ -201,7 +209,7 @@ class Judge {
     }
     if (segments.length > 1) {
       throw new TsonNotImplementedError(
-        `${where} names '${name}' at a position typed by the kind '${slot.type}', which holds a type's name -- this library does not yet read a type through a namespace of types, so the name is one segment`,
+        `${where} names '${name}' at a position typed by the kind '${kind}', which holds a type's name -- this library does not yet read a type through a namespace of types, so the name is one segment`,
       );
     }
     if (isKindMember(name, slot.of, this.local, (n) => this.headOf(n), this.structure)) return;

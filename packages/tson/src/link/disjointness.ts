@@ -53,17 +53,12 @@ import { choiceDisjoint } from '../schema/meta/typedef.js';
 export type DiscriminationClass = 'BOOLEAN' | 'NUMBER' | 'STRING' | 'BRACE' | 'BRACKET';
 
 /**
- * An enum's class depends on its `name_type` (§7.4, §5.4), read from linking's `textEnums` rather
- * than from the type's name: `name_type` resolves in a namespace the body cannot see. Where it is
- * not an identifier family the enum is string-class whatever its members' spellings — a set of
- * texts `80` and `443` admits the *texts*, not the numbers, so classifying by token would
- * misclassify it; the members are read as data, never as base-resolved tokens, and such an enum is
- * therefore always `STRING`. Where `type` is an identifier family the class is the members' shared
- * base-type class read off each member's own token (`[true false]` is `BOOLEAN`; an identifier
- * never begins with a digit, so no member is number-class); mixed members yield `undefined`.
+ * An enum's class is its members' shared base-type class, read off each member's own token
+ * (§5.4): its `name_type` is an identifier family (§7.4, an enum over any other type being
+ * refused at link), so `[true false]` is `BOOLEAN`, no member is number-class since an
+ * identifier never begins with a digit, and mixed members yield `undefined`.
  */
-function classifyEnum(body: EnumBody, isTextEnum: boolean): DiscriminationClass | undefined {
-  if (isTextEnum) return 'STRING';
+function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
   let common: DiscriminationClass | undefined;
   for (const member of body.members) {
     const base = resolveBaseType({ text: member, form: 'unquoted' });
@@ -104,12 +99,7 @@ function isClassStableFloat(body: FloatType): boolean {
   return !body.allowNan && !body.allowInfinity;
 }
 
-function classify(
-  name: string,
-  def: Top,
-  namespace: ReadonlyMap<string, Top>,
-  textEnums: ReadonlySet<string>,
-): DiscriminationClass | undefined {
+function classify(def: Top, namespace: ReadonlyMap<string, Top>): DiscriminationClass | undefined {
   const body = def;
   if (isTemplateBody(body)) {
     return undefined; // a held TemplateBody: no class until an application closes it
@@ -143,7 +133,7 @@ function classify(
     case 'mac_type':
       return 'STRING';
     case 'enum':
-      return classifyEnum(body, textEnums.has(name));
+      return classifyEnum(body);
     case 'record':
       return 'BRACE';
     case 'map':
@@ -172,26 +162,20 @@ function classify(
 export function discriminationClassOf(
   name: string,
   namespace: ReadonlyMap<string, Top>,
-  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
 ): DiscriminationClass | undefined {
   const lookup = (n: string): Top | undefined => namespace.get(n);
   const def = terminalDefinition(name, lookup);
-  return def === undefined
-    ? undefined
-    : classify(terminal(name, lookup), def, namespace, textEnums);
+  return def === undefined ? undefined : classify(def, namespace);
 }
-
-const NO_TEXT_ENUMS: ReadonlySet<string> = new Set();
 
 /** `true` exactly when every variant has a class and no class repeats (§5.4). */
 export function isChoiceDisjoint(
   variants: readonly { readonly name: string }[],
   namespace: ReadonlyMap<string, Top>,
-  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
 ): boolean {
   const seen = new Set<DiscriminationClass>();
   for (const variant of variants) {
-    const variantClass = discriminationClassOf(variant.name, namespace, textEnums);
+    const variantClass = discriminationClassOf(variant.name, namespace);
     if (variantClass === undefined || seen.has(variantClass)) {
       return false;
     }
@@ -205,15 +189,12 @@ export function isChoiceDisjoint(
  * namespace. Pure: entries with no `choice` body keep their identity, and `merged` itself is
  * returned unchanged when it holds no choice at all.
  */
-export function computeDisjointness(
-  merged: ReadonlyMap<string, Top>,
-  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
-): Map<string, Top> {
+export function computeDisjointness(merged: ReadonlyMap<string, Top>): Map<string, Top> {
   const result = new Map(merged);
   for (const [name, def] of merged) {
     const body = def;
     if (!isTemplateBody(body) && body.kind === 'choice') {
-      result.set(name, { ...body, disjoint: isChoiceDisjoint(body.variants, merged, textEnums) });
+      result.set(name, { ...body, disjoint: isChoiceDisjoint(body.variants, merged) });
     }
   }
   return result;

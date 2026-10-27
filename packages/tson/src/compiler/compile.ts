@@ -44,6 +44,7 @@ import type { LinkedSchema } from '../link/link.js';
 import { canonicalizeIdentity } from '../link/identity.js';
 import type { Reference, Scoped, Top } from '../schema/meta/typedef.js';
 import { choiceDisjoint, entryKind, isFamilyBase, isTemplateBody } from '../schema/meta/typedef.js';
+import { isNamespaceType, namespaceReadMapOf } from '../schema/meta/namespaces.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -229,6 +230,28 @@ function buildReader(
   // declared type -- applied at every position it governs (every `Atom`/`Product` body) rather
   // than only where a record happens to declare subtypes; see `subsumption.ts`'s own doc for which
   // kinds it deliberately leaves alone (`choice`, `reference`, `scoped`).
+  // §4.1: a namespace type resolves to a record of the facets it states, and a value of it is the
+  // map they describe, never a record of those facets -- a record's `fields` is its `field_map`.
+  const namespaceMap = isNamespaceType(body, name) ? namespaceReadMapOf(body) : undefined;
+  if (namespaceMap !== undefined) {
+    const map: MapBody = {
+      kind: 'map',
+      keyType: { name: namespaceMap.keyType, arguments: [], annotations: [] },
+      valueType: { name: namespaceMap.valueType, arguments: [], annotations: [] },
+      voidable: false,
+      ordered: namespaceMap.ordered,
+    };
+    const built = mapTreeReader(
+      name,
+      name,
+      map,
+      resolve,
+      location(),
+      isScopedType,
+      isNameType(namespaceMap.keyType),
+    );
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
+  }
   if (isRecordBody(body)) {
     const fieldNames = fieldNameRule(schema.nameTypes.get(name));
     const built = recordTreeReader(
@@ -280,7 +303,6 @@ function buildReader(
       location(),
       choiceDisjoint(definition) === true,
       schema.entries,
-      schema.textEnums,
     );
   }
   if (isReference(body)) {

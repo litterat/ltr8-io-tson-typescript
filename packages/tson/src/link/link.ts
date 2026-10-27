@@ -44,6 +44,7 @@ import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
+import { checkImportLevel, type ImportLevel } from './importLevel.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { computeKindMembers } from './kindMembers.js';
 import { checkFieldNameTypes, type FieldNameType } from './fieldNames.js';
@@ -53,7 +54,6 @@ import {
   checkEnumLabels,
   enumLabelForm,
   enumLabelProfile,
-  membersAreNames,
   type EnumLabelProfile,
 } from './enumLabels.js';
 import { checkNameHygiene } from './nameHygiene.js';
@@ -103,14 +103,6 @@ export interface LinkedSchema {
    * a further importer of *this* schema needs it to keep deciding the same question one hop out.
    */
   readonly origins: ReadonlyMap<string, string>;
-  /**
-   * The enums among `entries` whose `name_type` is not an identifier family ([TSON-SCHEMA] §7.4).
-   * Linking refuses every such enum, so a schema that links cleanly has none; one linked through a
-   * collecting receiver carries the refused ones here, string-class whatever their members spell
-   * (§5.4), so a reader of the partial result does not classify them by token. Local and imported
-   * enums alike.
-   */
-  readonly textEnums: ReadonlySet<string>;
   /**
    * Each enum among `entries` that matches in a form other than `NONE`, by name: its label type's
    * `normalization` ([TSON-SCHEMA] §5.5, §7.4), so `Content-Type` is the member written
@@ -195,15 +187,16 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const identifierPolicy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const origins = new Map<string, string>();
-  const textEnums = new Set<string>();
   const enumForms = new Map<string, Normalization>();
   const facts = new Map<string, EntryFacts>();
   const nameTypes = new Map<string, FieldNameType>();
   let merged = mergeImports(
     schema.imports,
+    deps.kernelGoverned === undefined
+      ? undefined
+      : { id: schema.id, meta: schema.meta, kernelGoverned: deps.kernelGoverned },
     resolveImport,
     origins,
-    textEnums,
     enumForms,
     facts,
     nameTypes,
@@ -258,13 +251,12 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     }
     const head = facts.get(name)?.head;
     const enumeration = head === undefined ? { value: definition } : { value: definition, head };
-    if (!membersAreNames(enumeration, entryOf, structureOf, headOf)) textEnums.add(name);
     const labelProfile = enumLabelProfile(enumeration, entryOf, structureOf, headOf);
     if (labelProfile !== undefined) enumProfiles.set(name, labelProfile);
     const form = enumLabelForm(enumeration, entryOf, structureOf, headOf);
     if (form !== 'NONE') enumForms.set(name, form);
   }
-  merged = computeDisjointness(merged, textEnums);
+  merged = computeDisjointness(merged);
 
   // Before the name checks: a member that is not a value of its enum's type is the more basic
   // verdict, and the per-name rules would otherwise report it as a restricted character.
@@ -332,6 +324,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
       schemaId: schema.id,
       facts,
       structureNamespace,
+      ...(structureFacts === undefined ? {} : { structureFacts }),
       ...(receiver === undefined ? {} : { receiver }),
     });
   }
@@ -366,7 +359,6 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     keyAnnotations: schema.keyAnnotations,
     bootstrap: schema.bootstrap,
     origins,
-    textEnums,
     enumForms,
     nameTypes,
     ...(deps.kernelGoverned === undefined ? {} : { kernelGoverned: deps.kernelGoverned }),
@@ -389,9 +381,9 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
  */
 function mergeImports(
   imports: readonly string[],
+  importer: ImportLevel | undefined,
   resolveImport: ImportResolver | undefined,
   origins: Map<string, string>,
-  textEnums: Set<string>,
   enumForms: Map<string, Normalization>,
   facts: Map<string, EntryFacts>,
   nameTypes: Map<string, FieldNameType>,
@@ -411,7 +403,7 @@ function mergeImports(
       );
     }
     const imported: ImportedSchema = resolveImport(importUri);
-    for (const name of imported.textEnums ?? []) textEnums.add(name);
+    checkImportLevel(importer, imported.level);
     for (const [name, form] of imported.enumForms ?? []) enumForms.set(name, form);
     for (const [name, nameType] of imported.nameTypes ?? []) nameTypes.set(name, nameType);
     for (const [name, definition] of imported.entries) {

@@ -83,7 +83,8 @@ Exit codes:
   1  checked and rejected -- includes a [TSON-DATA] §8.2 name-hygiene or §9.1 limit refusal
   2  usage error
  69  a schema permanently unavailable -- refused by policy, absent, or too large
- 75  a schema temporarily unavailable -- unreachable, or it did not answer in time
+ 75  a schema temporarily unavailable -- unreachable, or it did not answer in time --
+     and nothing else to fix
  78  a type the schema needs has no registered binding
  70  a gap in this library, or an internal fault -- never a statement about your document
 `;
@@ -352,7 +353,7 @@ async function runValidateCommand(args: readonly string[]): Promise<number> {
   const parsed = parseValidateArgs(rest, policy);
   const run = await runValidate(parsed.options);
   process.stdout.write(`${renderValidateRun(run, parsed.format)}\n`);
-  if (run.outcome === 'VALID') {
+  if (run.outcome === 'ACCEPTED') {
     return EXIT.OK;
   }
   const code = exitCodeFor(run.files.flatMap((f) => f.diagnostics));
@@ -368,14 +369,24 @@ async function runValidateCommand(args: readonly string[]): Promise<number> {
     );
   } else if (code === EXIT.SCHEMA_UNAVAILABLE) {
     process.stderr.write(
-      'note: some input could not be checked -- a schema could not be obtained (see the ' +
-        'SCHEMA_ entries above). Nothing here has read that schema, so nothing here is saying ' +
-        'your document, or that schema, is wrong. Rerunning will not obtain it.\n',
+      'note: some input could not be checked -- this run will not supply a schema it names (see ' +
+        'the SCHEMA_ entries above). Nothing here has read that schema; pass its file, or check ' +
+        'the !!id the reference names. Rerunning as is will not obtain it.\n',
     );
   } else if (code === EXIT.SCHEMA_TEMPFAIL) {
     process.stderr.write(
       'note: some input could not be checked -- a schema could not be reached (see the ' +
-        'SCHEMA_ entries above). This one may succeed if you run it again.\n',
+        'SCHEMA_ entries above). Nothing here has read that schema. This one may succeed if you ' +
+        'run it again.\n',
+    );
+  } else if (
+    run.files.some((f) =>
+      f.diagnostics.some((d) => d.code === 'SCHEMA_UNREACHABLE' || d.code === 'SCHEMA_TIMEOUT'),
+    )
+  ) {
+    process.stderr.write(
+      'note: a schema could not be reached as well (see the SCHEMA_ entries above); the ' +
+        'rejection stands whatever a rerun reaches, so fix it first.\n',
     );
   }
   return code;
@@ -423,7 +434,7 @@ async function runCompileCommand(args: readonly string[]): Promise<number> {
   const { files, format } = parseFilesAndFormat(rest, COMPILE_USAGE);
   const run = await runCompile(files, policy);
   process.stdout.write(`${renderCompileRun(run, format)}\n`);
-  return run.outcome === 'VALID' ? EXIT.OK : EXIT.INVALID;
+  return run.outcome === 'ACCEPTED' ? EXIT.OK : EXIT.INVALID;
 }
 
 // ── policy ───────────────────────────────────────────────────────────────────────────────────
@@ -467,7 +478,7 @@ async function runHashCommand(args: readonly string[]): Promise<number> {
   const { files, format } = parseFilesAndFormat(args, HASH_USAGE);
   const run = await runHash(files);
   process.stdout.write(`${renderHashRun(run, format)}\n`);
-  return run.outcome === 'VALID' ? EXIT.OK : EXIT.INVALID;
+  return run.outcome === 'ACCEPTED' ? EXIT.OK : EXIT.INVALID;
 }
 
 // ── strip ────────────────────────────────────────────────────────────────────────────────────

@@ -11,51 +11,54 @@ function diagnostic(code: Diagnostic['code']): Diagnostic {
 }
 
 describe('outcomeOfDiagnostics', () => {
-  it('is VALID when nothing was reported', () => {
-    expect(outcomeOfDiagnostics([])).toBe('VALID');
+  it('is ACCEPTED when nothing was reported', () => {
+    expect(outcomeOfDiagnostics([])).toBe('ACCEPTED');
   });
 
-  it('is INVALID when every diagnostic is a verdict', () => {
-    expect(outcomeOfDiagnostics([diagnostic('TYPE_MISMATCH')])).toBe('INVALID');
+  it('is REJECTED when every diagnostic is a verdict', () => {
+    expect(outcomeOfDiagnostics([diagnostic('TYPE_MISMATCH')])).toBe('REJECTED');
     expect(outcomeOfDiagnostics([diagnostic('TYPE_MISMATCH'), diagnostic('FIELD_REQUIRED')])).toBe(
-      'INVALID',
+      'REJECTED',
     );
   });
 
-  it('is NOT_CHECKED for a §8.2 name-hygiene refusal -- the fifth outcome, not a verdict', () => {
-    expect(outcomeOfDiagnostics([diagnostic('CONFUSABLE_NAMES')])).toBe('NOT_CHECKED');
-    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_CHARACTER')])).toBe('NOT_CHECKED');
-    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_SCRIPT')])).toBe('NOT_CHECKED');
+  it('is REJECTED for a refusal -- Part 1 §8.1: declined by this processor, a rejection here', () => {
+    expect(outcomeOfDiagnostics([diagnostic('CONFUSABLE_NAMES')])).toBe('REJECTED');
+    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_CHARACTER')])).toBe('REJECTED');
+    expect(outcomeOfDiagnostics([diagnostic('RESTRICTED_SCRIPT')])).toBe('REJECTED');
+    expect(outcomeOfDiagnostics([diagnostic('LIMIT_REFUSED')])).toBe('REJECTED');
+    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_NOT_PERMITTED')])).toBe('REJECTED');
+    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_TOO_LARGE')])).toBe('REJECTED');
   });
 
-  it('is NOT_CHECKED when a non-verdict code is present alone', () => {
-    expect(outcomeOfDiagnostics([diagnostic('NOT_IMPLEMENTED')])).toBe('NOT_CHECKED');
-    expect(outcomeOfDiagnostics([diagnostic('BIND_MISMATCH')])).toBe('NOT_CHECKED');
-    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_NOT_FOUND')])).toBe('NOT_CHECKED');
-    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_UNREACHABLE')])).toBe('NOT_CHECKED');
+  it('is UNDETERMINED when only what could not be judged was reported (Part 1 §8.1)', () => {
+    expect(outcomeOfDiagnostics([diagnostic('NOT_IMPLEMENTED')])).toBe('UNDETERMINED');
+    expect(outcomeOfDiagnostics([diagnostic('BIND_MISMATCH')])).toBe('UNDETERMINED');
+    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_NOT_FOUND')])).toBe('UNDETERMINED');
+    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_UNREACHABLE')])).toBe('UNDETERMINED');
+    expect(outcomeOfDiagnostics([diagnostic('SCHEMA_TIMEOUT')])).toBe('UNDETERMINED');
   });
 
-  it('is NOT_CHECKED when a non-verdict code sits beside real verdicts -- one is enough', () => {
+  it('is REJECTED when a rejection sits beside what went unjudged -- one rejection is enough', () => {
     expect(outcomeOfDiagnostics([diagnostic('TYPE_MISMATCH'), diagnostic('NOT_IMPLEMENTED')])).toBe(
-      'NOT_CHECKED',
+      'REJECTED',
     );
   });
 });
 
 describe('outcomeOfFiles', () => {
-  it('is VALID when every file is VALID', () => {
-    expect(outcomeOfFiles(['VALID', 'VALID'])).toBe('VALID');
-    expect(outcomeOfFiles([])).toBe('VALID');
+  it('is ACCEPTED when every file is ACCEPTED', () => {
+    expect(outcomeOfFiles(['ACCEPTED', 'ACCEPTED'])).toBe('ACCEPTED');
+    expect(outcomeOfFiles([])).toBe('ACCEPTED');
   });
 
-  it('is INVALID when at least one file is INVALID and none is NOT_CHECKED', () => {
-    expect(outcomeOfFiles(['VALID', 'INVALID'])).toBe('INVALID');
-    expect(outcomeOfFiles(['INVALID', 'INVALID'])).toBe('INVALID');
+  it('is REJECTED when any file is REJECTED, whatever else the run holds', () => {
+    expect(outcomeOfFiles(['ACCEPTED', 'REJECTED'])).toBe('REJECTED');
+    expect(outcomeOfFiles(['UNDETERMINED', 'REJECTED'])).toBe('REJECTED');
   });
 
-  it('is NOT_CHECKED when any file is NOT_CHECKED, even beside a VALID/INVALID one -- a run is no better than its parts', () => {
-    expect(outcomeOfFiles(['VALID', 'NOT_CHECKED'])).toBe('NOT_CHECKED');
-    expect(outcomeOfFiles(['INVALID', 'NOT_CHECKED'])).toBe('NOT_CHECKED');
-    expect(outcomeOfFiles(['NOT_CHECKED'])).toBe('NOT_CHECKED');
+  it('is UNDETERMINED when no file is REJECTED and one is UNDETERMINED', () => {
+    expect(outcomeOfFiles(['ACCEPTED', 'UNDETERMINED'])).toBe('UNDETERMINED');
+    expect(outcomeOfFiles(['UNDETERMINED'])).toBe('UNDETERMINED');
   });
 });

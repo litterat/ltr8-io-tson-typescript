@@ -114,11 +114,7 @@ export function buildChoiceReader(
   const byClass = new Map<DiscriminationClass, string>();
   if (disjoint) {
     for (const variantName of variantNames) {
-      const variantClass = discriminationClassOf(
-        variantName,
-        ctx.linkedSchema.entries,
-        ctx.linkedSchema.textEnums,
-      );
+      const variantClass = discriminationClassOf(variantName, ctx.linkedSchema.entries);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass.clear();
         break;

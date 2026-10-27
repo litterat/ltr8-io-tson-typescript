@@ -36,3 +36,41 @@ export function namespaceMapOf(namespace: RecordBody): NamespaceMap | undefined 
   const valueType = namespace.fields.entries.get('value_type')?.value?.text;
   return keyType === undefined || valueType === undefined ? undefined : { keyType, valueType };
 }
+
+/**
+ * What a key of a host-supplied family is read as: its spelling, any token, judged later under the
+ * host's own family -- a record's field names, which linking judges by the record's `name_type`.
+ */
+export const HOST_KEYS = 'text';
+
+/** The map a value of a namespace type is read by ({@link namespaceReadMapOf}). */
+export interface NamespaceReadMap {
+  /** The keys' type: the pinned `key_type`, or {@link HOST_KEYS} where the family is a default the host supplies. */
+  readonly keyType: string;
+  /** The values' type: the pinned `value_type`. */
+  readonly valueType: string;
+  /** Whether entry order is part of the value: the `ordered` facet, `false` where nothing states it. */
+  readonly ordered: boolean;
+}
+
+/**
+ * The map a value of the namespace type `namespace` is read as (§4.1), never a record of its
+ * facets: keys of its `key_type`, values of its pinned `value_type`, ordered as `ordered` says.
+ * `key_type` is pinned (`key_type: = F`), or stated by default (`key_type?: ~ F`) where the family
+ * the keys are names of is the one the value's host supplies -- `field_map`, keyed by its record's
+ * `name_type` -- and such a key is read by its spelling alone ({@link HOST_KEYS}). `undefined` where
+ * either facet is left open: the abstract `namespace`, or a namespace type leaving one to a subtype,
+ * describes no map.
+ */
+export function namespaceReadMapOf(namespace: RecordBody): NamespaceReadMap | undefined {
+  const key = namespace.fields.entries.get('key_type');
+  const keyFamily = key === undefined || key.role === 'FREE' ? undefined : key.value?.text;
+  const value = namespace.fields.entries.get('value_type');
+  const valueType = value?.role === 'FIXED' ? value.value?.text : undefined;
+  if (keyFamily === undefined || valueType === undefined) return undefined;
+  return {
+    keyType: key?.role === 'FIXED' ? keyFamily : HOST_KEYS,
+    valueType,
+    ordered: namespace.fields.entries.get('ordered')?.value?.text === 'true',
+  };
+}

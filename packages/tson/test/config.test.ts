@@ -442,7 +442,6 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
       facts: new Map(),
       bootstrap: false,
       origins: new Map<string, string>(),
-      textEnums: new Set<string>(),
       enumForms: new Map(),
       nameTypes: new Map(),
     };

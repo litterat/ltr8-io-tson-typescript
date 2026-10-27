@@ -11,7 +11,9 @@ nothing about its validity. The rest say no rule ran: `NOT_IMPLEMENTED` that thi
 check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five `SCHEMA_*` codes
 that no schema was obtained. `LIMIT_REFUSED` (§9.1) is a refusal too: `isRefusal(code)` is true for
 it and for the three name codes, and `isVerdict` is `false`, since another processor may accept the
-same document in full. The CLI reports it `NOT_CHECKED` and exits 1.
+same document in full. `SCHEMA_NOT_PERMITTED` and `SCHEMA_TOO_LARGE` are refusals as well (a schema
+this deployment will not supply); `SCHEMA_NOT_FOUND`, `SCHEMA_UNREACHABLE` and `SCHEMA_TIMEOUT` are
+undetermined (`isUndetermined`). The CLI reports a refused file `REJECTED` and exits 1.
 
 | Code                        | Means                                                                                                                                                                                                                                                                                                                                                                                                               |         `isVerdict`          |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------: |
@@ -180,9 +182,10 @@ no verdict was reached. `69`/`75`/`78` sit between the two for the same reason a
 causes — each means some diagnostic in the run was not a verdict (`isVerdict`), so nothing judged
 the document. None of this is guessed at: each command separates "a per-file verdict" from "this
 run could not reach one", and `exitCodeFor` ranks a run's collected diagnostics into whichever
-non-`OK` code applies, by the ranking `70 > 78 > 69 > 75 > 1` — **who must act first**. A library
-gap (`70`) blocks everyone; a missing binding (`78`) blocks whoever wires the application; an
-unobtainable schema blocks the runner, permanent (`69`) ranking above temporary (`75`). A §8.2
-refusal is exit `1` like any other rejection, although it is not a verdict and `tson validate`
-reports its file as `NOT_CHECKED`: what a caller does next is edit the document, here by renaming
-something, exactly as for any other `1` (`exit.ts`'s own note has the reasoning).
+non-`OK` code applies, by the ranking `70 > 78 > 69 > 1 > 75` — **who must act first**. A library
+gap (`70`) blocks everyone; a missing binding (`78`) blocks whoever wires the application; a schema
+this run will not supply blocks the runner (`69`); an origin that did not answer is `75` only when
+it is all that went wrong, since beside a rejection a rerun reaches the same rejection. A §8.2
+refusal is exit `1` like any other rejection, and `tson validate` reports its file `REJECTED`:
+what a caller does next is edit the document, here by renaming something, exactly as for any other
+`1` (`exit.ts`'s own note has the reasoning).

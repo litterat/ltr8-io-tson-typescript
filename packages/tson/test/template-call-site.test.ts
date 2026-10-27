@@ -95,16 +95,16 @@ describe('§5.7 open modifiers: a parametric modifier takes the name mark its li
 describe('§5.10, §8.2: a family member is the application a declaration names', () => {
   const family = 'box => <T> { v: T }\n';
 
-  it('a declared application carries the template in its supertypes; a use-site one does not', () => {
+  it('a declared application carries the template in its supertypes; a use-site one is its expansion, a member of nothing', () => {
     const schema = linked(`${family}bt => box<int32>\nholder => { k: box<text> }`);
     const entries = schema.entries;
     expect(supertypesIn(entries.get('bt'))).toContain('box');
-    const minted = [...entries].find(([name]) => {
-      const application = applicationOf(schema.keyAnnotations.get(name));
-      return name !== 'bt' && application?.name === 'box' && application.arguments.length > 0;
-    });
-    expect(minted).toBeDefined();
-    expect(supertypesIn(minted?.[1])).not.toContain('box');
+    // §8.2: the use site names a closed synthetic record keyed on its content, with no
+    // instantiation entry and no `@application`.
+    const kType = namedField(record(entries, 'holder'), 'k')?.type.name ?? '';
+    expect(kType).toMatch(/^record_v_text_[0-9a-f]{8}$/);
+    expect(applicationOf(schema.keyAnnotations.get(kType))).toBeUndefined();
+    expect(supertypesIn(entries.get(kType))).toEqual([]);
     expect(subtypesIn(entries.get('box'))).toEqual(['bt']);
   });
 
@@ -127,5 +127,107 @@ describe('§5.10, §8.2: a family member is the application a declaration names'
   it('the same application, declared, is a member and is admitted', () => {
     const entries = resolve(`${pets}dogs => dog_of<text>\nkennel => { k: dogs }`);
     expect(supertypesIn(entries.get('dogs'))).toContain('pet');
+  });
+});
+
+describe('§8.2: an application nothing declares is its expansion (change log #18)', () => {
+  it('a non-record template’s use-site application names the synthetic its sugar spelling names', () => {
+    const schema = linked(
+      'rows => <T> !array { element_type: T  min_items: 1 }\npost => { a: rows<text>  b: [text; 1..] }',
+    );
+    const post = record(schema.entries, 'post');
+    const a = namedField(post, 'a')?.type.name;
+    expect(a).toBe(namedField(post, 'b')?.type.name);
+    expect(a).toMatch(/^array_text_1_[0-9a-f]{8}$/);
+    expect([...schema.entries.keys()].some((name) => name.startsWith('rows_'))).toBe(false);
+    expect(applicationOf(schema.keyAnnotations.get(a ?? ''))).toBeUndefined();
+  });
+
+  it('an expansion naming its own application keeps an instantiation entry recording it', () => {
+    const schema = linked('nested => <T> ( T | [nested<T>] )\nu => { v: nested<text> }');
+    const v = namedField(record(schema.entries, 'u'), 'v')?.type.name ?? '';
+    expect(applicationOf(schema.keyAnnotations.get(v))).toMatchObject({ name: 'nested' });
+  });
+
+  it('a minted record composing an application only a use site mints loads (the one verdict change)', () => {
+    const schema = linked(
+      'box => <T> { v: T }\nvip => <T> box<T> & { level: int32 }\nh => { u: vip<text>  w: box<text> }',
+    );
+    const h = record(schema.entries, 'h');
+    const u = schema.entries.get(namedField(h, 'u')?.type.name ?? '');
+    expect(supertypesIn(u)).toEqual([]);
+  });
+});
+
+describe('§5.8: a chain is complete through applied parents, whatever the declaration order', () => {
+  const declarations = [
+    'result => <T> { payload: T }',
+    'ok => <T> result<T> & { note: text }',
+    'okt => ok<text>',
+    'rt => result<text>',
+    'great => okt & { extra: int32 }',
+  ];
+
+  it('an entry composing a declared application IS-A the entry declared for its applied parent', () => {
+    const entries = resolve(declarations.join('\n'));
+    expect(supertypesIn(entries.get('okt'))).toEqual(['ok', 'result', 'rt']);
+    expect(supertypesIn(entries.get('great'))).toEqual(['ok', 'okt', 'result', 'rt']);
+    expect(subtypesIn(entries.get('rt'))).toEqual(['great', 'okt']);
+  });
+
+  it('declared in reverse, the chains are the same', () => {
+    const entries = resolve([...declarations].reverse().join('\n'));
+    expect(supertypesIn(entries.get('great'))).toEqual(['ok', 'okt', 'result', 'rt']);
+  });
+
+  it('a closed type keeps no parents once the fold has run; a template keeps them as written', () => {
+    const entries = resolve(declarations.join('\n'));
+    const parentsOf = (name: string): unknown =>
+      (entries.get(name) as { chain?: { parents?: unknown } }).chain?.parents;
+    expect(parentsOf('okt')).toEqual([]);
+    expect(parentsOf('ok')).toMatchObject([{ name: 'result' }]);
+  });
+});
+
+describe('§5.10: where a record template’s parameter stands (change log #16, #17)', () => {
+  function loadError(declarations: string): string | undefined {
+    try {
+      linked(declarations);
+      return undefined;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }
+
+  it('a parameter is never an operand of & or ^, a parameter shadowing an entry of its name', () => {
+    expect(loadError('x => <T> T & { a: int32 }')).toMatch(/is a parameter of this declaration/);
+    expect(loadError('x => <T> T ^ { a: int32 }')).toMatch(/never an operand of '\^'/);
+    expect(loadError('pt => { a: int32 }\nx => <pt> pt & { b: int32 }')).toMatch(
+      /is a parameter of this declaration/,
+    );
+  });
+
+  it('an operand applied to a parameter is admitted', () => {
+    expect(loadError('box => <T> { v: T }\nx => <T> box<T> & { a: int32 }')).toBeUndefined();
+  });
+
+  it('a record template named bare at an operand is refused', () => {
+    expect(loadError('box => <T> { v: T }\nx => box & { a: int32 }')).toMatch(
+      /is a template and is applied to no arguments/,
+    );
+    expect(loadError('box => <T> { v: T }\nx => box ^ { v: int32 }')).toMatch(
+      /is a template and is applied to no arguments/,
+    );
+  });
+
+  it('a parameter standing in any slot but a field’s type, value or an argument names the slot', () => {
+    expect(
+      loadError('x => <T> !record { fields: { a => { type: int32 } }  extension: T }'),
+    ).toMatch(/parameter 'T' stands at record\.extension/);
+    expect(loadError('x => <T> !record { fields: { a => { type: int32  optional: T } } }')).toMatch(
+      /parameter 'T' stands at record_field\.optional/,
+    );
+    expect(loadError('x => <T> { a?: int32 ~ T }')).toBeUndefined();
+    expect(loadError('box => <T> { v: T }\nx => <T> { a: box<T> }')).toBeUndefined();
   });
 });

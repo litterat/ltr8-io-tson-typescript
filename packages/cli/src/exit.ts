@@ -1,4 +1,4 @@
-import { isVerdict, type Diagnostic, type DiagnosticCode } from '@ltr8/tson';
+import { type Diagnostic, type DiagnosticCode } from '@ltr8/tson';
 
 /**
  * Process exit codes -- part of this CLI's contract, not an implementation detail. A caller in a
@@ -16,12 +16,13 @@ import { isVerdict, type Diagnostic, type DiagnosticCode } from '@ltr8/tson';
  * diagnostic was not a verdict (`isVerdict`): nothing here judged the document, so this run has no
  * more grounds to call the data invalid than a `NOT_IMPLEMENTED` gap does.
  *
- * A refusal (`isRefusal`: a §8.2 name-hygiene refusal or a §9.1 limit refusal) is **not** among
- * them. It is exit 1, the same code as any other rejection, although its report outcome is
- * `NOT_CHECKED` (it is not a verdict, `isVerdict`): what a caller does next is edit the document,
- * here by renaming something or sending less. What is portability-
+ * A §8.2 name-hygiene or §9.1 limit refusal (`isRefusal`) is **not** among them. It is exit 1,
+ * the same code as any other rejection, and its report outcome is `REJECTED`: what a caller does
+ * next is edit the document, here by renaming something or sending less. What is portability-
  * sensitive, that another deployment's policy might accept the same document, is carried by the
- * diagnostic's own code and the report's policy, not by the exit code.
+ * diagnostic's own code and the report's policy, not by the exit code. A schema this run will not
+ * supply (`SCHEMA_NOT_PERMITTED`, `SCHEMA_TOO_LARGE`) is a refusal too, reported `REJECTED`, and
+ * exits 69 because the fix is the reference or the allow-list rather than the document.
  */
 export const EXIT = {
   /** Every input was valid (or, for `compile`/`hash`, every schema was well-formed). */
@@ -59,10 +60,13 @@ const TEMPORARILY_UNAVAILABLE: ReadonlySet<DiagnosticCode> = new Set([
  * Ranks a run's collected diagnostics into the exit code that reports it, for a run whose
  * per-file verdicts alone would otherwise mean {@link EXIT.INVALID}.
  *
- * The ranking is `70 > 78 > 69 > 75 > 1`, and the rule behind it is **who must act first**: until
- * they do, everyone else's fix is wasted. A library gap (70) blocks everyone; a missing binding
- * (78) blocks whoever wires the application; an unobtainable schema blocks the runner. Ties among
- * "nobody present can act" break by permanence -- 70 is more permanent than 78, and 69 than 75.
+ * The ranking is `70 > 78 > 69 > 1 > 75` (the reference implementation's `TsonCli.exitCodeFor`),
+ * and the rule behind it is **who must act first**: until they do, everyone else's fix is wasted.
+ * A library gap (70) blocks everyone; a missing binding (78) blocks whoever wires the application;
+ * a schema this run will not supply (69) blocks the runner. **An origin that did not answer ranks
+ * last and answers only when it is all that went wrong** (75): every other fix ends in a rerun,
+ * which retries the origin for free, while a bare rerun of a run holding a rejection reaches the
+ * same rejection -- so beside one, the run exits 1.
  *
  * The permanent/transient partition of the five fetch codes is *this consumer's* opinion, not the
  * library's. A different surface could partition the same five by whose doing it was instead,
@@ -75,20 +79,13 @@ export function exitCodeFor(diagnostics: readonly Diagnostic[]): ExitCode {
   if (has((code) => code === 'NOT_IMPLEMENTED')) return EXIT.FAULT;
   if (has((code) => code === 'BIND_MISMATCH')) return EXIT.CONFIG;
   if (has((code) => PERMANENTLY_UNAVAILABLE.has(code))) return EXIT.SCHEMA_UNAVAILABLE;
-  if (has((code) => TEMPORARILY_UNAVAILABLE.has(code))) return EXIT.SCHEMA_TEMPFAIL;
+  if (
+    has((code) => TEMPORARILY_UNAVAILABLE.has(code)) &&
+    diagnostics.every((d) => TEMPORARILY_UNAVAILABLE.has(d.code))
+  ) {
+    return EXIT.SCHEMA_TEMPFAIL;
+  }
   return EXIT.INVALID;
-}
-
-/**
- * Whether every diagnostic in `diagnostics` is a verdict on the document -- so a run carrying any
- * of them has genuinely been checked and rejected, rather than not checked at all.
- *
- * A refusal (§8.2 name, §9.1 limit) is not a verdict, so it answers `false`. Defers to the library's own
- * {@link isVerdict} rather than keeping a second copy of the set here,
- * which is how two consumers come to disagree about one diagnostic.
- */
-export function allVerdicts(diagnostics: readonly Diagnostic[]): boolean {
-  return diagnostics.every((d) => isVerdict(d.code));
 }
 
 /**

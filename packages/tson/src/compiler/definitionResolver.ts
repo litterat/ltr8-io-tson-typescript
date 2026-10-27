@@ -100,6 +100,8 @@ import type {
 } from '../schema/meta/typedef.js';
 import {
   constructorOf,
+  isFamilyBase,
+  isOpen,
   isConstructor,
   subtypesOf,
   supertypesOf,
@@ -138,18 +140,13 @@ import type {
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { createHeldBody, heldOf } from './heldBody.js';
-import {
-  DISCRIMINATORS,
-  EXTENSION,
-  field as wireField,
-  nameField,
-  refValue,
-  scoped,
-} from './wireForm.js';
+import { EXTENSION, nameField, refValue, scoped } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
+import { checkSlots } from './parameterTypes.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
 import { terminal, terminalDefinition } from '../link/referenceChain.js';
+import { ofParent as ancestryOfParent } from './ancestry.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -306,7 +303,11 @@ function applyRecordExtensionMark(
         '(§5.2)',
     );
   }
-  let extension: RecordExtensionType = body.discriminators !== undefined ? 'ABSTRACT' : 'OPEN';
+  // A selector derives ABSTRACT on a closed record only: on a template the base is ABSTRACT by
+  // construction and its selectors are the base's, so the record's own `extension` stays each
+  // application's (§5.10).
+  let extension: RecordExtensionType =
+    body.discriminators !== undefined && parameters.length === 0 ? 'ABSTRACT' : 'OPEN';
   if (mark === 'abstract') extension = 'ABSTRACT';
   if (mark === 'final') extension = 'FINAL';
   return extension === body.extension ? body : { ...body, extension };
@@ -320,7 +321,10 @@ function applyRecordExtensionMark(
  * typed by a family base, so it derives none.
  *
  * `isFreshRecordTemplate` gates the second source: composition and refinement templates contribute
- * only `=?`-marked selectors (already in `record.discriminators`).
+ * only `=?`-marked selectors (already in `record.discriminators`). A selector's declared type MUST
+ * mention none of the template's parameters at any depth (§5.10); a parameter-free application
+ * (`kind: bounded<9> = N`) satisfies it, being the entry it expands to in the base as in every
+ * member.
  */
 function familyDiscriminators(
   name: string,
@@ -335,12 +339,17 @@ function familyDiscriminators(
   const candidates = new Set(record.discriminators ?? []);
   const fields = namedFields(record);
   if (isFreshRecordTemplate) {
+    // A pin taken from a value parameter supplies one value per application and so one per member:
+    // a selector whatever its name's mark (§5.10), the base reading it required with the pin
+    // dropped and each member FIXED to its argument, optional as the name was marked. A field whose
+    // declared type is itself a parameter is no selector -- `<T, N> { v: T = N }` is an ordinary
+    // template, a type varying per application being one a position typed by the base cannot read.
     for (const field of fields) {
       if (
         field.role === 'FIXED' &&
-        !field.optional &&
         field.value?.form === 'UNQUOTED' &&
-        parameters.includes(field.value.text)
+        parameters.includes(field.value.text) &&
+        !parameters.includes(field.type.name)
       ) {
         candidates.add(field.name);
       }
@@ -412,7 +421,12 @@ function recordValue(
       parameters: parameters.map(undecidedParameter),
     };
   }
-  const chain = typeChain(draft.supertypes, parameters.length > 0 ? draft.parents : []);
+  // A template keeps its parents as written; a closed record keeps only its applied ones, until
+  // `schemaResolver.ts`'s fold has turned each into an edge and drops them (§5.8).
+  const chain = typeChain(
+    draft.supertypes,
+    parameters.length > 0 ? draft.parents : draft.parents.filter((p) => p.arguments.length > 0),
+  );
   return {
     value: withChain(body, chain),
     ...(draft.head === undefined ? {} : { head: draft.head }),
@@ -743,8 +757,10 @@ function resolveInstanceTemplate(
   if (!isRecordBodied) {
     return { value: createHeldBody(template.value, template.typeParams) };
   }
-  const hasSelectors = writtenSelectors(template.value);
-  const markedValue = markHeldRecordValue(name, template.value, mark, hasSelectors);
+  // §5.10's slot rule first, on the payload as written, so a parameter in a scalar slot is
+  // refused for standing there rather than for not reading as a boolean.
+  checkSlots(template.typeParams, template.value, deps.metaDefinitions);
+  const markedValue = markHeldRecordValue(template.value, mark);
   const read = bindAtomInstance(deps, name, readAsConstructor(markedValue, head.name));
   if (!isRecordBody(read)) {
     throw new TsonInternalError(`'${name}': a '!record' payload read as something else`);
@@ -760,35 +776,16 @@ function resolveInstanceTemplate(
 /** The kernel's own constructor name for a record body (§4.2, §5.2) -- the terminal a record template's head resolves to. */
 const RECORD_CONSTRUCTOR = 'record';
 
-/** Whether a written `!record { ... }` payload states `discriminators` -- §5.2's `=?`, already lowered by the desugarer. */
-function writtenSelectors(value: DataValue): boolean {
-  if (value.coreValue.kind !== 'record') return false;
-  const discriminators = wireField(value.coreValue, DISCRIMINATORS);
-  return discriminators?.kind === 'array' && discriminators.elements.length > 0;
-}
-
 /**
  * `value` with §5.2's mark baked in as the wire `extension` field -- the counterpart of {@link
  * applyRecordExtensionMark} over an already-desugared `!record { fields: { ... } }` wire value,
  * §5.2's canonical form a record *template* reaches through `desugar.ts`'s own
- * `structuralTypeDefPass` ahead of this module ever seeing it.
- *
- * @throws TsonSchemaValidationError per §5.2's `final`-beside-a-selector refusal.
+ * `structuralTypeDefPass` ahead of this module ever seeing it. On a template the record's own
+ * `extension` is each application's (§5.10): its selectors are the base's, which is ABSTRACT by
+ * construction, so they derive nothing here, and `final` is refused before this is reached.
  */
-function markHeldRecordValue(
-  name: string,
-  value: DataValue,
-  mark: 'abstract' | 'final' | undefined,
-  hasDiscriminators: boolean,
-): DataValue {
-  if (mark === 'final' && hasDiscriminators) {
-    throw new TsonSchemaValidationError(
-      `'${name}' writes 'final' beside a selector ('=?') -- a selector says this record's members ` +
-        'pin it, and FINAL admits no subtype, so the members a selector implies could never exist ' +
-        '(§5.2)',
-    );
-  }
-  let extension: RecordExtensionType = hasDiscriminators ? 'ABSTRACT' : 'OPEN';
+function markHeldRecordValue(value: DataValue, mark: 'abstract' | 'final' | undefined): DataValue {
+  let extension: RecordExtensionType = 'OPEN';
   if (mark === 'abstract') extension = 'ABSTRACT';
   if (mark === 'final') extension = 'FINAL';
   if (extension === 'OPEN' || value.coreValue.kind !== 'record') {
@@ -897,17 +894,9 @@ function resolveAtomRefinement(
   };
 }
 
-/**
- * What a closed parent contributes to an IS-A chain (§5.8): itself, the end of its reference
- * chain (§8.3: the terminal is the same type under another name, so IS-A reaches it), and that
- * entry's own chain -- the one rule every closed declaration's chain is built by.
- */
+/** What a closed parent contributes to an IS-A chain (§5.8, `ancestry.ts`). */
 function ofParent(deps: DefinitionResolverDeps, parent: string): string[] {
-  const names = [parent];
-  const end = terminal(parent, deps.namespaceDefinitions);
-  if (end !== parent) names.push(end);
-  names.push(...supertypesOf(deps.namespaceDefinitions(end)));
-  return names;
+  return ancestryOfParent(parent, deps.namespaceDefinitions);
 }
 
 /**
@@ -1097,6 +1086,17 @@ function bindAtomInstance(deps: DefinitionResolverDeps, name: string, value: Dat
     }
     if (e instanceof TsonBindMismatchError) {
       throw new TsonBindMismatchError(`'${name}': ${e.message}`, { cause: e });
+    }
+    // §8.2: a name a value body holds, refused under the processor's policy (a namespace value's
+    // payload, which the linker cannot see into) -- §8.1's refused outcome, kept as one.
+    if (e instanceof TsonNameHygieneRefusedError) {
+      throw new TsonNameHygieneRefusedError(`'${name}': ${e.message}`, {
+        mechanism: e.mechanism,
+        names: e.names,
+        uts39Version: e.uts39Version,
+        pointer: `/${name}`,
+        cause: e,
+      });
     }
     throw new TsonNotImplementedError(
       `'${name}': failed to bind '${constructorName}' via the compiled meta-schema reader: ${errorMessage(e)}`,
@@ -1307,12 +1307,21 @@ function resolveComposition(
           });
         }
       } else {
-        // §5.8's last sentence: a fully-bound application standing at a composition operand is
-        // "subsumed where it stands" -- its arguments are the member's own contribution, exactly
-        // as if the author had written the template's name and the substituted fields by hand --
-        // one IS-A edge to the template itself, and it mints no instantiation entry.
-        directSupertypes.push({ name: head, arguments: [], annotations: [] });
-        addIfAbsent(transitiveSupertypes, seenTransitive, head);
+        // §5.8: a fully-bound application at an operand denotes no entry of its own -- it
+        // contributes its fields and its template's ancestors, and mints nothing. The application
+        // itself goes into the chain's `parents`, arguments as §5.10 classifies them, for
+        // `schemaResolver.ts`'s fold to turn into the edge to the entry a declaration (or a use
+        // site's expansion) gives the same application; a removal revokes IS-A for every parent
+        // (§5.9), so nothing is kept. A *family base* is the one head that is itself a type
+        // (§5.10): where this declaration takes no parameters it is never held, so no later
+        // closing completes its chain, and the edge to the base is stated here --
+        // `dog => pet<"dog"> & { ... }` IS-A `pet`, which puts `dog` in `pet.subtypes`.
+        if (parameters.length === 0 && isFamilyBase(deps.namespaceDefinitions(head))) {
+          addIfAbsent(transitiveSupertypes, seenTransitive, head);
+        }
+        if (construction.removal === undefined) {
+          directSupertypes.push({ name: head, arguments: operand.arguments, annotations: [] });
+        }
       }
       for (const ancestor of operand.ancestors)
         addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
@@ -1330,6 +1339,7 @@ function resolveComposition(
       );
     }
     const supertypeName = supertypeRef.name;
+    refuseParameterOperand(name, supertypeName, parameters, 'supertype', '&');
     const supertypeDef = deps.namespaceDefinitions(supertypeName);
     if (supertypeDef === undefined) {
       throw new TsonSchemaValidationError(
@@ -1340,6 +1350,7 @@ function resolveComposition(
     // chain (§8.3), be a definition whose body is a `!record`". See `resolveRefinement` for why
     // the composed vocabulary is the terminal's while the recorded name is the author's.
     const supertypeVocabulary = vocabularyOf(deps, supertypeName) ?? supertypeDef;
+    refuseUnappliedTemplate(name, supertypeName, supertypeVocabulary, 'supertype', '&');
     if (!isRecordBody(supertypeVocabulary)) {
       throw new TsonSchemaValidationError(
         `'${name}': supertype '${supertypeName}' has no fields to contribute -- its body is a binding record, ` +
@@ -1629,6 +1640,9 @@ function resolveRefinement(
       operand.body,
     );
   }
+  if (refined.target.kind === 'simpleRef') {
+    refuseParameterOperand(name, refined.target.name, parameters, 'refinement source', '^');
+  }
   const sourceRef = resolveRefinementSource(deps, name, refined.target);
   const sourceName = sourceRef.name;
   const sourceDef = deps.namespaceDefinitions(sourceName);
@@ -1642,6 +1656,7 @@ function resolveRefinement(
   // resolving to either is *finished*". The vocabulary tightened is the terminal's; the name
   // recorded in `supertypes` stays the one the author wrote, since §8.3 states the chain as written.
   const sourceVocabulary = vocabularyOf(deps, sourceName) ?? sourceDef;
+  refuseUnappliedTemplate(name, sourceName, sourceVocabulary, 'refinement source', '^');
   if (!isRecordBody(sourceVocabulary)) {
     throw new TsonSchemaValidationError(
       `'${name}': refinement source '${sourceName}' has no vocabulary to tighten -- its body is a binding ` +
@@ -1853,6 +1868,50 @@ function absorb(
   groups.push(...source.groups);
 }
 
+/**
+ * A template named without arguments is no operand (§5.8, §5.10): a record template is a type a
+ * position may name, but an operand is flattened, and a template has fields only once its
+ * parameters are bound.
+ */
+function refuseUnappliedTemplate(
+  name: string,
+  operand: string,
+  definition: Top,
+  position: string,
+  operator: string,
+): void {
+  if (isOpen(definition)) {
+    throw new TsonSchemaValidationError(
+      `'${name}': ${position} '${operand}' is a template and is applied to no arguments -- ` +
+        `'${operator}' takes the fields of a record, and a template has fields once its parameters ` +
+        `are bound. Write '${operand}<...>' (§5.8, §5.10)`,
+    );
+  }
+}
+
+/**
+ * A parameter is never an operand of `&` or `^` (§5.8, §5.10): both read the operand's field set
+ * to flatten, and a parameter has none until the template is applied, so `<T> T & { ... }` and
+ * `<T> T ^ { ... }` have no body to hold. An operand applied *to* a parameter, `result<T>`, is a
+ * different thing and is admitted. Checked before the name is looked up, as §5.10's shadowing rule
+ * reads it: a parameter hides a schema entry of the same name.
+ */
+function refuseParameterOperand(
+  name: string,
+  operand: string,
+  parameters: readonly string[],
+  position: string,
+  operator: string,
+): void {
+  if (parameters.includes(operand)) {
+    throw new TsonSchemaValidationError(
+      `'${name}': ${position} '${operand}' is a parameter of this declaration, and a parameter is ` +
+        `never an operand of '${operator}' -- its fields are unknown until the template is applied, ` +
+        'so there is nothing to flatten (§5.10)',
+    );
+  }
+}
+
 /** Whether an application is applied to a parameter of the declaration that writes it, and so still open — through nesting (`box<inner<T>>` is as open as `box<T>`). */
 function namesOwnParameter(application: GenericRef, typeParams: readonly string[]): boolean {
   return application.args.some((arg) => {
@@ -1866,6 +1925,8 @@ function namesOwnParameter(application: GenericRef, typeParams: readonly string[
 interface OpenOperand {
   readonly ancestors: readonly string[];
   readonly body: RecordBody;
+  /** The application's arguments as §5.10 classifies them, where it was judged; as written otherwise. */
+  readonly arguments: readonly TypeArgument[];
 }
 
 /**
@@ -1912,9 +1973,11 @@ function openOperand(
   held.parameterNames.forEach((parameter, i) => {
     bindings.set(parameter, typeArgument(deps, at(application.args, i, 'openOperand')));
   });
-  if (deps.applicationChecker !== undefined && !namesOwnParameter(application, typeParams)) {
-    deps.applicationChecker({ name: head, arguments: [...bindings.values()], annotations: [] });
-  }
+  const written = [...bindings.values()];
+  const classified =
+    deps.applicationChecker !== undefined && !namesOwnParameter(application, typeParams)
+      ? deps.applicationChecker({ name: head, arguments: written, annotations: [] })
+      : written;
   const substituted = substitute(held.application.coreValue, head, held.parameterNames, bindings);
   const absorbedValue: DataValue = {
     annotations: held.application.annotations,
@@ -1928,7 +1991,7 @@ function openOperand(
         "vocabulary, so there is nothing to compose with (§5.8, and §5.7's vocabulary-body rule read across)",
     );
   }
-  return { ancestors: supertypesOf(template), body: absorbed };
+  return { ancestors: supertypesOf(template), body: absorbed, arguments: classified };
 }
 
 /** A fully-bound application at one of the two field-absorbing positions, closed to the entry it denotes. */

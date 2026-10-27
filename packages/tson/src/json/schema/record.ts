@@ -43,7 +43,7 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { selfNames, terminal, terminalDefinition } from '../../link/referenceChain.js';
+import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
   groupRefusals,
@@ -104,12 +104,7 @@ export interface FieldValue {
  * by its JS `typeof`, which cannot render a `number` family's {@link TsonDecimal} host value at
  * all.
  */
-function fieldValueNode(
-  form: AtomForm,
-  hostValue: unknown,
-  tokenText: string,
-  stringClass: boolean,
-): JsonValue {
+function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): JsonValue {
   switch (form) {
     case 'boolean':
       return jsonBoolean(hostValue as boolean);
@@ -128,9 +123,9 @@ function fieldValueNode(
     case 'string':
       return jsonString(tokenText);
     case 'enum':
-      // §5.2: an enum whose type is not an identifier family is string-class whatever its members
-      // spell, so only an identifier enum's `true`/`false` are JSON booleans.
-      return !stringClass && (tokenText === 'true' || tokenText === 'false')
+      // §7.4: an enum's members are values of an identifier family, so `true`/`false` are JSON
+      // booleans and every other member a string.
+      return tokenText === 'true' || tokenText === 'false'
         ? jsonBoolean(tokenText === 'true')
         : jsonString(tokenText);
   }
@@ -182,11 +177,7 @@ export function fieldValueOf(
   );
   const hostValue = parse(token.text);
   const text = write === undefined ? token.text : write(hostValue);
-  const entries = ctx.linkedSchema.entries;
-  const stringClass = ctx.linkedSchema.textEnums.has(
-    terminal(fieldTypeName, (n) => entries.get(n)),
-  );
-  return { hostValue, node: fieldValueNode(form, hostValue, text, stringClass) };
+  return { hostValue, node: fieldValueNode(form, hostValue, text) };
 }
 
 /**

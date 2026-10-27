@@ -89,6 +89,7 @@ import { isTemplateBody } from './meta/typedef.js';
 import { inheritedBindingName } from './inheritedBinding.js';
 import { isNamespaceType } from './meta/namespaces.js';
 import { readNamespaceInstance } from './namespaceReader.js';
+import type { IdentifierPolicy } from '../unicode/policy.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -314,13 +315,15 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
 export function createDefinitionMetaReader(
   lookupConstructorDef: DefinitionGetter,
   decodeAtom: AtomDecoder = metaAtomDecoder,
+  identifierPolicy?: IdentifierPolicy,
 ): DefinitionMetaReader {
   return (type, value) => {
     const constructor = lookupConstructorDef(type);
     // A meta layer's own namespace type: its value is the map its facets describe, read into the
-    // generic value model rather than bound (§4.1).
+    // generic value model rather than bound (§4.1), its names judged under the processor's
+    // identifier policy (§8.2, [TSON-SCHEMA] §11.4) since the linker cannot see into it.
     if (isNamespaceType(constructor, type)) {
-      return readNamespaceInstance(type, value, lookupConstructorDef);
+      return readNamespaceInstance(type, value, lookupConstructorDef, identifierPolicy);
     }
     const binding =
       metaBindings.get(type) ??

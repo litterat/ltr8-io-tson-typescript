@@ -37,6 +37,16 @@ async function reasonOf(promise: Promise<unknown>): Promise<string> {
   throw new Error('expected a rejection');
 }
 
+async function messageOf(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof TsonSchemaFetchError) return error.message;
+    throw error;
+  }
+  throw new Error('expected a rejection');
+}
+
 describe('fileSchemaSource: deny by default', () => {
   it('refuses every reference when no host is mapped', async () => {
     const source = fileSchemaSource();
@@ -47,6 +57,18 @@ describe('fileSchemaSource: deny by default', () => {
     const root = makeDir();
     const source = fileSchemaSource({ mapHosts: { 'schemas.example.com': root } });
     expect(await reasonOf(source.fetch('https://other.example.com/a.tn'))).toBe('not-permitted');
+  });
+
+  it('a refusal names the reference and no mapped host or path (TSON-SCHEMA §11.2)', async () => {
+    const root = makeDir();
+    const source = fileSchemaSource({ mapHosts: { 'schemas.example.com': root } });
+    const message = await messageOf(source.fetch('https://other.example.com/a.tn'));
+    expect(message).toContain('https://other.example.com/a.tn');
+    expect(message).toContain('will not supply');
+    expect(message).not.toContain('schemas.example.com');
+    expect(message).not.toContain(root);
+    const missing = await messageOf(source.fetch('https://schemas.example.com/missing.tn'));
+    expect(missing).not.toContain(root);
   });
 
   it('rejects a directory that does not exist, at construction', () => {

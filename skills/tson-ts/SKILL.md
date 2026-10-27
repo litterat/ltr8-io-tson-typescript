@@ -346,9 +346,9 @@ createTson({ maxNestingDepth: 128 }); // every schema it resolves and document i
 ```
 
 §8.2's three name-hygiene mechanisms are on by default (skeleton distinctness, `Identifier_Status`,
-Highly Restrictive over the whole name). A refusal is §8.1's fifth outcome: `isVerdict` is `false`
+Highly Restrictive over the whole name). A refusal is §8.1's refused outcome: `isVerdict` is `false`
 for its code (`CONFUSABLE_NAMES`, `RESTRICTED_CHARACTER`, `RESTRICTED_SCRIPT`; `isNameRefusal`), and
-`tson validate` reports the file `NOT_CHECKED` and still exits 1. Relaxation is a **code decision stated at the call site** —
+`tson validate` reports the file `REJECTED` and exits 1. Relaxation is a **code decision stated at the call site** —
 never an environment variable, because a security policy read from the environment is ambient
 authority. State it once on the instance, via `Config.identifierPolicy`:
 
@@ -438,12 +438,12 @@ as its `policy` field.
 `--format json` is the shape to parse in CI. **Its field names are `snake_case`, unlike the
 library's own `camelCase` `Diagnostic`** — `schema_id`, `schema_pointer`, `data_position`,
 `schema_position` — and every optional field is omitted rather than emitted as `null`. The run and
-each file report an `outcome` of `"VALID"`, `"INVALID"` or `"NOT_CHECKED"` — never a plain `valid`
-boolean, so a file whose schema could not be obtained is distinguishable from one that failed:
+each file report an `outcome` of `"ACCEPTED"`, `"REJECTED"` or `"UNDETERMINED"` — never a plain
+`valid` boolean, so a file whose schema could not be obtained is distinguishable from one that failed:
 
 ```json
 {
-  "outcome": "INVALID",
+  "outcome": "REJECTED",
   "policy": {
     "identifier_policy": { "level": "HIGHLY_RESTRICTIVE", "per_segment": false, "permitting": [] },
     "token_policy": { "level": "UNRESTRICTED", "per_segment": false, "permitting": [] },
@@ -452,7 +452,7 @@ boolean, so a file whose schema could not be obtained is distinguishable from on
   "files": [
     {
       "file": "order.tn",
-      "outcome": "INVALID",
+      "outcome": "REJECTED",
       "diagnostics": [
         {
           "code": "ATOM_FORM_INVALID",
@@ -472,9 +472,9 @@ boolean, so a file whose schema could not be obtained is distinguishable from on
 
 Every `validate`/`compile` run carries `policy` — the same record `tson policy` prints on its own
 — so a report always states what it was judged under. A file whose schema could not be obtained
-carries `"outcome": "NOT_CHECKED"` and a `SCHEMA_*` diagnostic with no `path`/`schema_pointer`
-(nothing was read to place one); a `NOT_IMPLEMENTED` or `BIND_MISMATCH` diagnostic likewise makes
-its file `NOT_CHECKED` rather than `INVALID`. `--format tson` is the same record written through
+carries `"outcome": "UNDETERMINED"` (or `"REJECTED"`, for one this run will not supply) and a
+`SCHEMA_*` diagnostic with no `path`/`schema_pointer` (nothing was read to place one); a
+`NOT_IMPLEMENTED` or `BIND_MISMATCH` diagnostic alone likewise makes its file `UNDETERMINED`. `--format tson` is the same record written through
 the library's own writer; `--format text` is one line per diagnostic, `CODE at /path
 (line:column): message`, or `CODE at the document root: message` when `path` is `""`.
 

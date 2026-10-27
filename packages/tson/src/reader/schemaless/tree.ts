@@ -109,11 +109,11 @@ import { reportAtomViolation, reportNotScalar, reportUnknownTypeRef } from './ty
 
 export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
   /**
-   * Keeps a type-ref naming no built-in type on the node without reporting it -- §5.1's
-   * uninterpreted marker, carried all the way to the tree. For reading the wire form of a
-   * document whose own `!!schema` defines those names but is deliberately not in scope, or for
-   * round-tripping through a tree writer. Defaults to `false` -- see `typeRefCheck.ts`'s own note
-   * on why reporting, not silence, is the default.
+   * Keeps a type-ref naming no built-in type on the node without reporting it -- the caller's
+   * explicit opt-out of [TSON-DATA] §3.2's resolver error, carrying the name all the way to the
+   * tree. For reading the wire form of a document whose own `!!schema` defines those names but is
+   * deliberately not in scope, or for round-tripping through a tree writer. Defaults to `false`:
+   * a schemaless document's only type names are §5's vocabulary (`typeRefCheck.ts`).
    */
   readonly preserveUnknownTypeRefs?: boolean;
   /**

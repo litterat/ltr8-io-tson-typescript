@@ -309,9 +309,11 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
       `text`/`json`/`tson` output (the `tson` format via `write()`, never string concatenation);
       exit codes `0` valid, `1` invalid input (a §8.2 refusal included — the sender still holds the
       fix), `2` usage error, `69` a schema permanently unobtainable, `75` one temporarily so, `78`
-      a type with no registered binding, `70` library gap or fault, ranked `70 > 78 > 69 > 75 > 1`
-      by who must act first. A run reports `outcome` — `VALID`/`INVALID`/`NOT_CHECKED` — rather
-      than a boolean, so a document whose schema was never fetched is not reported invalid. The
+      a type with no registered binding, `70` library gap or fault, ranked `70 > 78 > 69 > 1 > 75`
+      by who must act first (`75` only when an unanswering origin is all that went wrong). A run
+      reports `outcome` — `ACCEPTED`/`REJECTED`/`UNDETERMINED` (Part 1 §8.1's refused outcome
+      rejects; undetermined is what could not be judged) — rather than a boolean, so a document
+      whose schema was never fetched is not reported rejected. The
       §8.2 policy is configurable from the command line (`--identifier-policy`,
       `--identifier-per-segment`, `--identifier-allow-look-alikes`, `--identifier-scripts`,
       `--token-policy`, `--token-scripts`), stated once per run on the report in `policy.tn`'s
@@ -432,9 +434,12 @@ foreignSchemas })`, and a compile with no lookup reports `SCHEMA_NOT_PERMITTED`.
     typing the position by the record family instead (Part 3 §8.4's own closing paragraph), or,
     in JSON only, wrapping (`{"$type": "<family>", "$value": {"$type": "<subtype>", ...}}`).
 
-- **§8.1's ingest has no implementation.** "Ingest verifies a recorded parameter type and re-runs the
-  family checks over the closure", but nothing here reads resolved output back as a schema (the
-  reference does not either). The family checks run over the merged closure, ready for such a path.
+- **Resolved-output ingest is unbuilt** (Part 2 §8.1; Revision 38 change log §6 item 4, unbuilt on
+  both sides). "Ingest verifies a recorded parameter type and re-runs the family checks over the
+  closure", and an entry's `@application` is "read as stated on ingest", but nothing here reads
+  resolved output back as a schema: the writer emits it, and the conformance harness compares
+  written form. The family checks and the applied-parent fold run over the merged closure, ready
+  for such a path.
 
 - **`strip` holds the whole document in memory.** `compiler/strip.ts` parses the schema, rewrites
   it and re-lexes its own output, so memory is proportional to the document rather than to its

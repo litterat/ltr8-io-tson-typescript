@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { TsonAtomParseError, TsonAtomValidationError } from '../src/core/errors.js';
+import {
+  TsonAtomParseError,
+  TsonAtomValidationError,
+  TsonNameHygieneRefusedError,
+} from '../src/core/errors.js';
 import { createKindParser, createQualifiedNameParser } from '../src/atom/reference.js';
 import { compile, validate } from '../src/compiler/compile.js';
 import { encodeUtf8 } from '../src/io/utf8.js';
@@ -352,5 +356,75 @@ describe('a meta layer’s own constructor refining one of meta.tn’s ([TSON-SC
       },
     });
     expect(body).toMatchObject({ kind: 'enum', nameType: 'spaced', members: ['New York'] });
+  });
+});
+
+describe('a namespace value’s names meet §8.2 at the read ([TSON-DATA] §8.2, [TSON-SCHEMA] §11.4)', () => {
+  const CYRILLIC_PASS = 'раѕѕ'; // all-Cyrillic, a look-alike of `pass`
+  const MIXED_PASS = 'pаss'; // Latin with a Cyrillic `а`
+
+  function refusal(body: string): TsonNameHygieneRefusedError {
+    try {
+      withLayer().resolveSchema(governed(body));
+    } catch (error) {
+      if (error instanceof TsonNameHygieneRefusedError) return error;
+      throw error;
+    }
+    throw new Error('expected a §8.2 refusal');
+  }
+
+  it('two keys of one namespace value that read alike are refused (skeleton distinctness)', () => {
+    const error = refusal(
+      `orders => !interface { pass => { response: text }  ${CYRILLIC_PASS} => { response: text } }`,
+    );
+    expect(error.mechanism).toBe('skeleton-distinctness');
+  });
+
+  it('a key mixing scripts is refused under the default restriction level', () => {
+    const error = refusal(`orders => !interface { ${MIXED_PASS} => { response: text } }`);
+    expect(error.mechanism).toBe('restriction-level');
+  });
+
+  it('an identifier-typed value inside the payload is a name and is judged too', () => {
+    const error = refusal(
+      `api => !services { shop => { extends: [${MIXED_PASS}]  methods: { list => { response: text } } } }`,
+    );
+    expect(error.mechanism).toBe('restriction-level');
+    expect(error.names).toEqual([MIXED_PASS]);
+  });
+
+  it('single-script names that read alike only across scopes are admitted', () => {
+    expect(() =>
+      withLayer().resolveSchema(
+        governed(
+          `a => !interface { pass => { response: text } }\n b => !interface { ${CYRILLIC_PASS} => { response: text } }`,
+        ),
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('a diagnostic about a kind names the spelling the author wrote (§4.2, §8.2)', () => {
+  it('a kind-typed slot of a meta layer’s record is named `kind<record>`, never its minted entry', () => {
+    let message = '';
+    try {
+      withLayer().resolveSchema(governed('orders => !interface { place => { request: text } }'));
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("a member of 'kind<record>'");
+    expect(message).not.toMatch(/kind_type_record_[0-9a-f]{8}/);
+  });
+
+  it('a field of the schema’s own typed by an inline kind is named as written', () => {
+    let message = '';
+    try {
+      standardLibrary().resolveSchema(
+        `!!id:"https://example.com/k.tn"\n!!meta:"${META}"\n!!import:"${CORE}"\n{\n  o => { k?: kind<record> = text }\n}\n`,
+      );
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("is typed 'kind<record>'");
   });
 });

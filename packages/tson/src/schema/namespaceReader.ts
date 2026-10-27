@@ -70,6 +70,18 @@ import type {
 } from './meta/typedef.js';
 import { isTemplateBody, namespaceOf, subtypesOf, supertypesOf } from './meta/typedef.js';
 import { isNamespaceType, namespaceMapOf } from './meta/namespaces.js';
+import type { IdentifierType } from './meta/atoms-text.js';
+import { TsonNameHygieneRefusedError } from '../core/errors.js';
+import { identifierProfileOf } from '../unicode/identifier-profile.js';
+import { applyNormalization } from '../unicode/normalization.js';
+import {
+  DEFAULT_IDENTIFIER_POLICY,
+  judgeName,
+  nameHygieneRefusal,
+  type IdentifierPolicy,
+  type NameHygieneRefusal,
+} from '../unicode/policy.js';
+import { UTS39_VERSION } from '../unicode/uts39.js';
 
 /** The kernel's application form, a `type_ref` slot (§8.1). */
 const TYPE_REF = 'type_ref';
@@ -85,8 +97,9 @@ export function readNamespaceInstance(
   constructor: string,
   value: DataValue,
   meta: EntryLookup,
+  identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
 ): Namespace<MetaValue> {
-  const read = new ValueBodyReader(meta);
+  const read = new ValueBodyReader(meta, identifierPolicy);
   return read.namespace(value, constructor, []);
 }
 
@@ -179,7 +192,63 @@ function writtenAnnotationOf(annotation: Annotation): WrittenAnnotation {
 }
 
 class ValueBodyReader {
-  constructor(private readonly meta: EntryLookup) {}
+  constructor(
+    private readonly meta: EntryLookup,
+    private readonly policy: IdentifierPolicy,
+  ) {}
+
+  /**
+   * The identifier family `type` resolves to, past its reference chain, or `undefined` where it
+   * is no identifier family -- what makes a token at a position typed by it a name (§8.2).
+   */
+  private identifierFamily(type: string): IdentifierType | undefined {
+    const body = this.meta(terminal(type, this.meta));
+    return body !== undefined && !isTemplateBody(body) && body.kind === 'identifier_type'
+      ? body
+      : undefined;
+  }
+
+  /**
+   * §8.2's name hygiene over `names`, one scope of values of the identifier family `family`: the
+   * keys of one namespace value or one identifier-keyed map, the elements of one unique array, or a
+   * single identifier-typed value. A namespace value is a payload the linker cannot see into -- a
+   * map keyed by names whose values are a meta layer's own records -- so its names are judged here,
+   * at the read, under the processor's identifier policy as the same values are in a data document
+   * ([TSON-SCHEMA] §11.4). Skeleton distinctness relates the scope's names first, then each name
+   * meets the per-name rules under the family's profile, in the family's form.
+   *
+   * @throws TsonNameHygieneRefusedError the first refusal: §8.1's refused outcome, never a finding
+   *   about validity.
+   */
+  private judgeNames(
+    names: readonly string[],
+    family: IdentifierType,
+    path: readonly string[],
+  ): void {
+    const values = names.map((name) => applyNormalization(family.normalization, name));
+    const where = path.length === 0 ? 'a namespace value' : `'${path.join('.')}'`;
+    const refuse = (refusal: NameHygieneRefusal): never => {
+      throw new TsonNameHygieneRefusedError(
+        `${where} holds a name refused under [TSON-DATA] §8.2's name-hygiene policy: ` +
+          `${refusal.detail} (computed against UTS #39 version ${UTS39_VERSION})`,
+        { mechanism: refusal.mechanism, names: refusal.names, uts39Version: UTS39_VERSION },
+      );
+    };
+    if (values.length > 1) {
+      const relation = nameHygieneRefusal(values, {
+        ...this.policy,
+        restrictionLevel: 'UNRESTRICTED',
+      });
+      if (relation !== undefined) refuse(relation);
+    }
+    const profile = identifierProfileOf(family);
+    for (const value of values) {
+      const [violation] = judgeName(value, profile, this.policy);
+      if (violation !== undefined) {
+        refuse({ mechanism: violation.mechanism, names: [value], detail: violation.detail });
+      }
+    }
+  }
 
   /** `type`'s entry at the end of its chain (§8.3), under the name it is declared by. */
   private resolved(type: string): { readonly name: string; readonly body: Top } {
@@ -232,6 +301,8 @@ class ValueBodyReader {
       }
       entries.push([key, this.value(entry.value.value, map.valueType, [...path, key])]);
     }
+    const keyFamily = this.identifierFamily(map.keyType);
+    if (keyFamily !== undefined) this.judgeNames([...seen], keyFamily, path);
     return namespaceOf(name, entries, keyAnnotations);
   }
 
@@ -305,6 +376,7 @@ class ValueBodyReader {
         if (core.kind !== 'token') throw mismatch(path, `a value of '${name}'`, core);
         const token = { text: core.text, form: metaFormOfLexer(core.form) };
         this.atom(name, body, token, path);
+        if (body.kind === 'identifier_type') this.judgeNames([core.text], body, path);
         return { form: 'token', token };
       }
     }
@@ -540,6 +612,15 @@ class ValueBodyReader {
         ? ({ form: 'void' } as const)
         : this.value(element.value, body.elementType.name, [...path, String(index)]),
     );
+    // A unique array of names is a scope of them (§8.2), as an identifier-keyed map's keys are.
+    const family = body.uniqueItems ? this.identifierFamily(body.elementType.name) : undefined;
+    if (family !== undefined) {
+      this.judgeNames(
+        elements.flatMap((element) => (element.form === 'token' ? [element.token.text] : [])),
+        family,
+        path,
+      );
+    }
     return { form: 'list', elements };
   }
 
@@ -569,6 +650,8 @@ class ValueBodyReader {
           : this.value(written, body.valueType.name, [...path, text ?? String(entries.length)]);
       entries.push([key, read]);
     }
+    const keyFamily = this.identifierFamily(body.keyType.name);
+    if (keyFamily !== undefined) this.judgeNames([...seen], keyFamily, path);
     return { form: 'map', entries };
   }
 

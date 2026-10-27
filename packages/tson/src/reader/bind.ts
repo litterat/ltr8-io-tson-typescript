@@ -75,6 +75,8 @@ import type { Task } from '../io/bytes.js';
 import type { TsonEvent } from '../stream/event.js';
 import { lookingAhead, nestingLimitOf } from './context.js';
 import type { ReadContext, TypeReader } from './contracts.js';
+import { lookupBuiltinAtom } from './schemaless/vocabulary.js';
+import { reportUnknownTypeRef } from './schemaless/typeRefCheck.js';
 
 // ---------------------------------------------------------------------------------------------
 // The atom seam
@@ -219,10 +221,42 @@ function* skipTypeRef(ctx: ReadContext): Task<string | undefined> {
   return peeked.name;
 }
 
-/** `*annotation [type-ref]` (§2.3), both halves discarded -- every non-{@link readVariant} reader's own framing step. */
+/** `*annotation [type-ref]` (§2.3), both halves discarded -- the framing of a value read nowhere. */
 function* skipAnnotationsAndTypeRef(ctx: ReadContext): Task<void> {
   yield* skipAnnotations(ctx);
   yield* skipTypeRef(ctx);
+}
+
+/**
+ * An optional type-ref on a value this reader binds (§3.2). A schemaless document has no source of
+ * type names but [TSON-DATA] §5's vocabulary, so a name outside it names no type, and a host-typed
+ * read is no exception: the verdict on a document is a property of its bytes, never of the host
+ * type a caller happens to bind (§3.2, §5.1). Reported as `UNKNOWN_TYPE_REF`, a resolver error;
+ * a built-in name is consumed, the binding reading the token by its own atom.
+ */
+function* readTypeRef(ctx: ReadContext): Task<void> {
+  const peeked = yield* ctx.peek();
+  if (peeked.kind !== 'type-ref') return;
+  yield* ctx.next();
+  if (admittedTags.get(ctx) === peeked.name) {
+    admittedTags.delete(ctx);
+    return;
+  }
+  if (lookupBuiltinAtom(peeked.name) === undefined) reportUnknownTypeRef(ctx, peeked.name);
+}
+
+/**
+ * The tag a {@link readVariant} dispatch chose a member by, for the member's own reader to consume
+ * unjudged: a variant binding names its members' wire names itself, so the binding is the
+ * vocabulary such a tag is read in -- the caller's explicit choice, the TypeScript form of the
+ * reference's `withHostTypes()`. Keyed by the read context, and cleared once the member has read.
+ */
+const admittedTags = new WeakMap<ReadContext, string>();
+
+/** `*annotation [type-ref]` (§2.3) on a value this reader binds: annotations discarded, the type-ref judged ({@link readTypeRef}). */
+function* readFraming(ctx: ReadContext): Task<void> {
+  yield* skipAnnotations(ctx);
+  yield* readTypeRef(ctx);
 }
 
 /** Discards `[schema-directive] data-value` (§2.3) -- a record field, map entry, or array/tuple element this reader has nowhere to put. */
@@ -412,7 +446,7 @@ function* readAtomLeaf<T>(
   ctx: ReadContext,
   readAtom: AtomReader,
 ): Task<T> {
-  yield* skipAnnotationsAndTypeRef(ctx);
+  yield* readFraming(ctx);
   const e = yield* ctx.peek();
   if (e.kind !== 'token') {
     ctx.report(
@@ -461,7 +495,10 @@ function* readRecord<T>(
   } else {
     yield* skipAnnotations(ctx);
   }
-  yield* skipTypeRef(ctx);
+  // The construction guard counts from before the type-ref: a tag no vocabulary names abandons the
+  // record as any other report inside it does.
+  const framed = ctx.reported();
+  yield* readTypeRef(ctx);
 
   const peeked = yield* ctx.peek();
   const anchor = peeked.position;
@@ -472,7 +509,7 @@ function* readRecord<T>(
 
   if (peeked.kind === 'record-start') {
     yield* ctx.next();
-    const mark = ctx.reported();
+    const mark = framed;
     for (;;) {
       const next = yield* ctx.peek();
       if (next.kind === 'record-end') break;
@@ -532,13 +569,13 @@ function* readRecord<T>(
   }
   if (peeked.kind === 'empty-brace') {
     yield* ctx.next();
-    const mark = ctx.reported();
+    const mark = framed;
     fillMissingFields(binding, values, seen, ctx, anchor);
     if (ctx.reported() > mark) return abandonedValue() as T;
     return finishRecord(binding, values, seen, annotations);
   }
   if (positionalField !== undefined) {
-    const mark = ctx.reported();
+    const mark = framed;
     const fieldCtx = ctx.field(positionalField.wireName);
     values[positionalField.index] = yield* readBound(positionalField.binding, fieldCtx, readAtom);
     seen[positionalField.index] = true;
@@ -630,7 +667,8 @@ function finishRecord<T>(
 // ---------------------------------------------------------------------------------------------
 
 function* readTuple<T>(binding: TupleBinding<T>, ctx: ReadContext, readAtom: AtomReader): Task<T> {
-  yield* skipAnnotationsAndTypeRef(ctx);
+  const framed = ctx.reported();
+  yield* readFraming(ctx);
   const peeked = yield* ctx.peek();
   if (peeked.kind !== 'array-start') {
     ctx.report(
@@ -643,7 +681,7 @@ function* readTuple<T>(binding: TupleBinding<T>, ctx: ReadContext, readAtom: Ato
     return abandonedValue() as T;
   }
   yield* ctx.next();
-  const mark = ctx.reported();
+  const mark = framed;
   const arity = binding.elements.length;
   const values = new Array<unknown>(arity);
   let index = 0;
@@ -695,11 +733,12 @@ function* readTuple<T>(binding: TupleBinding<T>, ctx: ReadContext, readAtom: Ato
 // ---------------------------------------------------------------------------------------------
 
 function* readArray<T>(binding: ArrayBinding<T>, ctx: ReadContext, readAtom: AtomReader): Task<T> {
-  yield* skipAnnotationsAndTypeRef(ctx);
+  const framed = ctx.reported();
+  yield* readFraming(ctx);
   const peeked = yield* ctx.peek();
   if (peeked.kind === 'array-start') {
     yield* ctx.next();
-    const mark = ctx.reported();
+    const mark = framed;
     const values: unknown[] = [];
     let index = 0;
     for (;;) {
@@ -739,11 +778,12 @@ function isPrimitiveKey(value: unknown): value is string | number | boolean | bi
 }
 
 function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomReader): Task<T> {
-  yield* skipAnnotationsAndTypeRef(ctx);
+  const framed = ctx.reported();
+  yield* readFraming(ctx);
   const peeked = yield* ctx.peek();
   if (peeked.kind === 'map-start') {
     yield* ctx.next();
-    const mark = ctx.reported();
+    const mark = framed;
     const entries: (readonly [unknown, unknown])[] = [];
     // Duplicate-key detection compares decoded *primitive* keys only (§2.6: "a processor that
     // decodes values compares decoded values"). A Binding gives this module no equality over an
@@ -894,7 +934,12 @@ function* readVariant<T>(
     yield* skipRest(ctx);
     return abandonedValue() as T;
   }
-  return (yield* readBound(member.binding, ctx, readAtom)) as T;
+  admittedTags.set(ctx, typeRefName);
+  try {
+    return (yield* readBound(member.binding, ctx, readAtom)) as T;
+  } finally {
+    admittedTags.delete(ctx);
+  }
 }
 
 /** `[type-ref] core-value` -- what a data-value is once its annotations have already been consumed. */

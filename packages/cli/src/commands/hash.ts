@@ -26,7 +26,7 @@ export interface HashFileResult {
   readonly id?: string;
   readonly contentHash?: string;
   readonly pinnedReference?: string;
-  /** Why `outcome` is `'INVALID'` -- a content problem (no line terminator on an otherwise-openable file). Never `'NOT_CHECKED'`: an unreadable file throws past this result entirely rather than becoming one. */
+  /** Why `outcome` is `'REJECTED'` -- a content problem (no line terminator on an otherwise-openable file). Never `'UNDETERMINED'`: an unreadable file throws past this result entirely rather than becoming one. */
   readonly problem?: string;
 }
 
@@ -39,7 +39,7 @@ async function hashOne(file: string): Promise<HashFileResult> {
   const id = readIdDirective(bytes)?.id;
   return {
     file,
-    outcome: 'VALID',
+    outcome: 'ACCEPTED',
     ...(id === undefined ? {} : { id, pinnedReference: withSha256Pin(id, contentHash) }),
     contentHash,
   };
@@ -63,7 +63,7 @@ export async function runHash(files: readonly string[]): Promise<HashRun> {
       // document was never read, and reporting that as "invalid" would tell a caller their file
       // was bad when nothing had been checked.
       if (error instanceof TsonSchemaValidationError) {
-        results.push({ file, outcome: 'INVALID', problem: describeError(error) });
+        results.push({ file, outcome: 'REJECTED', problem: describeError(error) });
         continue;
       }
       throw error; // an unreadable file -- the caller's job to classify as a usage failure

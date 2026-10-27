@@ -43,7 +43,6 @@ function importedFrom(linked: LinkedSchema): ImportedSchema {
     facts: linked.facts,
     keyAnnotations: linked.keyAnnotations,
     originOf: () => linked.id,
-    textEnums: linked.textEnums,
     enumForms: linked.enumForms,
   };
 }

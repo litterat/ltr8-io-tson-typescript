@@ -54,11 +54,14 @@ function stubMaterialiser(
     syntheticNames(): ReadonlySet<string> {
       return new Set();
     },
+    expansionsByApplication() {
+      return new Map();
+    },
     setParameterKinds(): void {
       // not exercised by this test
     },
-    checkApplication(): void {
-      // not exercised by this test
+    checkApplication(application) {
+      return application.arguments; // not exercised by this test
     },
     recheckEarly(): void {
       // not exercised by this test

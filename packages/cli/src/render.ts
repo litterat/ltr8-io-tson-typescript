@@ -19,15 +19,15 @@ import type { Outcome } from './outcome.js';
 import type { ProcessorPolicy } from './policyOptions.js';
 import { policyJson, policyNode, policyNote, policyText } from './policyNode.js';
 
-/** The word a text report ends on: the real outcome, so a run that never reached a verdict (`NOT_CHECKED`, e.g. a §8.2 refusal) is not reported as `invalid`. */
+/** The word a text report ends on: the real outcome, so a run nothing could judge (`UNDETERMINED`, e.g. an unreachable schema) is not reported as rejected. */
 function outcomeWord(outcome: Outcome): string {
   switch (outcome) {
-    case 'VALID':
-      return 'valid';
-    case 'INVALID':
-      return 'invalid';
-    case 'NOT_CHECKED':
-      return 'not checked';
+    case 'ACCEPTED':
+      return 'accepted';
+    case 'REJECTED':
+      return 'rejected';
+    case 'UNDETERMINED':
+      return 'undetermined';
   }
 }
 
@@ -136,7 +136,7 @@ export function renderCompileRun(run: CompileRun, format: Format): string {
   const lines: string[] = [];
   for (const f of run.files) {
     lines.push(
-      f.outcome === 'VALID'
+      f.outcome === 'ACCEPTED'
         ? `${f.file}: compiles (${f.id ?? '?'}, ${String(f.entryCount ?? 0)} entries)`
         : `${f.file}: ${f.message ?? 'does not compile'}`,
     );
@@ -186,7 +186,7 @@ export function renderHashRun(run: HashRun, format: Format): string {
   }
   const lines: string[] = [];
   for (const f of run.files) {
-    if (f.outcome !== 'VALID') {
+    if (f.outcome !== 'ACCEPTED') {
       lines.push(`${f.file}: ${f.problem ?? 'could not be hashed'}`);
       continue;
     }
