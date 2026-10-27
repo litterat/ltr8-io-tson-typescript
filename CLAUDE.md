@@ -171,17 +171,20 @@ in conversation rather than silently picking.
   where the Java is deliberately stricter than the JDK; read it before writing any atom parser, since
   those checks are the behaviour, not the JDK's.
 
-- Resolved-output writing names the applied constructor from the entry's `source`. §8.1 says a
-  closed definition's body is "a binding record headed by the applied constructor", and
-  `spec/m/*-resolved.tn` writes `enum_set`'s body as `!set_type { element_type: text  min_items: 1 }`.
-  `set_type` restates `array`'s fields and adds none, and `enum`, `text_enum` and `enum_type` share one
-  body shape, so the head cannot be recovered from the body: it is the constructor recorded in the
-  same entry's `source`, never a guess from the body's shape. A body with no `source` is written under
-  its base constructor (`array`, `enum_type`). A field the head pins (`set_type`'s `ordered`, `enum`'s
-  `type`, a FIXED `spec`) is left out at its pinned value. The Java still writes `!array { … }` here,
-  and its fixture test cannot see it, since it binds the fixture into the value model and compares
-  `TypeDefinition` objects where both forms arrive as one `ArrayBody`. This port compares written form.
-  Worth reporting upstream as a §8.1 conformance gap in the Java.
+- Resolved-output writing names the applied constructor from a fact recorded beside the entry, not
+  from the body. §8.1 says a closed entry's value is "a binding record headed by the applied
+  constructor", and `spec/m/*-resolved.tn` writes `enum_set`'s body as `!set_type { element_type:
+text  min_items: 1 }`. `set_type` restates `array`'s fields and adds none, and `enum` and
+  `enum_type` share one body shape, so the head cannot be recovered from the body: the resolver
+  records it in the entry's facts (`link/facts.ts`, `head`), and the writer (`schema/bindings.ts`,
+  `topBinding`) writes the body under that name, never a guess from the body's shape. A body with no
+  recorded head is written under its base constructor (`array`, `enum_type`). A field the head pins
+  (`set_type`'s `ordered`, `enum`'s `name_type`, a FIXED `spec`) is left out at its pinned value.
+  Revision 38 removed `type_definition` and its `source` field, so this is the one place the applied
+  head survives outside the `@application` key annotation. The Java still writes `!array { … }`
+  here, and its fixture test cannot see it, since it binds the fixture into the value model and
+  compares bodies where both forms arrive as one `ArrayBody`. This port compares written form. Worth
+  reporting upstream as a §8.1 conformance gap in the Java.
 
 - **Name hygiene is policy, not validity** (§8.2, and §11.4 for the schema-layer scopes). The three
   UTS #39 mechanisms — skeleton distinctness, `Identifier_Status`, restriction level — are

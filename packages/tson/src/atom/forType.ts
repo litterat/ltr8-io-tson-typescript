@@ -47,6 +47,7 @@ import { createIpv4Parser } from './network/ipv4.js';
 import { createIpv6Parser } from './network/ipv6.js';
 import { createCidr4Parser } from './network/cidr4.js';
 import { createCidr6Parser } from './network/cidr6.js';
+import { createHostParser, createHostnameParser, createMediaTypeParser } from './network/index.js';
 import { createDateParser } from './temporal/date.js';
 import { createTimeParser } from './temporal/time.js';
 import { createDateTimeParser } from './temporal/datetime.js';
@@ -212,9 +213,14 @@ export function atomParserFor(
       // A kind's value is a type name (§4.2): read here by the name grammar, and judged a member
       // of the kind against the linked closure, which a bare-token parser cannot see.
       return createIdentifierParser(declaredName, KIND_NAME);
-    // TODO(WP1B): `hostname_type`/`host_type`/`media_type_type` take `parseHostname`/`parseHost`/
-    // `parseMediaType` from `atom/network/` here. A `ref_type` value is a qualified name judged
-    // against the linked closure (§5.12), which a bare-token parser cannot see.
+    case 'hostname_type':
+      return createHostnameParser(declaredName, body);
+    case 'host_type':
+      return createHostParser(declaredName);
+    case 'media_type_type':
+      return createMediaTypeParser(declaredName, body);
+    // A `ref_type` value is a qualified name judged against the linked closure (§5.12), which a
+    // bare-token parser cannot see.
     default:
       return undefined; // value_type, void_type, ref_type, containers, choice, reference, scoped
   }

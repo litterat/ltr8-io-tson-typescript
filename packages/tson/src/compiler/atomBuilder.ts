@@ -68,6 +68,11 @@ import { createIpv4Parser } from '../atom/network/ipv4.js';
 import { createIpv6Parser } from '../atom/network/ipv6.js';
 import { createCidr4Parser } from '../atom/network/cidr4.js';
 import { createCidr6Parser } from '../atom/network/cidr6.js';
+import {
+  createHostParser,
+  createHostnameParser,
+  createMediaTypeParser,
+} from '../atom/network/index.js';
 import { createDateParser } from '../atom/temporal/date.js';
 import { createTimeParser } from '../atom/temporal/time.js';
 import { createDateTimeParser } from '../atom/temporal/datetime.js';
@@ -300,13 +305,12 @@ export function buildAtomReader(
         `'${name}' is a reference (§5.12), whose values are qualified names judged when the ` +
           'schema links; reading one is not implemented yet',
       );
-    // TODO(WP1B): wire `parseHostname`/`parseHost`/`parseMediaType` from `atom/network/` here.
     case 'hostname_type':
+      return wrap(createHostnameParser(name, atom), name);
     case 'host_type':
+      return wrap(createHostParser(name), name);
     case 'media_type_type':
-      throw new TsonNotImplementedError(
-        `'${name}' is a ${atom.kind} (§5.5), whose parser is not wired in yet`,
-      );
+      return wrap(createMediaTypeParser(name, atom), name);
   }
 }
 
