@@ -14,12 +14,11 @@
  * - **The members of one enum** and **the field names of one record** (group labels included —
  *   §5.11's own resolution rule already flattens a group's members into the body's ordinary
  *   `fields` list before this module ever sees it, so no separate handling is needed) are each
- *   entry's own scope, checked once per entry in `merged`. **An enum's own scope is conditional on
- *   its `type`** (§7.4, §11.4): where `type` is an identifier family every mechanism applies,
- *   as always; under any other type the members are values, not names, so mechanisms 2
- *   (`Identifier_Status`) and 3 (restriction level) do not reach them — only mechanism 1
- *   (skeleton distinctness) still relates two members that read alike, and `textProfileScopePolicy`
- *   is the one-line policy that drops the other two for exactly that scope's check.
+ *   entry's own scope, checked once per entry in `merged`, **under the entry's name type's
+ *   profile** (§5.2, §7.4, §11.4): every enum's and every record's name type is an identifier
+ *   family, so all three mechanisms apply, and what the profile adds (`json_name`'s `@`, a medial
+ *   space) is the profile's own and meets no `Identifier_Status` rule. A record that states no
+ *   name type has the kernel's `field_name`, §7.7's profile.
  *
  * **A fifth scope §11.4 declines to make one: a template's own type parameters.** §11.4 says so
  * outright — "A template's parameter list is not a scope either (§5.10): one author writes it
@@ -66,6 +65,7 @@ import { identifierProfileOf } from '../unicode/identifier-profile.js';
 import { applyNormalization } from '../unicode/normalization.js';
 import { judgeName } from '../unicode/policy.js';
 import type { EnumLabelProfile } from './enumLabels.js';
+import type { FieldNameType } from './fieldNames.js';
 import type { SourcePosition } from '../schema/meta/position.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
@@ -93,13 +93,9 @@ export interface CheckNameHygieneOptions {
    */
   readonly receiver?: DiagnosticsReceiver;
   /**
-   * The enums whose `type` is not an identifier family (`LinkedSchema.textEnums`, [TSON-SCHEMA]
-   * §7.4): their members are values rather than names, so only mechanism 1 reaches them.
-   */
-  readonly textEnums?: ReadonlySet<string>;
-  /**
-   * The enums whose members linking has already refused as not values of their `type`: judging
-   * those members as names too would report the one mistake twice.
+   * The enums and records whose members or field names linking has already refused as not values
+   * of their name type: judging those names under the hygiene rules too would report the one
+   * mistake twice.
    */
   readonly refusedEnums?: ReadonlySet<string>;
   /**
@@ -108,6 +104,13 @@ export interface CheckNameHygieneOptions {
    * the profile adds is exempt for it as it is for a value at a position typed by the family.
    */
   readonly enumProfiles?: ReadonlyMap<string, EnumLabelProfile>;
+  /**
+   * The records that state a `name_type`, with the identifier family their field names are values
+   * of ([TSON-SCHEMA] §5.2, §11.4): each name is judged under that family's profile and in its form,
+   * so what the profile adds (`json_name`'s `@`, a medial space) is exempt as it is for a value of
+   * the family. A record absent here has the kernel's `field_name`, §7.7's profile.
+   */
+  readonly nameTypes?: ReadonlyMap<string, FieldNameType>;
 }
 
 /**
@@ -137,19 +140,18 @@ export function checkNameHygiene(
     reportOrThrow(namespaceRefusal, message, schemaId, at, positionOf(at), receiver);
   }
 
-  const textEnums = options.textEnums ?? new Set<string>();
   const refusedEnums = options.refusedEnums ?? new Set<string>();
 
   const enumProfiles = options.enumProfiles ?? new Map<string, EnumLabelProfile>();
 
   for (const [name, def] of merged) {
-    const labelProfile = refusedEnums.has(name) ? undefined : enumProfiles.get(name);
-    const scope =
-      labelProfile === undefined
-        ? entryScope(def, textEnums.has(name), refusedEnums.has(name))
-        : undefined;
+    const nameType = options.nameTypes?.get(name);
+    const labelProfile = refusedEnums.has(name)
+      ? undefined
+      : (enumProfiles.get(name) ?? (nameType === undefined ? undefined : profileOf(nameType)));
+    const scope = labelProfile === undefined ? entryScope(def, refusedEnums.has(name)) : undefined;
     if (labelProfile !== undefined) {
-      checkEnumMembers(
+      checkProfiledNames(
         name,
         def,
         positionOf(name),
@@ -160,10 +162,7 @@ export function checkNameHygiene(
       );
     }
     if (scope !== undefined) {
-      const scopePolicy = scope.textProfile
-        ? textProfileScopePolicy(identifierPolicy)
-        : identifierPolicy;
-      const refusal = nameHygieneRefusal(scope.names, scopePolicy);
+      const refusal = nameHygieneRefusal(scope.names, identifierPolicy);
       if (refusal !== undefined) {
         const message =
           `'${name}' has ${scope.noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
@@ -189,13 +188,21 @@ export function checkNameHygiene(
   }
 }
 
+/** The profile and form a record's field names are judged under: its name type's (§5.2). */
+function profileOf(nameType: FieldNameType): EnumLabelProfile {
+  return {
+    profile: identifierProfileOf(nameType.definition),
+    form: nameType.definition.normalization,
+  };
+}
+
 /**
- * The members of an enum whose `type` is an identifier family (§7.4, §11.4): each is a value of
- * that type, so it is judged under the family's profile and in its form, as a value of the family
- * is anywhere; skeleton distinctness relates the members as one scope, first, and every per-name
- * rule a member fails is reported (a throw reports the first).
+ * The members of an enum, or the field names of a record, whose name type is an identifier family
+ * (§5.2, §7.4, §11.4): each is a value of that type, so it is judged under the family's profile and
+ * in its form, as a value of the family is anywhere; skeleton distinctness relates the names as one
+ * scope, first, and every per-name rule a name fails is reported (a throw reports the first).
  */
-function checkEnumMembers(
+function checkProfiledNames(
   entry: string,
   def: Top,
   position: SourcePosition | undefined,
@@ -205,13 +212,15 @@ function checkEnumMembers(
   receiver: DiagnosticsReceiver | undefined,
 ): void {
   const body = def;
-  if (isTemplateBody(body) || body.kind !== 'enum') return;
-  const values = body.members.map((member) => applyNormalization(label.form, member));
-  const relation = nameHygieneRefusal(values, textProfileScopePolicy(policy));
+  if (isTemplateBody(body) || (body.kind !== 'enum' && body.kind !== 'record')) return;
+  const names = body.kind === 'enum' ? body.members : [...body.fields.entries.keys()];
+  const noun = body.kind === 'enum' ? 'enum members' : 'field names';
+  const values = names.map((member) => applyNormalization(label.form, member));
+  const relation = nameHygieneRefusal(values, relationOnly(policy));
   if (relation !== undefined) {
     const message =
-      `'${entry}' has enum members refused under [TSON-DATA] §8.2's name-hygiene policy ` +
-      `([TSON-SCHEMA] §11.4's enum members scope): ${relation.detail} (computed against ` +
+      `'${entry}' has ${noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
+      `([TSON-SCHEMA] §11.4's ${noun} scope): ${relation.detail} (computed against ` +
       `UTS #39 version ${UTS39_VERSION})`;
     reportOrThrow(relation, message, schemaId, entry, position, receiver);
   }
@@ -223,8 +232,8 @@ function checkEnumMembers(
         detail: violation.detail,
       };
       const message =
-        `'${entry}' has enum members refused under [TSON-DATA] §8.2's name-hygiene policy ` +
-        `([TSON-SCHEMA] §11.4's enum members scope): ${violation.detail} (computed against ` +
+        `'${entry}' has ${noun} refused under [TSON-DATA] §8.2's name-hygiene policy ` +
+        `([TSON-SCHEMA] §11.4's ${noun} scope): ${violation.detail} (computed against ` +
         `UTS #39 version ${UTS39_VERSION})`;
       reportOrThrow(refusal, message, schemaId, entry, position, receiver);
     }
@@ -232,24 +241,20 @@ function checkEnumMembers(
 }
 
 /**
- * A `TEXT`-profile enum's own scope policy (§7.4, §11.4, #21): mechanism 1 (skeleton
- * distinctness) still relates two members that read alike, but mechanisms 2 and 3 do not reach
- * values that are not names -- "a `TEXT` enum's members are values, and mechanisms 2 and 3 do not
- * reach them". Built from `base`, the caller's own configured policy, so a deployment's mechanism-1
- * relaxation still applies here too; only mechanisms 2 and 3 are unconditionally dropped.
+ * `base` with only its look-alike relation left (§8.2 mechanism 1): what a profiled scope asks of
+ * the whole set before {@link judgeName} asks each name its per-name rules under the profile,
+ * which §7.7's fixed profile could not judge fairly. A deployment's mechanism-1 relaxation still
+ * applies.
  */
-function textProfileScopePolicy(base: IdentifierPolicy): IdentifierPolicy {
+function relationOnly(base: IdentifierPolicy): IdentifierPolicy {
   return { ...base, restrictionLevel: 'UNRESTRICTED' };
 }
 
 /** One entry's own §11.4 scope — its record field names or its enum members — or `undefined` for every other body shape, which declares no scope of its own. */
 function entryScope(
   def: Top,
-  isTextEnum: boolean,
   isRefused: boolean,
-):
-  | { readonly names: readonly string[]; readonly noun: string; readonly textProfile: boolean }
-  | undefined {
+): { readonly names: readonly string[]; readonly noun: string } | undefined {
   const body = def;
   if (isTemplateBody(body)) {
     // A held TemplateBody is unresolved (no field/member list exists yet to check) -- §11.4 names
@@ -261,15 +266,13 @@ function entryScope(
       // Group labels are already ordinary `record_field`s here (§5.11's own resolution rule:
       // "each member becomes an ordinary record_field"), so no separate group-label pass exists.
       return {
-        names: [...body.fields.entries.keys()],
+        names: isRefused ? [] : [...body.fields.entries.keys()],
         noun: 'field names',
-        textProfile: false,
       };
     case 'enum':
       return {
         names: isRefused ? [] : body.members,
         noun: 'enum members',
-        textProfile: isTextEnum,
       };
     default:
       return undefined;

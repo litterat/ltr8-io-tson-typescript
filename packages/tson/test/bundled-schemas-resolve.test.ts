@@ -434,6 +434,7 @@ function importedFrom(linked: LinkedSchema): ImportedSchema {
     originOf: (entry) => linked.origins.get(entry) ?? linked.id,
     textEnums: linked.textEnums,
     enumForms: linked.enumForms,
+    nameTypes: linked.nameTypes,
   };
 }
 

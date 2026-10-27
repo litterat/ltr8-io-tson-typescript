@@ -7,8 +7,8 @@ import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
-// [TSON-SCHEMA] §7.4: an enum's `name_type` names a text family, each member is a value of it, and no
-// two members are one value under its equality. A pinned `name_type` resolves in the governing
+// [TSON-SCHEMA] §7.4: an enum's `name_type` names an identifier family whose form implies NFC, each
+// member is a value of it, and no two members are one value under its equality. A pinned `name_type` resolves in the governing
 // meta; an author-written one in the schema's own namespace. §5.4: an enum's class is read from it.
 
 const HEAD = `
@@ -58,12 +58,12 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
     expect(linked.textEnums.has('safe_header')).toBe(false);
   });
 
-  it('an enum over a text family keeps the family’s form but is a text enum', () => {
-    const linked = schema(
-      `charset => !text_type { normalization: NFKC_CASEFOLD }\n  names => !enum_type { name_type: charset  members: [UTF-8 ascii] }`,
-    );
-    expect(linked.enumForms.get('names')).toBe('NFKC_CASEFOLD');
-    expect(linked.textEnums.has('names')).toBe(true);
+  it('an enum over a text family is refused: a closed set of text is `text`’s own `members` facet', () => {
+    expect(
+      loadFailure(
+        `charset => !text_type { normalization: NFKC_CASEFOLD }\n  names => !enum_type { name_type: charset  members: [UTF-8 ascii] }`,
+      ),
+    ).toContain('is not an identifier family');
   });
 
   it('a pinned type resolves in the governing meta, so a schema’s own `identifier` does not retype `!enum`', () => {
@@ -106,10 +106,18 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
 });
 
 describe('what an enum’s type obliges (§7.4)', () => {
-  it('refuses a type that is not a text family', () => {
+  it('refuses a type that is not an identifier family', () => {
     expect(
       loadFailure('ports => !enum_type { name_type: integer  members: ["80" "443"] }'),
-    ).toContain('is not a text family');
+    ).toContain('is not an identifier family');
+  });
+
+  it('refuses a name type whose form does not imply NFC (§7.4, §5.2)', () => {
+    expect(
+      loadFailure(
+        'raw => !identifier_type { normalization: NONE }\n  kinds => !enum_type { name_type: raw  members: [a b] }',
+      ),
+    ).toContain('its normalization is NONE');
   });
 
   it('refuses a type that names nothing in scope', () => {

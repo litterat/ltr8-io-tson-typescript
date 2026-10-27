@@ -51,6 +51,7 @@ import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
+import type { FieldNameType } from '../link/fieldNames.js';
 import type { TemplateParam } from '../schema/meta/bodies.js';
 import { NO_FIELDS, TYPE_KIND } from '../schema/meta/bodies.js';
 import type { Annotations, EntryFacts, Top, TypeRef } from '../schema/meta/typedef.js';
@@ -146,6 +147,8 @@ export interface ImportedSchema {
   readonly textEnums?: ReadonlySet<string>;
   /** Each enum among `entries` that matches in a form other than `NONE`, by name -- `LinkedSchema.enumForms`. Absent means none. */
   readonly enumForms?: ReadonlyMap<string, Normalization>;
+  /** Each record among `entries` that states a `name_type`, with its identifier family -- `LinkedSchema.nameTypes`. Absent means none. */
+  readonly nameTypes?: ReadonlyMap<string, FieldNameType>;
 }
 
 /** Resolves one `!!import` directive's URI to the namespace it contributes. */

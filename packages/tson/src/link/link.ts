@@ -46,7 +46,7 @@ import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/pol
 import { canonicalizeIdentity } from './identity.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { computeKindMembers } from './kindMembers.js';
-import { checkDefaultFieldNames } from './fieldNames.js';
+import { checkFieldNameTypes, type FieldNameType } from './fieldNames.js';
 import { schemaPositionOf } from './facts.js';
 import { checkDisjointAssertions, computeDisjointness } from './disjointness.js';
 import {
@@ -102,11 +102,11 @@ export interface LinkedSchema {
    */
   readonly origins: ReadonlyMap<string, string>;
   /**
-   * The enums among `entries` whose `type` is not an identifier family ([TSON-SCHEMA] §7.4): their
-   * members are texts, so the enum is string-class whatever the members spell (§5.4) and §8.2's
-   * per-name rules lapse for them. Decided where the enum's `type` can be followed into the
-   * governing meta, which is why it is recorded here rather than recomputed by a reader. Local and
-   * imported enums alike.
+   * The enums among `entries` whose `name_type` is not an identifier family ([TSON-SCHEMA] §7.4).
+   * Linking refuses every such enum, so a schema that links cleanly has none; one linked through a
+   * collecting receiver carries the refused ones here, string-class whatever their members spell
+   * (§5.4), so a reader of the partial result does not classify them by token. Local and imported
+   * enums alike.
    */
   readonly textEnums: ReadonlySet<string>;
   /**
@@ -115,6 +115,13 @@ export interface LinkedSchema {
    * `content-type` under a case-folding type. Local and imported enums alike.
    */
   readonly enumForms: ReadonlyMap<string, Normalization>;
+  /**
+   * Each record among `entries` that states a `name_type`, with the identifier family its field
+   * names are values of ([TSON-SCHEMA] §5.2) -- resolved where the record was declared, so an
+   * importer reads an imported record's names as its own schema did. A record absent here has the
+   * kernel's `field_name`. Local and imported records alike.
+   */
+  readonly nameTypes: ReadonlyMap<string, FieldNameType>;
 }
 
 /** Dependencies {@link linkSchema} needs beyond the {@link Schema} being linked. */
@@ -181,7 +188,16 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const textEnums = new Set<string>();
   const enumForms = new Map<string, Normalization>();
   const facts = new Map<string, EntryFacts>();
-  let merged = mergeImports(schema.imports, resolveImport, origins, textEnums, enumForms, facts);
+  const nameTypes = new Map<string, FieldNameType>();
+  let merged = mergeImports(
+    schema.imports,
+    resolveImport,
+    origins,
+    textEnums,
+    enumForms,
+    facts,
+    nameTypes,
+  );
 
   const localNames = new Set<string>();
   const selfId = canonicalizeIdentity(schema.id);
@@ -257,7 +273,10 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
 
   // Before the name checks too: a field name its record's name type does not admit is no name,
   // and judging it under the hygiene rules as well would report one mistake twice.
-  for (const violation of checkDefaultFieldNames(merged, localNames)) {
+  const fieldNameTypes = checkFieldNameTypes(merged, localNames, structureOf);
+  for (const [name, nameType] of fieldNameTypes.nameTypes) nameTypes.set(name, nameType);
+  for (const violation of fieldNameTypes.violations) {
+    refusedEnums.add(violation.entry);
     if (receiver === undefined) throw new TsonSchemaValidationError(violation.message);
     receiver.report({
       code: 'SCHEMA_ERROR',
@@ -272,9 +291,9 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     schemaId: schema.id,
     facts,
     identifierPolicy,
-    textEnums,
     refusedEnums,
     enumProfiles,
+    nameTypes,
     ...(receiver === undefined ? {} : { receiver }),
   });
 
@@ -324,6 +343,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     origins,
     textEnums,
     enumForms,
+    nameTypes,
   };
 }
 
@@ -348,6 +368,7 @@ function mergeImports(
   textEnums: Set<string>,
   enumForms: Map<string, Normalization>,
   facts: Map<string, EntryFacts>,
+  nameTypes: Map<string, FieldNameType>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
   const alreadyImported = new Set<string>();
@@ -366,6 +387,7 @@ function mergeImports(
     const imported: ImportedSchema = resolveImport(importUri);
     for (const name of imported.textEnums ?? []) textEnums.add(name);
     for (const [name, form] of imported.enumForms ?? []) enumForms.set(name, form);
+    for (const [name, nameType] of imported.nameTypes ?? []) nameTypes.set(name, nameType);
     for (const [name, definition] of imported.entries) {
       const origin = imported.originOf(name);
       const incumbent = origins.get(name);

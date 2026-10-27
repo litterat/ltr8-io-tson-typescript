@@ -165,10 +165,23 @@ day it does not match is the day it matters.
       (`identifier_type`: `start`/`start_add`/`continue`/`continue_add`/`medial`/`exclude`,
       `normalization`), refinable but fixed once moved; a value of the family is a name, so §8.2's
       mechanisms reach it under its profile (`unicode/identifier-profile.ts`)
-- [x] `enum_type` (§7.4, #19) — an enum has a label `type`, and its members are judged under that
-      type's profile; a pinned `type` is followed through enum refinements and a template's held
-      body to the constructor that pins it. `!enum`, `!text_enum` and `!enum_type` refine alike;
-      a narrowed member set keeps the inherited order
+- [x] `enum_type` (§7.4, #19) — an enum's `name_type` is an identifier family whose form implies
+      NFC, and its members are judged under that type's profile; a pinned `name_type` is followed
+      through enum refinements and a template's held body to the constructor that pins it, and a
+      meta layer's own constructor refining `enum_type` reads through its binding. A closed set of
+      text is `!text ^ { members }`; an enum over a text family is refused. A narrowed member set
+      keeps the inherited order
+- [x] Name types (Part 2 §5.2, §7.2, §7.7, §11.4; Part 1 §2.5, §8.2) — a record's field names are
+      values of its `name_type`: set where declared, a composition's supertypes' one type
+      (templates applied at an operand included), `field_name` by default, resolved in the
+      author's namespace first. Judged at link (`link/fieldNames.ts`): an identifier family, `NONE`
+      refused, `ASCII_CASEFOLD` only over an all-ASCII profile, every declared name and selector a
+      value, two spellings of one value refused; a profile may add no Default_Ignorable, control,
+      or space but U+0020. The tree reader matches a document's names in the type's form, judges a
+      name by the type before closure, and holds a value of it to §8.2 under the type's profile
+      (`reader/tree/fieldNames.ts`); a sealed family's selector is found in that form too. Bind
+      mode has no schema in view and matches the wire name exactly; the JSON reader still matches
+      exactly
 - [x] `ordered` (§5.3, §7.5) — part of array and map identity: a unique array of unordered arrays
       refuses a reordering, a map's entry order matters only when `ordered: true`
 - [x] `value`/`void` constructors and the retired `element_state`/`unit` (#20) — `void_type` and

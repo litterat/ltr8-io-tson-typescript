@@ -80,6 +80,7 @@ import {
 } from './meta/bodies.js';
 import type { Top } from './meta/typedef.js';
 import { isTemplateBody } from './meta/typedef.js';
+import { inheritedBindingName } from './inheritedBinding.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -307,7 +308,15 @@ export function createDefinitionMetaReader(
   decodeAtom: AtomDecoder = metaAtomDecoder,
 ): DefinitionMetaReader {
   return (type, value) => {
-    const binding = metaBindings.get(type);
+    const binding =
+      metaBindings.get(type) ??
+      metaBindings.get(
+        inheritedBindingName(
+          type,
+          lookupConstructorDef,
+          (n) => metaBindings.get(n) !== undefined,
+        ) ?? type,
+      );
     if (binding === undefined) {
       throw new TsonMissingBindingError(
         `no binding registered for constructor '!${type}' in schema/bindings.ts's metaBindings`,

@@ -1,7 +1,9 @@
 /**
- * What an enum's `name_type` obliges ([TSON-SCHEMA] §7.4): that it names a text family, that each
- * member is a value of it, and that no two members are one value under its equality -- and,
- * because the answer lives in a namespace the body cannot see, where `name_type` resolves at all.
+ * What an enum's `name_type` obliges ([TSON-SCHEMA] §7.4): that it names an identifier family -- a
+ * member of `identifier_kind`, whose form implies NFC (`nameType.ts`'s `nameTypeFormRefusal`) --
+ * that each member is a value of it, and that no two members are one value under its equality --
+ * and, because the answer lives in a namespace the body cannot see, where `name_type` resolves at
+ * all. `fieldNames.ts` holds a record's field names to the same three.
  *
  * **Why the linker and not the body.** `EnumBody` holds `nameType` as a name, and what the name
  * denotes -- which family, which parser, which equality -- lives in a namespace the body cannot
@@ -16,10 +18,11 @@
  * `identifier` does not retype `!enum`. Which constructor an enum applied is its entry's `head`
  * fact, which the caller supplies with the value.
  *
- * **A text family is an atom-family instance whose constructor IS-A `text_type`**: `text_type`
- * itself and the families that compose it (`identifier_type`, `regex_type`, `uri_type`,
- * `iri_type`, `email_type`). An enum's members are texts under a naming vocabulary's equality; a
- * value set on any other family is that family's own `members` facet.
+ * **An identifier family is a type built with `identifier_type`**: an instance, a refinement of
+ * one, an instantiation of a template over the constructor, and an alias of any of them. An enum's
+ * members are names under a naming vocabulary's equality, and carry §8.2's per-name rules under its
+ * profile; a closed set of values on any other family, `text` included, is that family's own
+ * `members` facet.
  */
 import { atomParserFor } from '../atom/forType.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../core/errors.js';
@@ -30,6 +33,7 @@ import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import { identifierProfileOf, type IdentifierProfile } from '../unicode/identifier-profile.js';
 import { nfcFloor } from '../unicode/normalization.js';
+import { nameTypeFormRefusal } from './nameType.js';
 import { terminal } from './referenceChain.js';
 
 /** Looks an entry up by name; `undefined` for a name that resolves nowhere. */
@@ -120,16 +124,6 @@ function pinned(
   return false;
 }
 
-/** The families whose constructor IS-A `text_type` (§5.5, §9). */
-const TEXT_FAMILIES: ReadonlySet<string> = new Set([
-  'text_type',
-  'identifier_type',
-  'regex_type',
-  'uri_type',
-  'iri_type',
-  'email_type',
-]);
-
 /** The kind of the atom body `definition` holds, or `undefined` for a held template or a namespace value. */
 function bodyKindOf(definition: Top): string | undefined {
   return isTemplateBody(definition) || definition.kind === 'namespace'
@@ -214,9 +208,9 @@ export interface EnumLabelViolation {
 }
 
 /**
- * Every enum among `localNames` whose `type` is not a text family, whose members are not all values
- * of it, or two of whose members are one value under its equality -- the first problem of each
- * enum, in `localNames`' order.
+ * Every enum among `localNames` whose `name_type` is not an identifier family that can judge names,
+ * whose members are not all values of it, or two of whose members are one value under its equality
+ * -- the first problem of each enum, in `localNames`' order.
  */
 export function checkEnumLabels(
   merged: ReadonlyMap<string, Top>,
@@ -251,20 +245,22 @@ function checkEnum(
   if (label === undefined) {
     return `'${name}': its name_type '${body.nameType}' names nothing in scope (§7.4)`;
   }
-  const kind = bodyKindOf(label.definition);
-  if (kind === undefined || !TEXT_FAMILIES.has(kind)) {
+  const labelBody = label.definition;
+  if (isTemplateBody(labelBody) || labelBody.kind !== 'identifier_type') {
     return (
-      `'${name}': its name_type '${body.nameType}' is not a text family -- an enum's labels are drawn ` +
-      'from an atom-family instance whose constructor IS-A text_type (§7.4). A value set on ' +
-      "another family is that family's own 'members' facet: '!integer ^ { members: [80 443] }', " +
-      'not an enum'
+      `'${name}': its name_type '${body.nameType}' is not an identifier family -- an enum's ` +
+      'members are names drawn from an atom-family instance whose constructor IS-A ' +
+      "identifier_type (§7.4). A closed set of values on another family is that family's own " +
+      "'members' facet: '!text ^ { members: [...] }' or '!integer ^ { members: [80 443] }', not " +
+      'an enum'
     );
   }
-  const labelBody = label.definition;
-  if (isTemplateBody(labelBody) || labelBody.kind === 'namespace') return undefined;
+  const form = nameTypeFormRefusal(labelBody);
+  if (form !== undefined) {
+    return `'${name}': its name_type '${body.nameType}' cannot judge names -- ${form} (§7.4)`;
+  }
   const parser = atomParserFor(label.name, labelBody);
-  if (parser === undefined) return undefined; // a text family with no parser: nothing to judge by
-  const names = kind === 'identifier_type';
+  if (parser === undefined) return undefined; // a family with no parser: nothing to judge by
   const seen = new Map<string, string>();
   for (const member of body.members) {
     let value: unknown;
@@ -277,7 +273,7 @@ function checkEnum(
       return (
         `'${name}': member '${member}' is not a value of its name_type '${body.nameType}': ` +
         error.message +
-        (names ? " -- a closed set of text that is no name is '!text ^ { members: [...] }'" : '')
+        " -- a closed set of text that is no name is '!text ^ { members: [...] }'"
       );
     }
     // Text values are one when they are NFC-equal, each in its type's form (§5.5).

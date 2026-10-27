@@ -244,6 +244,7 @@ function narrowingSchema(): LinkedSchema {
     ),
     textEnums: new Set(),
     enumForms: new Map(),
+    nameTypes: new Map(),
   };
 }
 

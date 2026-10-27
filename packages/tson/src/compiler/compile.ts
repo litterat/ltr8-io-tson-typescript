@@ -63,6 +63,7 @@ import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
 import { resolvesToScoped, terminalDefinition } from '../link/referenceChain.js';
+import { fieldNameRule } from '../reader/tree/fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
@@ -229,6 +230,7 @@ function buildReader(
   // than only where a record happens to declare subtypes; see `subsumption.ts`'s own doc for which
   // kinds it deliberately leaves alone (`choice`, `reference`, `scoped`).
   if (isRecordBody(body)) {
+    const fieldNames = fieldNameRule(schema.nameTypes.get(name));
     const built = recordTreeReader(
       name,
       name,
@@ -236,8 +238,10 @@ function buildReader(
       (field) => resolve(field.type.name),
       location(),
       isScopedType,
+      fieldNames,
+      policy,
     );
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guardSubsumption(name, definition, built, schema.entries, resolve, fieldNames.form);
   }
   if (isArrayBody(body)) {
     const built = arrayTreeReader(

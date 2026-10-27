@@ -248,12 +248,10 @@ describe('checkNameHygiene: the members of one enum', () => {
 
   // ── §7.4, §11.4, #21: the scope is conditional on `profile` ─────────────────────────────────
 
-  it('a TEXT-profile enum member with a restricted-status character is not refused -- mechanism 2 does not reach values', () => {
-    // U+0132 LATIN CAPITAL LIGATURE IJ: `Identifier_Status != Allowed`, the same character the
-    // shared conformance corpus's `class2/schema/refused/a-restricted-character-in-an-enum-member`
-    // vector refuses under the default IDENTIFIER profile.
+  it('an enum over text is refused as no enum before any member is judged as a name (§7.4)', () => {
     const s = schema('https://x/s.tn', [['activity', def(textEnumOf(['sedentary', 'aĲb']))]]);
-    expect(() => linkSchema(s)).not.toThrow();
+    expect(() => linkSchema(s)).toThrow(TsonSchemaValidationError);
+    expect(() => linkSchema(s)).toThrow(/is not an identifier family/);
   });
 
   it('the same restricted-status character IS refused under the default IDENTIFIER profile', () => {
@@ -262,10 +260,8 @@ describe('checkNameHygiene: the members of one enum', () => {
     expect(refused.mechanism).toBe('identifier-status');
   });
 
-  it('a TEXT-profile enum still refuses two members that read alike -- mechanism 1 relates values, not just names', () => {
-    const s = schema('https://x/s.tn', [
-      ['activity', def(textEnumOf(['active', CYR_A + 'ctive']))],
-    ]);
+  it('an enum’s members are one scope: two that read alike are refused, the relation first', () => {
+    const s = schema('https://x/s.tn', [['activity', def(enumOf(['active', CYR_A + 'ctive']))]]);
     const refused = refusalOf(() => linkSchema(s));
     expect(refused.mechanism).toBe('skeleton-distinctness');
     expect(refused.message).toContain('enum members');

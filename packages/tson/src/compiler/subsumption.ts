@@ -82,6 +82,8 @@ import { isAtom } from './atomChecks.js';
 import { directMembers, type Member } from '../link/recordExtension.js';
 import { selfNames, terminal } from '../link/referenceChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
+import type { Normalization } from '../schema/meta/atoms-text.js';
+import { applyNormalization } from '../unicode/normalization.js';
 
 const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
 
@@ -134,6 +136,7 @@ export function guardSubsumption(
   reader: TypeReader<Value>,
   entries: ReadonlyMap<string, Top>,
   resolve: (name: string) => TypeReader<Value>,
+  fieldNameForm: Normalization = 'NFC',
 ): TypeReader<Value> {
   if (!isGuardedBody(definition)) {
     return reader;
@@ -162,6 +165,7 @@ export function guardSubsumption(
       entries,
       own,
       resolve,
+      fieldNameForm,
     );
   }
 
@@ -332,8 +336,13 @@ function buildMemberDispatchReader(
   entries: ReadonlyMap<string, Top>,
   own: ReadonlySet<string>,
   resolve: (name: string) => TypeReader<Value>,
+  fieldNameForm: Normalization,
 ): TypeReader<Value> & ChoiceSelfTagReader {
-  const discriminatorSet = new Set(discriminators);
+  // A document's names are matched in the base's name type's form, so a family's selector is found
+  // however its name is cased under a folding type (§5.2); the tokens are keyed by declared spelling.
+  const discriminatorByKey = new Map(
+    discriminators.map((d) => [applyNormalization(fieldNameForm, d), d] as const),
+  );
   const members = directMembers(name, entries);
   // §5.2: "a decoder parses them with the one set of types it knows before dispatch" -- every
   // discriminator's reader is the family's own declared type, resolved once here and reused both
@@ -407,7 +416,10 @@ function buildMemberDispatchReader(
               `'${fieldNameEvent.kind}'`,
           );
         }
-        if (discriminatorSet.has(fieldNameEvent.name) && !tokens.has(fieldNameEvent.name)) {
+        const discriminator = discriminatorByKey.get(
+          applyNormalization(fieldNameForm, fieldNameEvent.name),
+        );
+        if (discriminator !== undefined && !tokens.has(discriminator)) {
           const scopedPeek = yield* aheadCtx.peek();
           // No `!!schema` directive: a selector is never scoped (§5.2's own base-level checks
           // rule that out structurally), so a `schema-ref` here always belongs to some other
@@ -422,7 +434,7 @@ function buildMemberDispatchReader(
             const valuePeek = yield* aheadCtx.peek();
             if (valuePeek.kind === 'token') {
               yield* aheadCtx.next();
-              tokens.set(fieldNameEvent.name, {
+              tokens.set(discriminator, {
                 text: valuePeek.text,
                 form: metaFormOfLexer(valuePeek.form),
               });

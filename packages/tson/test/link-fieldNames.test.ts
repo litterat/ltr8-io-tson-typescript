@@ -50,3 +50,112 @@ describe('a composition takes its supertypes’ one name type, judged by the res
     ).toThrow(/have different name types/);
   });
 });
+
+describe('a stated name type is an identifier family that can judge names (§5.2, §7.4)', () => {
+  it('a name type that is no identifier family is a resolver error', () => {
+    expect(() =>
+      schema('row => !record { name_type: text  fields: { "first name" => { type: text } } }'),
+    ).toThrow(/is not an identifier family/);
+    expect(() =>
+      schema('node => !record { name_type: int32  fields: { "1" => { type: text } } }'),
+    ).toThrow(TsonSchemaValidationError);
+  });
+
+  it('a name type whose normalization is NONE is refused: its form must imply NFC', () => {
+    expect(() =>
+      schema(`
+        raw => !identifier_type { normalization: NONE }
+        row => !record { name_type: raw  fields: { a => { type: text } } }
+      `),
+    ).toThrow(/normalization is NONE/);
+  });
+
+  it('ASCII_CASEFOLD is admitted only over a profile whose every character is ASCII', () => {
+    expect(() =>
+      schema(`
+        folded => !identifier_type { normalization: ASCII_CASEFOLD }
+        row => !record { name_type: folded  fields: { a => { type: text } } }
+      `),
+    ).toThrow(/ASCII_CASEFOLD/);
+    const linked = schema(`
+      header => !identifier_type { start: ASCII  continue: ASCII  medial: "-"  normalization: ASCII_CASEFOLD }
+      headers => !record { name_type: header  fields: { "content-type" => { type: text } } }
+    `);
+    expect(linked.nameTypes.get('headers')?.definition.normalization).toBe('ASCII_CASEFOLD');
+  });
+
+  it('two declared spellings that are one value of a folding name type are a resolver error', () => {
+    expect(() =>
+      schema(`
+        folded => !identifier_type { normalization: NFKC_CASEFOLD }
+        row => !record { name_type: folded  fields: { name => { type: text }  NAME => { type: text } } }
+      `),
+    ).toThrow(/fields 'name' and 'NAME' are one value of its name_type 'folded'/);
+  });
+
+  it('one spelling written twice in the explicit form is the map’s duplicate key (§2.6)', () => {
+    expect(() =>
+      schema('point => !record { fields: { x => { type: int32 }  x => { type: text } } }'),
+    ).toThrow(/duplicate map key 'x'/);
+  });
+
+  it('a declared name the name type admits links, and the linked schema records the type for readers', () => {
+    const linked = schema(`
+      json_name => !identifier_type { start_add: "@$" }
+      node => !record { name_type: json_name  fields: { "@id" => { type: text }  label => { type: text } } }
+      plain => { a: text }
+    `);
+    expect(linked.nameTypes.get('node')?.typeName).toBe('json_name');
+    // The kernel's `field_name` is every reader's default, so a record stating none records nothing.
+    expect(linked.nameTypes.has('plain')).toBe(false);
+  });
+
+  it('a stated name type resolves in the author’s own namespace first', () => {
+    const linked = schema(`
+      field_name => !identifier_type { start_add: "@" }
+      stated => !record { name_type: field_name  fields: { "@id" => { type: text } } }
+    `);
+    expect(linked.nameTypes.get('stated')?.definition.startAdd).toBe('@');
+  });
+
+  it('two name types are one by the entry they resolve to, not by spelling (§5.2, §8.3)', () => {
+    const linked = schema(`
+      json_name => !identifier_type { start_add: "@$" }
+      jn => json_name
+      a => !record { name_type: json_name  extension: ABSTRACT  fields: {} }
+      b => !record { name_type: jn  extension: ABSTRACT  fields: {} }
+      both => a & b & { "@id": text }
+    `);
+    expect(linked.entries.has('both')).toBe(true);
+  });
+
+  it('a composition over an applied template takes the template’s name type (§5.8)', () => {
+    const linked = schema(`
+      json_name => !identifier_type { start_add: "@$" }
+      json_record => !record { name_type: json_name  extension: ABSTRACT  fields: {} }
+      page => <T> json_record & { "@id": T }
+      labelled => page<text> & { label: text }
+    `);
+    expect(linked.nameTypes.get('labelled')?.typeName).toBe('json_name');
+  });
+});
+
+describe('a profile may add no character that renders as nothing (§7.4, [TSON-DATA] §8.2)', () => {
+  it('a soft hyphen, a control or a space other than U+0020 is refused as an addition', () => {
+    expect(() => schema('zw => !identifier_type { continue_add: "\\u{AD}" }')).toThrow(
+      /Default_Ignorable_Code_Point/,
+    );
+    expect(() => schema('nb => !identifier_type { medial: "\\u{A0}" }')).toThrow(
+      /a space other than U\+0020/,
+    );
+    expect(() => schema('tab => !identifier_type { medial: "\\t" }')).toThrow(/a control/);
+  });
+
+  it('a medial U+0020 is how a name type holds words, and is admitted', () => {
+    const linked = schema(`
+      words => !identifier_type { continue_add: "-"  medial: " " }
+      row => !record { name_type: words  fields: { "first name" => { type: text } } }
+    `);
+    expect(linked.nameTypes.get('row')?.typeName).toBe('words');
+  });
+});

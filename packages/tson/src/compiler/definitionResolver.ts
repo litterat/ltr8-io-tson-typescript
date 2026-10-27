@@ -1271,6 +1271,14 @@ function resolveComposition(
   // declared under.
   let nameType: string | undefined;
   let nameTypeFrom: string | undefined;
+  const takeNameType = (from: string, stated: string | undefined): void => {
+    if (nameTypeFrom === undefined) {
+      nameType = stated;
+      nameTypeFrom = from;
+    } else {
+      requireOneNameType(deps, name, nameTypeFrom, nameType, from, stated);
+    }
+  };
 
   for (const rawSupertypeRef of construction.supertypes) {
     if (rawSupertypeRef.kind === 'genericRef') {
@@ -1309,6 +1317,8 @@ function resolveComposition(
       for (const ancestor of operand.ancestors)
         addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
       absorb(name, operand.body, fields, groups, seenFieldNames, inheritedFieldIndex);
+      // An applied template is a supertype like any other, so its name type is one of theirs.
+      takeNameType(head, operand.body.nameType);
       continue;
     }
     const supertypeRef: AstTypeRef = rawSupertypeRef;
@@ -1353,19 +1363,7 @@ function resolveComposition(
     for (const ancestor of ofParent(deps, supertypeName))
       addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
     absorb(name, supertypeVocabulary, fields, groups, seenFieldNames, inheritedFieldIndex);
-    if (nameTypeFrom === undefined) {
-      nameType = supertypeVocabulary.nameType;
-      nameTypeFrom = supertypeName;
-    } else {
-      requireOneNameType(
-        deps,
-        name,
-        nameTypeFrom,
-        nameType,
-        supertypeName,
-        supertypeVocabulary.nameType,
-      );
-    }
+    takeNameType(supertypeName, supertypeVocabulary.nameType);
   }
 
   if (construction.body !== undefined) {

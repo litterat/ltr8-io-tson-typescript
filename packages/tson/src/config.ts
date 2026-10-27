@@ -395,6 +395,7 @@ function importedFrom(schema: LinkedSchema): ImportedSchema {
     originOf: (name) => schema.origins.get(name) ?? schema.id,
     textEnums: schema.textEnums,
     enumForms: schema.enumForms,
+    nameTypes: schema.nameTypes,
   };
 }
 

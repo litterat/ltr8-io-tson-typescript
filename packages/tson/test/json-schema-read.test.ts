@@ -842,6 +842,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
       origins: new Map([...map.keys()].map((k) => [k, 'test://json-schema-read/gaps.tn'])),
       textEnums: new Set(),
       enumForms: new Map(),
+      nameTypes: new Map(),
     };
   }
 
