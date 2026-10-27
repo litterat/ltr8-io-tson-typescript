@@ -447,5 +447,52 @@ somewhere the JSON zone cannot reach (`compiler`, `reader`), move it to `link/`,
 
 ## To report upstream
 
-Collected by the manager from every stage's report. Each entry states the section, the reading this
-port chose, and why.
+Collected from the six stage reports. Each entry states the section, the reading this port chose,
+and why; a corpus item names the file.
+
+- **§8.1 (Part 2), resolved-output writing.** The Java still writes `!array { … }` for a body headed
+  by `set_type`; this port writes the applied head. Carried from Revision 37; still open.
+- **§8.2 (Part 2), applied-parent fold keys.** The fold and the minted-member refusal key operand
+  parents on classified but not dereferenced arguments, as the Java does, so `& box<user_id>`
+  beside `bu => box<uuid>` gets no IS-A edge even though §8.2 compares arguments after following
+  reference chains. Matched to the reference; a gap in the reference worth raising.
+- **§8.1 (Part 2), ingest.** Unbuilt on both sides (change log §6 item 4). This port reads `chain`
+  as the resolver computed it and recomputes `members` at link; nothing reads resolved output back.
+- **§9.4 (Part 3) against Part 2 §5.2 and §11.4, which field names meet §8.2.** The reference's
+  JSON reader judges only an unmatched name that is a value of the name type; its text reader, and
+  this port's, judge every field name. The two encodings disagree on the data document's names
+  that meet the policy. One rule should be stated for both.
+- **§9.4 (Part 3), which spelling is judged and which pointer is reported.** This port's JSON reader
+  judges the name in the type's form; the reference's JSON judges the unfolded NFC name. A folded
+  match's schema pointer is the declared field in JSON (the reference's test) and the written
+  spelling in the text reader. Both differ only under a folding name type.
+- **§9.4 (Part 3), the lookup miss.** The outcome paragraph names refused and undetermined but not
+  which code a foreign-schema lookup miss maps to. Both implementations report
+  `SCHEMA_NOT_PERMITTED` for a miss with no source behind it and `SCHEMA_NOT_FOUND` where a source
+  looked; worth a sentence.
+- **§4.2 (Part 2), a dotted name at a kind-typed slot.** The identifier grammar refuses it before
+  §5.12's "a type through a namespace of types is a gap" branch can be reached, in the reference
+  and here. The branch is unreachable text.
+- **§4.1 (Part 2), the tag of a namespace entry's value.** `get_order => !method { … }` under an
+  `api` whose value type is `method` is written untagged in resolved output; the corpus's
+  `resolved-output-writes-a-namespace-entry-as-written` expects that, though its description says
+  "as written". The tag is kept only where it names a strict subtype or family member.
+- **§5.5 (Part 1), an A-label decoding to an invalid U-label.** `xn--abc` is refused for the
+  U-label's own fault (a code point IDNA2008 does not permit), not as "not an A-label"; the text
+  does not say which. An ASCII label over 63 octets is refused before Punycode decoding.
+- **§5.5 (Part 1), `media_type` parameters.** `text/plain;` and `;;` are admitted, following the
+  reference and RFC 9110's empty list element; a repeated parameter name is refused.
+- **§2.2.1 (Part 1), hostless identities.** `file:///x.tn` and `/x.tn` keep an empty host as one
+  identity; a schema source refuses a reference with no scheme or host.
+- **§5.12 (Part 2), an annotation on a value inside a namespace payload.** Refused here, since the
+  generic value model has nowhere to keep it; the text speaks only of a name carrying none.
+- **§4.1 (Part 2), an untagged choice-typed slot in a value body** takes the first variant that
+  reads; the text says nothing and no fixture exercises it.
+- **Corpus, `RUNNER.md` rule 5** says "Exactly three grounds are legitimate" and lists four.
+- **Corpus, `README.md` against `RUNNER.md` 3e**: the README's identity-layer paragraph says an
+  `error` vector is "a reference that names no identity, or an `!!id` written in another
+  spelling", while 3e speaks of the first directive alone. The runner here judges `!!id` where
+  present, else `!!schema`; no vector has both.
+- **`tson-cli`'s exit ladder.** `70 > 78 > 69 > 1 > 75`: a refusal under a fetch policy
+  (`SCHEMA_NOT_PERMITTED`, `SCHEMA_TOO_LARGE`) is `REJECTED` and still exits 69, as the Java does —
+  rejected and permanently unavailable are separate axes. Worth stating in the CLI's own docs.

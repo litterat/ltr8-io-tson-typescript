@@ -244,9 +244,10 @@ day it does not match is the day it matters.
       value, two spellings of one value refused; a profile may add no Default_Ignorable, control,
       or space but U+0020. The tree reader matches a document's names in the type's form, judges a
       name by the type before closure, and holds a value of it to §8.2 under the type's profile
-      (`reader/tree/fieldNames.ts`); a sealed family's selector is found in that form too. Bind
-      mode has no schema in view and matches the wire name exactly; the JSON reader still matches
-      exactly
+      (`reader/tree/fieldNames.ts`); a sealed family's selector is found in that form too. The JSON
+      reader applies the same rule (`json/schema/record.ts`, over the shared
+      `link/fieldNameRule.ts`), judging an unmatched name under the type's profile before closure
+      (Part 3 §9.4). Bind mode has no schema in view and matches the wire name exactly
 - [x] `ordered` (§5.3, §7.5) — part of array and map identity: a unique array of unordered arrays
       refuses a reordering, a map's entry order matters only when `ordered: true`
 - [x] `value`/`void` constructors and the retired `element_state`/`unit` (#20) — `void_type` and
@@ -300,6 +301,17 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
       and pairs-form maps; the annotation object (§3.3) and its leading-member rule; tag dispatch
       at OPEN/ABSTRACT positions and member dispatch at a sealed family (§6.1.5); the choice kind
       table (§8) over the resolver's `disjoint` fact; all-or-nothing reads (§9.1)
+- [x] Revision 38 changes (§1.3, §3.2, §5.6, §6.1.1, §9.4) — a member name is a value of its
+      record's name type, matched in the type's form, a repeat under a folding type
+      `DUPLICATE_FIELD`, an unmatched name the type admits held to §8.2 under the type's profile
+      before closure; `$schema`, `$type` and `$value` used and not reserved, so any other
+      `$`-initial member is a field name; `$type` a type name and a kind-typed slot one bare name
+      judged a member; a namespace-typed slot read as its map; a foreign-schema lookup miss
+      `SCHEMA_NOT_PERMITTED` (refused), a source's miss `SCHEMA_NOT_FOUND` (undetermined);
+      `hostname`, `host` and `media_type` string-class through the net atoms' parsers.
+      **Two encodings, two spellings** (open): the text reader judges every field name, the JSON
+      reader only an unmatched one, and a folded match's schema pointer is the written spelling in
+      text and the declared field in JSON
 - [x] Revision 37 changes (§3.1, §5, §6, §8.5, §9.4) — duplicate member names judged after the key
       type's `normalization`, then NFC; identifier families string-class under their profile;
       text put into its form before facets; `uri`/`iri` refusing a relative reference; a leap
@@ -403,7 +415,9 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
 
 ## Known gaps
 
-- **The JSON encoding's Revision 38 coverage:** see Stage 3.
+- **An entry holding a namespace value has no JSON read path**: the JSON compiler reports
+  `NOT_IMPLEMENTED` for it, as the reference's `ErrorReader` does. A namespace-typed _slot_ reads
+  as its map in both encodings.
 
 - **The JSON encoding's ([TSON-JSON]) scope is narrower than the full spec's, and in one respect
   narrower than the reference implementation's own** (`REVISION-36-PLAN.md`'s own "Scope
