@@ -5,14 +5,14 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 
 describe('canonicalizeIdentity (§2.2.1)', () => {
   it('strips the scheme and its :// delimiter, keeping lowercase host plus path', () => {
-    expect(canonicalizeIdentity('https://tson.io/2026/37/m/core.tn')).toBe(
-      'tson.io/2026/37/m/core.tn',
+    expect(canonicalizeIdentity('https://tson.io/2026/38/m/core.tn')).toBe(
+      'tson.io/2026/38/m/core.tn',
     );
   });
 
   it('strips the query (a `?sha256=` pin is verification metadata, not identity)', () => {
-    expect(canonicalizeIdentity('https://tson.io/2026/37/m/core.tn?sha256=abc123')).toBe(
-      'tson.io/2026/37/m/core.tn',
+    expect(canonicalizeIdentity('https://tson.io/2026/38/m/core.tn?sha256=abc123')).toBe(
+      'tson.io/2026/38/m/core.tn',
     );
   });
 
@@ -41,8 +41,8 @@ describe('canonicalizeIdentity (§2.2.1)', () => {
   });
 
   it('refuses a relative path with no host, which a host-and-path identity could also spell (§2.2.1)', () => {
-    // `tson.io/2026/37/m/core.tn` is exactly what `https://tson.io/2026/37/m/core.tn` reduces to.
-    expect(() => canonicalizeIdentity('tson.io/2026/37/m/core.tn')).toThrow(
+    // `tson.io/2026/38/m/core.tn` is exactly what `https://tson.io/2026/38/m/core.tn` reduces to.
+    expect(() => canonicalizeIdentity('tson.io/2026/38/m/core.tn')).toThrow(
       TsonSchemaValidationError,
     );
     expect(() => canonicalizeIdentity('mini.tn')).toThrow(TsonSchemaValidationError);
@@ -55,12 +55,13 @@ describe('canonicalizeIdentity (§2.2.1)', () => {
     expect(() => canonicalizeIdentity('/a%2Db.tn')).toThrow(TsonSchemaValidationError);
   });
 
-  it('admits a host and a path beyond US-ASCII as written, and a percent-encoded spelling is another identity (RFC 3987)', () => {
+  it('admits a host and a path beyond US-ASCII, and reads a percent-encoded spelling back to them (§2.2.1)', () => {
     expect(canonicalizeIdentity('https://bücher.example/schémas/ordres.tn')).toBe(
       'bücher.example/schémas/ordres.tn',
     );
     expect(canonicalizeIdentity('/schémas/ordres.tn')).toBe('/schémas/ordres.tn');
-    expect(sameIdentity('/sch%C3%A9mas/x.tn', '/schémas/x.tn')).toBe(false);
+    expect(sameIdentity('/sch%C3%A9mas/x.tn', '/schémas/x.tn')).toBe(true);
+    expect(sameIdentity('/sch%c3%a9mas/x.tn', '/schémas/x.tn')).toBe(true);
   });
 
   it('refuses userinfo, a port and a fragment on a hostless authority as on any other', () => {
@@ -91,8 +92,11 @@ describe('canonicalizeIdentity (§2.2.1)', () => {
     );
   });
 
-  it('rejects a non-lowercase host', () => {
-    expect(() => canonicalizeIdentity('https://Tson.io/x.tn')).toThrow(TsonSchemaValidationError);
+  it('reads an ASCII-uppercase host to its lowercase form (§2.2.1), and refuses uppercase beyond ASCII', () => {
+    expect(canonicalizeIdentity('https://Tson.IO/x.tn')).toBe('tson.io/x.tn');
+    expect(() => canonicalizeIdentity('https://BÜCHER.example/x.tn')).toThrow(
+      TsonSchemaValidationError,
+    );
   });
 
   it('rejects a dot-segment in the path', () => {
@@ -114,6 +118,24 @@ describe('canonicalizeIdentity (§2.2.1)', () => {
 
   it('a query carrying only recognised hash parameters is stripped whole, not partially', () => {
     expect(canonicalizeIdentity('https://tson.io/x.tn?sha256=abc&sha256=def')).toBe('tson.io/x.tn');
+  });
+
+  it("validateIdentity requires a document's own !!id to be written in canonical form (§2.2.1)", () => {
+    expect(() => {
+      validateIdentity('https://tson.io/x.tn?sha256=' + '0'.repeat(64));
+    }).not.toThrow();
+    expect(() => {
+      validateIdentity('https://Tson.io/x.tn');
+    }).toThrow(/canonical form.*write 'https:\/\/tson\.io\/x\.tn'/u);
+    expect(() => {
+      validateIdentity('https://xn--bcher-kva.example/x.tn');
+    }).toThrow(TsonSchemaValidationError);
+    expect(() => {
+      validateIdentity('https://bücher.example/schémas/x.tn');
+    }).not.toThrow();
+    expect(() => {
+      validateIdentity('https://tson.io/sch%C3%A9mas/x.tn');
+    }).toThrow(TsonSchemaValidationError);
   });
 
   it('validateIdentity is a pass-through check with no return value', () => {

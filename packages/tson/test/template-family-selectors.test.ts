@@ -32,29 +32,41 @@ describe('a family whose base is a record-bodied template is judged (§5.2, §5.
   });
 });
 
-describe('only a pin on an unmarked name is a selector (§5.10, §3.2 item 33)', () => {
+describe('a parameter pin is a selector whatever its name’s mark (§5.10, change log #21)', () => {
   const discriminatorsOf = (linked: ReturnType<typeof load>): unknown =>
-    (linked.entries.get('pet')?.body as { discriminators?: unknown }).discriminators;
+    (linked.entries.get('pet') as { discriminators?: unknown }).discriminators;
 
   it('`type: text = N` is a selector', () => {
     expect(discriminatorsOf(load(`pet => <N, T> { type: text = N  pet: T }`))).toEqual(['type']);
   });
 
-  it('`type?: text = N` is an injected pin and selects nothing', () => {
+  it('`type?: text = N` is a selector too: the base reads it required, each member pins it', () => {
     const linked = load(
-      `pet => <N, T> { type?: text = N  pet: T }\ndog => pet<"dog", text>\no => { p: dog }`,
+      `pet => <N, T> { type?: text = N  pet: T }\ndog => pet<"dog", text>\no => { p: pet }`,
     );
-    expect(discriminatorsOf(linked)).toBeUndefined();
-    expect(textCodes(linked, 'o', '{ p: { pet: x } }')).toEqual([]);
-    expect(jsonCodes(linked, 'o', '{"p":{"pet":"x"}}')).toEqual([]);
+    expect(discriminatorsOf(linked)).toEqual(['type']);
+    // The member is FIXED to its argument, optional as the name was marked (§5.7).
+    const dog = linked.entries.get('dog') as {
+      fields: { entries: ReadonlyMap<string, { optional: boolean; role: string }> };
+    };
+    expect(dog.fields.entries.get('type')).toMatchObject({ optional: true, role: 'FIXED' });
+    // A position typed by the base dispatches on the selector, which it reads required.
+    expect(textCodes(linked, 'o', '{ p: { type: dog  pet: x } }')).toEqual([]);
+    expect(textCodes(linked, 'o', '{ p: { pet: x } }')).toEqual(['FIELD_REQUIRED']);
+    expect(jsonCodes(linked, 'o', '{"p":{"type":"dog","pet":"x"}}')).toEqual([]);
+  });
+
+  it('a pin whose field type is itself a parameter is no selector', () => {
+    expect(discriminatorsOf(load(`pet => <N, T> { v: T = N  pet: text }`))).toBeUndefined();
   });
 });
 
-describe('a thrown family error names its declaration (§5.2, §8.2)', () => {
-  it('a member minted at a use site is reported against the declaration that wrote it', () => {
+describe('a member minted at a use site is refused (§3.3.4, §8.2)', () => {
+  it('names the application the author wrote and the declaration that would admit it', () => {
     const message = loadError(
       `pet => { pet_type: text =?  n: text }\ndog_of => <T> pet & { pet_type: = "dog"  breed: T }\no => { k: dog_of<text> }`,
     );
-    expect(message).toMatch(/in the declaration of 'o'/);
+    expect(message).toMatch(/'dog_of<text>' composes onto 'pet'/);
+    expect(message).toMatch(/my_name => dog_of<text>/);
   });
 });

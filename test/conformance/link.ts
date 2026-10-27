@@ -10,8 +10,12 @@
 import { expect } from 'vitest';
 
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
-import type { TypeDefinition } from '../../packages/tson/src/schema/meta/typedef.js';
-import { choiceDisjoint } from '../../packages/tson/src/schema/meta/typedef.js';
+import {
+  choiceDisjoint,
+  isTemplateBody,
+  subtypesOf,
+  type Top,
+} from '../../packages/tson/src/schema/meta/typedef.js';
 
 import { newClass2Tson } from './class2Tson.js';
 import { assertSchemaOrLinkLoadFailed } from './schema.js';
@@ -23,7 +27,7 @@ function definitionOf(
   vector: Vector<Class2Layer>,
   entries: LinkedSchema['entries'],
   name: string,
-): TypeDefinition {
+): Top {
   const definition = entries.get(name);
   if (definition === undefined) {
     throw new Error(
@@ -35,8 +39,9 @@ function definitionOf(
 
 /**
  * What linking makes of a schema that has already resolved: §2.2.3's import closure (`binds`),
- * §5.4's derived, two-valued disjointness (`disjoint`), and §8.2's resolver-managed `subtypes`
- * index. Each is optional in the sidecar -- a vector states only what it is about.
+ * §5.4's derived, two-valued disjointness (`disjoint`), §8.2's resolver-managed `subtypes` index,
+ * and a kind's derived `members` (§4.2). Each is optional in the sidecar -- a vector states only
+ * what it is about.
  */
 function assertLinkedNamespaceMatches(
   vector: Vector<Class2Layer>,
@@ -75,8 +80,22 @@ function assertLinkedNamespaceMatches(
   if (expected.subtypes !== undefined) {
     for (const claim of expected.subtypes) {
       const definition = definitionOf(vector, entries, claim.name);
-      const actual = new Set(definition.subtypes.map((name) => normalizeSyntheticName(name)));
+      const actual = new Set(subtypesOf(definition).map((name) => normalizeSyntheticName(name)));
       const wanted = new Set(claim.subtypes.map((name) => normalizeSyntheticName(name)));
+      expect(actual).toEqual(wanted);
+    }
+  }
+
+  if (expected.members !== undefined) {
+    for (const claim of expected.members) {
+      const definition = definitionOf(vector, entries, claim.name);
+      if (isTemplateBody(definition) || definition.kind !== 'kind_type') {
+        throw new Error(`${vector.name}: '${claim.name}' is not a kind (§4.2)`);
+      }
+      const actual = new Set(
+        (definition.members ?? []).map((name) => normalizeSyntheticName(name)),
+      );
+      const wanted = new Set(claim.members.map((name) => normalizeSyntheticName(name)));
       expect(actual).toEqual(wanted);
     }
   }

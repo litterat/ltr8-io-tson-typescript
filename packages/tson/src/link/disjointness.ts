@@ -34,12 +34,13 @@
 import { resolveBaseType } from '../base/baseTypeResolver.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { isDataBody } from './bodyKind.js';
 import { isAtom } from '../compiler/atomChecks.js';
 import { terminal, terminalDefinition } from './referenceChain.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { FloatType } from '../schema/meta/atoms-numeric.js';
-import type { Annotations, TypeDefinition } from '../schema/meta/typedef.js';
+import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
+import { isTemplateBody } from '../schema/meta/typedef.js';
+import { schemaPositionOf } from './facts.js';
 import { choiceDisjoint } from '../schema/meta/typedef.js';
 
 /**
@@ -52,17 +53,12 @@ import { choiceDisjoint } from '../schema/meta/typedef.js';
 export type DiscriminationClass = 'BOOLEAN' | 'NUMBER' | 'STRING' | 'BRACE' | 'BRACKET';
 
 /**
- * An enum's class depends on its `type` (§7.4, §5.4), read from linking's `textEnums` rather than
- * from the type's name: `type` resolves in a namespace the body cannot see. Where `type` is not an
- * identifier family the enum is string-class whatever its members' spellings — `!text_enum [80
- * 443]` admits the *texts* `80` and `443`, not the numbers, so classifying by token would
- * misclassify it; the members are read as data, never as base-resolved tokens, and such an enum is
- * therefore always `STRING`. Where `type` is an identifier family the class is the members' shared
- * base-type class read off each member's own token (`[true false]` is `BOOLEAN`; an identifier
- * never begins with a digit, so no member is number-class); mixed members yield `undefined`.
+ * An enum's class is its members' shared base-type class, read off each member's own token
+ * (§5.4): its `name_type` is an identifier family (§7.4, an enum over any other type being
+ * refused at link), so `[true false]` is `BOOLEAN`, no member is number-class since an
+ * identifier never begins with a digit, and mixed members yield `undefined`.
  */
-function classifyEnum(body: EnumBody, isTextEnum: boolean): DiscriminationClass | undefined {
-  if (isTextEnum) return 'STRING';
+function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
   let common: DiscriminationClass | undefined;
   for (const member of body.members) {
     const base = resolveBaseType({ text: member, form: 'unquoted' });
@@ -84,15 +80,12 @@ function classifyEnum(body: EnumBody, isTextEnum: boolean): DiscriminationClass 
  * so neither is a type a token's own content picks out. The two are recognised by constructor
  * (§4.2), never by name.
  */
-function isScalarContentKeyType(
-  keyName: string,
-  namespace: ReadonlyMap<string, TypeDefinition>,
-): boolean {
+function isScalarContentKeyType(keyName: string, namespace: ReadonlyMap<string, Top>): boolean {
   const terminalName = terminal(keyName, (n) => namespace.get(n));
   const def = namespace.get(terminalName);
   if (def === undefined) return false; // unresolved or cyclic: no class either
-  const body = def.body;
-  if (!('kind' in body) || isDataBody(body) || !isAtom(body)) return false;
+  const body = def;
+  if (isTemplateBody(body) || body.kind === 'namespace' || !isAtom(body)) return false;
   return body.kind !== 'value_type' && body.kind !== 'void_type';
 }
 
@@ -106,18 +99,13 @@ function isClassStableFloat(body: FloatType): boolean {
   return !body.allowNan && !body.allowInfinity;
 }
 
-function classify(
-  name: string,
-  def: TypeDefinition,
-  namespace: ReadonlyMap<string, TypeDefinition>,
-  textEnums: ReadonlySet<string>,
-): DiscriminationClass | undefined {
-  const body = def.body;
-  if (!('kind' in body)) {
+function classify(def: Top, namespace: ReadonlyMap<string, Top>): DiscriminationClass | undefined {
+  const body = def;
+  if (isTemplateBody(body)) {
     return undefined; // a held TemplateBody: no class until an application closes it
   }
-  if (isDataBody(body)) {
-    return undefined; // a body describing something other than a data value has no class
+  if (body.kind === 'namespace') {
+    return undefined; // a namespace value is no type, and has no class
   }
   switch (body.kind) {
     case 'integer_type':
@@ -125,8 +113,16 @@ function classify(
       return 'NUMBER';
     case 'float_type':
       return isClassStableFloat(body) ? 'NUMBER' : undefined;
+    // A kind's value is a type name and a reference's a qualified name, each written as a token
+    // ([TSON-SCHEMA] §4.2, §5.12) and a JSON string ([TSON-JSON] §5.6), and the network families
+    // are string content in both encodings.
     case 'text_type':
     case 'identifier_type':
+    case 'kind_type':
+    case 'ref_type':
+    case 'hostname_type':
+    case 'host_type':
+    case 'media_type_type':
     case 'uri_type':
     case 'iri_type':
     case 'regex_type':
@@ -145,7 +141,7 @@ function classify(
     case 'mac_type':
       return 'STRING';
     case 'enum':
-      return classifyEnum(body, textEnums.has(name));
+      return classifyEnum(body);
     case 'record':
       return 'BRACE';
     case 'map':
@@ -173,27 +169,21 @@ function classify(
  */
 export function discriminationClassOf(
   name: string,
-  namespace: ReadonlyMap<string, TypeDefinition>,
-  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
+  namespace: ReadonlyMap<string, Top>,
 ): DiscriminationClass | undefined {
-  const lookup = (n: string): TypeDefinition | undefined => namespace.get(n);
+  const lookup = (n: string): Top | undefined => namespace.get(n);
   const def = terminalDefinition(name, lookup);
-  return def === undefined
-    ? undefined
-    : classify(terminal(name, lookup), def, namespace, textEnums);
+  return def === undefined ? undefined : classify(def, namespace);
 }
-
-const NO_TEXT_ENUMS: ReadonlySet<string> = new Set();
 
 /** `true` exactly when every variant has a class and no class repeats (§5.4). */
 export function isChoiceDisjoint(
   variants: readonly { readonly name: string }[],
-  namespace: ReadonlyMap<string, TypeDefinition>,
-  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
+  namespace: ReadonlyMap<string, Top>,
 ): boolean {
   const seen = new Set<DiscriminationClass>();
   for (const variant of variants) {
-    const variantClass = discriminationClassOf(variant.name, namespace, textEnums);
+    const variantClass = discriminationClassOf(variant.name, namespace);
     if (variantClass === undefined || seen.has(variantClass)) {
       return false;
     }
@@ -207,18 +197,12 @@ export function isChoiceDisjoint(
  * namespace. Pure: entries with no `choice` body keep their identity, and `merged` itself is
  * returned unchanged when it holds no choice at all.
  */
-export function computeDisjointness(
-  merged: ReadonlyMap<string, TypeDefinition>,
-  textEnums: ReadonlySet<string> = NO_TEXT_ENUMS,
-): Map<string, TypeDefinition> {
+export function computeDisjointness(merged: ReadonlyMap<string, Top>): Map<string, Top> {
   const result = new Map(merged);
   for (const [name, def] of merged) {
-    const body = def.body;
-    if ('kind' in body && !isDataBody(body) && body.kind === 'choice') {
-      result.set(name, {
-        ...def,
-        body: { ...body, disjoint: isChoiceDisjoint(body.variants, merged, textEnums) },
-      });
+    const body = def;
+    if (!isTemplateBody(body) && body.kind === 'choice') {
+      result.set(name, { ...body, disjoint: isChoiceDisjoint(body.variants, merged) });
     }
   }
   return result;
@@ -236,18 +220,20 @@ export interface CheckDisjointAssertionsOptions {
    * `LinkedSchema.keyAnnotations` already carry through resolution and linking. §6 lets
    * `@disjoint` appear before the declared name, not only on the entry's own value, and this
    * function checks both channels for the marker. Omitted means "no key annotations in scope":
-   * every local entry is then checked against its own {@link TypeDefinition.annotations} alone.
+   * every local entry is then checked against its value's own annotations alone.
    */
   readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
+  /** Each entry's facts (§8.1): the annotations on its value, and its position for a diagnostic. */
+  readonly facts?: ReadonlyMap<string, EntryFacts>;
 }
 
-/** `true` when `name` carries a `@disjoint` marker, on its own value ({@link TypeDefinition.annotations}) or on its declaration (`keyAnnotations`, §6). */
+/** `true` when `name` carries a `@disjoint` marker, on its own value (its facts' `annotations`) or on its declaration (`keyAnnotations`, §6). */
 function assertsDisjoint(
-  def: TypeDefinition,
+  facts: EntryFacts | undefined,
   name: string,
   keyAnnotations: ReadonlyMap<string, Annotations> | undefined,
 ): boolean {
-  if (def.annotations.some((a) => a.name === 'disjoint')) return true;
+  if ((facts?.annotations ?? []).some((a) => a.name === 'disjoint')) return true;
   return (keyAnnotations?.get(name) ?? []).some((a) => a.name === 'disjoint');
 }
 
@@ -267,20 +253,20 @@ function assertsDisjoint(
  * **Checked against both annotation channels.** §6 lets `@disjoint` appear before the declared
  * name (a *key* annotation) as readily as on the entry's own value; {@link
  * CheckDisjointAssertionsOptions.keyAnnotations}, when a caller supplies it, is checked alongside
- * `def.annotations` so a marker written either way is caught.
+ * the annotations on the entry's value so a marker written either way is caught.
  */
 export function checkDisjointAssertions(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckDisjointAssertionsOptions,
 ): void {
-  const { schemaId, receiver, keyAnnotations } = options;
+  const { schemaId, receiver, keyAnnotations, facts } = options;
   for (const name of localNames) {
     const def = merged.get(name);
     if (def === undefined) continue;
-    const body = def.body;
-    if (!('kind' in body) || isDataBody(body) || body.kind !== 'choice') continue;
-    if (!assertsDisjoint(def, name, keyAnnotations)) continue;
+    const body = def;
+    if (isTemplateBody(body) || body.kind !== 'choice') continue;
+    if (!assertsDisjoint(facts?.get(name), name, keyAnnotations)) continue;
     if (choiceDisjoint(def) === true) continue; // verified -- the assertion holds, and says so
 
     const variants = body.variants.map((v) => v.name);
@@ -298,7 +284,7 @@ export function checkDisjointAssertions(
       message,
       schemaId,
       schemaPointer: `/${name}`,
-      ...(def.position === undefined ? {} : { schemaPosition: def.position }),
+      ...schemaPositionOf(facts, name),
     });
   }
 }

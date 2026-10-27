@@ -11,6 +11,8 @@ export default defineConfig(
       '**/dist/**',
       '**/dist-types/**',
       '.references/**',
+      // Agent worktrees are whole checkouts of this repository; linting them doubles the tree.
+      '.claude/worktrees/**',
       '**/node_modules/**',
       '**/coverage/**',
       // Workflow scripts run in the Workflow runtime against globals this project
@@ -30,7 +32,7 @@ export default defineConfig(
           // project, and there are now more of them than the service admits by default. Raising
           // the ceiling costs a little lint time on files that carry no type information worth
           // building a project for; the alternative is a tsconfig per script.
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 12,
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 20,
         },
         // This file is linted under the default project, which carries no Node types, so
         // import.meta.dirname types as `any` here even though it is a real Node 20.11+ API.

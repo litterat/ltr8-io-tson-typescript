@@ -33,28 +33,32 @@ import {
   TsonBindMismatchError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import { isDataBody, type NonDataTop } from './bodyKind.js';
+import type { NonHeldTop } from './bodyKind.js';
+import { schemaPositionOf, type FactsTable } from './facts.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
-import { isHeldBody } from '../compiler/heldBody.js';
+import { heldOf } from '../compiler/heldBody.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import { resolvesToConstructor, terminal, type EntryLookup } from './referenceChain.js';
 import type {
   ArrayBody,
   ChoiceBody,
   MapBody,
+  NamedField,
   RecordBody,
-  RecordField,
   TupleBody,
 } from '../schema/meta/bodies.js';
-import type {
-  Token,
-  TypeArgument,
-  TypeDefinition,
-  TypeKind,
-  TypeRef,
+import { namedFields } from '../schema/meta/bodies.js';
+import type { Token, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
+import {
+  isFamilyBase,
+  isNamespaceValue,
+  isTemplateBody,
+  parentsOf,
+  subtypesOf,
+  supertypesOf,
+  typeParameters,
 } from '../schema/meta/typedef.js';
-import { isTemplateBody, typeKind, typeParameters } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -69,7 +73,9 @@ export interface ValidateReferencesOptions {
    * scope" (the meta-kernel bootstrap route), which every `source`/supertype reference must then
    * resolve in `merged` alone.
    */
-  readonly structureNamespace?: ReadonlyMap<string, TypeDefinition>;
+  readonly structureNamespace?: ReadonlyMap<string, Top>;
+  /** Each entry's facts: its position for a diagnostic, and the constructor its tag names. */
+  readonly facts?: FactsTable;
   /**
    * Where a failing entry is reported, letting every other entry still be checked ([TSON-DATA]
    * §8.1: continue past an error to report multiple issues in one pass). Omitted means fail-fast:
@@ -92,14 +98,14 @@ export interface ValidateReferencesOptions {
  * a `Data` body breaks its own `references()` contract (see {@link validateBody}).
  */
 export function validateReferences(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   options: ValidateReferencesOptions,
 ): void {
-  const { schemaId, structureNamespace, receiver } = options;
+  const { schemaId, structureNamespace, receiver, facts } = options;
   const enumForms = options.enumForms ?? NO_ENUM_FORMS;
   for (const [name, def] of merged) {
     try {
-      validateEntry(name, def, merged, structureNamespace, enumForms);
+      validateEntry(name, def, facts?.get(name)?.head, merged, structureNamespace, enumForms);
     } catch (e: unknown) {
       if (!isReportableLinkError(e)) {
         throw e;
@@ -107,7 +113,7 @@ export function validateReferences(
       if (receiver === undefined) {
         throw e;
       }
-      receiver.report(linkProblem(schemaId, name, def, e));
+      receiver.report(linkProblem(schemaId, name, facts, e));
     }
   }
 }
@@ -129,7 +135,7 @@ function isReportableLinkError(e: unknown): e is ReportableLinkError {
 function linkProblem(
   schemaId: string,
   name: string,
-  def: TypeDefinition,
+  facts: FactsTable | undefined,
   error: ReportableLinkError,
 ): Diagnostic {
   return {
@@ -137,7 +143,7 @@ function linkProblem(
     message: error.message,
     schemaId,
     schemaPointer: `/${name}`,
-    ...(def.position === undefined ? {} : { schemaPosition: def.position }),
+    ...schemaPositionOf(facts, name),
   };
 }
 
@@ -147,39 +153,47 @@ const NO_ENUM_FORMS: ReadonlyMap<string, Normalization> = new Map();
 
 function validateEntry(
   name: string,
-  def: TypeDefinition,
-  namespace: ReadonlyMap<string, TypeDefinition>,
-  structureNamespace: ReadonlyMap<string, TypeDefinition> | undefined,
+  def: Top,
+  head: string | undefined,
+  namespace: ReadonlyMap<string, Top>,
+  structureNamespace: ReadonlyMap<string, Top> | undefined,
   enumForms: ReadonlyMap<string, Normalization>,
 ): void {
   checkOpenEntryUsesEveryParameter(name, def);
 
-  if (def.source !== undefined) {
-    // Unlike every other reference, `source` gets the structure-namespace fallback: the name it
-    // records was consumed at a *constructor role* (§3.3.1) when this entry was originally
-    // resolved, unlike an ordinary type-ref (§3.3.2). The one shape the fallback does not cover
-    // is an application (`source.arguments` non-empty) -- desugar rewrites every constructor
-    // application before resolution, so arguments surviving to here mean a §5.10 user-template
-    // head, resolved in the type-name namespace only (§3.3.1).
-    const source = def.source;
-    const sourceLookup =
-      structureNamespace === undefined ||
-      structureNamespace.size === 0 ||
-      source.arguments.length > 0
+  if (head !== undefined) {
+    // The constructor an entry's tag names was consumed at a *constructor role* (§3.3.1) when the
+    // entry was resolved, unlike an ordinary type-ref (§3.3.2), so it gets the structure
+    // namespace's fallback.
+    const headLookup =
+      structureNamespace === undefined || structureNamespace.size === 0
         ? namespace
         : mergeWithFallback(namespace, structureNamespace);
-    validateTypeRef(source, sourceLookup, typeParameters(def), name, ' source');
+    validateTypeRef(
+      { name: head, arguments: [], annotations: [] },
+      headLookup,
+      typeParameters(def),
+      name,
+      ' constructor',
+    );
   }
 
-  for (const supertype of def.supertypes) {
+  for (const supertype of supertypesOf(def)) {
     if (!namespace.has(supertype) && !(structureNamespace?.has(supertype) ?? false)) {
       throw new TsonSchemaValidationError(`'${name}' has an unresolved supertype '${supertype}'`);
     }
   }
-  for (const subtype of def.subtypes) {
+  for (const subtype of subtypesOf(def)) {
     if (!namespace.has(subtype)) {
       throw new TsonSchemaValidationError(`'${name}' has an unresolved subtype '${subtype}'`);
     }
+  }
+  for (const parent of parentsOf(def)) {
+    const lookup =
+      structureNamespace === undefined
+        ? namespace
+        : mergeWithFallback(namespace, structureNamespace);
+    validateTypeRef(parent, lookup, typeParameters(def), name, ' parent');
   }
 
   validateBody(name, def, namespace, typeParameters(def), enumForms);
@@ -187,67 +201,33 @@ function validateEntry(
 
 function validateBody(
   entryName: string,
-  def: TypeDefinition,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  def: Top,
+  namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
   enumForms: ReadonlyMap<string, Normalization>,
 ): void {
-  const body = def.body;
-  if (!('kind' in body)) {
+  const body = def;
+  if (isTemplateBody(body)) {
     // A held TemplateBody: opaque to everything that needs to know what a reference *resolves
     // to* (that cannot be settled until substitution supplies arguments) except arity, which is
-    // decidable without substituting -- see checkHeldArity's own note. `isHeldBody` is this
-    // package's own single implementation of the contract (`compiler/heldBody.ts`'s own top
-    // note); a body that somehow is not one has no applications to check.
-    checkHeldArity(
-      entryName,
-      isHeldBody(body) ? body.applications() : [],
-      namespace,
-      ownParameters,
-    );
-    return;
-  }
-  if (isDataBody(body)) {
-    // A body describing something other than a data value, whose own type references (if any)
-    // are declared rather than discovered (`Data.references()`, `schema/meta/typedef.ts`'s own
-    // note). An omitted `references` method is the ordinary case (a body naming none) and is
-    // simply skipped -- but a `references` method that *exists* and returns `null`/`undefined`
-    // instead of an array is a broken contract, not "no references": it usually means an
-    // implementation reading an OPTIONAL bound component straight through, which the binder
-    // hands to the constructor as `undefined` for an omitted field without normalising it to an
-    // empty array. Naming it here, rather than iterating it unguarded, is the fix -- iterating it
-    // would throw a bare `TypeError` out of the schema pipeline, which every channel above reads
-    // as a fault in this library rather than in the caller's own `Data` implementation.
-    if (body.references !== undefined) {
-      const references: unknown = body.references();
-      if (references === undefined || references === null) {
-        throw new TsonBindMismatchError(
-          `'${entryName}' (!${body.kind}): references() returned ${
-            references === null ? 'null' : 'undefined'
-          } instead of an array -- return [] for a body that names no types. This usually means ` +
-            'an OPTIONAL bound component read directly: the binder hands an omitted field to the ' +
-            'constructor as undefined and does not normalise it to an empty array',
-        );
-      }
-      for (const reference of references as readonly TypeRef[]) {
-        validateTypeRef(reference, namespace, ownParameters, entryName, ` (!${body.kind})`);
-      }
-    }
+    // decidable without substituting -- see checkHeldArity's own note.
+    checkHeldArity(entryName, heldOf(body)?.applications() ?? [], namespace, ownParameters);
     return;
   }
   switch (body.kind) {
+    case 'namespace':
+      // A value of a meta layer's own vocabulary: the names it holds are judged by its own slots'
+      // types (a kind's, a reference's), which the linker reads at link (§4.2, §5.12).
+      return;
     case 'record': {
       const r: RecordBody = body;
-      for (const supertype of r.supertypes) {
-        validateTypeRef(supertype, namespace, ownParameters, entryName, ' supertype');
-      }
-      for (const field of r.fields) {
+      for (const field of namedFields(r)) {
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
         checkFieldValue(entryName, field, namespace, ownParameters, enumForms);
       }
       for (const group of r.groups) {
         for (const member of group.members.flat()) {
-          if (!r.fields.some((f) => f.name === member)) {
+          if (!r.fields.entries.has(member)) {
             throw new TsonSchemaValidationError(
               `'${entryName}' has a field group referencing unknown field '${member}'`,
             );
@@ -297,6 +277,8 @@ function validateBody(
     case 'value_type':
     case 'void_type':
     case 'enum':
+    case 'kind_type':
+    case 'ref_type':
     case 'integer_type':
     case 'text_type':
     case 'identifier_type':
@@ -319,6 +301,9 @@ function validateBody(
     case 'mac_type':
     case 'ipv4_type':
     case 'ipv6_type':
+    case 'hostname_type':
+    case 'host_type':
+    case 'media_type_type':
     case 'complex_type':
     case 'scoped':
       return; // no type reference of their own to validate
@@ -353,12 +338,17 @@ function validateBody(
  */
 function checkFieldValue(
   entryName: string,
-  field: RecordField,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  field: NamedField,
+  namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
   enumForms: ReadonlyMap<string, Normalization>,
 ): void {
   if (field.value === undefined || ownParameters.includes(field.type.name)) {
+    return;
+  }
+  // A parametric `= P` / `~ P` in a record template (§5.7, §5.10): the parameter rides `value`
+  // where it is written, and materialisation substitutes the argument, which is checked then.
+  if (field.value.form === 'UNQUOTED' && ownParameters.includes(field.value.text)) {
     return;
   }
   const terminalName = terminal(field.type.name, lookupIn(namespace));
@@ -367,7 +357,7 @@ function checkFieldValue(
   // does not reach, undeclared or a cycle, resolves no `target` here either). A target that is
   // still open (or an application of one) has no single body to check against until
   // materialisation closes it. A held body (no `kind` of its own) is excluded by the parameters
-  // check just above, kept here too as a defensive no-op; a `Data` body is not a type at all,
+  // check just above, kept here too as a defensive no-op; a namespace value is not a type at all,
   // already rejected as this field's own type reference by `validateTypeRef`; and a
   // `reference`-bodied target cannot occur here -- {@link terminal} does not stop on one except at
   // a cycle or an argument-bearing target, both already excluded by `target === undefined`/
@@ -377,14 +367,20 @@ function checkFieldValue(
     target === undefined ||
     typeParameters(target).length > 0 ||
     field.type.arguments.length > 0 ||
-    !('kind' in target.body) ||
-    isDataBody(target.body) ||
-    target.body.kind === 'reference'
+    isTemplateBody(target) ||
+    target.kind === 'namespace' ||
+    target.kind === 'reference'
   ) {
     return;
   }
-  const body = target.body;
+  const body = target;
   const value = field.value;
+  if (body.kind === 'kind_type') {
+    // A value at a kind-typed field is a type's name, judged a member of the kind by
+    // `namespaceTypes.ts`'s `checkKindPins` (§4.2), which follows a constructor template to the
+    // constructor it applies; nothing here second-guesses it.
+    return;
+  }
   if (!isScalarBody(body)) {
     throw notAScalarType(entryName, field, value, body);
   }
@@ -420,9 +416,9 @@ function checkFieldValue(
  */
 function notAScalarType(
   entryName: string,
-  field: RecordField,
+  field: NamedField,
   value: Token,
-  body: NonDataTop,
+  body: NonHeldTop,
 ): Error {
   return new TsonSchemaValidationError(
     `'${entryName}': field '${field.name}' is declared '${field.type.name}', which is ` +
@@ -435,7 +431,7 @@ function notAScalarType(
 }
 
 /** What a non-scalar body is, for the message -- named the way an author would name it, not by class. */
-function describeBody(body: NonDataTop): string {
+function describeBody(body: NonHeldTop): string {
   switch (body.kind) {
     case 'array':
       return 'an array';
@@ -465,43 +461,21 @@ function asWritten(token: Token): string {
 
 // ── Type references ──────────────────────────────────────────────────────────────────────────
 
-/**
- * {@link typeKind}, best-effort: `namespace` here is the merged local/imported namespace only,
- * never the governing structure namespace a constructor name might need for the derivation's own
- * fourth branch (§8.1) — a gap this function accepts rather than threading a second namespace
- * through every reference-validation call site for a check that exists only to produce a better
- * diagnostic (§4.1's own DATA-position refusal), never to decide whether data is valid: an
- * unresolved lookup here means "cannot prove DATA", not "not DATA", and the caller treats it that
- * way.
- */
-function safeTypeKind(
-  def: TypeDefinition,
-  namespace: ReadonlyMap<string, TypeDefinition>,
-): TypeKind | undefined {
-  try {
-    return typeKind(def, (n) => namespace.get(n));
-  } catch {
-    return undefined;
-  }
-}
-
 function validateTypeRef(
   ref: TypeRef,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
   subject: string,
   trail: string,
 ): void {
   const context = `'${subject}'${trail}`;
   const target = namespace.get(ref.name);
-  if (target !== undefined && safeTypeKind(target, namespace) === 'DATA') {
-    // §8.1's schema map holds only type definitions, so an entry describing something else has
-    // no way to say "declare me, but do not let anything name me as a type" other than this
-    // check. Without it the misuse resolves, links AND compiles, and fails only when a document
-    // is read against it (§4.1: naming a DATA entry where a type is expected is a resolver error).
+  if (target !== undefined && !ownParameters.includes(ref.name) && isNamespaceValue(target)) {
+    // An entry applying a namespace type is a value, never a type (§4.1): without this check the
+    // misuse resolves, links AND compiles, and fails only when a document is read against it.
     throw new TsonSchemaValidationError(
-      `${context} names '${ref.name}', which describes something other than a data value -- it ` +
-        'is declared by this schema but is not a type, so nothing can be typed by it',
+      `${context} names '${ref.name}', which is a value and not a type -- an entry applying a ` +
+        'namespace type is a value of it, so nothing can be typed by it (§4.1)',
     );
   }
   if (!namespace.has(ref.name) && !ownParameters.includes(ref.name)) {
@@ -527,7 +501,7 @@ function validateTypeRef(
 function checkHeldArity(
   entryName: string,
   applications: readonly TypeRef[],
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
 ): void {
   for (const application of applications) {
@@ -551,7 +525,7 @@ function checkHeldArity(
  */
 function checkArity(
   ref: TypeRef,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
   context: string,
 ): void {
@@ -583,11 +557,10 @@ function checkArity(
     );
   }
   if (supplied === 0) {
-    // §5.10: a record-bodied template that is a family base is the one template shape that IS a
-    // type without being applied -- its own `TemplateBody.extension` is stamped 'ABSTRACT' by
-    // `deriveTemplateFamilyFacts` exactly then, never for a reference, container,
-    // constructor-application or atom template, which stay refused below.
-    if (isTemplateBody(referenced.body) && referenced.body.extension !== undefined) {
+    // §5.10: a record template is a family base, the one open entry that IS a type without
+    // being applied -- never a reference, container, constructor-application or atom template,
+    // which stay refused below.
+    if (isFamilyBase(referenced)) {
       return;
     }
     throw new TsonSchemaValidationError(
@@ -615,7 +588,7 @@ function typeArgumentKey(arg: TypeArgument): string {
 }
 
 /** {@link terminal}'s `EntryLookup` over a finished namespace `Map`. */
-function lookupIn(namespace: ReadonlyMap<string, TypeDefinition>): EntryLookup {
+function lookupIn(namespace: ReadonlyMap<string, Top>): EntryLookup {
   return (name) => namespace.get(name);
 }
 
@@ -627,7 +600,7 @@ function lookupIn(namespace: ReadonlyMap<string, TypeDefinition>): EntryLookup {
 function checkVariantsAreDistinct(
   entryName: string,
   choice: ChoiceBody,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
 ): void {
   const lookup = lookupIn(namespace);
   const seen = new Map<string, string>();
@@ -662,7 +635,7 @@ function checkVariantsAreDistinct(
 function checkVariantsAreNotVoid(
   entryName: string,
   choice: ChoiceBody,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
 ): void {
   const lookup = lookupIn(namespace);
   for (const variant of choice.variants) {
@@ -684,14 +657,13 @@ function checkVariantsAreNotVoid(
  * `box => <T> { v: text }` declares `T` and never uses it, so no application of it could differ
  * from any other -- the parameter is a mistake, not a degenerate-but-legal template.
  */
-function checkOpenEntryUsesEveryParameter(name: string, def: TypeDefinition): void {
+function checkOpenEntryUsesEveryParameter(name: string, def: Top): void {
   const parameters = typeParameters(def);
   if (parameters.length === 0) {
     return;
   }
   const referenced = new Set<string>();
-  if (def.source !== undefined) collectNames(def.source, referenced);
-  collectBodyNames(def.body, referenced);
+  collectBodyNames(def, referenced);
   for (const parameter of parameters) {
     if (!referenced.has(parameter)) {
       throw new TsonSchemaValidationError(
@@ -712,22 +684,20 @@ function collectNames(ref: TypeRef, into: Set<string>): void {
 }
 
 /** Every name an entry's body mentions: for {@link checkOpenEntryUsesEveryParameter}, and for finding the declaration that wrote a minted entry's name (`recordExtension.ts`). */
-export function collectBodyNames(body: TypeDefinition['body'], into: Set<string>): void {
-  if (!('kind' in body)) {
+export function collectBodyNames(body: Top, into: Set<string>): void {
+  if (isTemplateBody(body)) {
     // The one question a held body answers without being resolved, and it answers it about
     // tokens rather than references -- the same rule substitution follows when deciding what to
-    // rewrite. `isHeldBody`: see `validateBody`'s own identical note.
-    if (isHeldBody(body)) {
-      for (const n of body.names()) into.add(n);
-    }
+    // rewrite.
+    for (const n of heldOf(body)?.names() ?? []) into.add(n);
     return;
   }
-  if (isDataBody(body)) {
-    return; // a Data body names no type parameter -- there is nothing to introspect
-  }
   switch (body.kind) {
+    case 'namespace':
+      return; // a namespace value names no type parameter -- there is nothing to introspect
     case 'record':
-      for (const field of body.fields) {
+      for (const parent of parentsOf(body)) collectNames(parent, into);
+      for (const field of body.fields.entries.values()) {
         collectNames(field.type, into);
         // A routed parameter rides `value` like any other token, so it is named here too --
         // which is what keeps `<S> base ^ { status: = S }` from reading as a template that
@@ -752,7 +722,7 @@ export function collectBodyNames(body: TypeDefinition['body'], into: Set<string>
       collectNames(body.target, into);
       return;
     default:
-      return; // an atom body, Data, Unit, EnumBody, or Scoped names no type parameter
+      return; // an atom body, an EnumBody, or a Scoped names no type parameter
   }
 }
 
@@ -760,8 +730,8 @@ export function collectBodyNames(body: TypeDefinition['body'], into: Set<string>
 
 /** `fallback` entries, overridden by `primary` on collision -- `primary` isn't mutated. */
 function mergeWithFallback(
-  primary: ReadonlyMap<string, TypeDefinition>,
-  fallback: ReadonlyMap<string, TypeDefinition>,
-): Map<string, TypeDefinition> {
+  primary: ReadonlyMap<string, Top>,
+  fallback: ReadonlyMap<string, Top>,
+): Map<string, Top> {
   return new Map([...fallback, ...primary]);
 }

@@ -14,7 +14,7 @@ npx @ltr8/tson-cli strip person.tn
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
-`0.37.x` is built against the 2026 Revision 37 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+`0.38.x` is built against the 2026 Revision 38 series. `@ltr8/tson` and `@ltr8/tson-cli` are
 released in lockstep at the same version.
 
 ## Commands
@@ -25,7 +25,7 @@ released in lockstep at the same version.
 | `compile`      | resolves and links a schema against the bundled standard library and reports whether it compiles                                                                                                                                                                                                                                                                                                                                                  |
 | `policy`       | prints the [TSON-DATA] §8.2 Unicode name-hygiene policy this run would apply, with no document in hand                                                                                                                                                                                                                                                                                                                                            |
 | `hash`         | prints a document's canonical content hash and, when it declares `!!id`, the reference pinned with that hash. Read-only — it never rewrites the file                                                                                                                                                                                                                                                                                              |
-| `strip`        | prints a schema document's reading form: no `!!id`, `?sha256=` pins or documentary annotations (`@doc`, `@title`, `@examples`, `@comment`; `--keep-docs` keeps all but `@comment`), the spec's own library shortened to `"37/core"`, whitespace collapsed, one line per declaration. Valid syntax, not a loadable schema; the file is never rewritten. Exits `1` with `file:line:col: message` for a malformed schema, `2` for an unreadable file |
+| `strip`        | prints a schema document's reading form: no `!!id`, `?sha256=` pins or documentary annotations (`@doc`, `@title`, `@examples`, `@comment`; `--keep-docs` keeps all but `@comment`), the spec's own library shortened to `"38/core"`, whitespace collapsed, one line per declaration. Valid syntax, not a loadable schema; the file is never rewritten. Exits `1` with `file:line:col: message` for a malformed schema, `2` for an unreadable file |
 | `init-example` | writes an example schema and a matching data document, ready to validate                                                                                                                                                                                                                                                                                                                                                                          |
 
 ### Policy options
@@ -64,7 +64,7 @@ a `70` gap does.
 ## Offline
 
 `validate`, `compile` and `hash` register `@ltr8/tson/stdlib`'s embedded `meta-kernel` / `meta.tn` /
-`core.tn`, so they work with no network access and no schema source configured.
+`core.tn` / `net.tn` / `policy.tn`, so they work with no network access and no schema source configured.
 
 Full documentation is in the
 [repository](https://github.com/litterat/ltr8-io-tson-typescript#readme). Apache-2.0.

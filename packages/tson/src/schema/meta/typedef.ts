@@ -1,10 +1,17 @@
 /**
- * The resolver's own output record, `type_definition` (Part 2 §4, §8.1), and the type-system
- * vocabulary it is built from: kinds, references, applications, cross-schema scoping, and the
- * structural root every resolved body composes with.
+ * The resolved-schema value model's root (Part 2 §4, §8.1): what a schema map's entries are
+ * values of, the IS-A chain a type carries, and the type-system vocabulary every body is built
+ * from -- references, applications, kinds, namespace values and cross-schema scoping.
+ *
+ * **An entry is its value** (§8.1). A resolved schema is a map from name to {@link Top}: a type
+ * body (every atom, product and sum), a {@link Reference}, a held {@link TemplateBody}, or a
+ * {@link Namespace} value. What the value's own shape cannot carry -- where the declaration sat,
+ * the annotations written after `=>`, the constructor its tag names -- is the entry's
+ * {@link EntryFacts}, kept beside the map rather than in it, since none of it is a field of any
+ * constructor and none of it is written.
  *
  * This module, like every other module in `schema/meta`, depends on nothing but itself, sibling
- * modules in this same directory, and `core/` — never a compiler type. Two shapes here are local
+ * modules in this same directory, and `core/` -- never a compiler type. Two shapes here are local
  * stand-ins for that reason: {@link Token} mirrors `ast.TokenValue`, and {@link SourcePosition}
  * (declared in `./position.js`) is structurally satisfied by `core/position.ts`'s `Position` with
  * no conversion. {@link Annotation}/{@link Annotations} are a third, minimal stand-in: the real
@@ -12,7 +19,7 @@
  * shape those methods read is needed here.
  */
 import type { SourcePosition } from './position.js';
-import type { ChoiceBody, EnumBody, TemplateBody } from './bodies.js';
+import type { EnumBody, RecordBody, TemplateBody, TemplateParam } from './bodies.js';
 import type { Product, Sum, ValueType, VoidType } from './algebra.js';
 import type {
   IntegerType,
@@ -38,14 +45,23 @@ import type {
   DurationType,
   PeriodType,
 } from './atoms-temporal.js';
-import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type, MacType } from './atoms-network.js';
+import type {
+  Cidr4Type,
+  Cidr6Type,
+  HostType,
+  HostnameType,
+  Ipv4Type,
+  Ipv6Type,
+  MacType,
+  MediaTypeType,
+} from './atoms-network.js';
 
 /**
  * One TSON wire-format annotation (`@name` or `@name:value`) attached to a resolved value
  * (§6, §8.1). `value` is `unknown` because its TypeScript shape depends on how the carrying
- * document was read — bound against a governing type when one resolves, kept as a raw
- * structural fragment otherwise — and this package, which never binds anything, cannot name
- * either.
+ * document was read -- bound against a governing type when one resolves, kept as a raw
+ * structural fragment otherwise -- and this package, which never binds anything, cannot name
+ * either. The resolver-attached `@application` carries a {@link TypeRef}.
  *
  * A local, data-only stand-in for `src/annotations`' own `Annotation`: the real carrier
  * additionally exposes lookup methods (`get`, `value`, `has`, ...), but `schema/meta`
@@ -59,10 +75,9 @@ export interface Annotation {
 }
 
 /**
- * Every annotation attached to one resolved value, in source order — §3.1 permits a name to
- * repeat, so this is a list rather than a map. Always an array, never absent, when a value
- * carries none: see {@link TypeDefinition}'s own note on the "absent and empty are the same
- * list" convention this package follows for every list-shaped field.
+ * Every annotation attached to one resolved value, in source order -- §3.1 permits a name to
+ * repeat, so this is a list rather than a map. Always an array, never absent, where a host
+ * shape declares the field: absent and empty are the same list throughout this package.
  */
 export type Annotations = readonly Annotation[];
 
@@ -73,7 +88,7 @@ export type Annotations = readonly Annotation[];
 export type TokenForm = 'UNQUOTED' | 'SINGLE_LINE_QUOTED' | 'MULTI_LINE_QUOTED';
 
 /**
- * A raw, unresolved scalar literal — a field's default/fixed value (§5.2), or a
+ * A raw, unresolved scalar literal -- a field's default/fixed value (§5.2), or a
  * type-argument's literal (§5.10: "a bare token... never annotated, never typed, never a
  * container").
  *
@@ -89,37 +104,38 @@ export interface Token {
 }
 
 /**
- * An entry's kind (§4.1, §8.1) — the four base kinds, plus TEMPLATE for an open entry that is
- * not yet a type at all (§5.10). **Not a stored field of {@link
- * TypeDefinition}**: §8.1 removes `kind` from resolver output because it restated what
- * `supertypes` and `body` already determine and was the one thing a document could be lied to
- * about. {@link typeKind} derives it; nothing in this package caches or threads it as a
- * parameter.
+ * The kind of a resolved entry (§4.1, §8.1) -- its value's kind, derived by {@link entryKind}
+ * and never written. The three base kinds; REFERENCE for an alias; NAMESPACE for a namespace
+ * type (a constructor IS-A the kernel's `namespace`, whose instances are maps) and for an entry
+ * whose value is one of those instances, which is no type; and TEMPLATE for a held template
+ * (§5.10's open entry over any constructor but `record`), which is no type either. A record
+ * template is a type, the family base, and takes a record's kind.
  */
-export type TypeKind = 'ATOM' | 'PRODUCT' | 'SUM' | 'REFERENCE' | 'DATA' | 'TEMPLATE';
+export type EntryKind = 'ATOM' | 'PRODUCT' | 'SUM' | 'REFERENCE' | 'NAMESPACE' | 'TEMPLATE';
 
 /**
- * A resolved reference to a named entry (§8.1). `name` is the only field the kernel's own
- * `type_ref` requires, so an argument-free reference is written as the bare token everywhere
- * the positional-form rule applies (§5.6), never as `!type_ref { name: ... }`.
+ * A resolved reference to a named entry (§8.1): the kernel's `type_ref`, the application form.
+ * `name` is the only field the kernel requires, so an argument-free reference is written as the
+ * bare token everywhere the positional-form rule applies (§5.6), never as `!type_ref { name: ... }`.
  *
- * **`arguments` non-empty means "an application"**, and appears in output only inside
- * template bodies and in `source` provenance (§8.1) — a use-site application is always
- * flattened to a bare reference to its materialised entry before it reaches output (§8.2).
- * **Absent and empty are the same list**: the kernel's `arguments: [type_argument]?` is
- * OPTIONAL with no default, so a resolver MUST normalise an unstated value to `[]` rather than
- * leaving it unset — the same convention {@link TypeDefinition}'s own note states for its
- * list-shaped fields.
+ * **One host shape for every slot that names something.** The kernel types a slot that names the
+ * type of a value by `type_kind`, which holds one bare name (`record_field.type`,
+ * `array.element_type`, `choice.variants`, ...), and stands `type_ref` only where an application
+ * may (`type_chain.parents`, `type_argument.name`, the `@application` annotation,
+ * `reference.target`). This model carries both as a `TypeRef`, as the reference implementation
+ * does: the judgement is the slot's and never the host's, a closed `type_kind` value is a
+ * `TypeRef` with no arguments -- written as the same bare name -- and a record template's field
+ * may name an application still open over the template's own parameters (`v: box<T>`), which a
+ * bare name could not carry.
+ *
+ * **`arguments` non-empty means "an application"**, and appears only where an application is
+ * still open (inside a record template, a held template's text, an alias's target) or where one
+ * is recorded (`type_chain.parents`, `@application`). Absent and empty are the same list, so a
+ * resolver normalises an unstated value to `[]`.
  *
  * `annotations` carries the wire annotations written on the reference **itself**, not the
- * enclosing field's. A reference is a hop, never a rewrite (§8.3): a use site names what the
- * author wrote and nothing is ever rewritten into a use site's own reference, so this field
- * carries only annotations the author actually placed on that particular reference token — no
- * resolver-attached provenance ever lands here. Also absent-equals-empty, normalised to `[]`.
- * The Java original excludes `annotations` from this record's equality (identity is where a
- * reference *points*); this package states that as the contract for whoever compares two of
- * these, since a plain TypeScript object has no equality method of its own to carry the
- * exclusion.
+ * enclosing field's. A reference is a hop, never a rewrite (§8.3), so no resolver-attached
+ * provenance ever lands here. Excluded from a reference's identity, which is where it points.
  */
 export interface TypeRef {
   readonly name: string;
@@ -128,54 +144,132 @@ export interface TypeRef {
 }
 
 /**
- * One positional argument of a resolved {@link TypeRef} (§8.1, §9): the kernel's own
- * field *group* `{ (name: type_ref | value: value) }`, which must be chosen, — exactly one of a reference
- * or a literal is ever present (§5.11).
- *
- * Modelled as a discriminated union rather than a record with two optional fields: it is a
- * labelled choice, and a shape with two optional members would not say that exactly one is
- * ever present. `kind` is this package's own discriminant tag for narrowing — the kernel
- * itself distinguishes the two members by which field is present, not by a tag.
- *
- * The `name`-member case ({@link TypeArgumentRef}) holds every *reference* — a type, an
- * entry, or (inside a template body) a parameter of either kind — while the `value`-member
- * case ({@link TypeArgumentValue}) holds concrete literals only, so a token in a reference
- * position can never be mistaken for a value-typed enum-member literal (§8.1).
+ * One positional argument of a resolved {@link TypeRef} (§8.1, §9): the kernel's own field
+ * group `{ (name: type_ref | value: value) }`, exactly one of which is ever present (§5.11).
+ * A discriminated union, `kind` being this package's own tag -- the kernel tells the two members
+ * apart by which field is present.
  */
 export type TypeArgument = TypeArgumentRef | TypeArgumentValue;
 
-/** A reference argument — the kernel's own `{ name: type_ref }` member. */
+/** A reference argument -- the kernel's own `{ name: type_ref }` member. */
 export interface TypeArgumentRef {
   readonly kind: 'ref';
   readonly ref: TypeRef;
 }
 
-/** A literal argument — the kernel's own `{ value: value }` member. */
+/** A literal argument -- the kernel's own `{ value: value }` member. */
 export interface TypeArgumentValue {
   readonly kind: 'value';
   readonly value: Token;
 }
 
 /**
- * The meta-kernel's `reference` constructor's own vocabulary, resolved (§4.1, §8.1): a
- * `kind: REFERENCE` entry's body, `!reference { target: E }` — used directly by
- * `type_name`/`field_name`/`param_name` (aliasing `token`), the annotation markers
- * (`annotation`/`documentation`/`doc`), and materialised template instantiations (§5.10,
- * §8.2). For a simple alias, `target` equals the entry's own `source`.
+ * The meta-kernel's `type_chain` (§4.1): where a type sits in the IS-A order, carried by every
+ * type body as `type`'s one field, `chain`.
  *
- * `target` is a full {@link TypeRef}, so an alias to a still-open application states its
- * own arguments — §5.10's partial application, `uuid_pair => <B> pair<uuid, B>`, is an
- * alias whose target carries an argument list. **A closed alias never carries arguments**:
- * materialisation rewrites a fully-bound target to name the entry it minted, so an
- * argument-bearing `target` appears only where an application is still open, inside a
- * template (§8.3: the reference-flattening walk stops at an argument-bearing target rather
- * than treating it as a further hop).
+ * - **`parents`** is what was written: a record template's parents, one of which may be an
+ *   application (`<T> result<T> & { ... }`). It is the only list that ever holds an
+ *   application, and a closed type that is no template carries none.
+ * - **`supertypes`** is the closed chain: every entry this one IS-A, complete to a fixed point
+ *   through applied parents (§5.8), each a bare name, sorted; empty for a fresh record, an
+ *   instance and a subtracted record alike.
+ * - **`subtypes`** is the inverse, over the entries of one schema map only (§3.3.4), computed by
+ *   the linker.
  *
- * **A reference is a hop, never a rewrite** (§8.3): a use site elsewhere in the output that
- * names this entry names this entry, and no walk collapses `target` into whatever `target`
- * itself resolves to before writing it out. A consumer that needs a terminal type still walks
- * the chain (subsumption, refinement sources, atom refinement, ...); the walk is a caller's own
- * traversal over `target`, never something this shape performs or memoises.
+ * A declaration never writes the chain: the resolver computes it and the linker inverts it.
+ * Absent and empty are one chain, and one list -- see {@link withChain}, which is how every body
+ * is given one, and which leaves a chain with nothing in it off the body altogether.
+ */
+export interface TypeChain {
+  readonly parents: readonly TypeRef[];
+  readonly supertypes: readonly string[];
+  readonly subtypes: readonly string[];
+}
+
+/** The chain of a value no declaration placed: a fresh record, an instance. */
+export const EMPTY_CHAIN: TypeChain = { parents: [], supertypes: [], subtypes: [] };
+
+/**
+ * The meta-kernel's `type => abstract top & { chain?: type_chain }` (§4.1): the one field every
+ * type body carries, mirroring the constructor's flattened shape, where `type`'s field comes
+ * first. Optional, absent meaning {@link EMPTY_CHAIN}.
+ */
+export interface TypeBase {
+  readonly chain?: TypeChain;
+}
+
+/** Whether `chain` states nothing: no parents, no supertypes, no subtypes. */
+export function isEmptyChain(chain: TypeChain | undefined): boolean {
+  return (
+    chain === undefined ||
+    (chain.parents.length === 0 && chain.supertypes.length === 0 && chain.subtypes.length === 0)
+  );
+}
+
+/**
+ * A chain in its one canonical spelling: `supertypes` sorted and without repeats, so one chain has
+ * one spelling whichever order a resolver reached it in, and `subtypes` the same.
+ */
+export function typeChain(
+  supertypes: readonly string[] = [],
+  parents: readonly TypeRef[] = [],
+  subtypes: readonly string[] = [],
+): TypeChain {
+  return {
+    parents,
+    supertypes: [...new Set(supertypes)].sort(),
+    subtypes: [...new Set(subtypes)].sort(),
+  };
+}
+
+/** `value`'s chain, {@link EMPTY_CHAIN} for a value that carries none. */
+export function chainOf(value: Top | undefined): TypeChain {
+  return value !== undefined && isType(value) ? (value.chain ?? EMPTY_CHAIN) : EMPTY_CHAIN;
+}
+
+/** `value`'s closed supertypes, empty for a value that carries no chain. */
+export function supertypesOf(value: Top | undefined): readonly string[] {
+  return chainOf(value).supertypes;
+}
+
+/** `value`'s subtypes within its schema map, empty for a value that carries no chain. */
+export function subtypesOf(value: Top | undefined): readonly string[] {
+  return chainOf(value).subtypes;
+}
+
+/** `value`'s written parents, empty for a value that carries no chain. */
+export function parentsOf(value: Top | undefined): readonly TypeRef[] {
+  return chainOf(value).parents;
+}
+
+/**
+ * `value` with `chain` in place of its own. A value that carries no chain (a reference, a held
+ * template, a namespace value) is returned as it is, and an empty chain leaves the body with no
+ * `chain` at all -- absent and empty are one chain, so two bodies differing only there compare
+ * equal structurally.
+ */
+export function withChain<T extends Top>(value: T, chain: TypeChain): T {
+  if (!isType(value)) return value;
+  const { chain: _previous, ...rest } = value as T & TypeBase;
+  void _previous;
+  return (isEmptyChain(chain) ? rest : { ...rest, chain }) as T;
+}
+
+/** `value` with its chain emptied: what two values are, rather than where each sits. */
+export function withoutChain<T extends Top>(value: T): T {
+  return withChain(value, EMPTY_CHAIN);
+}
+
+/**
+ * The meta-kernel's `reference` constructor's own vocabulary, resolved (§4.1, §8.1): an alias,
+ * `!reference { target: E }` -- `type_name`/`field_name`/`param_name` (aliasing `identifier`),
+ * the annotation markers, and a declaration naming another entry. Composes `top` directly, so it
+ * carries no chain: a hop has no IS-A of its own.
+ *
+ * `target` is a {@link TypeRef} judged by resolution alone, and may name a constructor, since an
+ * alias of a constructor is applied as its target is (§3.3.1). **A reference is a hop, never a
+ * rewrite** (§8.3): a use site naming this entry names this entry, and no walk collapses
+ * `target` into whatever it in turn names before writing it out.
  */
 export interface Reference {
   readonly kind: 'reference';
@@ -183,97 +277,163 @@ export interface Reference {
 }
 
 /**
- * Which namespace a value's type may be drawn from (§7.8) — meta.tn's `scope_kind` enum, the
- * element type of {@link Scoped.scope}. The two cells are independent questions about a
- * position, which is why `scope` is a set rather than a three-valued selector: a position may
- * admit either, both, or — unrepresentably, `scope` carrying `min_items: 1` — neither.
+ * Which namespace a value's type may be drawn from (§7.8) -- meta.tn's `scope_kind` enum, the
+ * element type of {@link Scoped.scope}.
  */
 export type ScopeKind = 'LOCAL' | 'EXTERN';
 
 /**
  * meta.tn's `scoped` constructor's own vocabulary, resolved (§7.8): the open sum, in which the
  * value names its own type and the instance names the namespaces that name may be resolved in.
- * One constructor covers every scoped position: core's `declared`, `extern` and `dynamic` are
- * all instances of it, distinguished only by `scope`.
- *
- * Distinct from {@link ChoiceBody} on closed-versus-open: a choice enumerates its variants; a
- * scoped instance names where variants are drawn from. That is also why `disjoint` never
- * applies here as it does not on any non-choice sum (§8.1) — a fact about a variant list has
- * nowhere to live on a body with none.
- *
- * `scope` says which namespaces are admitted — the kernel's own `set<scope_kind>`, `min_items:
- * 1` — modelled as a bare array on the absent-equals-empty convention this package states
- * throughout, though a coherent instance's `scope` is never actually empty.
+ * Core's `declared`, `extern` and `dynamic` are all instances of it, distinguished only by
+ * `scope`.
  *
  * `schemas` narrows the foreign namespace, when `scope` holds `EXTERN`: absent admits any
  * foreign schema; present, it maps each admitted schema's canonical URI to the type names
- * admitted from it, an empty list meaning every type that schema declares — the kernel's own
- * `[type_name; 1..]?` collapsed onto this package's absent-equals-empty convention, since a
- * list that is present at the wire is never itself empty. Keys compare by canonical identity
- * (§2.2.1), so a pinned key and an unpinned `!!schema` in the data match.
- *
- * Pure constraint values, no reading behaviour: the dispatch this constructor drives — the
- * governing-schema switch on descent into an EXTERN value — is a later work package's concern,
- * not this value model's.
+ * admitted from it, an empty list meaning every type that schema declares. Keys compare by
+ * canonical identity (§2.2.1).
  */
-export interface Scoped {
+export interface Scoped extends TypeBase {
   readonly kind: 'scoped';
   readonly scope: readonly ScopeKind[];
   readonly schemas?: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
- * A body describing **something other than a data value** (§4.1's fourth base kind,
- * `data => top & {}`) — vocabulary a meta-schema introduces beyond the kernel's own (an
- * `operation` describing an HTTP endpoint, say), whose instances ride along in a schema map
- * without being types.
+ * An instance of the meta-kernel's `kind_type` (§4.2): the atom whose values are the names of
+ * the types built with the constructor {@link of}. `kind<uuid_type>` and `!kind_type { of:
+ * uuid_type }` are one instance; a value at a position typed by it is a type name resolving to
+ * one of its {@link members} -- the name, never a value of the type it names.
  *
- * The one deliberately open member of {@link Top}: every other branch mirrors one kernel
- * constructor over a fixed, closed set of shapes, but the constructors reaching this one are
- * declared by meta-schemas this package has never seen. `kind` is a bare `string` here
- * rather than a literal union for the same reason — it is the constructor's own name
- * (`operation`), which this model cannot enumerate in advance.
- *
- * `references` names every type this body itself mentions, for a linker to resolve like any
- * other reference (§9: "a slot holding a type reference MUST be typed `type_ref`," which is
- * what lets it participate in flattening and identity). Declared rather than discovered — a
- * payload's shape alone says nothing about which of its components are references — and
- * optional here because a body naming none is the ordinary case; omitting the method entirely
- * means "none", mirroring the Java original's own empty-list default.
- *
- * **A method that is present must never return `null`/`undefined` — return `[]` for a body
- * that names no types.** The case to watch is an implementation returning an OPTIONAL bound
- * component directly: a binder hands an omitted field to the constructor as `undefined` and
- * does not normalise it to an empty array, so `references()` inherits that `undefined`.
- * `link/referenceValidation.ts` reports a body that breaks this as `TsonBindMismatchError`
- * naming the entry, since it is the reading application's mistake rather than anything about
- * the schema.
- *
- * An entry whose body is a `Data` is not a type: naming one where a type is expected is a
- * resolver error checked at schema load (§4.1) — a fact about how this shape is *used*, not
- * something this type itself enforces.
+ * `of` names a constructor of the writer's structure namespace, held as the name written.
+ * **`members` is a derived index**, as {@link TypeChain.subtypes} is: absent on a declaration,
+ * computed at link over the governing closure, sorted. Two kinds are one kind by `of` and the
+ * chain, never by the index, since the index says what a closure holds rather than which kind
+ * this is.
  */
-export interface Data {
-  readonly kind: string;
-  references?(): readonly TypeRef[];
+export interface KindBody extends TypeBase {
+  readonly kind: 'kind_type';
+  readonly of: string;
+  readonly members?: readonly string[];
 }
 
 /**
- * The meta-kernel's `atom => top & {}` base kind (§4.1) — every ATOM-kind {@link Top}
- * variant. {@link ValueType} and {@link VoidType} back `value` and `void` (the two atoms with no
- * constraint vocabulary, §4.2); {@link EnumBody} backs `boolean` and the kernel's other internal
- * enumerations; every other member is an atom constraint-vocabulary family, one per
- * `*_type` constructor (§9).
+ * An instance of the meta-kernel's `ref_type` (§4.2, §5.12): the atom whose values are qualified
+ * names naming a value whose type is {@link of} or IS-A it. `of` names a type of the writer's own
+ * namespace, never a constructor -- a reference to a type is a kind ({@link KindBody}). Kernel
+ * vocabulary only, declared in a kernel-governed schema.
+ */
+export interface RefBody extends TypeBase {
+  readonly kind: 'ref_type';
+  readonly of: string;
+}
+
+/**
+ * A value read from a meta layer's own vocabulary, held generically (§4.1): this model binds
+ * nothing to host classes, so the values of a namespace type a meta layer declares (an
+ * `interface`'s `method`s, an `api`'s `binding`s) are carried as what they were written as. A
+ * record value holds its fields by wire name ({@link MetaRecordValue}); a token at an atom-typed
+ * slot is kept as written, and a name at a kind- or reference-typed slot is kept as the
+ * {@link Token} written, beside the {@link NameSlot} it was read at -- which is what a qualified
+ * name's field step reads and what resolved output writes back.
+ */
+export type MetaValue =
+  | { readonly form: 'token'; readonly token: Token; readonly slot?: NameSlot }
+  | { readonly form: 'void' }
+  | { readonly form: 'list'; readonly elements: readonly MetaValue[] }
+  | {
+      readonly form: 'map';
+      readonly entries: readonly (readonly [MetaValue, MetaValue])[];
+    }
+  | MetaRecordValue
+  | { readonly form: 'namespace'; readonly value: Namespace<MetaValue> };
+
+/**
+ * The slot a name was read at, as its declaration typed it (§4.2, §5.12): a kind-typed slot holds
+ * a type's name (`kind`, judged a member of the kind of {@link of}), a reference-typed slot a
+ * value's qualified name (`reference`, judged a value IS-A {@link of}), and a `type_ref` slot the
+ * application form (`application`, judged by resolution and arity). `type` names the slot's
+ * declared type in the governing meta's namespace (a kind or a reference entry). A name carries
+ * its slot's type from the read, so judging it never walks back through the meta's declarations.
+ */
+export interface NameSlot {
+  readonly role: 'kind' | 'reference' | 'application';
+  readonly type: string;
+  readonly of: string;
+}
+
+/**
+ * A record value of a meta layer's vocabulary: its fields by wire name, and `type`, the record type
+ * its tag names where that is other than the type its position declares (a member of a family, a
+ * strict subtype) -- the tag resolved output writes. A value read as its position's own type
+ * carries none, whether or not it was written with a tag naming that type.
+ */
+export interface MetaRecordValue {
+  readonly form: 'record';
+  readonly type?: string;
+  readonly fields: ReadonlyMap<string, MetaValue>;
+}
+
+/**
+ * A value of a namespace type (§4.1): an instance of a constructor IS-A the kernel's
+ * `namespace`, written and read as the map its facets describe, never as a record of the facets.
+ * The kernel declares two namespace types and every resolved schema holds values of both: the
+ * schema map is a value of `schema`, and a record's fields are a value of `field_map`
+ * ({@link RecordBody.fields}). A meta layer declares its own (`api => namespace & { key_type: =
+ * identifier  value_type: = method }`), and an entry applying one (`myapi => !api { ... }`) is a
+ * value of it -- a value, never a type.
  *
- * This package ports only the *shape* of each family — its constraint fields — never the
- * narrowing/coherence rules the Java original attaches to them (`Atom.constraintsCheck`,
- * `Atom.coherenceCheck`, `AtomNarrowing`, `AtomCoherence`): those are resolver logic for a
- * later work package, not part of this value model.
+ * `type` names the namespace constructor, which fixes the family the keys are names of and the
+ * type of the values; it is the tag resolved output writes where the value stands as a schema
+ * entry. `entries` keeps the order the keys were written in; `keyAnnotations` holds the
+ * annotations written at a key's own position, present only for a key that carries any.
+ *
+ * Equal namespaces are one constructor's values with the same keys, values and key annotations.
+ * Whether order is part of the value is a facet of the constructor (`ordered`), so an owner whose
+ * namespace is ordered compares it in order itself, as a record does its `field_map`.
+ */
+export interface Namespace<V> {
+  readonly kind: 'namespace';
+  readonly type: string;
+  readonly entries: ReadonlyMap<string, V>;
+  readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
+}
+
+/** The kernel's two namespace types, and the `application` and `synthetic` key annotations (§8.1, §8.2). */
+export const SCHEMA_NAMESPACE = 'schema';
+export const FIELD_MAP = 'field_map';
+export const APPLICATION_ANNOTATION = 'application';
+export const SYNTHETIC_ANNOTATION = 'synthetic';
+
+/** A value of `type` holding `entries`, in the order given, with `keyAnnotations` where any key carries some. */
+export function namespaceOf<V>(
+  type: string,
+  entries: Iterable<readonly [string, V]>,
+  keyAnnotations?: ReadonlyMap<string, Annotations>,
+): Namespace<V> {
+  const map = new Map<string, V>();
+  for (const [key, value] of entries) map.set(key, value);
+  return {
+    kind: 'namespace',
+    type,
+    entries: map,
+    ...(keyAnnotations === undefined || keyAnnotations.size === 0 ? {} : { keyAnnotations }),
+  };
+}
+
+/**
+ * The meta-kernel's `atom => abstract type & {}` base kind (§4.1) -- every ATOM-kind body.
+ * {@link ValueType} and {@link VoidType} back `value` and `void`; {@link EnumBody} backs
+ * `boolean` and the kernel's other enumerations; {@link KindBody} and {@link RefBody} are the
+ * atoms whose values are names; every other member is an atom constraint-vocabulary family, one
+ * per `*_type` constructor (§9).
  */
 export type Atom =
   | ValueType
   | VoidType
   | EnumBody
+  | KindBody
+  | RefBody
   | IntegerType
   | TextType
   | IdentifierType
@@ -296,199 +456,186 @@ export type Atom =
   | MacType
   | Ipv4Type
   | Ipv6Type
+  | HostnameType
+  | HostType
+  | MediaTypeType
   | ComplexType;
 
 /**
- * The meta-kernel's structural root, `top => {}` (§4.1) — every type in a schema IS-A this,
- * and it is every {@link TypeDefinition.body}'s own declared type.
- *
- * A union of every resolved body shape rather than a marker interface: the Java original is
- * a sealed marker every variant `implements`, useful there for `instanceof` narrowing; a
- * TypeScript union serves the same purpose more directly, which is what "discriminated
- * unions on `kind`" (this package's convention throughout) means applied to the root of the
- * hierarchy.
- *
- * Two branches describe something other than a constructed value, and both compose with
- * `top` directly for that reason: {@link Data}, the meta layer's extension point, and
- * {@link TemplateBody}, the held body of an entry that declares type parameters (§5.10).
- * Every other member — reached through {@link Atom}, {@link Product}, or {@link Sum} —
- * carries a `kind` literal matching its resolved constructor's own name (`record`, `array`,
- * `integer_type`, ...), narrowable with an ordinary `switch (body.kind)`.
- *
- * {@link TemplateBody} is the one member with **no** `kind` tag at all: it never serialises
- * as a value of this vocabulary and has no constructor name of its own (§5.10), so code that
- * must handle it narrows with {@link isTemplateBody} before switching on `kind`.
+ * The meta-kernel's `type => abstract top & { chain?: type_chain }` (§4.1): the bodies that
+ * describe the shape of a data value. `atom`, `product` and `sum` compose it, and every body here
+ * carries its {@link TypeChain}.
  */
-export type Top = Atom | Product | Sum | Reference | Data | TemplateBody;
+export type Type = Atom | Product | Sum;
 
 /**
- * Whether `body` is the held, unresolved body of an open entry (§5.10) — the one {@link Top}
- * member with no `kind` tag of its own (see {@link Top}'s own note), so every switch over a
- * resolved body runs this check first.
+ * The meta-kernel's structural root, `top => abstract {}` (§4.1), and what a schema map's entries
+ * are values of: `schema => namespace & { key_type: = type_name  value_type: = top }`.
+ *
+ * Four kinds of value: a {@link Type} (every atom, product and sum body), a {@link Reference}, a
+ * held {@link TemplateBody}, and a {@link Namespace} value of a meta layer's vocabulary. The
+ * latter three carry no chain -- a hop, an abbreviation and a value have no IS-A.
+ *
+ * Every member but {@link TemplateBody} carries a `kind` literal (`record`, `array`,
+ * `integer_type`, `reference`, `namespace`, ...), narrowable with an ordinary `switch`; the held
+ * body has none, since the kernel's `template` declares no tag field, so code that must handle it
+ * narrows with {@link isTemplateBody} first.
  */
-export function isTemplateBody(body: Top): body is TemplateBody {
-  return 'template' in body && 'parameters' in body;
+export type Top = Type | Reference | TemplateBody | Namespace<MetaValue>;
+
+/** Whether `value` is the held, unresolved body of an open entry (§5.10), the one {@link Top} member with no `kind`. */
+export function isTemplateBody(value: Top): value is TemplateBody {
+  return !('kind' in value) && 'template' in value && 'parameters' in value;
+}
+
+/** Whether `value` is a namespace value of a meta layer's vocabulary -- an entry that is a value, never a type. */
+export function isNamespaceValue(value: Top): value is Namespace<MetaValue> {
+  return 'kind' in value && value.kind === 'namespace';
+}
+
+/** Whether `value` describes a type -- IS-A `type`, so carries a chain (§4.1). */
+export function isType(value: Top): value is Type {
+  return 'kind' in value && value.kind !== 'reference' && value.kind !== 'namespace';
 }
 
 /**
- * Whether `def` IS-A `top` (§4.2, §8.1) — which is what makes it a constructor. Derived from
- * `supertypes` rather than stated: the kernel carries no marker for it, so this is not a fact a
- * document can be wrong about.
- *
- * True of every entry whose (transitive) {@link TypeDefinition.supertypes} includes `'top'` —
- * `atom`, `product`, `sum`, `data`, `reference`, `template`, and everything a schema composes
- * with one of those, directly or through further composition and refinement. False of an
- * ordinary instance (`integer => !integer_type {}`) or a refinement of one
- * (`positive_integer => !integer ^ { min: 1 }`), neither of which composes with `top` at all —
- * an application mints a fresh entry with no IS-A chain of its own (§8.1's `supertypes` note).
- *
- * `top` itself is the one entry this predicate does not answer for: its own `supertypes` is
- * `[]` by definition (it is the root, with no parent to record), so `isConstructor` applied to
- * `top`'s own definition reads `false` even though `top` IS-A itself. Nothing in this package
- * or its known callers ever asks `top`'s own constructorness — only whether some *other* entry
- * composes with it — so the edge case is noted rather than special-cased away.
+ * Whether the entry `name`, whose value is `value`, IS-A the meta-kernel's `top` (§4.1, §4.2) --
+ * what makes it a constructor: a base kind, a namespace type, `reference`, `template`, or anything
+ * composing one. Read off the chain, so it is not a fact a document can be wrong about. `top`
+ * answers for itself by name, being what every other answer IS-A.
  */
-export function isConstructor(def: TypeDefinition): boolean {
-  return def.supertypes.includes('top');
+export function isConstructor(value: Top, name?: string): boolean {
+  return supertypesOf(value).includes('top') || name === 'top';
 }
 
 /**
- * The type parameters `def` declares (§5.10) — `[]` unless its body is held. Not stored: a held
- * body already carries the list it binds ({@link TemplateBody.parameters}), so "does this entry
- * declare parameters?" and "what does its body hold?" are one question with one answer and
- * cannot disagree.
+ * The parameters an entry whose value is `value` binds, in declaration order (§5.10) -- `[]` for
+ * a closed entry. Two shapes carry an open entry: a record template ({@link RecordBody.parameters},
+ * a family base and itself a type) and every other open entry's held {@link TemplateBody}.
  */
-export function typeParameters(def: TypeDefinition): readonly string[] {
-  return isTemplateBody(def.body) ? def.body.parameters.map((parameter) => parameter.name) : [];
+export function parametersOf(value: Top | undefined): readonly TemplateParam[] {
+  if (value === undefined) return [];
+  if (isTemplateBody(value)) return value.parameters;
+  if (value.kind === 'record') return value.parameters ?? [];
+  return [];
+}
+
+/** The parameter names `value` binds, in declaration order -- what an application's arity is checked against. */
+export function typeParameters(value: Top | undefined): readonly string[] {
+  return parametersOf(value).map((parameter) => parameter.name);
+}
+
+/** Whether an entry whose value is `value` declares parameters (§5.10). */
+export function isOpen(value: Top | undefined): boolean {
+  return parametersOf(value).length > 0;
+}
+
+/** A record template (§5.10): a record that declares parameters. */
+export type FamilyBase = RecordBody & { readonly parameters: readonly TemplateParam[] };
+
+/** Whether `value` is a family base: a record that declares parameters, ABSTRACT by construction (§5.10). */
+export function isFamilyBase(value: Top | undefined): value is FamilyBase {
+  return value !== undefined && !isTemplateBody(value) && value.kind === 'record' && isOpen(value);
 }
 
 /**
- * `def`'s own choice-disjointness fact (§5.4, §8.1) — present exactly when `def.body` is a
- * {@link ChoiceBody}, absent for every other body shape. The fact is about a variant list, so it
- * lives on the one body that has one ({@link ChoiceBody.disjoint}) and an entry with no variants
- * has nowhere to put it — "recorded on every choice and absent on everything else" is structural
- * rather than a rule a document could break.
+ * `value`'s own choice-disjointness fact (§5.4, §8.1) -- present exactly when `value` is a
+ * {@link ChoiceBody}, absent for every other body shape.
  */
-export function choiceDisjoint(def: TypeDefinition): boolean | undefined {
-  const body = def.body;
-  return !isTemplateBody(body) && isChoiceBody(body) ? body.disjoint : undefined;
+export function choiceDisjoint(value: Top): boolean | undefined {
+  return !isTemplateBody(value) && value.kind === 'choice' ? value.disjoint : undefined;
 }
 
-/**
- * `'variants' in body` rather than `body.kind === 'choice'` alone: `Data.kind` is a bare
- * `string` (§4.1's own open extension point), so an equality check against the literal
- * `'choice'` cannot rule a `Data` body out on the type level, even though no real one is ever
- * tagged that way — the same problem `link/bodyKind.ts`'s own `isDataBody` exists to solve for
- * every other switch in this codebase over a `Top` body.
- */
-function isChoiceBody(body: Exclude<Top, TemplateBody>): body is ChoiceBody {
-  return 'variants' in body;
-}
-
-/**
- * The four base-kind names {@link typeKind}'s third branch searches `TypeDefinition.supertypes`
- * for, in the order the base kinds are declared in the meta-kernel — order has no semantic
- * weight, since a coherent schema's `supertypes` names at most one of them, but a stable order
- * keeps the derivation deterministic even over a document that has not yet been checked
- * coherent.
- */
-const BASE_KIND_NAMES: readonly (readonly [string, TypeKind])[] = [
+/** The base kinds a record's chain is searched for, in the order the kernel declares them. */
+const BASE_KIND_NAMES: readonly (readonly [string, EntryKind])[] = [
   ['atom', 'ATOM'],
   ['product', 'PRODUCT'],
   ['sum', 'SUM'],
-  ['data', 'DATA'],
+  ['namespace', 'NAMESPACE'],
 ];
 
 /**
- * Derives `def`'s {@link TypeKind} (§4.1, §8.1) — resolver output carries no `kind` field;
- * every conforming resolver derives the same answer from `supertypes` and `body` alone. `lookup`
- * resolves a type name to its definition within the same namespace, consulted only by the
- * fourth branch.
+ * `value`'s {@link EntryKind} (§4.1, §8.1), derived and never stored. A body is the branch of
+ * {@link Top} it occupies -- an instance takes its constructor's kind by being built as one (§5.5's
+ * transfer) -- except a record, whose kind is the base kind its chain reaches: `integer_type =>
+ * atom & { ... }` is a record describing atoms, and the kind of a constructor is what its
+ * instances are. The first of `atom`, `product`, `sum` and `namespace` in the chain wins (`top`
+ * and `type` never count), and a record whose chain reaches none is a product.
  *
- * The four branches, in order — the first that matches wins:
- *
- * 1. `body` is a {@link TemplateBody} → `'TEMPLATE'`, an open entry with no kind of its own
- *    (§5.10).
- * 2. Else `body`'s own constructor head is `'reference'` → `'REFERENCE'` — the head lookup
- *    would say `'PRODUCT'`, since the kernel's `reference` is itself a product, and §4.1 makes
- *    REFERENCE a kind the alias form confers rather than a base kind.
- * 3. Else `def` {@link isConstructor | IS-A `top`} → the base-kind name among its own
- *    `supertypes` (`'atom'` → ATOM, `'sum'` → SUM, `'data'` → DATA), or `'PRODUCT'` if none of
- *    them appears — a constructor's kind states what its *instances* are, not what its own body
- *    is (`integer_type` has a `!record` body listing its own fields, and is ATOM-kinded).
- * 4. Else `def` is an ordinary instance or refinement: the kind of the entry `body`'s own
- *    constructor head names, resolved through `lookup` and derived recursively.
- *
- * A `lookup` that cannot resolve the fourth branch's head — an unresolved reference in the
- * graph handed in — is a schema-load error a caller is expected to have already refused before
- * ever deriving a kind over the result; this function does not itself guard against that or
- * against a cycle, and throws rather than returning a meaningless answer.
+ * `kernel` says whether a chain's name denotes the meta-kernel's own entry of that name: a kind is
+ * judged by where a base kind is defined, never by its spelling, so a schema's own `namespace =>
+ * { ... }` composed into `payload => namespace & { ... }` leaves `payload` a PRODUCT. Omitted, every
+ * name is taken as the kernel's.
  */
-export function typeKind(
-  def: TypeDefinition,
-  lookup: (name: string) => TypeDefinition | undefined,
-): TypeKind {
-  if (isTemplateBody(def.body)) return 'TEMPLATE';
-  if (def.body.kind === 'reference') return 'REFERENCE';
-  if (isConstructor(def)) {
-    for (const [name, kind] of BASE_KIND_NAMES) {
-      if (def.supertypes.includes(name)) return kind;
+export function entryKind(value: Top, kernel: (name: string) => boolean = () => true): EntryKind {
+  if (isTemplateBody(value)) return 'TEMPLATE';
+  switch (value.kind) {
+    case 'reference':
+      return 'REFERENCE';
+    case 'namespace':
+      return 'NAMESPACE';
+    case 'record': {
+      const supertypes = supertypesOf(value);
+      for (const [name, kind] of BASE_KIND_NAMES) {
+        if (supertypes.includes(name) && kernel(name)) return kind;
+      }
+      return 'PRODUCT';
     }
-    return 'PRODUCT';
+    case 'array':
+    case 'map':
+    case 'tuple':
+      return 'PRODUCT';
+    case 'choice':
+    case 'scoped':
+      return 'SUM';
+    default:
+      return 'ATOM';
   }
-  const head = def.body.kind;
-  const headDef = lookup(head);
-  if (headDef === undefined) {
-    throw new Error(
-      `cannot derive a type kind: '${head}' does not resolve in the supplied namespace`,
-    );
-  }
-  return typeKind(headDef, lookup);
 }
 
 /**
- * The meta-kernel's `type_definition` record, resolved (§4, §8.1) — what every schema
- * declaration ultimately resolves to, whatever declaration form produced it (§5.6, §8).
- *
- * Four fields are deliberately absent, each because it would restate a fact `supertypes` and
- * `body` already determine — and a restated fact is one a document can state wrongly:
- *
- * - **No `constructor`.** Whether an entry is a constructor is whether it {@link isConstructor
- *   | IS-A `top`}, derived from `supertypes`.
- * - **No `kind`.** {@link typeKind} derives it from `body` and `supertypes` together.
- * - **No `parameters`.** {@link typeParameters} reads it off `body` when `body` is a
- *   {@link TemplateBody}.
- * - **No `disjoint`.** {@link choiceDisjoint} reads it off `body` when `body` is a
- *   {@link ChoiceBody} — the only body shape a variant list, and so a disjointness fact about
- *   one, can live on.
- *
- * **`supertypes`/`subtypes` are conceptually OPTIONAL in the kernel** (`[type_name]?`), but
- * modelled here as bare, always-present arrays — mirroring what the Java original's own compact
- * constructor normalises *to*, not the kernel's own field cardinality. **Absent and empty are
- * the same list here**: a definition bound from a resolved-form document that omits one arrives
- * with nothing where one resolved from source arrives with an empty list, and whatever builds a
- * `TypeDefinition` MUST supply `[]` for either field that has no members, never leave it unset.
- *
- * **`annotations` follows the identical rule**: always an array, never optional, and a builder
- * reading a definition with no annotations stated MUST supply `[]`.
- *
- * **Two supertype fields answer different questions (§8.1).** This field, `supertypes`, is
- * the **transitive** IS-A chain: direct parents plus each parent's own chain, deduplicated;
- * a `Product`-shaped body's own `supertypes` component (e.g. {@link RecordBody.supertypes})
- * records only the **direct** `&` compositions as written. `subtypes` is a resolver-managed
- * cache — the transitive inverse of `supertypes` across the schema's namespace — fully
- * recomputable and never trusted: ingest (§8.1) MUST discard and recompute it, never take it
- * from a document.
- *
- * `position` has no counterpart in the kernel's own `type_definition` at all — it is this
- * implementation's own diagnostic addition (the Java original marks it `@Unbound` for
- * exactly this reason), present only when the definition's source position is known.
+ * What an entry carries beyond its value (§8.1), none of it a field of any constructor and none of
+ * it written: where the declaration sat, the annotations written after `=>` on the value (§6; the
+ * ones written before the name are the key's), and `head`, the constructor the value's tag names
+ * -- `!integer_type`, `!enum`, `!set_type` -- which a body's shape cannot always recover, since
+ * `set_type` restates `array`'s fields and `enum` and `enum_type` share one shape. (`head` rather
+ * than `constructor`, which every object already answers through its prototype.)
  */
-export interface TypeDefinition {
-  readonly source?: TypeRef;
-  readonly supertypes: readonly string[];
-  readonly subtypes: readonly string[];
-  readonly body: Top;
+export interface EntryFacts {
   readonly position?: SourcePosition;
-  readonly annotations: Annotations;
+  readonly annotations?: Annotations;
+  readonly head?: string;
+}
+
+/** An entry with none of its facts recorded. */
+export const NO_FACTS: EntryFacts = {};
+
+/**
+ * The constructor `value`'s shape is the body of, by its `kind` -- exact where one constructor has
+ * that shape, and the base one where several share it (`array` for `array`/`set_type`, `enum_type`
+ * for `enum`/`enum_type`), which is why an entry's {@link EntryFacts.head} is asked first. A
+ * namespace value names its own constructor, and a held body is `template`'s.
+ */
+export function constructorOf(value: Top): string {
+  if (isTemplateBody(value)) return 'template';
+  if (value.kind === 'namespace') return value.type;
+  if (value.kind === 'enum') return 'enum_type';
+  return value.kind;
+}
+
+/** The `@application` an entry's key annotations record, if it closes one (§8.2). */
+export function applicationOf(keyAnnotations: Annotations | undefined): TypeRef | undefined {
+  const found = keyAnnotations?.find((annotation) => annotation.name === APPLICATION_ANNOTATION);
+  return found?.value as TypeRef | undefined;
+}
+
+/** `keyAnnotations` with `application` recorded as the entry's `@application`, any earlier one replaced. */
+export function withApplication(
+  keyAnnotations: Annotations | undefined,
+  application: TypeRef,
+): Annotations {
+  return [
+    { name: APPLICATION_ANNOTATION, value: application },
+    ...(keyAnnotations ?? []).filter((annotation) => annotation.name !== APPLICATION_ANNOTATION),
+  ];
 }

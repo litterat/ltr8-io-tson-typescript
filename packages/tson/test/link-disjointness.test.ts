@@ -8,33 +8,43 @@ import {
 } from '../src/link/disjointness.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
-import type { Top, TypeDefinition } from '../src/schema/meta/typedef.js';
-import { choiceDisjoint } from '../src/schema/meta/typedef.js';
+import type { Annotations, EntryFacts, MetaValue, Top } from '../src/schema/meta/typedef.js';
+import { choiceDisjoint, namespaceOf } from '../src/schema/meta/typedef.js';
+import { fieldMapOf } from '../src/schema/meta/bodies.js';
+
+/** The annotations written on each test value (§3.1), which an entry's facts carry beside it. */
+const valueAnnotations = new WeakMap<Top, Annotations>();
 
 function def(
   body: Top,
   options: {
-    readonly annotations?: TypeDefinition['annotations'];
+    readonly annotations?: Annotations;
     readonly disjoint?: boolean;
   } = {},
-): TypeDefinition {
-  // `disjoint` now lives on the `ChoiceBody` it is a fact about (§8.1), not on the entry --
-  // every caller here that passes it is building a `choice` body.
+): Top {
+  // `disjoint` lives on the `ChoiceBody` it is a fact about (§8.1) -- every caller here that
+  // passes it is building a `choice` body.
   const withDisjoint: Top =
     options.disjoint === undefined || !('variants' in body)
       ? body
       : { ...body, disjoint: options.disjoint };
-  return {
-    supertypes: [],
-    subtypes: [],
-    body: withDisjoint,
-    annotations: options.annotations ?? [],
-  };
+  if (options.annotations !== undefined) valueAnnotations.set(withDisjoint, options.annotations);
+  return withDisjoint;
+}
+
+/** Each entry's facts (§8.1): the annotations written on its value. */
+function factsFor(merged: ReadonlyMap<string, Top>): ReadonlyMap<string, EntryFacts> {
+  const facts = new Map<string, EntryFacts>();
+  for (const [name, value] of merged) {
+    const annotations = valueAnnotations.get(value);
+    if (annotations !== undefined) facts.set(name, { annotations });
+  }
+  return facts;
 }
 
 const text = def({ kind: 'text_type', normalization: 'NONE' });
 const int32 = def({ kind: 'integer_type', size: { bits: 32, signed: true } } as never);
-const record = def({ kind: 'record', supertypes: [], fields: [], groups: [] });
+const record = def({ kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' });
 const arr = def({
   kind: 'array',
   elementType: { name: 'text', arguments: [], annotations: [] },
@@ -45,7 +55,7 @@ const arr = def({
 const alias = def({ kind: 'reference', target: { name: 'text', arguments: [], annotations: [] } });
 
 describe('discriminationClassOf (§5.4)', () => {
-  const namespace = new Map<string, TypeDefinition>([
+  const namespace = new Map<string, Top>([
     ['text', text],
     ['int32', int32],
     ['record', record],
@@ -72,7 +82,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('returns undefined for a reference cycle rather than hanging', () => {
-    const cyclic = new Map<string, TypeDefinition>([
+    const cyclic = new Map<string, Top>([
       ['a', def({ kind: 'reference', target: { name: 'b', arguments: [], annotations: [] } })],
       ['b', def({ kind: 'reference', target: { name: 'a', arguments: [], annotations: [] } })],
     ]);
@@ -80,39 +90,38 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('classifies a boolean-shaped enum as BOOLEAN and a mixed enum as undefined', () => {
-    const ns = new Map<string, TypeDefinition>([
-      ['boolean', def({ kind: 'enum', type: 'identifier', members: ['true', 'false'] })],
-      ['mixed', def({ kind: 'enum', type: 'identifier', members: ['true', '1'] })],
+    const ns = new Map<string, Top>([
+      ['boolean', def({ kind: 'enum', nameType: 'identifier', members: ['true', 'false'] })],
+      ['mixed', def({ kind: 'enum', nameType: 'identifier', members: ['true', '1'] })],
     ]);
     expect(discriminationClassOf('boolean', ns)).toBe('BOOLEAN');
     expect(discriminationClassOf('mixed', ns)).toBeUndefined();
   });
 
-  it('a rational/complex atom (needs a tag) and a Data body both have no class', () => {
-    const ns = new Map<string, TypeDefinition>([
+  it('a rational/complex atom (needs a tag) and a namespace value both have no class', () => {
+    const operation: MetaValue = { form: 'record', type: 'operation', fields: new Map() };
+    const ns = new Map<string, Top>([
       ['rational', def({ kind: 'rational_type' })],
-      ['op', def({ kind: 'operation' })],
+      ['op', def(namespaceOf('api', new Map([['orders', operation]])))],
     ]);
     expect(discriminationClassOf('rational', ns)).toBeUndefined();
     expect(discriminationClassOf('op', ns)).toBeUndefined();
   });
 
-  it('an enum whose type is not an identifier family is always STRING, whatever its members spell (§7.4)', () => {
-    const ns = new Map<string, TypeDefinition>([
-      ['ports', def({ kind: 'enum', members: ['80', '443'], type: 'text' })],
-      ['bools', def({ kind: 'enum', members: ['true', 'false'], type: 'text' })],
+  it('an enum’s class is its members’ shared base-type class, its members being identifiers (§5.4, §7.4)', () => {
+    const ns = new Map<string, Top>([
+      ['bools', def({ kind: 'enum', members: ['true', 'false'], nameType: 'identifier' })],
+      ['states', def({ kind: 'enum', members: ['OPEN', 'DONE'], nameType: 'identifier' })],
+      ['mixed', def({ kind: 'enum', members: ['true', 'OPEN'], nameType: 'identifier' })],
     ]);
-    // Linking decides which enums are text enums -- `type` resolves in a namespace the body cannot
-    // see -- and records them in `textEnums`; the class is read from that, never from the name.
-    const textEnums = new Set(['ports', 'bools']);
-    expect(discriminationClassOf('ports', ns, textEnums)).toBe('STRING');
-    expect(discriminationClassOf('bools', ns, textEnums)).toBe('STRING');
-    expect(discriminationClassOf('ports', ns)).toBe('NUMBER');
+    expect(discriminationClassOf('bools', ns)).toBe('BOOLEAN');
+    expect(discriminationClassOf('states', ns)).toBe('STRING');
+    expect(discriminationClassOf('mixed', ns)).toBeUndefined();
   });
 
   // ── §5.4's no-class list gains two straddling kinds (#17) ───────────────────────────────────
 
-  const approximateFloat = (allowNan: boolean, allowInfinity: boolean): TypeDefinition =>
+  const approximateFloat = (allowNan: boolean, allowInfinity: boolean): Top =>
     def({
       kind: 'float_type',
       format: 'BINARY64',
@@ -123,7 +132,7 @@ describe('discriminationClassOf (§5.4)', () => {
     });
 
   it('an approximate atom (float) still admitting NaN or infinity has no class -- its forms straddle classes like rational/complex', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       ['nanFloat', approximateFloat(true, false)],
       ['infFloat', approximateFloat(false, true)],
       ['bothFloat', approximateFloat(true, true)],
@@ -134,11 +143,11 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('narrowing allow_nan and allow_infinity to false restores the class (NUMBER)', () => {
-    const ns = new Map<string, TypeDefinition>([['stableFloat', approximateFloat(false, false)]]);
+    const ns = new Map<string, Top>([['stableFloat', approximateFloat(false, false)]]);
     expect(discriminationClassOf('stableFloat', ns)).toBe('NUMBER');
   });
 
-  function withKeyType(keyName: string): TypeDefinition {
+  function withKeyType(keyName: string): Top {
     return def({
       kind: 'map',
       keyType: { name: keyName, arguments: [], annotations: [] },
@@ -149,10 +158,10 @@ describe('discriminationClassOf (§5.4)', () => {
   }
 
   it('a map keyed by an atom-family instance or an enum is BRACE', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       ['text', text],
       ['byText', withKeyType('text')],
-      ['status', def({ kind: 'enum', members: ['UP', 'DOWN'], type: 'identifier' })],
+      ['status', def({ kind: 'enum', members: ['UP', 'DOWN'], nameType: 'identifier' })],
       ['byEnum', withKeyType('status')],
     ]);
     expect(discriminationClassOf('byText', ns)).toBe('BRACE');
@@ -160,7 +169,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('a map keyed by a compound type (no single scalar token denotes it) has no class -- a record, an array, and a nested map alike', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       ['record', record],
       ['byRecord', withKeyType('record')],
       ['text', text],
@@ -172,7 +181,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('a map keyed by a `value_type` or `void_type` instance has no class, whatever the instance is named (§4.2, §5.4)', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       ['value', def({ kind: 'value_type' })],
       ['void', def({ kind: 'void_type' })],
       ['byValue', withKeyType('value')],
@@ -183,7 +192,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('a map keyed by an identifier family is keyed by scalar content (§5.4, §7.7)', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       [
         'name',
         def({
@@ -201,7 +210,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('an identifier family is string-class, so a choice of it and an integer is disjoint (§5.4)', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       [
         'name',
         def({
@@ -220,7 +229,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('a choice over an approximate float and text is not disjoint in text either -- the straddling kind needs a tag (§5.4, #17)', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       ['unstableFloat', approximateFloat(true, true)],
       ['text', text],
     ]);
@@ -228,7 +237,7 @@ describe('discriminationClassOf (§5.4)', () => {
   });
 
   it('a choice over a compound-keyed map and text is not disjoint -- the same class-stability rule (#17)', () => {
-    const ns = new Map<string, TypeDefinition>([
+    const ns = new Map<string, Top>([
       ['record', record],
       ['byRecord', withKeyType('record')],
       ['text', text],
@@ -239,7 +248,7 @@ describe('discriminationClassOf (§5.4)', () => {
 
 describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
   it('is true when every variant has a distinct class', () => {
-    const namespace = new Map<string, TypeDefinition>([
+    const namespace = new Map<string, Top>([
       ['text', text],
       ['int32', int32],
     ]);
@@ -248,7 +257,7 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
 
   it('is false when two variants share one class -- even though their value sets never overlap', () => {
     // §5.4: "MUST NOT prove more (value-set separation... does not make a choice disjoint)".
-    const namespace = new Map<string, TypeDefinition>([
+    const namespace = new Map<string, Top>([
       ['text', text],
       ['other_text', def({ kind: 'text_type', normalization: 'NONE' })],
     ]);
@@ -256,7 +265,7 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
   });
 
   it('is false when a variant has no class at all', () => {
-    const namespace = new Map<string, TypeDefinition>([
+    const namespace = new Map<string, Top>([
       ['text', text],
       ['rational', def({ kind: 'rational_type' })],
     ]);
@@ -271,7 +280,7 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
         { name: 'int32', arguments: [], annotations: [] },
       ],
     });
-    const entries = new Map<string, TypeDefinition>([
+    const entries = new Map<string, Top>([
       ['text', text],
       ['int32', int32],
       ['choice', choice],
@@ -291,7 +300,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
     );
     const merged = new Map([['c', choice]]);
     expect(() => {
-      checkDisjointAssertions(merged, new Set(['c']), { schemaId: 'https://x/s.tn' });
+      checkDisjointAssertions(merged, new Set(['c']), {
+        facts: factsFor(merged),
+        schemaId: 'https://x/s.tn',
+      });
     }).not.toThrow();
   });
 
@@ -308,7 +320,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
     );
     const merged = new Map([['c', choice]]);
     expect(() => {
-      checkDisjointAssertions(merged, new Set(['c']), { schemaId: 'https://x/s.tn' });
+      checkDisjointAssertions(merged, new Set(['c']), {
+        facts: factsFor(merged),
+        schemaId: 'https://x/s.tn',
+      });
     }).toThrow(TsonSchemaValidationError);
   });
 
@@ -320,6 +335,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
     const merged = new Map([['c', choice]]);
     const diagnostics = collector();
     checkDisjointAssertions(merged, new Set(['c']), {
+      facts: factsFor(merged),
       schemaId: 'https://x/s.tn',
       receiver: diagnostics,
     });
@@ -331,7 +347,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
     const choice = def({ kind: 'choice', variants: [] }, { disjoint: false, annotations: [] });
     const merged = new Map([['c', choice]]);
     expect(() => {
-      checkDisjointAssertions(merged, new Set(['c']), { schemaId: 'https://x/s.tn' });
+      checkDisjointAssertions(merged, new Set(['c']), {
+        facts: factsFor(merged),
+        schemaId: 'https://x/s.tn',
+      });
     }).not.toThrow();
   });
 
@@ -342,7 +361,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
     );
     const merged = new Map([['imported_c', choice]]);
     expect(() => {
-      checkDisjointAssertions(merged, new Set(), { schemaId: 'https://x/s.tn' });
+      checkDisjointAssertions(merged, new Set(), {
+        facts: factsFor(merged),
+        schemaId: 'https://x/s.tn',
+      });
     }).not.toThrow();
   });
 
@@ -357,11 +379,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
           { name: 'other', arguments: [], annotations: [] },
         ],
       });
-      const merged = new Map([
-        ['shapes', { ...choice, body: { ...choice.body, disjoint: false } }],
-      ]);
+      const merged = new Map<string, Top>([['shapes', { ...choice, disjoint: false } as Top]]);
       expect(() => {
         checkDisjointAssertions(merged, new Set(['shapes']), {
+          facts: factsFor(merged),
           schemaId: 'https://x/s.tn',
           keyAnnotations: new Map([['shapes', [{ name: 'disjoint' }]]]),
         });
@@ -373,6 +394,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
       const merged = new Map([['shapes', choice]]);
       expect(() => {
         checkDisjointAssertions(merged, new Set(['shapes']), {
+          facts: factsFor(merged),
           schemaId: 'https://x/s.tn',
           keyAnnotations: new Map([['shapes', [{ name: 'disjoint' }]]]),
         });
@@ -384,6 +406,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
       const merged = new Map([['shapes', choice]]);
       expect(() => {
         checkDisjointAssertions(merged, new Set(['shapes']), {
+          facts: factsFor(merged),
           schemaId: 'https://x/s.tn',
           keyAnnotations: new Map([['shapes', [{ name: 'doc', value: 'a shape' }]]]),
         });
@@ -394,7 +417,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
       const choice = def({ kind: 'choice', variants: [] }, { disjoint: false });
       const merged = new Map([['shapes', choice]]);
       expect(() => {
-        checkDisjointAssertions(merged, new Set(['shapes']), { schemaId: 'https://x/s.tn' });
+        checkDisjointAssertions(merged, new Set(['shapes']), {
+          facts: factsFor(merged),
+          schemaId: 'https://x/s.tn',
+        });
       }).not.toThrow();
     });
   });

@@ -17,24 +17,24 @@
  *   position with nothing to place an untagged value as, not about an admissibility question).
  *
  * **Every name it admits was resolved when the schema compiled** (`json/schema/route.ts`'s own
- * `routeTo`): a base's `subtypes` is its whole family, transitively (`TypeDefinition.subtypes`),
+ * `routeTo`): a base's `subtypes` is its whole family, transitively (the chain's `subtypes`),
  * so a tag naming a type any number of levels down reaches that type's reader in one step, and
  * every alias meaning one of them (`link/referenceChain.ts`'s own `admitting`) reaches the same
  * reader.
  *
- * **It decides from the leading members and reads no further** (`reservedMembers.ts`'s own
+ * **It decides from the leading members and reads no further** (`tagMembers.ts`'s own
  * `lead`): §3.3 puts `$type` first, after a `$schema` where one is present, so the selector is
  * known before any of the object's own members, and the reader it selects reads the object once,
  * from the start.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import type { TypeDefinition } from '../../schema/meta/typedef.js';
+import { isOpen, isTemplateBody, type Top } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/referenceChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
-import { lead as leadOf, SCHEMA, TYPE, type Lead } from './reservedMembers.js';
+import { lead as leadOf, SCHEMA, TYPE, type Lead } from './tagMembers.js';
 import { hasReadExact, routeTo, type ExactReader, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 
@@ -43,13 +43,19 @@ export interface DispatchTagOptions {
   readonly name: string;
   readonly displayName: string;
   /** The whole namespace, for alias flattening (`aliases.ts`). */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
-  /** The family below the base, transitive (`TypeDefinition.subtypes`), not yet alias-flattened. */
+  readonly entries: ReadonlyMap<string, Top>;
+  /** The family below the base, transitive (the chain's `subtypes`), not yet alias-flattened. */
   readonly subtypes: readonly string[];
   /** The OPEN record's own concrete reader, or `undefined` for an ABSTRACT base. */
   readonly untagged: JsonTypeReader | undefined;
   readonly schemaLocation: SchemaLocation;
   readonly resolve: (name: string) => JsonTypeReader;
+}
+
+/** Whether a value can be `entry` directly: not an open entry (§5.10), and not an ABSTRACT record. */
+function isInstantiable(entry: Top | undefined): boolean {
+  if (entry === undefined || isTemplateBody(entry) || isOpen(entry)) return false;
+  return entry.kind !== 'record' || entry.extension !== 'ABSTRACT';
 }
 
 function isRecordLike(event: { kind: string }): boolean {
@@ -61,7 +67,12 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
   const { name, displayName, entries, subtypes, untagged, schemaLocation, resolve } = options;
   const own = selfNames(name, entries);
   const admittedSubtypes = admitting(subtypes, entries);
-  const subtypeList = subtypes.join(' | ');
+  // What a refusal names as satisfying the position: the subtypes with instances of their own. An
+  // abstract record and a record template (a family base, §5.10) are no answer -- naming either
+  // would only refuse in turn.
+  const subtypeList = subtypes
+    .filter((subtype) => isInstantiable(entries.get(subtype)))
+    .join(' | ');
   const admissible = untagged !== undefined ? `${name} | ${subtypeList}` : subtypeList;
 
   const routes = new Map<string, Route>();
@@ -93,7 +104,7 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
       untagged !== undefined &&
       (lead.type === undefined || (!lead.wrapper && own.has(lead.type)))
     ) {
-      // Untagged, an inline restatement, or leading reserved members naming no type: all of it is
+      // Untagged, an inline restatement, or leading annotation members naming no type: all of it is
       // the record's own reader's to judge, on exactly the terms a record without subtypes judges
       // it. A restating wrapper takes its own route instead, whose `$value` may name a subtype.
       return hasReadExact(untagged)

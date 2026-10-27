@@ -241,6 +241,21 @@ export interface VocabularySidecar extends CommonSidecarFields {
   readonly value?: ExpectedVocabularyValue;
 }
 
+// ── Identity layer ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * An identity-layer sidecar (`schemas/identity-sidecar.tn`, RUNNER.md rule 3e): [TSON-DATA]
+ * §2.2.1's canonical identity of the subject's first directive. A `valid` vector states the
+ * identity the runner compares byte for byte; an `error` vector's category is `resolver`.
+ */
+export interface IdentitySidecar extends CommonSidecarFields {
+  readonly outcome: 'valid' | 'error';
+  /** Present iff `outcome === 'error'`. */
+  readonly category?: Category;
+  /** Present iff `outcome === 'valid'`: the host's canonical text plus the path, no scheme or query. */
+  readonly identity?: string;
+}
+
 // ── Reader layer ─────────────────────────────────────────────────────────────────────────────
 
 /** One field of an expected reader-layer record, after §2.5's uniqueness rule. */
@@ -880,6 +895,30 @@ export function parseVocabularySidecar(raw: Uint8Array): VocabularySidecar {
   return { ...common, outcome, typeRef, value };
 }
 
+/** Parses an identity-layer sidecar (`schemas/identity-sidecar.tn`). */
+export function parseIdentitySidecar(raw: Uint8Array): IdentitySidecar {
+  const fields = parseSidecarBody(raw);
+  const common = toCommonFields(fields);
+  const { outcome, payload } = outcomeMember(fields, ['valid', 'error']);
+  if (outcome === 'error') {
+    const payloadFields = recordFields(payload, 'identity sidecar.error');
+    return {
+      ...common,
+      outcome,
+      category: toCategory(
+        requiredText(payloadFields, 'category', 'identity sidecar.error'),
+        'identity sidecar.error',
+      ),
+    };
+  }
+  const payloadFields = recordFields(payload, 'identity sidecar.valid');
+  return {
+    ...common,
+    outcome,
+    identity: requiredText(payloadFields, 'identity', 'identity sidecar.valid'),
+  };
+}
+
 /** Parses a reader-layer sidecar (`schemas/reader-sidecar.tn`). */
 export function parseReaderSidecar(raw: Uint8Array): ReaderSidecar {
   const fields = parseSidecarBody(raw);
@@ -966,11 +1005,18 @@ export interface ExpectedSubtyping {
   readonly subtypes: readonly string[];
 }
 
+/** A kind and the names its derived `members` index must list ([TSON-SCHEMA] §4.2, `link-sidecar.tn`'s `membership`). */
+export interface ExpectedMembership {
+  readonly name: string;
+  readonly members: readonly string[];
+}
+
 /** The payload of a `class2/link/` `valid` outcome (`link-sidecar.tn`'s `link_valid`). Each list is optional: a vector states only what it is about. */
 export interface LinkValid {
   readonly binds?: readonly string[];
   readonly disjoint?: readonly ExpectedDisjointness[];
   readonly subtypes?: readonly ExpectedSubtyping[];
+  readonly members?: readonly ExpectedMembership[];
 }
 
 export interface LinkSidecar extends CommonSidecarFields {
@@ -1000,6 +1046,16 @@ function toExpectedSubtyping(dv: DataValue): ExpectedSubtyping {
   };
 }
 
+function toExpectedMembership(dv: DataValue): ExpectedMembership {
+  const fields = recordFields(dv, 'membership');
+  return {
+    name: requiredText(fields, 'name', 'membership'),
+    members: arrayElements(requireField(fields, 'members', 'membership'), 'membership.members').map(
+      (el) => tokenText(el.value, 'membership.members entry'),
+    ),
+  };
+}
+
 /** `dv` is a `link_valid` record (`link-sidecar.tn`): every field OPTIONAL, a vector stating only what it is about. */
 function toLinkValid(dv: DataValue): LinkValid {
   const fields = recordFields(dv, 'link sidecar.valid');
@@ -1018,10 +1074,16 @@ function toLinkValid(dv: DataValue): LinkValid {
     subtypesField === undefined || isAbsent(subtypesField)
       ? undefined
       : arrayElements(subtypesField, 'subtypes').map((el) => toExpectedSubtyping(el.value));
+  const membersField = fields.get('members');
+  const members =
+    membersField === undefined || isAbsent(membersField)
+      ? undefined
+      : arrayElements(membersField, 'members').map((el) => toExpectedMembership(el.value));
   return {
     ...(binds !== undefined ? { binds } : {}),
     ...(disjoint !== undefined ? { disjoint } : {}),
     ...(subtypes !== undefined ? { subtypes } : {}),
+    ...(members !== undefined ? { members } : {}),
   };
 }
 

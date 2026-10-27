@@ -6,18 +6,19 @@
  * for the Java's `TsonObjectWriter` field (see this file's own note on it below).
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
-import type { Top, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
+import type { EntryFacts, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
 
 /**
- * A single-name `TypeDefinition` lookup, `undefined` when `name` isn't resolved (yet or at all) —
- * the TypeScript idiom for the Java original's `Map.get`-shaped `DefinitionGetter`.
+ * A single-name entry lookup -- the entry's value (§8.1: an entry is its value), `undefined` when
+ * `name` isn't resolved (yet or at all) -- the TypeScript idiom for the Java original's
+ * `Map.get`-shaped `DefinitionGetter`.
  *
  * `definitionResolver.ts` holds two of these, one per namespace Part 2 §3.3.1 distinguishes:
  * the type-name namespace (a supertype/refinement-source/atom-refinement-source lookup) and the
  * structure namespace (a constructor-application target lookup, one hop via `!!meta`). Both are
  * genuinely different namespaces that happen to share this shape, not two names for one thing.
  *
- * Every real implementation closes over some caller's own growing `Map<string, TypeDefinition>`
+ * Every real implementation closes over some caller's own growing `Map<string, Top>`
  * — `entries.get.bind(entries)` for a namespace still being populated one declaration at a time,
  * or a fully-resolved schema's own entry table for one that's already fixed (true of the
  * structure namespace always: a governing meta-schema is compiled before anything asks it a
@@ -25,7 +26,16 @@ import type { Top, TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
  * function, only reads through it — a caller resolving declarations one at a time in a loop still
  * has to record each result itself.
  */
-export type DefinitionGetter = (name: string) => TypeDefinition | undefined;
+export type DefinitionGetter = (name: string) => Top | undefined;
+
+/**
+ * Each entry's facts as resolution learns them (§8.1's {@link EntryFacts}): where it was declared,
+ * the annotations written on its value, and the constructor its tag names. Shared and mutable,
+ * written by the definition resolver as each declaration resolves and read by the schema resolver
+ * when it assembles the result; it holds imported entries' facts too, so an atom refinement finds
+ * the constructor of a source another schema declared.
+ */
+export type EntryFactsTable = Map<string, EntryFacts>;
 
 /**
  * Reads a constructor-application/atom-refinement value against `type`'s own compiled reader —
@@ -88,7 +98,7 @@ export type ApplicationCloser = (application: TypeRef) => string;
  * §8.2's "a declaration whose body denotes a type is that type's entry": closes `application` (as
  * {@link ApplicationCloser} would) but, when the application's own template admits it, publishes
  * the result *as* `name` — the declaring entry itself, no content-derived name minted beside it and
- * no `!reference` hop (§5.10, §8.2) — and returns the resulting `TypeDefinition` directly so
+ * no `!reference` hop (§5.10, §8.2) — and returns the resulting value directly so
  * `definitionResolver.ts` can use it as the declaration's own resolved entry.
  *
  * Returns `undefined` for a case this owns nothing of: the head is not a template, the arity
@@ -99,21 +109,20 @@ export type ApplicationCloser = (application: TypeRef) => string;
  * Optional on the same terms as {@link ApplicationCloser}: omitted for a caller with no
  * whole-schema materialiser to hand.
  */
-export type DeclaredApplicationCloser = (
-  name: string,
-  application: TypeRef,
-) => TypeDefinition | undefined;
+export type DeclaredApplicationCloser = (name: string, application: TypeRef) => Top | undefined;
 
 /**
  * §5.10's argument check for an application that denotes no entry: a composition operand absorbs
  * its template's fields by value and mints nothing, so it never reaches the materialiser's closing
  * path, which is where an application's arguments are otherwise judged against the parameters they
  * bind. Throws a `TsonSchemaValidationError` when an argument is outside its parameter's bound or
- * type; an argument it cannot judge is left to the position, as everywhere else.
+ * type; an argument it cannot judge is left to the position, as everywhere else. Returns the
+ * arguments as §5.10 classifies them by the parameter each binds -- what the operand's chain
+ * records, so the applied-parent fold keys it as the owning declaration's `@application` is keyed.
  *
  * Optional on the same terms as {@link ApplicationCloser}.
  */
-export type ApplicationChecker = (application: TypeRef) => void;
+export type ApplicationChecker = (application: TypeRef) => readonly TypeArgument[];
 
 /**
  * Converts an already-bound `Top` body back to a bare wire `CoreValue` — this port's own

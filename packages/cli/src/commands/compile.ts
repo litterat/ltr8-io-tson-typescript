@@ -1,6 +1,6 @@
 /**
  * `tson compile [<policy options>] <schema>...` -- checks that each schema document resolves and
- * links against the bundled standard library (meta-kernel, meta.tn, core.tn; see `../stdlib.ts`),
+ * links against the bundled standard library (meta-kernel, meta.tn, core.tn, net.tn, policy.tn; see `../stdlib.ts`),
  * under `identifierPolicy` ([TSON-SCHEMA] §11.4's schema-layer name hygiene).
  *
  * **Deliberately does not force every entry's compiled reader.** `@ltr8/tson`'s `compile()` is
@@ -39,16 +39,16 @@ async function compileOne(tson: Tson, file: string): Promise<CompileFileResult> 
     linked = tson.resolveSchema(bytes);
   } catch (error) {
     if (isInvalidSchemaError(error)) {
-      return { file, outcome: 'INVALID', message: error.message };
+      return { file, outcome: 'REJECTED', message: error.message };
     }
-    // §8.2's fifth outcome: this processor's policy declined the schema, which says nothing
-    // about whether it is valid -- not checked, and (like any rejection) exit 1.
+    // §8.1's refused outcome: this processor's policy declined the schema, which says nothing
+    // about whether it is valid -- a rejection here all the same, and (like any rejection) exit 1.
     if (error instanceof TsonNameHygieneRefusedError) {
-      return { file, outcome: 'NOT_CHECKED', message: error.message };
+      return { file, outcome: 'REJECTED', message: error.message };
     }
     throw error;
   }
-  return { file, outcome: 'VALID', id: linked.id, entryCount: linked.entries.size };
+  return { file, outcome: 'ACCEPTED', id: linked.id, entryCount: linked.entries.size };
 }
 
 export interface CompileRun {

@@ -19,8 +19,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/identifier-families-read.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   identifier => !identifier_type { continue_add: "-" }
   header_name => !identifier_type { start: NONE  continue: NONE

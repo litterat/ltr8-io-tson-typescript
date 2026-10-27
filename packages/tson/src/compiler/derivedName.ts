@@ -75,6 +75,11 @@ function appendReadable(out: string[], value: CoreValue): void {
       });
       break;
     case 'map':
+      value.entries.forEach((entry) => {
+        appendReadable(out, entry.key.coreValue);
+        appendReadable(out, entry.value.value.coreValue);
+      });
+      break;
     case 'empty-brace':
     case 'void':
       out.push('_v');

@@ -72,13 +72,14 @@ export function classifyReadError(error: unknown): Problem {
   if (error instanceof TsonReadError) {
     return { kind: 'invalid', diagnostic: error.diagnostic };
   }
-  // A §8.2 name refusal travels as its own code, which `isVerdict` rejects: the document was
-  // declined by policy, not judged, so a run reports it `NOT_CHECKED` and still exits 1.
+  // A §8.2 name refusal travels as its own code, which `isVerdict` rejects and `isRefusal`
+  // accepts: the document was declined by policy, not judged, so a run reports it `REJECTED`
+  // (§8.1's refused outcome) and exits 1.
   if (error instanceof TsonNameHygieneRefusedError) {
     return { kind: 'invalid', diagnostic: diagnosticOfNameRefusal(error) };
   }
-  // A §9.1 limit refusal is the same kind as a name refusal (`isRefusal`): not a verdict, so the
-  // run reports `NOT_CHECKED`, and still exit 1 since the sender holds the fix.
+  // A §9.1 limit refusal is the same kind as a name refusal (`isRefusal`): not a verdict, yet a
+  // rejection here, so the run reports `REJECTED` and exits 1, the sender holding the fix.
   if (error instanceof TsonLimitRefusedError) {
     return {
       kind: 'invalid',

@@ -47,8 +47,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/parity-1.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   person => {
     name:   text
@@ -85,6 +85,10 @@ const SCHEMA_SOURCE = `
   figure    => abstract { area: int32 }
   disc      => figure & { side: int32 }
   kennel    => { p: pet }
+  verdict   => abstract { v_kind: text =? }
+  passed    => verdict & { v_kind?: = "pass" }
+  pending   => <T> verdict & { v_kind?: = "wait"  detail: T }
+  ruling    => { v: verdict }
   dog_of    => dog
   pet_of    => pet
   gallery   => { f: figure }
@@ -100,10 +104,10 @@ const SCHEMA_SOURCE = `
   crate      => { b: box }
   local_box  => { v: declared }
   extern_box => { v: extern }
-  port_label  => !text_enum ["80" "443"]
+  port_label  => !text ^ { members: ["80" "443"] }
   port_slot   => ( port_label | int32 )
   ported      => { p: port_slot }
-  answer      => !text_enum ["true" "false"]
+  answer      => !text ^ { members: ["true" "false"] }
   answer_slot => ( answer | boolean )
   answered    => { a: answer_slot }
   port_text   => ( port_label | text )
@@ -122,8 +126,16 @@ const SCHEMA_SOURCE = `
   pinned      => { h: header_name = Idempotency-Key }
   charset     => !text_type { members: [UTF-8 us-ascii]  normalization: NFKC_CASEFOLD }
   encoded     => { c: charset }
-  safe_header => !enum_type { type: header_name  members: [Accept content-type] }
+  safe_header => !enum_type { name_type: header_name  members: [Accept content-type] }
   screened    => { h: safe_header }
+  stock_id    => !uuid_type {}
+  customer_id => !uuid_type {}
+  ided        => { id: kind<uuid_type> }
+  a_host       => !host_type {}
+  host_or_port => ( a_host | int32 )
+  addressed    => { at: host_or_port }
+  kind_or_port => ( kind<uuid_type> | int32 )
+  chosen       => { k: kind_or_port }
   marks      => {
     nickname?: text
     from:      int32?
@@ -881,5 +893,57 @@ describe('§5.5 a text family’s normalization', () => {
     const fullWidth = verdictsOf(tson('fields', '{ "\uff23ontent-Type" => "a" }'));
     expect(fullWidth).toEqual([{ code: 'ATOM_FORM_INVALID', path: '/\uff23ontent-Type' }]);
     expect(verdictsOf(json('fields', '{"\uff23ontent-Type": "a"}'))).toEqual(fullWidth);
+  });
+});
+
+// \u2500\u2500 A record template under a sealed base ([TSON-SCHEMA] \u00a75.10, \u00a78.1) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+describe('\u00a76.1.5 a record template under a sealed base', () => {
+  /**
+   * A record template IS-A a sealed base is no member of it, though it pins the selector: it has
+   * no values, and its applications are the members. So `pending`'s `"wait"` selects nothing, and
+   * the refusal offers only what a document could select -- never a route to the template, whose
+   * own reader would refuse for want of a subtype, naming a type the position never offered. This
+   * port's `expected` names the members that pin, where the reference's names their pins.
+   */
+  it('a record template under a sealed base is no member of it, in both', () => {
+    sameRule(
+      'ruling',
+      '{ v: { v_kind: "wait"  detail: 1 } }',
+      '{"v": {"v_kind": "wait", "detail": 1}}',
+    );
+    const refused = json('ruling', '{"v": {"v_kind": "wait", "detail": 1}}');
+    expect(refused.map((d) => d.expected)).toEqual(['passed']);
+  });
+});
+
+// \u2500\u2500 Kind positions ([TSON-SCHEMA] \u00a74.2, [TSON-JSON] \u00a75.6): an atom whose values are names \u2500\u2500\u2500\u2500\u2500
+
+describe('\u00a75.6 a kind position', () => {
+  it('a member name at a kind is accepted by both', () => {
+    bothAccept('ided', '{ id: stock_id }', '{"id": "stock_id"}');
+  });
+
+  it('one rule with one code: a type built with another constructor is no member, in either encoding', () => {
+    sameVerdict('ided', '{ id: text }', '{"id": "text"}');
+  });
+
+  /**
+   * [TSON-SCHEMA] §5.4, [TSON-JSON] §5: a kind and the network families are string-class, so each
+   * beside a number-class variant makes a disjoint choice, read untagged in both encodings.
+   */
+  it('§5.4: a kind and host are string-class, so a choice of either beside int32 is disjoint, in both', () => {
+    bothAccept('addressed', '{ at: example.com }', '{"at": "example.com"}');
+    bothAccept('addressed', '{ at: 8080 }', '{"at": 8080}');
+    bothAccept('chosen', '{ k: stock_id }', '{"k": "stock_id"}');
+    bothAccept('chosen', '{ k: 7 }', '{"k": 7}');
+  });
+
+  it('a kind holds a name, so a value of one of its members is refused as no name, the same way in both', () => {
+    sameVerdict(
+      'ided',
+      '{ id: "7d3e5f8a-1b2c-4d5e-8f90-a1b2c3d4e5f6" }',
+      '{"id": "7d3e5f8a-1b2c-4d5e-8f90-a1b2c3d4e5f6"}',
+    );
   });
 });

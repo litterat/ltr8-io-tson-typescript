@@ -1,42 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import type { SchemaLocation } from '../src/core/diagnostic.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top } from '../src/schema/meta/typedef.js';
 import { recordReaderFactory, type TreeReaderContext } from '../src/reader/tree/factory.js';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
 import type { TypeReader } from '../src/reader/contracts.js';
 import type { Value } from '../src/tree/nodes.js';
 import { bodyContextOver, stubTextType } from './reader-tree-helpers.js';
 import { runSync } from '../src/io/bytes.js';
+import { entry, fieldMapOf } from './model-fixtures.js';
 
 /**
- * `reader/tree/factory.ts` -- the `ValueReaderFactory<TypeDefinition, TreeReaderContext>` wiring, a
- * starting point for Wave 5's compiler. Exercised end to end: one `TypeDefinition`, one hand-built
+ * `reader/tree/factory.ts` -- the `ValueReaderFactory<Top, TreeReaderContext>` wiring, a
+ * starting point for Wave 5's compiler. Exercised end to end: one `Top`, one hand-built
  * context, one read.
  */
 
 describe('recordReaderFactory', () => {
-  it('builds a working tree reader from a resolved TypeDefinition', () => {
-    const definition: TypeDefinition = {
-      supertypes: [],
-      subtypes: [],
-      annotations: [],
-      body: {
-        kind: 'record',
-        supertypes: [],
-        groups: [],
-        extension: 'OPEN',
-        fields: [
-          {
-            name: 'name',
-            type: { name: 'text', arguments: [], annotations: [] },
-            optional: false,
-            voidable: false,
-            role: 'FREE',
-            annotations: [],
-          },
-        ],
-      },
-    };
+  it('builds a working tree reader from a resolved Top', () => {
+    const definition: Top = entry({
+      kind: 'record',
+      groups: [],
+      extension: 'OPEN',
+      fields: fieldMapOf([
+        {
+          name: 'name',
+          type: { name: 'text', arguments: [], annotations: [] },
+          optional: false,
+          voidable: false,
+          role: 'FREE',
+          annotations: [],
+        },
+      ]),
+    });
     const textReader: TypeReader<Value> = atomTreeReader(
       atomTypeReader(stubTextType(), 'text'),
       'text',
@@ -58,12 +53,7 @@ describe('recordReaderFactory', () => {
   });
 
   it('throws when the definition is not record-shaped -- an authoring bug in the caller, not a document problem', () => {
-    const definition: TypeDefinition = {
-      supertypes: [],
-      subtypes: [],
-      annotations: [],
-      body: { kind: 'value_type' },
-    };
+    const definition: Top = entry({ kind: 'value_type' });
     const context: TreeReaderContext = {
       resolve: () => atomTreeReader(atomTypeReader(stubTextType(), 'text'), 'text'),
       locationOf: (): SchemaLocation => ({ schemaId: 'test://s.tn' }),

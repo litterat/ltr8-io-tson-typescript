@@ -52,7 +52,7 @@ import type { SchemaLocation } from '../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import { lookingAhead } from '../reader/context.js';
 import type { ChoiceBody } from '../schema/meta/bodies.js';
-import type { TypeDefinition } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
 import { abandonedValue, type TreeTypeResolver } from '../reader/tree/support.js';
@@ -104,7 +104,7 @@ function classifyEvent(event: TsonEvent): DiscriminationClass | undefined {
   }
 }
 
-/** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries and `textEnums` its enums whose members are texts, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
+/** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
 export function choiceTreeReader(
   name: string,
   displayName: string,
@@ -112,8 +112,7 @@ export function choiceTreeReader(
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
   disjoint: boolean,
-  namespace: ReadonlyMap<string, TypeDefinition>,
-  textEnums: ReadonlySet<string> = new Set(),
+  namespace: ReadonlyMap<string, Top>,
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
     name: variant.name,
@@ -137,14 +136,14 @@ export function choiceTreeReader(
 
   // Untagged recovery's own `class -> variant` map -- built only when `disjoint` says the classes
   // are distinct, and rebuilt from the classes themselves rather than trusted blindly: a
-  // hand-assembled `TypeDefinition` could in principle carry `disjoint: true` over variants the
+  // hand-assembled entry could in principle carry `disjoint: true` over variants the
   // classes disagree with, and the safe reading of that disagreement is no recovery at all (mirrors
   // the reference implementation's own `ChoiceReader.untaggedRecovery`).
   let byClass: Map<DiscriminationClass, (typeof variants)[number]> | undefined;
   if (disjoint) {
     byClass = new Map();
     for (const variant of variants) {
-      const variantClass = discriminationClassOf(variant.name, namespace, textEnums);
+      const variantClass = discriminationClassOf(variant.name, namespace);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass = undefined;
         break;

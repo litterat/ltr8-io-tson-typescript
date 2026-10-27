@@ -16,6 +16,10 @@
  *   HttpSchemaSourceOptions.mapHosts} default to empty — nothing is fetched until a host is
  *   named. A host is matched exactly: no suffix or wildcard matching, because a `.example.com`
  *   suffix test also matches `evil-example.com`, which is how this control is usually defeated.
+ * - **A refusal does not disclose the allow-list** ([TSON-SCHEMA] §11.2). It names the reference
+ *   and that this deployment will not supply it, never the hosts it would, nor the base a host is
+ *   mapped to: telling an untrusted sender which hosts this source fetches from is reconnaissance
+ *   for request forgery.
  * - **The reference must be a legal identity** (`reference.ts`'s own {@link permittedReference}),
  *   checked before any connection is opened.
  * - **Redirects are never followed.** `fetch` is called with `redirect: 'manual'`, so a 3xx
@@ -48,7 +52,7 @@
 import { fromReadableStream } from '../io/streams.js';
 import { TsonSchemaFetchError } from '../core/errors.js';
 import type { SchemaSource } from '../config.js';
-import { notPermitted, permittedReference } from './reference.js';
+import { asciiHost, hostKey, notPermitted, permittedReference } from './reference.js';
 
 export type { SchemaSource } from '../config.js';
 
@@ -68,7 +72,9 @@ export interface HttpSchemaSourceOptions {
   /**
    * Schemas identified by any of these hosts are fetched over `https` from that same host — the
    * short form. The host is matched exactly: allowing `schemas.example.com` permits nothing on a
-   * subdomain and nothing on a host that merely ends the same way.
+   * subdomain and nothing on a host that merely ends the same way. A host is a `host` value (§5.5),
+   * so `xn--bcher-kva.example` and `bücher.example` allow the same identities; a value that is
+   * not a host is a `TypeError`.
    */
   readonly allowHosts?: readonly string[];
   /**
@@ -119,10 +125,10 @@ interface Target {
 export function httpSchemaSource(options: HttpSchemaSourceOptions = {}): HttpSchemaSource {
   const hosts = new Map<string, string>();
   for (const host of options.allowHosts ?? []) {
-    hosts.set(host.toLowerCase(), `https://${host.toLowerCase()}`);
+    hosts.set(hostKey(host), `https://${asciiHost(host)}`);
   }
   for (const [host, base] of Object.entries(options.mapHosts ?? {})) {
-    hosts.set(host.toLowerCase(), validateBase(base));
+    hosts.set(hostKey(host), validateBase(base));
   }
   const maxDocumentBytes = options.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -139,8 +145,8 @@ export function httpSchemaSource(options: HttpSchemaSourceOptions = {}): HttpSch
       throw notPermitted(
         reference,
         hosts.size === 0
-          ? 'no host is allowed by this source'
-          : `host '${identity.host}' is not one of ${[...hosts.keys()].join(', ')}`,
+          ? 'no host is allowed by this source, so this deployment will not supply it'
+          : `host '${identity.host}' is not an allowed host, so this deployment will not supply it`,
       );
     }
     // Concatenate, then VERIFY against the parser that will actually be used. `fetch` re-parses
@@ -150,12 +156,12 @@ export function httpSchemaSource(options: HttpSchemaSourceOptions = {}): HttpSch
     // but a source that maps a host into a *sub-path* of an origin is exactly the place where a
     // future parser quirk becomes an SSRF. Checking the parsed result costs one parse per fetch
     // and makes the containment property independent of what the identity check happens to catch.
-    const location = base + identity.path;
+    const location = base + identity.uriPath;
     const parsed = safeParse(location);
     if (parsed === undefined || !isWithin(parsed, base)) {
       throw notPermitted(
         reference,
-        `resolves to '${parsed?.href ?? location}', which is outside the mapped base '${base}'`,
+        'resolves outside the base its host is mapped to, so this deployment will not supply it',
       );
     }
     return { canonical: identity.canonical, location: parsed.href };

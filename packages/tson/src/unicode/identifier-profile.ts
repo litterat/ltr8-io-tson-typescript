@@ -2,6 +2,7 @@ import type { IdentifierBase, IdentifierType, Normalization } from '../schema/me
 import { isJoiningControlPermitted, joiningControlsSatisfied } from './joining-controls.js';
 import { isNfc } from './nfc.js';
 import { holdsNormalization } from './normalization.js';
+import { nfkcCasefoldOf } from './normalization-tables.js';
 import { identifierStatusAllowed } from './uts39.js';
 import { isIdContinue, isIdStart, isXidContinue, isXidStart } from './xid.js';
 
@@ -200,9 +201,21 @@ function inBase(base: IdentifierBase, codePoint: number, start: boolean): boolea
       return start ? isXidStart(codePoint) : isXidContinue(codePoint);
     case 'ID':
       return start ? isIdStart(codePoint) : isIdContinue(codePoint);
+    case 'ASCII':
+      return start ? isAsciiLetter(codePoint) : isAsciiContinue(codePoint);
     case 'NONE':
       return false;
   }
+}
+
+/** `identifier_base`'s `ASCII` Start: `A`-`Z` and `a`-`z` (§7.7). */
+function isAsciiLetter(codePoint: number): boolean {
+  return (codePoint >= 0x41 && codePoint <= 0x5a) || (codePoint >= 0x61 && codePoint <= 0x7a);
+}
+
+/** `identifier_base`'s `ASCII` Continue: the Start set, `0`-`9` and `_` (§7.7). */
+function isAsciiContinue(codePoint: number): boolean {
+  return isAsciiLetter(codePoint) || (codePoint >= 0x30 && codePoint <= 0x39) || codePoint === 0x5f;
 }
 
 function profileStart(profile: IdentifierProfile, codePoint: number): boolean {
@@ -288,9 +301,11 @@ export function checkIdentifier(profile: IdentifierProfile, text: string): strin
 }
 
 /**
- * What makes `profile` admit no identifier, or admit one ambiguously: empty when there is nothing
- * (§5.5). A Start set left empty admits nothing at all; a medial character that is also Start or
- * Continue could be read as either, which the grammar's placement rule cannot decide.
+ * What makes `profile` admit no identifier, admit one ambiguously, or admit one no name rule can
+ * see: empty when there is nothing (§5.5, §7.4). A Start set left empty admits nothing at all; a
+ * medial character that is also Start or Continue could be read as either, which the grammar's
+ * placement rule cannot decide; and an addition below {@link invisible}'s floor makes two names
+ * that render alike.
  */
 export function profileIncoherence(profile: IdentifierProfile): string[] {
   const problems: string[] = [];
@@ -304,7 +319,57 @@ export function profileIncoherence(profile: IdentifierProfile): string[] {
       );
     }
   }
+  for (const set of [profile.startAdd, profile.continueAdd, profile.medial]) {
+    for (const codePoint of set) {
+      const why = invisible(codePoint);
+      if (why !== undefined) {
+        problems.push(
+          `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')} is ${why}, which a profile ` +
+            'may not add: a name holding it reads as one without it, so no name rule could tell ' +
+            'the two apart (§7.4)',
+        );
+      }
+    }
+  }
   return problems;
+}
+
+/**
+ * The floor a profile's additions cannot lift ([TSON-SCHEMA] §5.2, §7.4): a character that renders
+ * as nothing, or as a character it is not. {@link restrictedCharacterViolation} counts an added
+ * character as the profile's own, so without this an addition would carry a soft hyphen or a bidi
+ * override into names past every UTS #39 rule -- `pass\u{AD}word` beside `password`, under the
+ * strictest policy. `Default_Ignorable_Code_Point` covers `Bidi_Control` and the format characters
+ * that matter; a control and a space other than U+0020 are the rest. U+0020 itself stays: a medial
+ * space is how a name type holds words.
+ *
+ * `Default_Ignorable_Code_Point` is read off the checked-in `NFKC_Casefold` table, which maps
+ * exactly that property's code points, and no other, to the empty string (UAX #44's derivation of
+ * `NFKC_CF` removes them). The control and space sets are `General_Category=Cc` and `White_Space`,
+ * both closed by Unicode's stability policies, so they are stated here rather than tabled.
+ */
+function invisible(codePoint: number): string | undefined {
+  if (nfkcCasefoldOf(codePoint) === '') return 'Default_Ignorable_Code_Point';
+  if (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) return 'a control character';
+  if (codePoint !== 0x20 && isWhiteSpace(codePoint)) return 'a space other than U+0020';
+  return undefined;
+}
+
+/** `White_Space` (PropList.txt). */
+function isWhiteSpace(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x09 && codePoint <= 0x0d) ||
+    codePoint === 0x20 ||
+    codePoint === 0x85 ||
+    codePoint === 0xa0 ||
+    codePoint === 0x1680 ||
+    (codePoint >= 0x2000 && codePoint <= 0x200a) ||
+    codePoint === 0x2028 ||
+    codePoint === 0x2029 ||
+    codePoint === 0x202f ||
+    codePoint === 0x205f ||
+    codePoint === 0x3000
+  );
 }
 
 /**

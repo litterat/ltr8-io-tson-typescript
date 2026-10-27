@@ -36,8 +36,8 @@
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
  * tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/37/m/meta.tn',
- *   'https://tson.io/2026/37/m/core.tn',
+ *   'https://tson.io/2026/38/m/meta.tn',
+ *   'https://tson.io/2026/38/m/core.tn',
  * ]);
  * ```
  *
@@ -387,12 +387,18 @@ function requireRegistered(
   return found;
 }
 
-function importedFrom(schema: LinkedSchema): ImportedSchema {
+function importedFrom(
+  schemas: ReadonlyMap<string, LinkedSchema>,
+  schema: LinkedSchema,
+): ImportedSchema {
   return {
+    level: { id: schema.id, meta: schema.meta, kernelGoverned: governedByKernel(schemas, schema) },
     entries: schema.entries,
+    facts: schema.facts,
+    keyAnnotations: schema.keyAnnotations,
     originOf: (name) => schema.origins.get(name) ?? schema.id,
-    textEnums: schema.textEnums,
     enumForms: schema.enumForms,
+    nameTypes: schema.nameTypes,
   };
 }
 
@@ -475,9 +481,9 @@ function resolveAgainstRegistry(
   const governingMeta = requireRegistered(schemas, contentHashes, document.meta, id);
   const metaDefinitions: DefinitionGetter = (name) => governingMeta.entries.get(name);
   const resolveImport: ImportResolver = (importUri) =>
-    importedFrom(requireRegistered(schemas, contentHashes, importUri, id));
+    importedFrom(schemas, requireRegistered(schemas, contentHashes, importUri, id));
   const resolved = resolveSchemaCore(document, {
-    definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
+    definitionMetaReader: createDefinitionMetaReader(metaDefinitions, undefined, identifierPolicy),
     // §6/§3.3.3: a declaration's key annotations (`@doc` and anything else a meta-schema defines)
     // name ordinary entries of the governing meta, and their values are read through that
     // schema's own compiled readers. Without this every key annotation resolved name-only, so a
@@ -486,8 +492,10 @@ function resolveAgainstRegistry(
       compiledMetaFor(governingMeta, identifierPolicy),
     ),
     metaDefinitions,
+    metaFacts: (name) => governingMeta.facts.get(name),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
+    kernelGoverned: isSelfGoverned(governingMeta),
   });
   // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
   // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
@@ -497,9 +505,33 @@ function resolveAgainstRegistry(
   }
   return linkSchema(resolved, {
     structureNamespace: governingMeta.entries,
+    structureFacts: governingMeta.facts,
     resolveImport,
     ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
+    kernelGoverned: isSelfGoverned(governingMeta),
   });
+}
+
+/**
+ * Whether `meta` is the meta-kernel: the one schema naming itself as its own `!!meta` (§1.5), so a
+ * schema it governs is a meta layer, where an entry may hold a value (§2.2.2).
+ */
+function isSelfGoverned(meta: LinkedSchema): boolean {
+  return meta.bootstrap || canonicalizeIdentity(meta.meta) === canonicalizeIdentity(meta.id);
+}
+
+/**
+ * Whether the meta-kernel governs the registered `schema`: its own `!!meta` is self-governed. The
+ * kernel itself is (its `!!meta` is its own identity); a schema whose `!!meta` is not registered
+ * falls back to what its linker was told.
+ */
+function governedByKernel(
+  schemas: ReadonlyMap<string, LinkedSchema>,
+  schema: LinkedSchema,
+): boolean {
+  if (schema.bootstrap) return true;
+  const meta = schemas.get(canonicalizeIdentity(schema.meta));
+  return meta === undefined ? schema.kernelGoverned === true : isSelfGoverned(meta);
 }
 
 /**

@@ -61,7 +61,7 @@ export type DiagnosticCode =
    * unadmitted name reports {@link TYPE_MISMATCH} unconditionally rather than this code.
    *
    * **A second, narrower use: [TSON-JSON] §3.2/§3.3's reserved `$`-member namespace**
-   * (`json/schema/reservedMembers.ts`). There the name in question is the *member name itself* --
+   * (`json/schema/tagMembers.ts`). There the name in question is the *member name itself* --
    * an unknown `$`-initial member, a `$schema`/`$type` that does not lead its object, a `$value`
    * with no leading `$type`, or a non-reserved member beside `$value` in wrapper form -- and what
    * denotes nothing is the member's own position: the closed reserved namespace admits no such
@@ -128,7 +128,11 @@ export type DiagnosticCode =
   //
   // None of these five is a verdict on anything. A schema reference (`!!import`, `!!meta`, or
   // `!!schema`) named a document no configured source would supply, so it was never obtained and
-  // never read -- unlike `SCHEMA_ERROR`, which means the schema *was* obtained and is wrong.
+  // never read -- unlike `SCHEMA_ERROR`, which means the schema *was* obtained and is wrong. They
+  // split along [TSON-DATA] §8.1's two outcomes beside the four categories ([TSON-SCHEMA] §10.1,
+  // §11.2): `SCHEMA_NOT_PERMITTED` and `SCHEMA_TOO_LARGE` are this deployment declining to supply
+  // the schema, so *refused* ({@link isRefusal}); `SCHEMA_NOT_FOUND`, `SCHEMA_UNREACHABLE` and
+  // `SCHEMA_TIMEOUT` are what it could not obtain, so *undetermined* ({@link isUndetermined}).
   //
   // Why a fetch failed is a routing question, and a code is what a consumer routes on -- the same
   // reason §8.2's three refusal codes below are three codes rather than one code beside a
@@ -141,7 +145,11 @@ export type DiagnosticCode =
   // is the throwing channel's vocabulary and the sole input to {@link diagnosticCodeForFetch}, so
   // the two channels cannot disagree.
 
-  /** Policy refused it: not an allowed host, not a legal identity, or no pin where one is required. */
+  /**
+   * Policy refused it: not an allowed host, not a legal identity, or no pin where one is required
+   * -- a refusal ({@link isRefusal}). Its message names the reference and that this deployment
+   * will not supply it, and never the hosts it would (§11.2).
+   */
   | 'SCHEMA_NOT_PERMITTED'
   /** The location was reached and does not have it. */
   | 'SCHEMA_NOT_FOUND'
@@ -149,7 +157,7 @@ export type DiagnosticCode =
   | 'SCHEMA_UNREACHABLE'
   /** The location did not answer in time. */
   | 'SCHEMA_TIMEOUT'
-  /** The location answered with more bytes than a schema document is allowed to be. */
+  /** The location answered with more bytes than this deployment's size cap admits (§11.2) -- a refusal ({@link isRefusal}), the cap being this deployment's. */
   | 'SCHEMA_TOO_LARGE'
   // -- [TSON-DATA] §8.2's name hygiene: one code per mechanism -------------------------------
   //
@@ -246,15 +254,33 @@ export function isNameRefusal(code: DiagnosticCode): boolean {
 }
 
 /**
- * Whether `code` is a §8.1 refusal: this processor declined the document under its own policy,
- * data version or limits -- a §8.2 name refusal ({@link isNameRefusal}) or a §9.1 limit refusal
- * (`LIMIT_REFUSED`). The same bytes may be accepted in full by a processor configured otherwise,
- * so a refusal is not a verdict ({@link isVerdict}) and is never reported under one of §8.1's four
- * categories. The five `SCHEMA_*` fetch codes are the other kind of non-verdict -- no schema was
- * obtained -- and are not refusals.
+ * Whether `code` is [TSON-DATA] §8.1's **refused** outcome: this processor declined the document
+ * under its own configuration -- its §8.2 policy and data version ({@link isNameRefusal}), its
+ * §9.1 limits (`LIMIT_REFUSED`), or a schema it does not hold and will not fetch
+ * (`SCHEMA_NOT_PERMITTED`) or one past its size limit (`SCHEMA_TOO_LARGE`, [TSON-SCHEMA] §11.2).
+ * A refusal is a rejection *here* and never a finding about validity: a processor configured
+ * otherwise may accept the same bytes in full, so it is not a verdict ({@link isVerdict}), is
+ * never reported under one of §8.1's four categories, and names the rule or limit it applied.
  */
 export function isRefusal(code: DiagnosticCode): boolean {
-  return isNameRefusal(code) || code === 'LIMIT_REFUSED';
+  return (
+    isNameRefusal(code) ||
+    code === 'LIMIT_REFUSED' ||
+    code === 'SCHEMA_NOT_PERMITTED' ||
+    code === 'SCHEMA_TOO_LARGE'
+  );
+}
+
+/**
+ * Whether `code` is [TSON-DATA] §8.1's **undetermined** outcome: this processor could not obtain
+ * what it would judge against -- nothing at the reference (`SCHEMA_NOT_FOUND`), or no answer
+ * (`SCHEMA_UNREACHABLE`, `SCHEMA_TIMEOUT`) -- so nothing was judged, and acceptance cannot be
+ * stated ([TSON-SCHEMA] §10.1). Not a verdict ({@link isVerdict}) and not a refusal
+ * ({@link isRefusal}). `NOT_IMPLEMENTED` and `BIND_MISMATCH` also leave a document unjudged, but
+ * they are this library's gap and the reading application's wiring, not a schema unobtained.
+ */
+export function isUndetermined(code: DiagnosticCode): boolean {
+  return code === 'SCHEMA_NOT_FOUND' || code === 'SCHEMA_UNREACHABLE' || code === 'SCHEMA_TIMEOUT';
 }
 
 /** The codes that assert nothing about the document -- see {@link isVerdict}. */
@@ -276,17 +302,18 @@ const NON_VERDICT: ReadonlySet<DiagnosticCode> = new Set([
  * Whether `code` reports something an evaluation actually looked at and found, as opposed to a
  * check this library could not run at all.
  *
- * **A `false` answer means the document was not judged**, §8.1's "fifth outcome, not a verdict".
- * Two groups answer `false`. A refusal ({@link isRefusal}) says this processor declined under its
- * own policy, data version or limits -- a §8.2 name refusal, or a §9.1 limit refusal -- which
- * asserts nothing about validity: "the document may be well-formed, valid and accepted in full by
- * the next processor along" (§9.1). The rest say no rule ran: `NOT_IMPLEMENTED` that this library
- * could not check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five
- * `SCHEMA_*` codes that no schema was obtained to check against (§10.1).
+ * **A `false` answer means the document was not judged** -- one of §8.1's two outcomes beside the
+ * four categories, or a gap. A refusal ({@link isRefusal}) says this processor declined under its
+ * own configuration -- a §8.2 name refusal, a §9.1 limit refusal, a schema it will not fetch or
+ * one past its size limit -- which asserts nothing about validity: "the document may be
+ * well-formed, valid and accepted in full by the next processor along" (§9.1). An undetermined
+ * code ({@link isUndetermined}) says no schema was obtained to check against (§10.1). The rest say
+ * no rule ran: `NOT_IMPLEMENTED` that this library could not check it, `BIND_MISMATCH` that the
+ * reading application is wired wrong.
  *
  * A consumer that asks whether a document was *rejected* rather than *judged* asks
- * {@link isRefusal} beside this: the CLI reports a refused file as `NOT_CHECKED` and still exits
- * 1, since the sender holds the fix.
+ * {@link isRefusal} beside this: the CLI reports a refused file `REJECTED`, the sender holding the
+ * fix.
  *
  * Stated here so no consumer keeps its own copy of the set. Two already would -- the CLI's exit
  * code and its report outcome -- and a private copy each is how two consumers come to disagree

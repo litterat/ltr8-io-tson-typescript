@@ -100,9 +100,9 @@ describe('§2.5/§7.7 field names -- an identifier, written unquoted, or no lega
     expect(field(decomposed)).toBe('{ é: 1 }');
   });
 
-  // §2.5: a field name is an identifier at every layer, and quoting is relief from what the
-  // unquoted form cannot spell rather than a wider name set -- so each of these has no legal
-  // spelling, and writing one quoted would produce a document this port's own parser rejects.
+  // §2.5: a field name is any single-line token -- what it may be is its record's `name_type`'s
+  // to say (Part 2 §7.7), judged by the reader -- so a name that is no identifier is written as a
+  // single-line token, which the parser reads back as the same name.
   it.each([
     ['42x', 'digit-led: a digit is not XID_Start (§7.7)'],
     ['_id', 'token-initial _ is XID_Continue only, never XID_Start'],
@@ -113,9 +113,8 @@ describe('§2.5/§7.7 field names -- an identifier, written unquoted, or no lega
     ['-', 'a lone hyphen has no identifier-start'],
     ['+', 'a boundary sign is not identifier-continue'],
     ['a..b', 'a full stop is not identifier-continue'],
-  ])('%j is refused outright, not quoted -- %s', (name) => {
-    expect(() => field(name)).toThrow(TsonWriteError);
-    expect(() => field(name)).toThrow(/is not an identifier, so it names no field/);
+  ])('%j is written as a single-line token, not refused -- %s', (name) => {
+    expect(field(name)).toBe(`{ ${JSON.stringify(name)}: 1 }`);
   });
 });
 

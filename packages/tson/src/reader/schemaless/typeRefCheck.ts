@@ -15,15 +15,15 @@
  *    {@link TsonAtomTypeError} -- see `tree.ts`'s own `leaf`).
  * 2. Otherwise the name links to nothing and is {@link reportUnknownTypeRef}.
  *
- * **Rule 2 is a reader policy, not a parsing one.** §5.1 requires the Class 1 *parsing* step to
- * preserve an unrecognized type annotation as an uninterpreted marker, and it does -- the event
- * stream and structural annotation capture in this package keep every name they see. What a
- * reader actively type-checking a value does with a marker it cannot link to anything is the
- * layer above, where a typo like `!Uuid` (case-sensitive per §5.1, so not `!uuid`) silently
- * disabling the validation its author intended is the worse failure. `readSchemalessTree`
- * therefore reports by default and offers preservation as an opt-in
- * (`SchemalessTreeReaderOptions.preserveUnknownTypeRefs`); §7.1's "informational" is the floor
- * this sits above.
+ * **Rule 2 is a resolver error** ([TSON-DATA] §3.2, §5.1): a schemaless document has no source of
+ * type names but §5's vocabulary, so a name outside it names no type, at every processor -- a
+ * portable finding about the document, never a refusal. The event stream and structural
+ * annotation capture keep every name they see, which is what lets a reader report one at its
+ * position; a typo like `!Uuid` (case-sensitive per §5.1, so not `!uuid`) would otherwise disable
+ * the validation its author intended and report nothing. Both schemaless readers report it -- the
+ * tree (`tree.ts`) and the binder (`reader/bind.ts`), a host-typed read being no exception -- and
+ * `SchemalessTreeReaderOptions.preserveUnknownTypeRefs` is the caller's explicit opt-out, for
+ * reading the wire form of a document whose own schema is deliberately not in scope.
  */
 import type { TsonAtomTypeError } from '../../core/errors.js';
 import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';

@@ -134,7 +134,8 @@ function jsonBigintReplacer(_key: string, value: unknown): unknown {
   return typeof value === 'bigint' ? `${value.toString()}n` : value;
 }
 
-function readSchemaless(bytes: Uint8Array): TsonDocument {
+/** `namesSchema` overrides what the document's own header says, for a value read without its header. */
+function readSchemaless(bytes: Uint8Array, namesSchema?: boolean): TsonDocument {
   const source = createDataStream(fromBytes(bytes));
   const ctx = createReadContext(
     source,
@@ -143,7 +144,14 @@ function readSchemaless(bytes: Uint8Array): TsonDocument {
   const start = runSync(ctx.next());
   if (start.kind !== 'document-start')
     throw new Error(`expected document-start, got ${start.kind}`);
-  const root = runSync(schemalessTreeReader({ preserveUnknownTypeRefs: true }).read(ctx));
+  // A document naming a schema has field names of that schema's name types (Part 2 §7.7), which a
+  // schemaless read holds to no name rule.
+  const root = runSync(
+    schemalessTreeReader({
+      preserveUnknownTypeRefs: true,
+      judgeFieldNames: !(namesSchema ?? start.schema !== undefined),
+    }).read(ctx),
+  );
   const end = runSync(ctx.next());
   if (end.kind !== 'document-end') throw new Error(`expected document-end, got ${end.kind}`);
   return tsonDocument(root, start.id, start.schema);
@@ -186,7 +194,7 @@ describe.skipIf(!suitePresent)(
             // fine on its own; only the full header+root document write is inapplicable here.
             expect(() => writeTree(first)).toThrow(TsonWriteError);
             const writtenValue = writeTreeValue(first.root);
-            const rereadValue = readSchemaless(new TextEncoder().encode(writtenValue)).root;
+            const rereadValue = readSchemaless(new TextEncoder().encode(writtenValue), true).root;
             expect(valueEqual(rereadValue, first.root)).toBe(true);
             return;
           }

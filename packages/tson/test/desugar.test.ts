@@ -96,6 +96,20 @@ function namedField(value: CoreValue, name: string): CoreValue | undefined {
   return recordFields(value).find((field) => field.name === name)?.value.value.coreValue;
 }
 
+/** The value of the field map entry at `index` (`record.fields` is a map keyed by name, §5.2), or throws. */
+function fieldAt(value: CoreValue, index: number): CoreValue {
+  if (value.kind !== 'map') throw new Error(`expected a field map, got '${value.kind}'`);
+  const entry = value.entries[index];
+  if (entry === undefined) throw new Error(`no field at index ${String(index)}`);
+  return entry.value.value.coreValue;
+}
+
+/** The entries of a field map core value, or throws. */
+function fieldEntries(value: CoreValue) {
+  if (value.kind !== 'map') throw new Error(`expected a field map, got '${value.kind}'`);
+  return value.entries;
+}
+
 /** The core value at `index` of an array core value, or throws. */
 function elementAt(value: CoreValue, index: number): CoreValue {
   const elements = arrayElements(value);
@@ -370,7 +384,7 @@ describe('identity and deduplication (§8.2)', () => {
 // ── §5.2's own rewrite: a bare record body inside a template ─────────────
 
 describe("a template's bare record body (§5.2)", () => {
-  it('becomes !record { fields: [...] } only inside a template, not a plain declaration', () => {
+  it('becomes !record { fields: { ... } } only inside a template, not a plain declaration', () => {
     const plain = declarationOf(desugarDoc('point => { x: integer  y: integer }'), 'point');
     expect(plain.typeDef.kind).toBe('structuralTypeDef');
 
@@ -382,8 +396,8 @@ describe("a template's bare record body (§5.2)", () => {
   it("writes optional/voidable/role/value only where the author's marks say something the default does not", () => {
     const instance = instanceOf(desugarDoc('box => <T> { v: T  count?: integer ~ 0 }'), 'box');
     const fields = requiredField(instance, 'fields');
-    expect(fieldNames(elementAt(fields, 0))).toEqual(['name', 'type']);
-    expect(fieldNames(elementAt(fields, 1))).toEqual(['name', 'type', 'optional', 'role', 'value']);
+    expect(fieldNames(fieldAt(fields, 0))).toEqual(['type']);
+    expect(fieldNames(fieldAt(fields, 1))).toEqual(['type', 'optional', 'role', 'value']);
   });
 
   it('rejects the same field declared twice (§5.11)', () => {
@@ -398,7 +412,7 @@ describe("a template's bare record body (§5.2)", () => {
 
   it('folds a field group into ordinary optional fields plus a group entry (§5.11)', () => {
     const instance = instanceOf(desugarDoc('box => <T> { (a: T | b: text) }'), 'box');
-    expect(arrayElements(requiredField(instance, 'fields'))).toHaveLength(2);
+    expect(fieldEntries(requiredField(instance, 'fields'))).toHaveLength(2);
     expect(arrayElements(requiredField(instance, 'groups'))).toHaveLength(1);
   });
 
@@ -459,13 +473,13 @@ describe('field-marks validation (§5.2)', () => {
   it("`v?: void?` is the spelling an earlier revision wrote as '= _': optional, voidable, no value member", () => {
     const instance = instanceOf(desugarDoc('box => <T> { v?: void? }'), 'box');
     const fields = requiredField(instance, 'fields');
-    expect(fieldNames(elementAt(fields, 0))).toEqual(['name', 'type', 'optional', 'voidable']);
+    expect(fieldNames(fieldAt(fields, 0))).toEqual(['type', 'optional', 'voidable']);
   });
 
-  it("the selector '=?' on an unmarked, non-voidable name writes no facet beyond name/type (it stays FREE, unpinned)", () => {
+  it("the selector '=?' on an unmarked, non-voidable name writes no facet beyond its type (it stays FREE, unpinned)", () => {
     const instance = instanceOf(desugarDoc('box => <T> { v: T  kind: text =? }'), 'box');
     const fields = requiredField(instance, 'fields');
-    expect(fieldNames(elementAt(fields, 1))).toEqual(['name', 'type']);
+    expect(fieldNames(fieldAt(fields, 1))).toEqual(['type']);
   });
 });
 
@@ -476,7 +490,7 @@ describe('open (parameter-bearing) synthetics', () => {
     const document = desugarDoc('holder => <T> { xs: [T] }');
     const injected = onlyInjected(document, 'array');
     const instance = declarationOf(document, 'holder').typeDef as Instance;
-    const xsField = elementAt(requiredField(instance, 'fields'), 0);
+    const xsField = fieldAt(requiredField(instance, 'fields'), 0);
     const typeValue = namedField(xsField, 'type');
     if (typeValue === undefined) throw new Error("'xs' field has no type");
     expect(typeValue.kind).toBe('record');

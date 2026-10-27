@@ -6,13 +6,19 @@
  * it, `meta.tn` and `core.tn` cannot resolve at all -- every `Instance`/atom-refinement they carry
  * stops at "no compiled reader for '!enum'" (see `bundled-schemas-resolve.test.ts`'s own history).
  *
+ * **A meta layer's own constructors.** One IS-A the kernel's `namespace` has maps for values, which
+ * no binding describes: its payload is read into the generic value model by
+ * `schema/namespaceReader.ts` (§4.1). One refining a constructor of the kernel's or meta.tn's
+ * vocabulary (`text_enum => enum_type ^ { name_type?: = text_identifier }`) builds that
+ * constructor's body, read through its binding with the refinement's own fields' defaults.
+ *
  * **Deliberately outside `schema/meta`**, alongside `bindings.ts` -- the zone rule in
  * `eslint.config.js` reserves `schema/meta` for the value model alone, and this module needs both
  * `bind/` (`fromDataValue`, the read direction `bind/decode.ts` provides) and `compiler/`'s own
  * `DefinitionMetaReader`/`DefinitionGetter` shapes.
  *
  * **Two things a bind-level `RecordBinding` alone cannot answer**, both resolved here by
- * consulting the *governing meta's own resolved `TypeDefinition`* for a constructor name --
+ * consulting the *governing meta's own resolved entry* for a constructor name --
  * exactly the structure-namespace lookup `deps.metaDefinitions` already threads through
  * `definitionResolver.ts` -- and handed to `bind/decode.ts` as a {@link RecordFieldsProvider}:
  *
@@ -41,7 +47,7 @@
  * *top-level* binding (`metaBindings.get(type)`, keyed by the real `type` this call was invoked
  * with -- the only way to tell `!array {...}` from `!set {...}` apart, since both share one
  * `arrayBodyBinding` object) and a small closed table of *nested* "supporting record" bindings
- * (`type_ref`, `record_field`, `tuple_element`, `field_group`, `integer_size`) that never alias
+ * (`type_ref`, `record_field`, `tuple_element`, `field_group`, `integer_size`, `type_chain`) that never alias
  * another wire name the way `array`/`set` do.
  */
 import type { DataValue } from '../ast/value.js';
@@ -67,10 +73,23 @@ import {
   recordFieldBinding,
   tokenFormToWire,
   tupleElementBinding,
+  typeChainBinding,
   typeRefBinding,
 } from './bindings.js';
-import { fieldOmission, isGroupMember, type RecordBody, type RecordField } from './meta/bodies.js';
-import type { Top, TypeDefinition } from './meta/typedef.js';
+import {
+  fieldOmission,
+  isGroupMember,
+  namedFields,
+  type NamedField,
+  type RecordBody,
+  type RecordField,
+} from './meta/bodies.js';
+import type { Top } from './meta/typedef.js';
+import { isTemplateBody } from './meta/typedef.js';
+import { inheritedBindingName } from './inheritedBinding.js';
+import { isNamespaceType } from './meta/namespaces.js';
+import { readNamespaceInstance } from './namespaceReader.js';
+import type { IdentifierPolicy } from '../unicode/policy.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -226,30 +245,16 @@ function readError(message: string): TsonReadError {
 // -------------------------------------------------------------------------------------------
 
 /** `def`'s own `RecordBody`, or `undefined` when `def` is unknown or not record-shaped. */
-function recordBodyOf(def: TypeDefinition | undefined): RecordBody | undefined {
-  if (def === undefined) return undefined;
-  const body: Top = def.body;
-  // `TemplateBody` carries no `kind` tag at all (see `typedef.ts`'s own doc) -- membership must
-  // be checked before narrowing, exactly as `bind/strictness.ts`'s own `checkBinding` does.
-  if (!('kind' in body) || body.kind !== 'record') return undefined;
-  // `Data.kind` is a plain `string` (a meta-schema's own constructor name), not a literal, so the
-  // check above narrows to `RecordBody | Data` rather than `RecordBody` alone -- the same
-  // narrowing gap `bind/strictness.ts`'s own `checkBinding` documents and casts past.
-  return body as RecordBody;
+function recordBodyOf(value: Top | undefined): RecordBody | undefined {
+  if (value === undefined || isTemplateBody(value)) return undefined;
+  return value.kind === 'record' ? value : undefined;
 }
 
-/** The one field name §5.6 lets a bare (non-record) value fill: the constructor's single field whose NAME is unmarked, if it has exactly one -- whatever its modifier (§5.6: "fields whose name carries `?` do not count, whether or not they carry a value"). */
-function singleRequiredField(fields: readonly RecordField[]): string | undefined {
+function singleRequiredField(fields: readonly NamedField[]): string | undefined {
   const required = fields.filter((f) => !f.optional);
   return required.length === 1 ? required[0]?.name : undefined;
 }
 
-/**
- * A default/fixed `RecordField.value` re-spelled as the wire `DataValue` it denotes, via
- * `bindings.ts`'s own form map, using {@link fieldOmission}'s own `'INJECTED'` verdict (§5.2) --
- * never for a field-group member, which the group governs and never supplies (§5.11) whatever its
- * own `role` says.
- */
 function defaultAsDataValue(field: RecordField, memberOfGroup: boolean): DataValue | undefined {
   if (fieldOmission(field, memberOfGroup) !== 'INJECTED' || field.value === undefined) {
     return undefined;
@@ -261,18 +266,18 @@ function defaultAsDataValue(field: RecordField, memberOfGroup: boolean): DataVal
 }
 
 /** Builds the {@link RecordFieldPolicy} `def`'s own resolved fields describe, or `undefined` when `def` is unknown/not record-shaped -- {@link fromCoreValue} then falls back to its own self-contained heuristic. */
-function policyFor(def: TypeDefinition | undefined): RecordFieldPolicy | undefined {
-  const body = recordBodyOf(def);
+function policyFor(value: Top | undefined): RecordFieldPolicy | undefined {
+  const body = recordBodyOf(value);
   if (body === undefined) return undefined;
   const { fields, groups } = body;
-  const positionalField = singleRequiredField(fields);
+  const positionalField = singleRequiredField(namedFields(body));
   return {
     ...(positionalField === undefined ? {} : { positionalField }),
     defaultFor: (wireName) => {
-      const field = fields.find((f) => f.name === wireName);
+      const field = fields.entries.get(wireName);
       return field === undefined
         ? undefined
-        : defaultAsDataValue(field, isGroupMember(groups, field.name));
+        : defaultAsDataValue(field, isGroupMember(groups, wireName));
     },
   };
 }
@@ -292,6 +297,7 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
   [tupleElementBinding, 'tuple_element'],
   [fieldGroupBinding, 'field_group'],
   [integerSizeBinding, 'integer_size'],
+  [typeChainBinding, 'type_chain'],
 ]);
 
 // -------------------------------------------------------------------------------------------
@@ -309,9 +315,25 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
 export function createDefinitionMetaReader(
   lookupConstructorDef: DefinitionGetter,
   decodeAtom: AtomDecoder = metaAtomDecoder,
+  identifierPolicy?: IdentifierPolicy,
 ): DefinitionMetaReader {
   return (type, value) => {
-    const binding = metaBindings.get(type);
+    const constructor = lookupConstructorDef(type);
+    // A meta layer's own namespace type: its value is the map its facets describe, read into the
+    // generic value model rather than bound (§4.1), its names judged under the processor's
+    // identifier policy (§8.2, [TSON-SCHEMA] §11.4) since the linker cannot see into it.
+    if (isNamespaceType(constructor, type)) {
+      return readNamespaceInstance(type, value, lookupConstructorDef, identifierPolicy);
+    }
+    const binding =
+      metaBindings.get(type) ??
+      metaBindings.get(
+        inheritedBindingName(
+          type,
+          lookupConstructorDef,
+          (n) => metaBindings.get(n) !== undefined,
+        ) ?? type,
+      );
     if (binding === undefined) {
       throw new TsonMissingBindingError(
         `no binding registered for constructor '!${type}' in schema/bindings.ts's metaBindings`,

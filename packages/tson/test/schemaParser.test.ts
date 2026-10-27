@@ -292,10 +292,9 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
     );
   });
 
-  it('an instance payload field name is an identifier, exactly as in ordinary data (§2.5, §7.7)', () => {
-    expect(thrownBy(`${META} { x => !choice { "not an id": [T error] } }`)).toBeInstanceOf(
-      TsonParseError,
-    );
+  it('an instance payload field name is any single-line token, exactly as in ordinary data (§2.5, §7.7)', () => {
+    // The constructor's record reads the name when the payload is bound, never the grammar.
+    expect(() => parse(`${META} { x => !choice { "not an id": [T error] } }`)).not.toThrow();
   });
 });
 
@@ -699,23 +698,23 @@ describe('the shapes a field group may take (§5.11)', () => {
   });
 });
 
-describe('a field name is an identifier in the schema grammar too (§2.5, §5.2, §5.11, §7.7)', () => {
-  it('rejects a quoted, non-identifier record field name', () => {
-    expect(thrownBy(`${META} { x => { "first name": text } }`)).toBeInstanceOf(TsonParseError);
+describe('a declared field name is any single-line token, judged at link by its record (§5.2, §7.7, §12.1)', () => {
+  it('admits a quoted, non-identifier record field name as its decoded text', () => {
+    expect(typeDefOf('{ "first name": text }')).toEqual(
+      expect.objectContaining({ kind: 'structuralTypeDef' }),
+    );
   });
 
   it('admits a quoted field name whose decoded text is an identifier, same as its unquoted spelling', () => {
     expect(typeDefOf('{ "order-id": uuid }')).toEqual(typeDefOf('{ order-id: uuid }'));
   });
 
-  it('rejects a non-identifier group member name', () => {
-    expect(thrownBy(`${META} { x => { ("first name": text | b: text) } }`)).toBeInstanceOf(
-      TsonParseError,
-    );
+  it('admits a non-identifier group member name', () => {
+    expect(() => parse(`${META} { x => { ("first name": text | b: text) } }`)).not.toThrow();
   });
 
-  it('rejects a non-identifier name in a removal set', () => {
-    expect(thrownBy(`${META} { x => customer -{ "not an id" } }`)).toBeInstanceOf(TsonParseError);
+  it('admits a non-identifier name in a removal set', () => {
+    expect(() => parse(`${META} { x => customer -{ "not an id" } }`)).not.toThrow();
   });
 });
 
@@ -988,7 +987,7 @@ describe("the spec's own worked example (§1.6)", () => {
     const doc = parse(`
 !!id:"https://example.com/task.tn"
 ${META}
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 @doc:"Task-tracking example schema."
 {
   priority => integer

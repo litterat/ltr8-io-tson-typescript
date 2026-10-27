@@ -6,35 +6,36 @@ import { fromBytes, runSync } from '../src/io/bytes.js';
 import { parseDocument } from '../src/compiler/dataParser.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
-import { resolveSchema, type Schema } from '../src/compiler/schemaResolver.js';
+import { resolveSchema, type ImportedSchema, type Schema } from '../src/compiler/schemaResolver.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
 import { canonicalizeIdentity } from '../src/link/identity.js';
 import type { DefinitionGetter } from '../src/compiler/resolverTypes.js';
 import { toCoreValue, toDataValue, type AtomEncoder } from '../src/bind/encode.js';
-import { topBinding, typeDefinitionBinding } from '../src/schema/bindings.js';
+import { headed, topBinding } from '../src/schema/bindings.js';
 import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
 import { createAnnotationValueReader } from '../src/schema/annotationReader.js';
 import { compile } from '../src/compiler/compile.js';
-import type { Annotation } from '../src/schema/meta/typedef.js';
+import { subtypesOf, type Annotation } from '../src/schema/meta/typedef.js';
 import type { CoreValue, DataValue, TokenValue } from '../src/ast/value.js';
 
 /**
- * The resolver gate: each of the three bundled schemas, resolved by this implementation, is
- * exactly the schema map its checked-in resolver-output fixture describes.
+ * The resolver gate: each bundled schema with a resolver-output fixture, resolved by this
+ * implementation, is exactly the schema map its checked-in fixture describes.
  *
- * `spec/m/{meta-kernel,meta,core}-resolved.tn` are vendored verbatim from the reference
+ * `spec/m/{meta-kernel,meta,core,net}-resolved.tn` are vendored verbatim from the reference
  * implementation (`spec/PROVENANCE.md`), so they are the port target, not a restatement of what
  * this port happens to produce. Each is a data document whose root is the kernel's own `schema`
- * type -- `map<type_name, type_definition>` (Part 2 §9) -- and it is parsed here with this
- * package's own parser, the way the shared conformance suite expects an implementation to
- * dogfood its own sidecars.
+ * namespace -- a map from entry name to the entry's value (Part 2 §8.1, §9) -- and it is parsed
+ * here with this package's own parser, the way the shared conformance suite expects an
+ * implementation to dogfood its own sidecars.
  *
  * **Comparison is wire-level, in the resolved schema's own vocabulary.** A resolved
  * {@link Schema} is a graph of `schema/meta` host values and the fixture is a document; the two
- * meet by encoding each entry through `schema/bindings.ts`'s `type_definition` binding
- * (`bind/encode.ts`'s `toDataValue`, the direction `bind/` carries) and comparing the resulting
- * `data-value` against the fixture's under {@link canonical}'s rules. Comparing host objects
- * instead would test this port against itself: the fixture's authority is its wire form.
+ * meet by encoding each entry's value through `schema/bindings.ts`'s `top` binding, headed by the
+ * constructor its facts record (`bind/encode.ts`'s `toDataValue`, the direction `bind/` carries),
+ * and comparing the resulting `data-value` against the fixture's under {@link canonical}'s rules.
+ * Comparing host objects instead would test this port against itself: the fixture's authority is
+ * its wire form.
  */
 
 const SPEC = fileURLToPath(new URL('../../../spec/m/', import.meta.url));
@@ -104,10 +105,15 @@ const DEFAULTS_BY_HEAD: Record<string, Record<string, string>> = {
     allow_negative_zero: 'true',
   },
   complex_type: { component: 'NUMBER' },
+  hostname_type: { allow_idn: 'true' },
+  media_type_type: { allow_parameters: 'false' },
 };
 
-/** Set-typed fields, which the fixture header says a comparison tool canonicalises before comparing. */
-const SET_TYPED = new Set(['subtypes']);
+/**
+ * The chain's name lists and a kind's derived `members`, which the fixture header says are
+ * written sorted and a comparison tool canonicalises before comparing.
+ */
+const SET_TYPED = new Set(['subtypes', 'supertypes', 'members']);
 
 /**
  * Constructor markers the fixture writes where the position's own declared type already fixes the
@@ -117,7 +123,9 @@ const SET_TYPED = new Set(['subtypes']);
  * absent from this set: there the marker *is* the discriminant.
  */
 const MONOMORPHIC = new Set([
-  'type_definition',
+  'type_chain',
+  'field_map',
+  'template_param',
   'record_field',
   'field_group',
   'tuple_element',
@@ -218,7 +226,7 @@ function liftedAnnotations(value: CoreValue): Canonical[] {
   });
 }
 
-function canonicalCore(value: CoreValue, entry: boolean, head?: string): Canonical {
+function canonicalCore(value: CoreValue, head?: string): Canonical {
   switch (value.kind) {
     case 'token':
       return value.form === 'unquoted' ? canonicalName(value.text) : JSON.stringify(value.text);
@@ -242,14 +250,14 @@ function canonicalCore(value: CoreValue, entry: boolean, head?: string): Canonic
               ? JSON.stringify(parsedTemplate(core.text))
               : canonical(field.value.value);
         if (Array.isArray(held) && held.length === 0) continue;
+        // An empty braced value and an empty map are one empty field map (§8.1: absent and
+        // empty are the same, and `fields: {}` is how a document writes an empty map).
+        if (core.kind === 'empty-brace') continue;
         if (FALSE_BY_DEFAULT.has(field.name) && held === 'false') continue;
         if (field.name === 'role' && held === 'FREE') continue;
         if (field.name === 'extension' && held === 'OPEN') continue;
         if (head !== undefined && DEFAULTS_BY_HEAD[head]?.[field.name] === held) continue;
-        // `type_definition.supertypes` is a set the fixture sorts and a resolver may not; a
-        // *body*'s own `supertypes` records what was written, in source order, and is compared
-        // as written.
-        const sorted = SET_TYPED.has(field.name) || (entry && field.name === 'supertypes');
+        const sorted = SET_TYPED.has(field.name);
         record[field.name] = sorted && Array.isArray(held) ? [...(held as string[])].sort() : held;
       }
       return record;
@@ -257,8 +265,8 @@ function canonicalCore(value: CoreValue, entry: boolean, head?: string): Canonic
   }
 }
 
-function canonical(value: DataValue, entry = false): Canonical {
-  const core = canonicalCore(value.coreValue, entry, value.typeRef);
+function canonical(value: DataValue): Canonical {
+  const core = canonicalCore(value.coreValue, value.typeRef);
   const annotations = [
     ...value.annotations.map((a) =>
       annotationOf(a.name, a.value === undefined ? undefined : canonical(a.value)),
@@ -330,6 +338,24 @@ function renderAnnotationValue(value: unknown): Canonical {
   return String(value);
 }
 
+/**
+ * `value` with an entry's value-position annotations (§3.1) in front of it, where {@link
+ * canonical} puts the fixture's own: the resolver records them in the entry's facts, beside the
+ * value rather than on it, and resolved output writes them where the author did.
+ */
+function withValueAnnotations(value: Canonical, annotations: readonly Annotation[]): Canonical {
+  if (annotations.length === 0) return value;
+  const rendered = annotations.map((a) =>
+    annotationOf(a.name, a.value === undefined ? undefined : renderAnnotationValue(a.value)),
+  );
+  if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'v' in value) {
+    const framed = value as Record<string, Canonical>;
+    const { v, ...frame } = framed;
+    return { ...frame, '@': [...rendered, ...((framed['@'] as Canonical[] | undefined) ?? [])], v };
+  }
+  return { '@': rendered, v: value };
+}
+
 // -- The fixtures -----------------------------------------------------------------------------
 
 interface FixtureEntry {
@@ -351,7 +377,7 @@ function fixture(name: string): Map<string, FixtureEntry> {
       throw new Error(`${name}-resolved.tn: a schema-map key is not a token`);
     }
     entries.set(canonicalName(key.text), {
-      definition: canonical(entry.value.value, true),
+      definition: canonical(entry.value.value),
       keyAnnotations: entry.key.annotations
         .filter((a) => a.name !== 'doc')
         .map((a) =>
@@ -372,16 +398,21 @@ const CHAIN: Record<string, readonly string[]> = {
   'meta-kernel': [],
   meta: ['meta-kernel'],
   core: ['meta-kernel', 'meta'],
+  net: ['meta-kernel', 'meta'],
+  policy: ['meta-kernel', 'meta'],
 };
+
+/** The bundled schema an `!!import`/`!!meta` URI names, by its file name (`.../m/core.tn?sha256=...`). */
+function bundledName(uri: string): string {
+  const file = uri.split('?')[0]?.split('/').at(-1) ?? '';
+  return file.replace(/\.tn$/, '');
+}
 
 /**
  * `name`'s own constructor structure namespace (§3.3.1's "one hop via `!!meta`"): every schema on
- * `name`'s own `!!meta` chain, nearest first. `Schema.entries` is deliberately local-only
- * (`schemaResolver.ts`'s own doc: "imported entries are visible during resolution but never part
- * of this"), so `meta.tn`'s own resolved entries alone do not carry meta-kernel's constructors
- * (`record`/`array`/`map`/`enum`/`set`/...) even though meta.tn imports meta-kernel and reuses
- * them constantly -- `core.tn`'s own `!record`/`!array`/`!enum` instances need this chain, not
- * `resolved('meta').entries` alone, to find them.
+ * `name`'s own `!!meta` chain, nearest first. `Schema.entries` is local-only, so `meta.tn`'s own
+ * resolved entries alone do not carry meta-kernel's constructors even though meta.tn imports
+ * meta-kernel; `core.tn`'s own `!record`/`!array`/`!enum` instances need the chain.
  */
 function structureNamespaceFor(name: string): DefinitionGetter {
   const chain = [...(CHAIN[name] ?? [])].reverse().map(resolved); // nearest first
@@ -394,6 +425,18 @@ function structureNamespaceFor(name: string): DefinitionGetter {
   };
 }
 
+/** `linked` as one of the schemas another imports. */
+function importedFrom(linked: LinkedSchema): ImportedSchema {
+  return {
+    entries: linked.entries,
+    facts: linked.facts,
+    keyAnnotations: linked.keyAnnotations,
+    originOf: (entry) => linked.origins.get(entry) ?? linked.id,
+    enumForms: linked.enumForms,
+    nameTypes: linked.nameTypes,
+  };
+}
+
 function resolveBundled(name: string, meta: LinkedSchema): Schema {
   const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
   // For meta-kernel the governing namespace is `meta` itself -- its own bootstrap output, since
@@ -402,36 +445,29 @@ function resolveBundled(name: string, meta: LinkedSchema): Schema {
   const metaDefinitions: DefinitionGetter =
     name === 'meta-kernel' ? (typeName) => meta.entries.get(typeName) : structureNamespaceFor(name);
   return resolveSchema(document, {
-    // `schema/metaReader.ts`'s reader: binds a constructor-application body (`!enum [true false]`,
-    // `!integer_type { size: ... }`) to the `schema.meta` `Top` value it denotes, via
-    // `bind/decode.ts`'s `fromDataValue` over `schema/bindings.ts`'s `metaBindings`. Governed by
-    // the same structure namespace as `metaDefinitions` below, for §5.6's positional form and
-    // `DEFAULT`/`FIXED` field defaulting -- see that module's own top comment.
+    // `schema/metaReader.ts`'s reader: binds a constructor-application body to the `schema.meta`
+    // `Top` value it denotes, governed by the same structure namespace as `metaDefinitions`.
     definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
     // §6/§3.3.3: a key annotation names an ordinary entry of the governing meta's namespace, and
-    // its value is read through that schema's own compiled reader for the name. Without one, every
-    // key annotation resolves name-only and each declaration's `@doc` is lost.
+    // its value is read through that schema's own compiled reader for the name.
     annotationValueReader: createAnnotationValueReader(compile(meta)),
     metaDefinitions,
-    // §5.6's chained atom refinement merges on the wire record; `resolverTypes.ts` states that a
-    // caller which can see both `compiler/` and `bind/` -- a test, or the eventual front door --
-    // closes over `toCoreValue` and passes it in, which is what keeps `compiler/` free of `bind/`.
+    metaFacts: (entry) => meta.facts.get(entry),
+    // §5.6's chained atom refinement merges on the wire record; a caller which can see both
+    // `compiler/` and `bind/` closes over `toCoreValue` and passes it in, which is what keeps
+    // `compiler/` free of `bind/`.
     encodeSourceBody: (body) => toCoreValue(topBinding, body, encodeAtom),
-    // Both bundled importers import only their own governing meta, so one namespace answers every
-    // `!!import` either of them writes.
-    resolveImport: () => ({ entries: meta.entries, originOf: () => meta.id }),
+    resolveImport: (uri) => importedFrom(resolved(bundledName(uri))),
   });
 }
 
 const cache = new Map<string, LinkedSchema>();
 
 /**
- * The bundled schema `name`, resolved against its own governing chain **and linked**
- * (`link/link.ts`'s own `linkSchema`) -- the whole-schema pass that populates `subtypes` (Wave 4
- * work package 15) and merges every `!!import`'s namespace into `entries` (§2.2.3), which is why
- * `differences` below compares only the entries `LinkedSchema.origins` attributes to `name`
- * itself: `meta.tn` imports meta-kernel.tn, so its own *linked* `entries` legitimately also
- * carries meta-kernel's, and `meta-resolved.tn`'s fixture alone is what `meta.tn` contributes.
+ * The bundled schema `name`, resolved against its own governing chain **and linked** -- the
+ * whole-schema pass that computes `subtypes` and a kind's `members` and merges every `!!import`'s
+ * namespace into `entries` (§2.2.3), which is why `differences` below compares only the entries
+ * `LinkedSchema.origins` attributes to `name` itself.
  */
 function resolved(name: string): LinkedSchema {
   const already = cache.get(name);
@@ -440,14 +476,14 @@ function resolved(name: string): LinkedSchema {
   const last = chain.at(-1);
   // meta-kernel's `!!meta` names itself (§1.5), so its governing meta is its own bootstrap output
   // -- and it is then resolved *ordinarily* against that, exactly as `schema/bootstrap.ts`'s own
-  // doc says to: "a caller wanting meta-kernel's entries properly marked runs `resolveSchema` over
-  // the same document instead, governed by this function's own output". The bootstrap output alone
-  // carries no key annotations and no `@synthetic` markers, which is what the fixture compares.
+  // doc says to. The bootstrap output alone carries no key annotations and no `@synthetic`
+  // markers, which is what the fixture compares.
   const governingMeta =
     last === undefined ? linkSchema(bootstrapMetaKernel(source('meta-kernel.tn'))) : resolved(last);
   const linked = linkSchema(resolveBundled(name, governingMeta), {
     structureNamespace: governingMeta.entries,
-    resolveImport: () => ({ entries: governingMeta.entries, originOf: () => governingMeta.id }),
+    structureFacts: governingMeta.facts,
+    resolveImport: (uri) => importedFrom(resolved(bundledName(uri))),
   });
   cache.set(name, linked);
   return linked;
@@ -527,6 +563,12 @@ function differences(name: string): string[] {
       .filter(([key]) => schema.origins.get(key) === selfId)
       .map(([key, value]) => [canonicalName(key), value]),
   );
+  // Each canonical key back to the real name, for the facts recorded under it.
+  const ownNames = new Map(
+    [...schema.entries.keys()]
+      .filter((key) => schema.origins.get(key) === selfId)
+      .map((key) => [canonicalName(key), key]),
+  );
   // Keyed the same way. A sugar-lifted entry's real name carries a real content hash
   // (`array_field_group_bcbfb436`) where the fixture writes the `_xxhash` placeholder, so a
   // lookup by the fixture's key against a map keyed by real names silently found nothing --
@@ -553,7 +595,16 @@ function differences(name: string): string[] {
     report(
       key,
       entry.definition,
-      canonical(toDataValue(typeDefinitionBinding, definition, encodeAtom), true),
+      withValueAnnotations(
+        canonical(
+          toDataValue(
+            topBinding,
+            headed(definition, schema.facts.get(ownNames.get(key) ?? key)?.head),
+            encodeAtom,
+          ),
+        ),
+        schema.facts.get(ownNames.get(key) ?? key)?.annotations ?? [],
+      ),
       out,
     );
   }
@@ -571,23 +622,32 @@ function differences(name: string): string[] {
 
 // -- The gate ---------------------------------------------------------------------------------
 
-describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixtures", () => {
-  // A fixture's entry count is its schema's authored declaration count plus whatever §5.3's sugar
-  // forms lift to a closed synthetic entry: meta-kernel declares 59 and lifts 9, meta declares 38
-  // and lifts 3, core declares 48 and lifts none. Pinned because the two counts are easy to
-  // conflate, and a schema whose declaration count drifts is a vendoring failure
-  // `vendored-spec.test.ts` should have caught first.
-  it.each([
-    ['meta-kernel', 59, 68],
-    ['meta', 38, 41],
-    ['core', 48, 48],
-  ])('%s.tn declares %i names and its fixture holds %i entries', (name, declared, entries) => {
-    const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
-    expect(document.body.declarations.size).toBe(declared);
-    expect(fixture(name).size).toBe(entries);
-  });
+/** Each fixtured schema's authored declaration count and its fixture's entry count. */
+const DECLARATION_COUNTS: readonly (readonly [string, number, number])[] = [
+  ['meta-kernel', 68, 77],
+  ['meta', 41, 45],
+  ['core', 44, 44],
+  ['net', 8, 8],
+];
 
-  it.each([['meta-kernel'], ['meta'], ['core']])('%s.tn resolves to its fixture', (name) => {
+/** The bundled schemas with a resolver-output fixture; `policy.tn` has none. */
+const WITH_FIXTURE = [['meta-kernel'], ['meta'], ['core'], ['net']];
+
+describe('the bundled schemas resolve to their checked-in fixtures (Part 2 §8.1)', () => {
+  // A fixture's entry count is its schema's authored declaration count plus whatever §5.3's sugar
+  // forms lift to a closed synthetic entry. Pinned because the two counts are easy to conflate,
+  // and a schema whose declaration count drifts is a vendoring failure `vendored-spec.test.ts`
+  // should have caught first.
+  it.each(DECLARATION_COUNTS)(
+    '%s.tn declares %i names and its fixture holds %i entries',
+    (name, declared, entries) => {
+      const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
+      expect(document.body.declarations.size).toBe(declared);
+      expect(fixture(name).size).toBe(entries);
+    },
+  );
+
+  it.each(WITH_FIXTURE)('%s.tn resolves to its fixture', (name) => {
     const unexpected = differences(name);
     expect(
       unexpected,
@@ -595,13 +655,19 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
     ).toEqual([]);
   });
 
-  it.each([['meta-kernel'], ['meta'], ['core']])(
+  it('policy.tn, which has no fixture, resolves and links against core.tn (Part 2 §9)', () => {
+    const policy = resolved('policy');
+    expect(policy.entries.has('policy')).toBe(true);
+    expect(policy.entries.has('restriction_level')).toBe(true);
+  });
+
+  it.each([...WITH_FIXTURE, ['policy']])(
     "%s.tn's key annotations carry their values, each @doc verbatim from the source",
     (name) => {
-      // The fixture cannot check this: its own header says it carries long `@doc` strings
-      // abbreviated, and that "a conforming resolver preserves them verbatim". The source document
-      // is the oracle instead -- which is a stronger check than the fixture would have been, since
-      // it compares against the exact text an author wrote rather than a summary of it.
+      // The fixture cannot check this: its own header says it leaves entry docs out, and that "a
+      // conforming resolver carries every source @doc verbatim". The source document is the
+      // oracle instead -- a stronger check than the fixture would have been, since it compares
+      // against the exact text an author wrote.
       const document = runSync(parseSchemaDocument(fromBytes(source(`${name}.tn`))));
       const schema = resolved(name);
       const selfId = canonicalizeIdentity(schema.id);
@@ -624,24 +690,21 @@ describe("Wave 3's gate: the bundled schemas resolve to their checked-in fixture
       }
       // A guard against the loop silently checking nothing -- every bundled schema documents most
       // of what it declares.
-      expect(checked).toBeGreaterThan(20);
+      expect(checked).toBeGreaterThan(3);
     },
   );
 
-  it('populates subtypes for meta-kernel.tn exactly as the fixture records (Wave 4 work package 15)', () => {
+  it("computes meta-kernel.tn's subtypes exactly as the fixture's chains record them (§4.1)", () => {
     const entries = resolved('meta-kernel').entries;
-    const subtypeCount = (name: string): number => entries.get(name)?.subtypes.length ?? -1;
-    // Revision 35 adds two entries that IS-A `top`: `template` (§5.10's held-body constructor,
-    // composing with `top` directly like `reference`) and `set_type` (§5.6's "the nearest
-    // constructor in the source chain for every container closure" for a `set<T>` application --
-    // `array ^ { ... }`, a *constructor* refinement, §4.2, which preserves IS-A per §5.7's
-    // operations table).
-    expect(subtypeCount('top')).toBe(22);
-    expect(subtypeCount('atom')).toBe(10);
+    const subtypeCount = (name: string): number => {
+      const value = entries.get(name);
+      return value === undefined ? -1 : subtypesOf(value).length;
+    };
+    expect(subtypeCount('top')).toBe(26);
+    expect(subtypeCount('type')).toBe(20);
+    expect(subtypeCount('atom')).toBe(11);
     expect(subtypeCount('product')).toBe(5);
     expect(subtypeCount('sum')).toBe(1);
-    expect(subtypeCount('text_type')).toBe(3);
-    expect(subtypeCount('atom_specification')).toBe(3);
-    expect(subtypeCount('array')).toBe(1);
+    expect(subtypeCount('namespace')).toBe(2);
   });
 });

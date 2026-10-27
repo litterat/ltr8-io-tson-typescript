@@ -1,54 +1,45 @@
 /**
- * `HeldBody` — the one implementation of `schema/meta`'s own `TemplateBody` (§5.10): a
- * constructor application, still in wire form, standing as the body of the template that
- * declares it, unread until `templateSubstitution.ts` substitutes its parameters away.
+ * `HeldBody` — the held tree of an open entry (§5.10): a constructor application, still in wire
+ * form, unread until `templateSubstitution.ts` substitutes its parameters away.
  *
- * `schema/meta/bodies.ts`'s own doc says this outright: "declared here but implemented
- * elsewhere... exactly one class implements this interface, and it lives outside `schema/meta`".
- * This module is that implementation.
+ * **Two kernel shapes carry an open entry, and one tree serves both.** A record template is a
+ * `record` with `parameters` (`schema/meta`'s `RecordBody`, a family base and itself a type);
+ * every other open entry's value is the kernel's `template`, the application held as text
+ * (`TemplateBody`). Closing reads one tree shape whichever kind of open entry it came from:
+ * {@link heldOf} answers for any value, writing a record template's tree through `wireForm.ts`'s
+ * `heldRecord` and keeping the tree a held `TemplateBody` was built from.
  *
- * **`TemplateBody` itself is now text** (§8.1: "the application is text... What is compared —
- * for identity, on ingest, and between two resolvers' outputs — is the parsed form of the text,
- * never the text"), so `parameters`/`template` alone satisfy the contract `schema/meta` declares
- * the seat for. `HeldBody` carries more than that contract requires: the live `application`
- * value beneath the text, and the two query methods ({@link HeldBody.names}/
- * {@link HeldBody.applications}) every caller in this module still asks of it. Parsing
- * `template` text back into a structured application belongs to a later work package's own held-
- * body cache; until it lands, this implementation keeps answering both questions the way it
- * always has — directly over the `DataValue` it was built from, never round-tripped through the
- * text — which is why `template` is written once, from the same value, and never read back here.
- *
- * **Every held body is an application, so a `DataValue` carries all of them.** A sugar form
- * already is one, by the desugar table (`desugar.ts`). A bare record body becomes one too: it is
- * the `!record { fields: [ ... ] }` §5.2 says it denotes, built by `wireForm.ts`'s own
- * `heldRecord`/`heldEmptyRecord` and applied by `definitionResolver.ts`'s own `holdIfOpen` for the
- * two forms desugaring cannot rewrite in advance — a composition or refinement template, which has
- * to flatten its supertype's/source's fields against a namespace before there is anything to hold.
+ * **`TemplateBody` itself is text** (§8.1: what is compared is the parsed form of the text, never
+ * the text), so `parameters`/`template` alone satisfy the contract `schema/meta` declares.
+ * `HeldBody` carries more: the live `application` value beneath the text, and the two query
+ * methods ({@link HeldBody.names}/{@link HeldBody.applications}) the resolver asks of it. A held
+ * body built here answers both directly over the `DataValue` it was built from; one that arrived
+ * as text alone is parsed once, by {@link heldOf}.
  *
  * The wire vocabulary and the shape of an application (`isApplication`/`typeRefOf`) are
  * `wireForm.ts`'s own concern, shared with every other phase that writes or reads one — see that
- * module's own doc for why one spelling matters. This module is left with what only it answers:
- * the two questions a held, unresolved body can answer without being resolved.
+ * module's own doc for why one spelling matters.
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
-import type { RecordExtensionType, TemplateBody, TemplateParam } from '../schema/meta/bodies.js';
-import type { TypeRef } from '../schema/meta/typedef.js';
+import { fromBytes, runSync } from '../io/bytes.js';
+import { encodeUtf8 } from '../io/utf8.js';
+import type { TemplateBody, TemplateParam } from '../schema/meta/bodies.js';
+import { TYPE_KIND } from '../schema/meta/bodies.js';
+import type { Top, TypeRef } from '../schema/meta/typedef.js';
+import { isFamilyBase, isTemplateBody } from '../schema/meta/typedef.js';
 import { writeDataValue } from '../write/astWriter.js';
-import { isApplication, typeRefOf } from './wireForm.js';
+import { parseDocument } from './dataParser.js';
+import { heldRecord, isApplication, typeRefOf } from './wireForm.js';
 
 /**
- * Wraps a held application (§5.10) as the `TemplateBody` `schema/meta` declares the seat for —
- * `application` is `HeldBody`'s own accessor in the Java original; here it is a plain property, so
- * a caller (`definitionResolver.ts`'s own `openOperand`) reads `held.application` directly with no
- * separate accessor call.
+ * A held application (§5.10) with the parameters it binds: the `TemplateBody` `schema/meta`
+ * declares the seat for, plus `application`, the tree beneath the text.
  *
  * `names()`/`applications()` answer the only two questions a held, unresolved body can answer
  * without being resolved: every unquoted name it mentions, at any depth (a declared parameter the
  * body never references is an author error, §5.10), and every type application it writes, at any
  * depth (a recursive application that does not pass its parameters through unchanged grows its
- * argument at every level, §5.10.1). Neither is part of `TemplateBody` itself — the
- * contract's own `template` field carries only text — so a caller that needs either narrows (or
- * casts, the way this module's own callers do) from `TemplateBody` to this richer type first.
+ * argument at every level, §5.10.1).
  */
 export interface HeldBody extends TemplateBody {
   readonly application: DataValue;
@@ -58,88 +49,66 @@ export interface HeldBody extends TemplateBody {
   applications(): readonly TypeRef[];
 }
 
-/**
- * Whether a resolved `TemplateBody` is this module's own `HeldBody` — true of every one that
- * exists, since this is the one implementation `schema/meta`'s own doc says lives "outside
- * `schema/meta`" (this module's own top note). Callers elsewhere in `compiler/`/`link/` that need
- * `application`/`names()`/`applications()` — none of which `TemplateBody` itself declares any
- * more — narrow with this first rather than assuming the cast is always safe.
- */
+/** Whether a resolved `TemplateBody` carries its tree -- true of every one this module built. */
 export function isHeldBody(body: TemplateBody): body is HeldBody {
   return 'application' in body;
 }
 
-/** The kernel entry every type-reference slot is typed by (§9) — what an unclassified parameter starts as. */
-const TYPE_REF: TypeRef = { name: 'type_ref', arguments: [], annotations: [] };
-
-/** The family-base facts a held body carries beside its parameters and text (§5.10). */
-interface HeldFacts {
-  readonly extension?: RecordExtensionType;
-  readonly discriminators?: readonly string[];
-}
+/** The kernel's kind of the types (§4.2) — what an unclassified parameter starts as, a type parameter. */
+const TYPE_KIND_REF: TypeRef = { name: TYPE_KIND, arguments: [], annotations: [] };
 
 /**
- * Wraps a held application and the parameters it binds, in declaration order. A parameter's type
- * is derived from the body once the whole schema has resolved (`parameterTypes.ts`), well after a
- * held body is built, so every parameter starts as an unbounded type parameter.
+ * A held body over `application`, each of `parameters` starting as a type parameter until
+ * `parameterTypes.ts` derives its type from the positions it stands in (§5.10).
  */
-export function createHeldBody(
-  application: DataValue,
-  parameters: readonly string[],
-  facts: HeldFacts = {},
-): HeldBody {
+export function createHeldBody(application: DataValue, parameters: readonly string[]): HeldBody {
   return heldBodyOf(
     application,
-    parameters.map((name): TemplateParam => ({ name, type: TYPE_REF })),
-    facts,
+    parameters.map((name): TemplateParam => ({ name, type: TYPE_KIND_REF })),
   );
 }
 
-/**
- * `held` with some of its recorded facts replaced: its typed parameters, and the family-base
- * `extension` and `discriminators` (§5.10). The application and text are the same, since the
- * held text is authoritative.
- */
-export function reheld(
-  held: HeldBody,
-  patch: HeldFacts & { readonly parameters?: readonly TemplateParam[] },
-): HeldBody {
-  const extension = patch.extension ?? held.extension;
-  const discriminators = patch.discriminators ?? held.discriminators;
-  return heldBodyOf(held.application, patch.parameters ?? held.parameters, {
-    ...(extension === undefined ? {} : { extension }),
-    ...(discriminators === undefined ? {} : { discriminators }),
-  });
-}
-
-/** `held` with its parameters replaced by the typed ones `settled` names, by parameter name; a parameter `settled` does not name keeps what it had. */
+/** `held` with each parameter replaced by `settled`'s entry for it, where there is one. */
 export function withParameters(
   held: HeldBody,
   settled: ReadonlyMap<string, TemplateParam>,
 ): HeldBody {
-  return reheld(held, {
-    parameters: held.parameters.map((parameter) => settled.get(parameter.name) ?? parameter),
-  });
+  return heldBodyOf(
+    held.application,
+    held.parameters.map((parameter) => settled.get(parameter.name) ?? parameter),
+  );
 }
 
 /**
- * **Everything beyond the `TemplateBody` contract is non-enumerable**: the application, the
- * parameter names and the two queries are this module's working state, and a held body compared,
- * spread or written is the contract alone — `parameters`, `template`, `extension`,
- * `discriminators`.
+ * The held tree of an entry whose value is `value`, or `undefined` for a closed entry: a held
+ * `TemplateBody`'s own tree (parsed from its text where it arrived as text alone), or a record
+ * template's, written through `heldRecord` -- its own `extension` (each application's) stated
+ * where it is not OPEN, its parents as written, and no selector list, which a member never
+ * carries.
  */
-function heldBodyOf(
-  application: DataValue,
-  parameters: readonly TemplateParam[],
-  facts: HeldFacts,
-): HeldBody {
+export function heldOf(value: Top | undefined): HeldBody | undefined {
+  if (value === undefined) return undefined;
+  if (isTemplateBody(value)) {
+    if (isHeldBody(value)) return value;
+    return heldBodyOf(parseHeldText(value.template), value.parameters);
+  }
+  if (isFamilyBase(value)) {
+    const { discriminators: _selectors, parameters, ...record } = value;
+    void _selectors;
+    return heldBodyOf(heldRecord({ ...record }), parameters);
+  }
+  return undefined;
+}
+
+/** A held body's text back as the application it spells. */
+function parseHeldText(text: string): DataValue {
+  return runSync(parseDocument(fromBytes(encodeUtf8(text)))).document.root;
+}
+
+function heldBodyOf(application: DataValue, parameters: readonly TemplateParam[]): HeldBody {
   const body: TemplateBody = {
     parameters,
     template: writeDataValue(application),
-    ...(facts.extension === undefined ? {} : { extension: facts.extension }),
-    ...(facts.discriminators === undefined || facts.discriminators.length === 0
-      ? {}
-      : { discriminators: facts.discriminators }),
   };
   return Object.defineProperties(body, {
     application: { value: application },
@@ -173,10 +142,10 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       for (const field of value.fields) collectNames(field.value.value.coreValue, into);
       return;
     case 'map':
-      // A parameter stands wherever a token stands (this module's own top note), map keys and
-      // values alike -- `extern_of => <S> !scoped { scope: [EXTERN] schemas: { S => _ } }` binds
-      // `S` as a map key, never a field or element, so a walk that skipped this case would call
-      // `extern_of` a declared-but-unused parameter (§5.10's own error, wrongly raised).
+      // A parameter stands wherever a token stands, map keys and values alike --
+      // `extern_of => <S> !scoped { scope: [EXTERN] schemas: { S => _ } }` binds `S` as a map key,
+      // never a field or element, so a walk that skipped this case would call `extern_of` a
+      // declared-but-unused parameter (§5.10's own error, wrongly raised).
       for (const entry of value.entries) {
         collectNames(entry.key.coreValue, into);
         collectNames(entry.value.value.coreValue, into);
@@ -188,11 +157,6 @@ function collectNames(value: CoreValue, into: Set<string>): void {
   }
 }
 
-/**
- * Every `type_ref` record form the held tree holds. Does **not** descend into one it finds: an
- * application's own arguments come back inside the `TypeRef` it yields, and a caller that cares
- * about nesting walks those — descending here too would report each nested application twice.
- */
 function collectApplications(value: CoreValue, into: TypeRef[]): void {
   switch (value.kind) {
     case 'record':
@@ -218,4 +182,22 @@ function collectApplications(value: CoreValue, into: TypeRef[]): void {
     case 'void':
       return;
   }
+}
+
+/**
+ * `value` with each of its parameters replaced by `settled`'s entry for it, where there is one --
+ * how a parameter's derived type is stamped (§5.10). A closed entry is returned as it is.
+ */
+export function withParametersOf(value: Top, settled: ReadonlyMap<string, TemplateParam>): Top {
+  if (isTemplateBody(value)) {
+    const held = heldOf(value);
+    return held === undefined ? value : withParameters(held, settled);
+  }
+  if (isFamilyBase(value)) {
+    return {
+      ...value,
+      parameters: value.parameters.map((parameter) => settled.get(parameter.name) ?? parameter),
+    };
+  }
+  return value;
 }

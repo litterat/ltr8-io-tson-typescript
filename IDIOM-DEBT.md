@@ -441,7 +441,7 @@ The public names for the void sentinel follow the reference's own (`TsonVoid`, `
 "absent" for a field or facet a body does not state, so `FieldOmission`'s `'ABSENT'` — an internal
 fact with no Java counterpart — keeps its name.
 
-Three places differ from the reference's closed `Diagnostic.Code` set and are held as they are:
+Two places differ from the reference's closed `Diagnostic.Code` set and are held as they are:
 
 - `VOID_MAP_KEY` has no counterpart: the Java's set carries no code for a void key in a map.
 - `LIMIT_REFUSED` is the Java's `LIMIT_EXCEEDED`: the same §9.1 outcome under a different name.
@@ -451,6 +451,27 @@ a limit refusal is not a verdict, and `isRefusal` groups it with the §8.2 name 
 
 **Trigger.** The reference's `Diagnostic.Code` set settles. A rename is then one identifier per
 code.
+
+## 11. The net atoms read to canonical-text strings, where the Java reads to value classes
+
+`hostname`, `host` and `media_type` ([TSON-DATA] §5.5) are string-class atoms whose value is the
+canonical text: `createHostnameParser`, `createHostParser` and `createMediaTypeParser` return
+`AtomType<string>`, and a tree node, a bound value and a written token all carry that string. The
+reference reads them to `HostName`, `Host` and `MediaType` value classes, and `ipv4`, `ipv6`,
+`cidr4`, `cidr6` and `mac` in this port already read to structured values (`Ipv4Address` and its
+siblings). Strings are enough for every consumer that exists: §5.5 gives each type an equality that
+two values meet exactly when their canonical texts are equal, so `===` on the text is the type's
+`equals`, and a set or map of them compares correctly with no hash.
+
+The structured value is not lost. `parseHostname`, `parseHost` and `parseMediaType` return it
+(`HostnameValue` with its labels and A-label form, `HostValue` with an address's octets,
+`MediaTypeValue` with its parameter map), and the identity rules of §2.2.1 consume it from there.
+What is held is only the narrower `AtomType` an application reads through.
+
+**Trigger.** A consumer reading through `readTree` or `readBind` needs a member of the value rather
+than its text (a name's labels, a media type's parameters, an address's octets). The `AtomType`'s `T`
+then becomes the exported value type, with `write` taking it, and a caller that wants the text
+composes a `bridge()`.
 
 ## Summary
 
@@ -466,6 +487,7 @@ code.
 | 8   | `export *` barrel                                     | Before first npm publish              | Small, one file           |
 | 9   | `json/` mirrors the TSON-text read-plan shape         | A shared `tson-encoding`-style module | Large, whole `json/` tree |
 | 10  | Diagnostic code names and verdicts held to the Java's | The Java's code set settles           | Small, a few identifiers  |
+| 11  | Net atoms read to strings, not value classes          | A consumer needs the structured value | Small, three parsers      |
 
-Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7, 9 and 10 are the hold — and 7 is
+Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7, 9, 10 and 11 are the hold — and 7 is
 where most of the "this library is its own thing now" actually lives.

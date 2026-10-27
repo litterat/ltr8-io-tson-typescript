@@ -25,8 +25,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-dispatch.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   pet => abstract { pet_type: text =?  name: text  nickname?: text? }
   cat => pet & { pet_type: = cat  hunting_skill?: text ~ lazy }
@@ -38,6 +38,10 @@ const SCHEMA_SOURCE = `
   vehicle => abstract { }
   car => vehicle & { wheels: int32 }
   truck => vehicle & { axles: int32 }
+
+  craft => abstract { }
+  vessel => abstract craft & { }
+  dinghy => vessel & { oars: int32 }
 
   base_shape => { common: text }
   wide_shape => base_shape & { extra: text }
@@ -137,9 +141,9 @@ describe('§3.2/§3.3 the annotation object', () => {
     expect(d.code).toBe('SCOPE_NOT_ADMITTED');
   });
 
-  it('a $-initial member outside the closed reserved set is a resolver error (§3.2, §9.4)', () => {
+  it('§3.2: a $-initial member outside the three is an ordinary member, so an undeclared one is §6.1.1’s closure error', () => {
     const d = refusalJson('dog', '{"$bogus": 1, "pet_type": "dog", "name": "Rex", "pack_size": 3}');
-    expect(d.code).toBe('UNKNOWN_TYPE_REF');
+    expect(d.code).toBe('UNRECOGNIZED_FIELD');
     expect(d.path).toBe('/$bogus');
   });
 });
@@ -186,6 +190,13 @@ describe('§6.1.5 ABSTRACT, no discriminators', () => {
     expect(refusalJson('vehicle', '{"$type": "cat", "pet_type": "cat", "name": "x"}').code).toBe(
       'TYPE_MISMATCH',
     );
+  });
+
+  it('§6.1.5: a missing tag SHOULD name the subtypes, and names those with instances of their own -- an abstract one is no answer', () => {
+    const d = refusalJson('craft', '{"oars": 2}');
+    expect(d.code).toBe('VALIDATION_ERROR');
+    expect(d.expected).toBe('one of (dinghy)');
+    expect(acceptedJson('craft', '{"$type": "dinghy", "oars": 2}')).toBe('{"oars":2}');
   });
 });
 
@@ -458,8 +469,8 @@ describe('cross-encoding parity: same schema, same verdict', () => {
 describe('a record-bodied template family base', () => {
   const TEMPLATE_SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-dispatch-template.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   box => abstract <T> { kind: text =?  value: T }
   int_box => box<int32> & { kind: = int_box }

@@ -116,7 +116,9 @@ describe('the standard library carries its own key annotations (§6)', () => {
   it('reads a @doc value as an atom node carrying the text the author wrote', () => {
     const doc = kernel?.keyAnnotations.get('top')?.find((a) => a.name === 'doc');
     expect(doc?.value).toMatchObject({ kind: 'atom' });
-    expect((doc?.value as { value: unknown }).value).toMatch(/^The structural root\./u);
+    expect((doc?.value as { value: unknown }).value).toMatch(
+      /^The structural root, and what a schema map's entries are/u,
+    );
   });
 });
 

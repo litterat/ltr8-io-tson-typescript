@@ -1,42 +1,46 @@
 /**
- * Whether a document was checked, and if it was, what checking found -- the port of the reference
- * implementation's `Outcome` enum (`tson-cli`'s own `Outcome.java`).
+ * Whether a document will be accepted -- the question a sender checking a file against a
+ * deployment's schema and policy is asking (the reference implementation's `Outcome`, `tson-cli`'s
+ * own `Outcome.java`).
  *
- * **The bug a plain `ok: boolean` (plus ad hoc `notImplemented?`/`schemaUnavailable?` side flags)
- * has**: a document whose schema was never fetched, or that hit a construct this library has no
- * reader for, was never actually read. Reporting `ok: false` for it asserts a verdict the run
- * never reached, and `if (!ok)` is exactly what a consumer of this report acts on. A second
- * boolean does not fix this -- `checked: false, valid: true` is representable and meaningless --
- * and neither does an optional boolean, `undefined` being falsy in every language that consumes
- * this wire shape. There is no falsy shortcut past a three-member type.
+ * **Acceptance, not validity, is the headline.** A document is rejected by an invalidity every
+ * processor repeats, and equally by a refusal under this processor's own configuration -- its
+ * [TSON-DATA] §8.2 policy, its §9.1 limits, or a schema it does not hold and will not fetch or one
+ * past its size limit ([TSON-SCHEMA] §11.2): either way it will not be accepted here, and the
+ * sender holds the fix. Which of the two it was -- the portable finding or the local one -- is
+ * each diagnostic's own code, where the library's `isVerdict` and `isRefusal` tell them apart.
+ * What leaves a document {@link "UNDETERMINED"} is nothing anyone present could judge it by: a
+ * schema that could not be obtained, a gap in this library, a type with no binding here
+ * ([TSON-DATA] §8.1).
+ *
+ * **A three-member type rather than a `valid` boolean**, since `if (!valid)` reads "undetermined"
+ * as "rejected" -- the assertion a consumer acts on. There is no falsy shortcut past it.
  */
-import { type Diagnostic } from '@ltr8/tson';
-import { allVerdicts } from './exit.js';
+import { isRefusal, isVerdict, type Diagnostic } from '@ltr8/tson';
 
-export type Outcome = 'VALID' | 'INVALID' | 'NOT_CHECKED';
+export type Outcome = 'ACCEPTED' | 'REJECTED' | 'UNDETERMINED';
 
 /**
- * The outcome one file's (or one schema's) own diagnostics denote.
- *
- * Mirrors the reference implementation's `Outcome.of`: nothing reported is {@link "VALID"};
- * everything reported being a verdict on the document (`isVerdict`, via `exit.ts`'s own
- * {@link allVerdicts}) is {@link "INVALID"}; **any non-verdict present, even beside real
- * verdicts, makes the whole thing {@link "NOT_CHECKED"}** -- the ordinary problems beside it are
- * still real and still reported, but part of the document went unchecked, so "invalid" is a claim
- * about the whole that this run cannot make.
+ * The outcome one file's (or one schema's) own diagnostics denote: nothing reported is
+ * {@link "ACCEPTED"}, any invalidity or refusal is {@link "REJECTED"}, and what is left is
+ * {@link "UNDETERMINED"}. **One rejection is enough**, beside anything else reported: what went
+ * unjudged cannot make a rejected document acceptable, only an unrejected one unknown. Which codes
+ * reject is the library's to say, so this keeps no copy of the set.
  */
 export function outcomeOfDiagnostics(diagnostics: readonly Diagnostic[]): Outcome {
-  if (diagnostics.length === 0) return 'VALID';
-  return allVerdicts(diagnostics) ? 'INVALID' : 'NOT_CHECKED';
+  if (diagnostics.length === 0) return 'ACCEPTED';
+  return diagnostics.some((d) => isVerdict(d.code) || isRefusal(d.code))
+    ? 'REJECTED'
+    : 'UNDETERMINED';
 }
 
 /**
- * The outcome of a whole run: the least settled of its files' own outcomes -- a run is no better
- * than its parts (the reference implementation's `Outcome.ofFiles`). Any file {@link
- * "NOT_CHECKED"} makes the run {@link "NOT_CHECKED"}; short of that, every file {@link "VALID"}
- * makes the run {@link "VALID"}; anything else is {@link "INVALID"}.
+ * The outcome of a whole run, on the same terms (the reference implementation's
+ * `Outcome.ofFiles`): any file {@link "REJECTED"} makes the run {@link "REJECTED"}; short of that,
+ * every file {@link "ACCEPTED"} makes the run {@link "ACCEPTED"}; anything else is
+ * {@link "UNDETERMINED"}.
  */
 export function outcomeOfFiles(outcomes: readonly Outcome[]): Outcome {
-  if (outcomes.some((outcome) => outcome === 'NOT_CHECKED')) return 'NOT_CHECKED';
-  return outcomes.every((outcome) => outcome === 'VALID') ? 'VALID' : 'INVALID';
+  if (outcomes.some((outcome) => outcome === 'REJECTED')) return 'REJECTED';
+  return outcomes.every((outcome) => outcome === 'ACCEPTED') ? 'ACCEPTED' : 'UNDETERMINED';
 }

@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `!!id:"test://scoped.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 `;
 const load = (decls: string) => resolveUserSchema(`${HEAD}{ claim => { id: text }\n  ${decls} }`);
 
@@ -34,7 +34,7 @@ describe('§7.8: `schemas` requires EXTERN in `scope`', () => {
     const linked = load(
       'any => !scoped { scope: [EXTERN]  schemas: { "https://example.com/a.tn" => _ } }',
     );
-    const body = linked.entries.get('any')?.body;
+    const body = linked.entries.get('any');
     expect(body).toMatchObject({ kind: 'scoped' });
     // Absent and the empty list are the same list, and the reader reads both as "any type".
     expect(

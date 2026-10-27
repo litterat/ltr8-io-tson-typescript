@@ -11,8 +11,12 @@
  *
  * A compile with no lookup behind it reports `SCHEMA_NOT_PERMITTED`: nothing was configured to
  * supply a foreign schema, which is a fact about this deployment and not a verdict on the
- * document. A lookup that answers `undefined` reports `SCHEMA_NOT_FOUND`; one that throws a fetch
- * failure reports that failure's own code. None of the five is a verdict (§8.1).
+ * document. A lookup that answers `undefined` reports `SCHEMA_NOT_PERMITTED` too: it holds none of
+ * that schema and has no source for it, so this processor will not supply it -- [TSON-JSON] §9.4's
+ * *refused* outcome at the reference, never a claim that nothing exists there, which only a
+ * source that looked can make. A lookup that throws a fetch failure reports that failure's own
+ * code, `SCHEMA_NOT_FOUND` among them (§9.4's *undetermined*). None of the five is a verdict
+ * (§8.1).
  */
 import { diagnosticCodeForFetch, type DiagnosticCode } from '../../core/diagnostic.js';
 import {
@@ -81,8 +85,9 @@ export function createForeignLookup(
         if (linked === undefined) {
           fail(
             ctx,
-            'SCHEMA_NOT_FOUND',
-            `no schema was supplied for '${uri}' (§8.5)`,
+            'SCHEMA_NOT_PERMITTED',
+            `no schema was supplied for '${uri}' -- this processor holds none and has no source ` +
+              'for it (§8.5, §9.4)',
             'a schema this processor can obtain',
             uri,
           );

@@ -24,9 +24,10 @@ import {
   fieldOmission,
   groupRefusals,
   isGroupMember,
+  namedFields,
   type FieldGroup,
+  type NamedField,
   type RecordBody,
-  type RecordField,
 } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
 import { voidNode, recordNode } from '../../tree/nodes.js';
@@ -40,9 +41,11 @@ import {
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
 import { abandonedValue, readSchemaLiteral, renderValue } from './support.js';
+import { FIELD_NAME_RULE, judgeFieldName, matchKey, type FieldNameRule } from './fieldNames.js';
+import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../../unicode/policy.js';
 
 interface CompiledField {
-  readonly schema: RecordField;
+  readonly schema: NamedField;
   readonly parser: TypeReader<Value>;
   /** Whether this field's own declared type resolves to a `scoped` instance (§7.8) -- whether a nested `!!schema` may stand at this field's value at all. */
   readonly scoped: boolean;
@@ -82,11 +85,13 @@ export function recordTreeReader(
   name: string,
   displayName: string,
   body: RecordBody,
-  resolveField: (field: RecordField) => TypeReader<Value>,
+  resolveField: (field: NamedField) => TypeReader<Value>,
   schemaLocation: SchemaLocation,
   isScopedType: (typeName: string) => boolean,
+  fieldNames: FieldNameRule = FIELD_NAME_RULE,
+  identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
 ): TypeReader<Value> {
-  const fields: CompiledField[] = body.fields.map((schema) => ({
+  const fields: CompiledField[] = namedFields(body).map((schema) => ({
     schema,
     parser: resolveField(schema),
     scoped: isScopedType(schema.type.name),
@@ -103,7 +108,8 @@ export function recordTreeReader(
   let bareRequiredCount = 0;
 
   fields.forEach((field, i) => {
-    fieldIndex.set(field.schema.name, i);
+    // Keyed in the name type's form, the equality linking judged the declared names distinct under.
+    fieldIndex.set(matchKey(fieldNames, field.schema.name), i);
     const role = field.schema.role;
     if (role !== 'FREE') {
       const token = field.schema.value;
@@ -300,9 +306,18 @@ export function recordTreeReader(
       if (fieldNameEvent.kind !== 'field-name') {
         throw new Error(`expected a field-name event, found '${fieldNameEvent.kind}'`);
       }
-      const schemaIndex = fieldIndex.get(fieldNameEvent.name);
+      const written = fieldNameEvent.name;
+      const key = matchKey(fieldNames, written);
+      // The name type judges the name before closure does: a refused name was never read, so
+      // nothing below may hold a verdict about it (`fieldNames.ts`).
+      const judged = judgeFieldName(ctx.field(written), fieldNames, identifierPolicy, written);
+      const schemaIndex = fieldIndex.get(key);
       if (schemaIndex === undefined) {
-        if (seenUnmatched.has(fieldNameEvent.name)) {
+        if (judged === 'refused') {
+          yield* skipScopedValue(ctx);
+          continue;
+        }
+        if (seenUnmatched.has(key)) {
           ctx
             .field(fieldNameEvent.name)
             .report(
@@ -314,12 +329,18 @@ export function recordTreeReader(
           yield* skipScopedValue(ctx);
           continue;
         }
-        seenUnmatched.add(fieldNameEvent.name);
+        seenUnmatched.add(key);
+        // Under the default the message is the plain one any undeclared name draws; under a
+        // declared name type it names the type and its reason, the rules the author looks up.
+        const reason =
+          judged === undefined || fieldNames.typeName === undefined
+            ? ''
+            : ` -- it is no value of its name_type '${fieldNames.typeName}': ${judged.notAName}`;
         ctx
           .field(fieldNameEvent.name)
           .report(
             'UNRECOGNIZED_FIELD',
-            `unknown field '${fieldNameEvent.name}' on '${displayName}' -- a record is closed under its type (§7.2), whose fields are (${declaredFields})`,
+            `unknown field '${fieldNameEvent.name}' on '${displayName}' -- a record is closed under its type (§7.2), whose fields are (${declaredFields})${reason}`,
             declaredFields,
             fieldNameEvent.name,
           );
@@ -327,11 +348,16 @@ export function recordTreeReader(
         continue;
       }
       if (seen[schemaIndex]) {
+        const declared = at(fields, schemaIndex, 'field').schema.name;
+        const spelling =
+          declared === written
+            ? ''
+            : `, another spelling of the field '${declared}' under its name type`;
         ctx
           .schemaField(fieldNameEvent.name)
           .report(
             'DUPLICATE_FIELD',
-            `duplicate field '${fieldNameEvent.name}' on '${displayName}' -- a record states each field at most once (§2.5), and the repeat states a value for nothing`,
+            `duplicate field '${fieldNameEvent.name}'${spelling} on '${displayName}' -- a record states each field at most once (§2.5), and the repeat states a value for nothing`,
             'each field stated once',
             `'${fieldNameEvent.name}' stated again`,
           );
@@ -376,7 +402,7 @@ export function recordTreeReader(
   /** Field-group presence check (§5.11, {@link groupViolations}): one option chosen, or at most one under `?`, and a chosen option holds every unmarked member. */
   function validateGroups(ctx: ReadContext, seen: readonly boolean[]): void {
     const isPresent = (member: string): boolean => {
-      const idx = fieldIndex.get(member);
+      const idx = fieldIndex.get(matchKey(fieldNames, member));
       return idx !== undefined && seen[idx] === true;
     };
     for (const group of groups) {

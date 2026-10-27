@@ -5,17 +5,21 @@
 A **closed union** — a new code is an API change, not a new string appearing in a message. Switch on
 it exhaustively; never match on `message` text. `isVerdict(code)` says whether a rule actually ran
 against the document and reported what it found, as opposed to a reason the document was not
-judged: [TSON-DATA] §8.1's fifth outcome, "not a verdict". Two groups answer `false`. A §8.2
+judged: [TSON-DATA] §8.1's two outcomes beside its four categories, **refused** (this processor declined the
+document under its own configuration) and **undetermined** (it could not obtain what it would judge
+against), neither a verdict on validity. Two groups answer `false`. A §8.2
 **name refusal** (`isNameRefusal`) says this processor's policy declined the document, which asserts
 nothing about its validity. The rest say no rule ran: `NOT_IMPLEMENTED` that this library could not
 check it, `BIND_MISMATCH` that the reading application is wired wrong, and the five `SCHEMA_*` codes
 that no schema was obtained. `LIMIT_REFUSED` (§9.1) is a refusal too: `isRefusal(code)` is true for
 it and for the three name codes, and `isVerdict` is `false`, since another processor may accept the
-same document in full. The CLI reports it `NOT_CHECKED` and exits 1.
+same document in full. `SCHEMA_NOT_PERMITTED` and `SCHEMA_TOO_LARGE` are refusals as well (a schema
+this deployment will not supply); `SCHEMA_NOT_FOUND`, `SCHEMA_UNREACHABLE` and `SCHEMA_TIMEOUT` are
+undetermined (`isUndetermined`). The CLI reports a refused file `REJECTED` and exits 1.
 
 | Code                        | Means                                                                                                                                                                                                                                                                                                                                                                                                               |         `isVerdict`          |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------: |
-| `LIMIT_REFUSED`             | a resource limit was exceeded (§9.1, [TSON-SCHEMA] §11.5) — §8.1's fifth outcome, naming the limit and the threshold                                                                                                                                                                                                                                                                                                | yes (not a validity verdict) |
+| `LIMIT_REFUSED`             | a resource limit was exceeded (§9.1, [TSON-SCHEMA] §11.5) — a refusal (§8.1), naming the limit and the threshold                                                                                                                                                                                                                                                                                                    | yes (not a validity verdict) |
 | `FIELD_REQUIRED`            | a required field was absent from the data                                                                                                                                                                                                                                                                                                                                                                           |             yes              |
 | `FIELD_FIXED`               | a field the schema fixes carried a different value                                                                                                                                                                                                                                                                                                                                                                  |             yes              |
 | `FIELD_GROUP`               | a field group's presence rule broken ([TSON-SCHEMA] §5.11): no option chosen where one is needed, more than the group admits, or a chosen option missing a member its group does not mark optional                                                                                                                                                                                                                  |             yes              |
@@ -52,10 +56,10 @@ change on retry; `SCHEMA_UNREACHABLE`/`SCHEMA_TIMEOUT` might), another surface b
 was — and a code is what a consumer routes on.
 
 Likewise `CONFUSABLE_NAMES`/`RESTRICTED_CHARACTER`/`RESTRICTED_SCRIPT` are one code per §8.2
-mechanism rather than one code plus a `mechanism` field, for the same reason. §8.1 calls a refusal
-"a fifth outcome, not a verdict": it says nothing about whether the document conforms, so
-`isVerdict` answers `false` for these three, and a refusal is reported apart from the four error
-categories, never inside one of them. A fail-fast read never throws a `Diagnostic` carrying one of
+mechanism rather than one code plus a `mechanism` field, for the same reason. §8.1 makes a refusal an
+outcome beside its four categories, not a verdict: it says nothing about whether the document
+conforms, so `isVerdict` answers `false` for these three, and a refusal is reported apart from the
+four error categories, never inside one of them. A fail-fast read never throws a `Diagnostic` carrying one of
 these three: it throws `TsonNameHygieneRefusedError` directly instead, deliberately not
 reconstructible from a `DiagnosticCode` alone. A refusal while loading a schema carries the
 schema's id and a pointer to the refused key.
@@ -121,7 +125,7 @@ Error
     ├── TsonContentHashMismatchError .schemaId, .expected, .actual
     ├── TsonNotImplementedError      a library gap
     ├── TsonInternalError            a broken invariant — a bug here, not bad input
-    └── TsonRefusedError             §8.1's fifth outcome — never TsonLexError/TsonParseError/
+    └── TsonRefusedError             a §8.1 refusal — never TsonLexError/TsonParseError/
         │                            TsonReadError/TsonAtomTypeError, so a category-mapping
         │                            caller gets `false` from all four for anything refused
         ├── TsonNameHygieneRefusedError  .mechanism, .names, .uts39Version
@@ -142,16 +146,16 @@ nothing. Every class restores its prototype chain, so `instanceof` holds when co
 
 ### Which error comes out of where
 
-| Call                                               | Throws                                                                                                                                                                                                                                                                                           |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `parse`                                            | `TsonLexError`, `TsonParseError` — directly, unwrapped                                                                                                                                                                                                                                           |
-| `readTree`                                         | `TsonReadError` for everything, with the narrower error on `.cause`                                                                                                                                                                                                                              |
-| `readTree` under a refused name                    | `TsonNameHygieneRefusedError`                                                                                                                                                                                                                                                                    |
-| `readTree`/`validate` past a resource limit        | `TsonLimitRefusedError` — thrown directly, never collected, fail-fast or collecting alike (§9.1's "MUST NOT be reported as a validity error")                                                                                                                                                    |
-| `validate`                                         | a lex/parse/read failure arrives as a diagnostic (`VALIDATION_ERROR`), and `value` is omitted along with every other reported problem — a read is all-or-nothing; a refusal — name hygiene or a resource limit — still throws, since §8.1's fifth outcome is never collected into `.diagnostics` |
-| `CompiledSchema.reader(name)`                      | `TsonInternalError` (no such entry) or `TsonNotImplementedError` (no reader yet)                                                                                                                                                                                                                 |
-| `Tson.fetch`/`preload` with no source              | `TsonSchemaFetchError`, reason `'not-permitted'`                                                                                                                                                                                                                                                 |
-| `Tson.resolveSchema` naming an unregistered import | `TsonSchemaValidationError`                                                                                                                                                                                                                                                                      |
+| Call                                               | Throws                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parse`                                            | `TsonLexError`, `TsonParseError` — directly, unwrapped                                                                                                                                                                                                                                |
+| `readTree`                                         | `TsonReadError` for everything, with the narrower error on `.cause`                                                                                                                                                                                                                   |
+| `readTree` under a refused name                    | `TsonNameHygieneRefusedError`                                                                                                                                                                                                                                                         |
+| `readTree`/`validate` past a resource limit        | `TsonLimitRefusedError` — thrown directly, never collected, fail-fast or collecting alike (§9.1's "MUST NOT be reported as a validity error")                                                                                                                                         |
+| `validate`                                         | a lex/parse/read failure arrives as a diagnostic (`VALIDATION_ERROR`), and `value` is omitted along with every other reported problem — a read is all-or-nothing; a refusal — name hygiene or a resource limit — still throws, since a refusal is never collected into `.diagnostics` |
+| `CompiledSchema.reader(name)`                      | `TsonInternalError` (no such entry) or `TsonNotImplementedError` (no reader yet)                                                                                                                                                                                                      |
+| `Tson.fetch`/`preload` with no source              | `TsonSchemaFetchError`, reason `'not-permitted'`                                                                                                                                                                                                                                      |
+| `Tson.resolveSchema` naming an unregistered import | `TsonSchemaValidationError`                                                                                                                                                                                                                                                           |
 
 `TsonNameHygieneRefusedError` and `TsonLimitRefusedError` both extend `TsonRefusedError`, which
 extends `TsonError` **directly** — never `TsonLexError`, `TsonParseError`, `TsonReadError` or
@@ -180,9 +184,10 @@ no verdict was reached. `69`/`75`/`78` sit between the two for the same reason a
 causes — each means some diagnostic in the run was not a verdict (`isVerdict`), so nothing judged
 the document. None of this is guessed at: each command separates "a per-file verdict" from "this
 run could not reach one", and `exitCodeFor` ranks a run's collected diagnostics into whichever
-non-`OK` code applies, by the ranking `70 > 78 > 69 > 75 > 1` — **who must act first**. A library
-gap (`70`) blocks everyone; a missing binding (`78`) blocks whoever wires the application; an
-unobtainable schema blocks the runner, permanent (`69`) ranking above temporary (`75`). A §8.2
-refusal is exit `1` like any other rejection, although it is not a verdict and `tson validate`
-reports its file as `NOT_CHECKED`: what a caller does next is edit the document, here by renaming
-something, exactly as for any other `1` (`exit.ts`'s own note has the reasoning).
+non-`OK` code applies, by the ranking `70 > 78 > 69 > 1 > 75` — **who must act first**. A library
+gap (`70`) blocks everyone; a missing binding (`78`) blocks whoever wires the application; a schema
+this run will not supply blocks the runner (`69`); an origin that did not answer is `75` only when
+it is all that went wrong, since beside a rejection a rerun reaches the same rejection. A §8.2
+refusal is exit `1` like any other rejection, and `tson validate` reports its file `REJECTED`:
+what a caller does next is edit the document, here by renaming something, exactly as for any other
+`1` (`exit.ts`'s own note has the reasoning).

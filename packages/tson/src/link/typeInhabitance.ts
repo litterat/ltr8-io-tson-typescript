@@ -30,9 +30,11 @@
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { resolvesToConstructor } from './referenceChain.js';
-import { isDataBody } from './bodyKind.js';
+import { schemaPositionOf, type FactsTable } from './facts.js';
 import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
-import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
+import { namedFields } from '../schema/meta/bodies.js';
+import type { Top, TypeRef } from '../schema/meta/typedef.js';
+import { isTemplateBody } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,8 @@ import type { TypeDefinition, TypeRef } from '../schema/meta/typedef.js';
 export interface CheckInhabitanceOptions {
   /** This schema's own canonical identity, stamped on every diagnostic. */
   readonly schemaId: string;
+  /** Each entry's facts, for a diagnostic's position. */
+  readonly facts?: FactsTable;
   /**
    * Where a failing entry is reported, letting every other entry still be checked. Omitted means
    * fail-fast: the first {@link TsonSchemaValidationError} propagates.
@@ -62,7 +66,7 @@ export interface CheckInhabitanceOptions {
  * mistaken for an uninhabited one.
  */
 export function checkEveryEntryIsInhabited(
-  merged: ReadonlyMap<string, TypeDefinition>,
+  merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckInhabitanceOptions,
 ): void {
@@ -72,7 +76,6 @@ export function checkEveryEntryIsInhabited(
     if (inhabited.has(name)) {
       continue;
     }
-    const def = merged.get(name);
     const chain = cycleThrough(name, merged, inhabited);
     const message =
       `'${name}' can never be satisfied by any document: ${chain.join(' needs ')}, and nothing ` +
@@ -87,7 +90,7 @@ export function checkEveryEntryIsInhabited(
       message,
       schemaId,
       schemaPointer: `/${name}`,
-      ...(def?.position === undefined ? {} : { schemaPosition: def.position }),
+      ...schemaPositionOf(options.facts, name),
     });
   }
 }
@@ -95,7 +98,7 @@ export function checkEveryEntryIsInhabited(
 // ── The fixed point ──────────────────────────────────────────────────────────────────────────
 
 /** The names some finite document can satisfy. Everything else in `namespace` is uninhabited. */
-function deriveInhabited(namespace: ReadonlyMap<string, TypeDefinition>): ReadonlySet<string> {
+function deriveInhabited(namespace: ReadonlyMap<string, Top>): ReadonlySet<string> {
   const inhabited = new Set<string>();
   let changed = true;
   while (changed) {
@@ -123,12 +126,12 @@ function deriveInhabited(namespace: ReadonlyMap<string, TypeDefinition>): Readon
  * own name up.
  */
 function isInhabited(
-  def: TypeDefinition,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  def: Top,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
-  const body = def.body;
-  if (!('kind' in body)) {
+  const body = def;
+  if (isTemplateBody(body)) {
     // A held body is not walked: its element type and bounds are tokens that mean nothing until
     // substitution supplies the arguments, so a template is inhabited here and the closure that
     // does supply them is judged on its own -- it is an ordinary entry in this namespace by the
@@ -136,10 +139,9 @@ function isInhabited(
     // nowhere, which is the same answer §5.10 gives everywhere else for that case.
     return true;
   }
-  if (isDataBody(body)) {
-    return true; // not a type; TypeInhabitance's own question does not apply to it
-  }
   switch (body.kind) {
+    case 'namespace':
+      return true; // not a type; TypeInhabitance's own question does not apply to it
     case 'record':
       // §5.2: "Inhabitance gains no case" -- ABSTRACT is not a productivity question at all, and
       // gets no branch here. A record's own field set is judged the same way whatever its
@@ -191,14 +193,14 @@ function isInhabited(
  */
 function recordInhabited(
   record: RecordBody,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
   const grouped = new Set<string>();
   for (const group of record.groups) {
     for (const member of group.members.flat()) grouped.add(member);
   }
-  for (const field of record.fields) {
+  for (const field of namedFields(record)) {
     if (grouped.has(field.name) || isOptionalField(field)) {
       continue;
     }
@@ -239,7 +241,7 @@ function choosable(
   option: readonly string[],
   group: FieldGroup,
   record: RecordBody,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
   const optionalMembers = group.optionalMembers ?? [];
@@ -256,10 +258,10 @@ function choosable(
 function memberStatable(
   member: string,
   record: RecordBody,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
-  const field = record.fields.find((f) => f.name === member);
+  const field = record.fields.entries.get(member);
   return field === undefined || statable(field, namespace, inhabited);
 }
 
@@ -270,7 +272,7 @@ function memberStatable(
  */
 function statable(
   field: RecordField,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
   if (field.voidable) return true;
@@ -290,7 +292,7 @@ function isOptionalField(field: RecordField): boolean {
 
 function positionInhabited(
   element: TupleElement,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
   return element.voidable || refInhabited(element.elementType, namespace, inhabited);
@@ -313,7 +315,7 @@ function isEmptyAllowed(minItems: bigint | undefined): boolean {
  */
 function refInhabited(
   ref: TypeRef,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
   return !namespace.has(ref.name) || inhabited.has(ref.name);
@@ -327,7 +329,7 @@ function refInhabited(
  * atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
  * one position-specific exemption from it, not a fact `void`'s own entry carries.
  */
-function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, TypeDefinition>): boolean {
+function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, Top>): boolean {
   return resolvesToConstructor(ref.name, (n) => namespace.get(n), 'void_type');
 }
 
@@ -340,7 +342,7 @@ function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, TypeDefinition>)
  */
 function cycleThrough(
   name: string,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): readonly string[] {
   const chain: string[] = [];
@@ -371,14 +373,14 @@ function cycleThrough(
  */
 function recordDependency(
   record: RecordBody,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): string | undefined {
   const grouped = new Set<string>();
   for (const group of record.groups) {
     for (const member of group.members.flat()) grouped.add(member);
   }
-  for (const field of record.fields) {
+  for (const field of namedFields(record)) {
     if (
       !grouped.has(field.name) &&
       !isOptionalField(field) &&
@@ -393,7 +395,7 @@ function recordDependency(
       continue;
     }
     for (const member of group.members.flat()) {
-      const field = record.fields.find((f) => f.name === member);
+      const field = record.fields.entries.get(member);
       if (field !== undefined && !statable(field, namespace, inhabited)) return field.type.name;
     }
   }
@@ -402,15 +404,15 @@ function recordDependency(
 
 /** The first thing a definition demands that nothing satisfies -- the next link of the chain. */
 function firstUnsatisfiedDependency(
-  def: TypeDefinition | undefined,
-  namespace: ReadonlyMap<string, TypeDefinition>,
+  def: Top | undefined,
+  namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): string | undefined {
   if (def === undefined) {
     return undefined;
   }
-  const body = def.body;
-  if (!('kind' in body) || isDataBody(body)) {
+  const body = def;
+  if (isTemplateBody(body)) {
     return undefined;
   }
   switch (body.kind) {

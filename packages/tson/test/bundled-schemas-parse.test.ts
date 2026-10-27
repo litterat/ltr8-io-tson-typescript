@@ -5,7 +5,7 @@ import { fromBytes, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
 
 /**
- * The three bundled schemas must parse. They are vendored under `spec/m/`, loaded at runtime, and
+ * The five bundled schemas must parse. They are vendored under `spec/m/`, loaded at runtime, and
  * are what Wave 3's resolver gate is measured against — so a parser that cannot read them is not
  * usable, however many synthetic cases it passes.
  *
@@ -21,9 +21,11 @@ function parseBundled(name: string): number {
 
 describe('the bundled schemas parse (spec/m)', () => {
   it.each([
-    ['meta-kernel.tn', 59],
-    ['meta.tn', 38],
-    ['core.tn', 48],
+    ['meta-kernel.tn', 68],
+    ['meta.tn', 41],
+    ['core.tn', 44],
+    ['net.tn', 8],
+    ['policy.tn', 5],
   ])('%s parses', (name, expectedDeclarations) => {
     expect(parseBundled(name)).toBe(expectedDeclarations);
   });

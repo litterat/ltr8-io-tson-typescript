@@ -55,7 +55,7 @@ export function buildArrayReader(
     (() => {
       const element = terminalDefinition(body.elementType.name, (n) =>
         ctx.linkedSchema.entries.get(n),
-      )?.body;
+      );
       return element !== undefined && 'kind' in element && element.kind === 'identifier_type';
     })();
 

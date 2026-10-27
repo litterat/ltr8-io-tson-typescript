@@ -25,13 +25,15 @@ import { validateJson, type ValidateJsonResult } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
 import { DEFAULT_IDENTIFIER_POLICY } from '../src/unicode/policy.js';
 import type { LinkedSchema } from '../src/link/link.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top } from '../src/schema/meta/typedef.js';
+import { namespaceOf } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
+import { entry } from './model-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   count      => int32
   exact      => number
@@ -41,7 +43,8 @@ const SCHEMA = resolveUserSchema(`
   day        => date
   blob       => bytes
   colour     => !enum [ RED GREEN BLUE ]
-  activity   => !text_enum ["sedentary" "lightly active"]
+  words      => !identifier_type { continue_add: "-"  medial: " " }
+  activity   => !enum_type { name_type: words  members: [sedentary "lightly active"] }
   country    => !text ^ { length: 2  members: ["AU" "NZ"] }
   flag       => boolean
   nothing    => void
@@ -219,7 +222,13 @@ describe('§5 atoms', () => {
     expect(refusal('colour', '"MAUVE"').code).toBe('ATOM_CONSTRAINT_VIOLATION');
   });
 
-  it('a value-set enum reads a member no identifier rule would admit', () => {
+  /**
+   * [TSON-JSON] §5.2: an enum over an author's own identifier type needs nothing from this
+   * encoding -- its members are held as text, and a JSON string is matched against them by content
+   * exactly as a TSON token is (§5.1). The profile governs what may be *declared*, a schema-load
+   * question this encoding never sees.
+   */
+  it('§5.2: an enum over its own identifier type reads a member the kernel’s identifier would not admit', () => {
     expect(accepted('activity', '"lightly active"')).toBe('"lightly active"');
     expect(refusal('activity', '"very active"').code).toBe('ATOM_CONSTRAINT_VIOLATION');
   });
@@ -393,9 +402,9 @@ describe('§6.1 records', () => {
     ]);
   });
 
-  it('a reserved member outside the three-name table is a resolver error (§3.2, §9.4 -- json-dispatch.test.ts has the full annotation-object surface)', () => {
+  it('§3.2: a $-initial member outside the three is a field name, so an undeclared one is §6.1.1’s closure error (json-dispatch.test.ts has the full annotation-object surface)', () => {
     const d = refusal('person', '{"name": "Ada", "$bogus": 1}');
-    expect(d.code).toBe('UNKNOWN_TYPE_REF');
+    expect(d.code).toBe('UNRECOGNIZED_FIELD');
     expect(d.path).toBe('/$bogus');
   });
 
@@ -827,18 +836,19 @@ describe('§8.2 name hygiene', () => {
 // building the `LinkedSchema` directly -- the same technique `templates.test.ts` already uses
 // for `compiler/compile.ts`'s own equivalent branches -- to reach `compileJsonSchema` at all.
 describe('gaps (§8.5, one corner of §5.10)', () => {
-  function handLinked(entries: Record<string, TypeDefinition>): LinkedSchema {
+  function handLinked(entries: Record<string, Top>): LinkedSchema {
     const map = new Map(Object.entries(entries));
     return {
       id: 'test://json-schema-read/gaps.tn',
-      meta: 'https://tson.io/2026/37/m/meta.tn',
+      meta: 'https://tson.io/2026/38/m/meta.tn',
       imports: [],
       entries: map,
       keyAnnotations: new Map(),
+      facts: new Map(),
       bootstrap: false,
       origins: new Map([...map.keys()].map((k) => [k, 'test://json-schema-read/gaps.tn'])),
-      textEnums: new Set(),
       enumForms: new Map(),
+      nameTypes: new Map(),
     };
   }
 
@@ -853,8 +863,8 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it("a scoped position -- core.tn's own `dynamic` -- reads (§8.5): a bare null names no type", () => {
     const gapSchema = resolveUserSchema(`
 !!id:"https://example.test/gaps-scoped.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   either => dynamic
 }
@@ -869,15 +879,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(diagnostic.code).toBe('VALIDATION_ERROR');
   });
 
-  it("a meta-layer 'data' construct -- meta-kernel's own `data` entry composed onto -- is a gap and not a verdict", () => {
+  it("a namespace value -- a meta layer's vocabulary, a value and not a type (§4.1) -- is a gap and not a verdict", () => {
     const compiled = compileJsonSchema(
       handLinked({
-        op: {
-          supertypes: ['top'],
-          subtypes: [],
-          body: { kind: 'operation' },
-          annotations: [],
-        },
+        op: namespaceOf('api', new Map()),
       }),
     );
     const result = validateJson('{}', {
@@ -893,19 +898,14 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it('an unmaterialised generic application is a gap and not a verdict', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        box: {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            kind: 'reference',
-            target: {
-              name: 'pair',
-              arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
-              annotations: [],
-            },
+        box: entry({
+          kind: 'reference',
+          target: {
+            name: 'pair',
+            arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
+            annotations: [],
           },
-          annotations: [],
-        },
+        }),
       }),
     );
     const result = validateJson('{}', {
@@ -921,15 +921,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it('an open template family base with no type of its own is a gap and not a verdict', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        box: {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-            template: '[T]',
-          },
-          annotations: [],
-        },
+        box: entry({
+          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+          template: '[T]',
+        }),
       }),
     );
     const result = validateJson('[]', {
@@ -945,21 +940,11 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
   it('a schema with unreadable entries still compiles: the gap is per entry, not per schema (aSchemaWithUnreadableEntriesStillCompiles)', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        colour: {
-          supertypes: ['top'],
-          subtypes: [],
-          body: { kind: 'enum', members: ['RED', 'GREEN'], type: 'identifier' },
-          annotations: [],
-        },
-        unreadable: {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-            template: '[T]',
-          },
-          annotations: [],
-        },
+        colour: entry({ kind: 'enum', members: ['RED', 'GREEN'], nameType: 'identifier' }, ['top']),
+        unreadable: entry({
+          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
+          template: '[T]',
+        }),
       }),
     );
     // The gap does not stop the schema's other entry from compiling, or from reading cleanly.

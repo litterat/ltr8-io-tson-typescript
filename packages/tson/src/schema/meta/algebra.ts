@@ -4,6 +4,7 @@
  * host-value shapes this package's constraint fields are typed with: {@link Rational} and
  * {@link Decimal}.
  */
+import type { TypeBase } from './typedef.js';
 import type { Scoped } from './typedef.js';
 import type { ArrayBody, ChoiceBody, MapBody, RecordBody, TupleBody } from './bodies.js';
 
@@ -47,7 +48,7 @@ export type ProductAccessType = 'INDEX' | 'NAMED';
  * `!value_type {}` — the body of `value`, the atom with no constraint vocabulary and no class. A
  * processor recognises it by constructor, never by name.
  */
-export interface ValueType {
+export interface ValueType extends TypeBase {
   readonly kind: 'value_type';
 }
 
@@ -56,7 +57,7 @@ export interface ValueType {
  * `!void_type {}` — the body of `void` (and core's own `void` sibling), the atom whose only value
  * is the void sentinel. A processor recognises it by constructor, never by name.
  */
-export interface VoidType {
+export interface VoidType extends TypeBase {
   readonly kind: 'void_type';
 }
 

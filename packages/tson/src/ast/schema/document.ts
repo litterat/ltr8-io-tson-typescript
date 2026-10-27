@@ -69,7 +69,7 @@ export interface SchemaMap {
  *
  * `position` is the name token's own source position — this package's diagnostic addition, with
  * no counterpart in the grammar itself. `compiler/schemaResolver.ts` copies it onto the resolved
- * `TypeDefinition` (§8.1's own diagnostic addition there), which is what lets a
+ * entry's facts (§8.1's own diagnostic addition there), which is what lets a
  * `Diagnostic.schemaPosition` name a line at all: without it every resolved entry's `position` is
  * `undefined` and every diagnostic naming that entry loses its line. `compiler/desugar.ts` carries
  * it forward automatically when it rebuilds a declaration whose body contains sugar (a plain

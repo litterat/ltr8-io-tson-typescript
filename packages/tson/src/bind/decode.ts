@@ -38,6 +38,7 @@ import type {
   TokenValue,
 } from '../ast/value.js';
 import { TsonReadError } from '../core/errors.js';
+import { toNfc } from '../unicode/nfc.js';
 import type { Diagnostic, DiagnosticCode } from '../core/diagnostic.js';
 import type { Annotations } from '../annotations/index.js';
 import type { AtomBinding, Binding, BindingRef, RecordBinding, VariantMember } from './binding.js';
@@ -119,6 +120,29 @@ function mapEntriesOf(value: CoreValue): readonly MapEntry[] {
   if (value.kind === 'empty-brace') return [];
   if (value.kind === 'map') return value.entries;
   throw readError('TYPE_MISMATCH', `expected a map (or '{}'), found a ${value.kind}`);
+}
+
+/**
+ * A map's keys are distinct ([TSON-DATA] §2.6): a key written twice is a resolver error at the
+ * repeat, before any key type is consulted -- which is how one field name written twice in an
+ * explicit `!record { fields: { x => …  x => … } }` is refused, `record.fields` being a map keyed by
+ * the name (§5.2). Compared by the textual identity §2.6 makes every processor's minimum: a token
+ * key's decoded text, NFC-normalised. A key that is no token is left to its key type's equality.
+ */
+function refuseRepeatedKey(entries: readonly MapEntry[]): void {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const key = entry.key.coreValue;
+    if (key.kind !== 'token') continue;
+    const text = toNfc(key.text);
+    if (seen.has(text)) {
+      throw readError(
+        'DUPLICATE_MAP_KEY',
+        `duplicate map key '${key.text}' -- a map states each key at most once (§2.6)`,
+      );
+    }
+    seen.add(text);
+  }
 }
 
 function tokenOf(value: CoreValue, wireType: string): TokenValue {
@@ -362,6 +386,7 @@ export function fromCoreValue<T>(
     }
 
     case 'map': {
+      refuseRepeatedKey(mapEntriesOf(value));
       const entries = mapEntriesOf(value).map(
         (e) =>
           [

@@ -98,6 +98,7 @@ import {
   TYPE,
   VALUE,
   VOIDABLE,
+  fieldsValue,
   groupValue,
   nameField,
   scoped,
@@ -725,16 +726,16 @@ function choiceBinding(variants: readonly TypeRef[]): Binding {
 }
 
 /**
- * `!record { fields: [ { name: x  type: T } ... ] }` — §5.2's own rewrite of a bare record body,
- * applied where the body is written so that a record template holds an application like every
- * other open form.
+ * `!record { fields: { x => { type: T } ... } }` — §5.2's own rewrite of a bare record body,
+ * applied where the body is written so that a record template reaches the resolver as the
+ * construction it is (§5.10: a record template is a `record` with `parameters`).
  *
  * **Only what the author wrote is written.** A field's unmarked `optional: false`/`voidable:
  * false`/`role: FREE` is the `record_field` constructor's own default, so it is never stated —
  * the same economy {@link arrayBinding} makes with an unmarked element's `voidable`.
  */
 function recordBinding(record: RecordDef): Binding {
-  const fields: ScopedValue[] = [];
+  const fields: (readonly [string, ScopedValue])[] = [];
   const groups: ScopedValue[] = [];
   const discriminators: string[] = [];
   const seen = new Set<string>();
@@ -742,7 +743,7 @@ function recordBinding(record: RecordDef): Binding {
     if (entry.kind === 'fieldDef') {
       requireFieldNameUnseen(entry.name, seen, 'this body declares it twice');
       const field = recordFieldValue(entry);
-      fields.push(field.value);
+      fields.push([entry.name, field.value]);
       if (field.selector) discriminators.push(entry.name);
       continue;
     }
@@ -756,18 +757,17 @@ function recordBinding(record: RecordDef): Binding {
       // `T?` member); the group itself records only their names, which are optional within their
       // option, and whether it is optional (§5.11, `spec/m/meta-kernel-resolved.tn`).
       const memberFields: RecordField[] = [
-        nameField(NAME, member.name),
         { name: TYPE, value: scoped(refValueOf(member.typeRef)) },
         nameField(OPTIONAL, 'true'),
       ];
       if (member.voidable) {
         memberFields.push(nameField(VOIDABLE, 'true'));
       }
-      fields.push(scoped(recordValue(memberFields), member.annotations));
+      fields.push([member.name, scoped(recordValue(memberFields), member.annotations)]);
     }
     groups.push(groupValue(lowerGroup(entry), entry.annotations));
   }
-  const binding: RecordField[] = [{ name: FIELDS, value: scoped(arrayValue(fields)) }];
+  const binding: RecordField[] = [{ name: FIELDS, value: scoped(fieldsValue(fields)) }];
   if (groups.length > 0) {
     binding.push({ name: GROUPS, value: scoped(arrayValue(groups)) });
   }
@@ -775,7 +775,7 @@ function recordBinding(record: RecordDef): Binding {
   // (`definitionResolver.ts`): the base's own statement of which fields its members pin, in
   // declaration order -- a fresh record TEMPLATE reaches this constructor via `desugar.ts` rather
   // than that path (§5.2's canonical-form rewrite, `structuralTypeDefPass`), so it has to be
-  // written here too, or a template's own selectors would never reach the held text at all.
+  // written here too, or a template's own selectors would never reach the resolver at all.
   if (discriminators.length > 0) {
     binding.push({
       name: DISCRIMINATORS,
@@ -827,10 +827,7 @@ function recordFieldValue(field: FieldDef): RecordFieldValue {
     field.type.voidable,
     field.modifier,
   );
-  const members: RecordField[] = [
-    nameField(NAME, field.name),
-    { name: TYPE, value: scoped(refValueOf(field.type.typeRef)) },
-  ];
+  const members: RecordField[] = [{ name: TYPE, value: scoped(refValueOf(field.type.typeRef)) }];
   if (resolved.optional) {
     members.push(nameField(OPTIONAL, 'true'));
   }

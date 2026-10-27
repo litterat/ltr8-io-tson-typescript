@@ -52,6 +52,9 @@ import { createTimeParser } from '../../packages/tson/src/atom/temporal/time.js'
 import { createCidr4Parser } from '../../packages/tson/src/atom/network/cidr4.js';
 import { createCidr6Parser } from '../../packages/tson/src/atom/network/cidr6.js';
 import { createEmailParser } from '../../packages/tson/src/atom/network/email.js';
+import { createHostParser } from '../../packages/tson/src/atom/network/host.js';
+import { createHostnameParser } from '../../packages/tson/src/atom/network/hostName.js';
+import { createMediaTypeParser } from '../../packages/tson/src/atom/network/mediaType.js';
 import { createIpv4Parser } from '../../packages/tson/src/atom/network/ipv4.js';
 import { createIpv6Parser } from '../../packages/tson/src/atom/network/ipv6.js';
 import { createMacParser, formatMac } from '../../packages/tson/src/atom/network/mac.js';
@@ -187,6 +190,9 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
     kind: 'mac_type',
     spec: 'https://www.rfc-editor.org/rfc/rfc9542',
   });
+  const hostname = createHostnameParser('hostname');
+  const host = createHostParser('host');
+  const mediaType = createMediaTypeParser('media_type');
   const email = createEmailParser('email', {
     kind: 'email_type',
     spec: 'https://www.rfc-editor.org/rfc/rfc5322',
@@ -243,6 +249,9 @@ function buildReaders(): Readonly<Record<string, VocabularyReader>> {
     uuid: (token) => formatUuid(uuid.read(token).bytes),
     mac: (token) => formatMac(mac.read(token).octets),
     email: (token) => email.write(email.read(token)),
+    hostname: (token) => hostname.write(hostname.read(token)),
+    host: (token) => host.write(host.read(token)),
+    media_type: (token) => mediaType.write(mediaType.read(token)),
   };
 }
 

@@ -125,16 +125,16 @@ describe('an unobtainable schema (exit 69): a --schema no configured source woul
           diagnostics: readonly { code: string }[];
         }[];
       };
-      expect(parsed.outcome).toBe('NOT_CHECKED');
+      expect(parsed.outcome).toBe('UNDETERMINED');
       // Every requested file is accounted for -- none was actually opened, but none is silently
       // dropped from the report either.
       expect(parsed.files.map((f) => f.file)).toEqual(['a.tn', 'b.tn']);
       for (const file of parsed.files) {
-        expect(file.outcome).toBe('NOT_CHECKED');
+        expect(file.outcome).toBe('UNDETERMINED');
         expect(file.diagnostics).toHaveLength(1);
         expect(file.diagnostics[0]?.code).toBe('SCHEMA_NOT_FOUND');
       }
-      expect(io.stderr()).toContain('schema could not be obtained');
+      expect(io.stderr()).toContain('will not supply a schema it names');
     } finally {
       await close();
     }

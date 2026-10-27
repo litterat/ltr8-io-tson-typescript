@@ -34,6 +34,7 @@ import { createBinaryParser } from './numeric/binary.js';
 import { createTextParser } from './text/text.js';
 import { createIdentifierParser } from './text/identifier.js';
 import { createEnumParser } from './enum.js';
+import { createKindParser, createQualifiedNameParser } from './reference.js';
 import { createUuidParser } from './network/uuid.js';
 import { createUriParser } from './network/uri.js';
 import { createEmailParser } from './network/email.js';
@@ -42,6 +43,7 @@ import { createIpv4Parser } from './network/ipv4.js';
 import { createIpv6Parser } from './network/ipv6.js';
 import { createCidr4Parser } from './network/cidr4.js';
 import { createCidr6Parser } from './network/cidr6.js';
+import { createHostParser, createHostnameParser, createMediaTypeParser } from './network/index.js';
 import { createDateParser } from './temporal/date.js';
 import { createTimeParser } from './temporal/time.js';
 import { createDateTimeParser } from './temporal/datetime.js';
@@ -99,6 +101,11 @@ export function isScalarBody(body: ScalarCandidate): boolean {
     case 'ipv4_type':
     case 'ipv6_type':
     case 'complex_type':
+    case 'kind_type':
+    case 'ref_type':
+    case 'hostname_type':
+    case 'host_type':
+    case 'media_type_type':
       return true;
     default:
       return false; // record, array, map, tuple, choice, reference, scoped, and Data
@@ -188,7 +195,20 @@ export function atomParserFor(
       return createIpv6Parser(declaredName, body);
     case 'complex_type':
       return createComplexParser(declaredName);
+    case 'kind_type':
+      // A kind's value is a type name (§4.2): read here by the name grammar, and judged a member
+      // of the kind against the linked closure, which a bare-token parser cannot see.
+      return createKindParser(declaredName, body, false);
+    case 'ref_type':
+      // A reference's value is a qualified name (§5.12), judged against the linked closure.
+      return createQualifiedNameParser(declaredName);
+    case 'hostname_type':
+      return createHostnameParser(declaredName, body);
+    case 'host_type':
+      return createHostParser(declaredName);
+    case 'media_type_type':
+      return createMediaTypeParser(declaredName, body);
     default:
-      return undefined; // value_type, void_type, record, array, map, tuple, choice, reference, scoped, Data
+      return undefined; // value_type, void_type, containers, choice, reference, scoped
   }
 }

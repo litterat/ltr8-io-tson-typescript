@@ -11,15 +11,11 @@ import {
   withSkeletonDistinctness,
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
-import type { Top } from '../src/schema/meta/typedef.js';
-import type { RecordBody, RecordField } from '../src/schema/meta/bodies.js';
-import type { TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
-import { createHeldBody } from '../src/compiler/heldBody.js';
-import { heldRecord } from '../src/compiler/wireForm.js';
-
-function isRecordBody(body: Top): body is RecordBody {
-  return 'fields' in body;
-}
+import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
+import { isTemplateBody } from '../src/schema/meta/typedef.js';
+import type { NamedField } from '../src/schema/meta/bodies.js';
+import { TYPE_KIND, fieldMapOf } from '../src/schema/meta/bodies.js';
+import { entry } from './model-fixtures.js';
 
 /**
  * `link/nameHygiene.ts`'s implementation of [TSON-SCHEMA] §11.4's schema-layer name-hygiene
@@ -81,51 +77,49 @@ function def(
     readonly subtypes?: readonly string[];
     readonly parameters?: readonly string[];
   } = {},
-): TypeDefinition {
-  // A non-empty `parameters` makes this an open entry (§5.10): fold it into a held `TemplateBody`
-  // the way `definitionResolver.ts`'s own `holdIfOpen` does, since `typeParameters` reads the
-  // list off the body, not off a stored field any more.
+): Top {
+  // A non-empty `parameters` makes a record a record template (§5.10): the record it is, with
+  // its parameters, each a type parameter.
   const parameters = options.parameters ?? [];
-  const finalBody: Top =
-    parameters.length === 0 || !isRecordBody(body)
+  const value: Top =
+    parameters.length === 0 || isTemplateBody(body) || body.kind !== 'record'
       ? body
-      : createHeldBody(heldRecord(body), parameters);
-  return {
-    supertypes: options.supertypes ?? [],
-    subtypes: options.subtypes ?? [],
-    body: finalBody,
-    annotations: [],
-  };
+      : {
+          ...body,
+          parameters: parameters.map((name) => ({
+            name,
+            type: { name: TYPE_KIND, arguments: [], annotations: [] },
+          })),
+        };
+  return entry(value, options.supertypes ?? [], options.subtypes ?? []);
 }
 
 const RECORD: Top = {
   kind: 'record',
-  supertypes: [],
-  fields: [],
+  fields: fieldMapOf([]),
   groups: [],
   extension: 'OPEN',
 };
 
-function field(name: string, type: TypeRef): RecordField {
+function field(name: string, type: TypeRef): NamedField {
   return { name, type, optional: false, voidable: false, role: 'FREE', annotations: [] };
 }
 
-function record(fields: readonly RecordField[]): Top {
+function record(fields: readonly NamedField[]): Top {
   return {
     kind: 'record',
-    supertypes: [],
-    fields,
+    fields: fieldMapOf(fields),
     groups: [],
     extension: 'OPEN',
   };
 }
 
 function enumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members, type: 'identifier' };
+  return { kind: 'enum', members, nameType: 'identifier' };
 }
 
 function textEnumOf(members: readonly string[]): Top {
-  return { kind: 'enum', members, type: 'text' };
+  return { kind: 'enum', members, nameType: 'text' };
 }
 
 function choiceOf(variants: readonly TypeRef[]): Top {
@@ -137,7 +131,7 @@ function choiceOf(variants: readonly TypeRef[]): Top {
  * and `text`, which makes them values. A schema declaring an enum declares the type it draws from,
  * so the helper adds each unless the test states its own.
  */
-const LABEL_TYPES: readonly (readonly [string, TypeDefinition])[] = [
+const LABEL_TYPES: readonly (readonly [string, Top])[] = [
   [
     'identifier',
     def({
@@ -154,24 +148,22 @@ const LABEL_TYPES: readonly (readonly [string, TypeDefinition])[] = [
 
 function schema(
   id: string,
-  entries: Iterable<readonly [string, TypeDefinition]>,
+  entries: Iterable<readonly [string, Top]>,
   imports: readonly string[] = [],
 ): Schema {
   const own = new Map(entries);
   for (const [name, label] of LABEL_TYPES) {
-    if (
-      !own.has(name) &&
-      [...own.values()].some((d) => 'kind' in d.body && d.body.kind === 'enum')
-    ) {
+    if (!own.has(name) && [...own.values()].some((d) => 'kind' in d && d.kind === 'enum')) {
       own.set(name, label);
     }
   }
   return {
     id,
-    meta: 'https://tson.io/2026/37/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/38/m/meta-kernel.tn',
     imports,
     entries: own,
     keyAnnotations: new Map(),
+    facts: new Map(),
     bootstrap: false,
   };
 }
@@ -256,12 +248,10 @@ describe('checkNameHygiene: the members of one enum', () => {
 
   // ── §7.4, §11.4, #21: the scope is conditional on `profile` ─────────────────────────────────
 
-  it('a TEXT-profile enum member with a restricted-status character is not refused -- mechanism 2 does not reach values', () => {
-    // U+0132 LATIN CAPITAL LIGATURE IJ: `Identifier_Status != Allowed`, the same character the
-    // shared conformance corpus's `class2/schema/refused/a-restricted-character-in-an-enum-member`
-    // vector refuses under the default IDENTIFIER profile.
+  it('an enum over text is refused as no enum before any member is judged as a name (§7.4)', () => {
     const s = schema('https://x/s.tn', [['activity', def(textEnumOf(['sedentary', 'aĲb']))]]);
-    expect(() => linkSchema(s)).not.toThrow();
+    expect(() => linkSchema(s)).toThrow(TsonSchemaValidationError);
+    expect(() => linkSchema(s)).toThrow(/is not an identifier family/);
   });
 
   it('the same restricted-status character IS refused under the default IDENTIFIER profile', () => {
@@ -270,10 +260,8 @@ describe('checkNameHygiene: the members of one enum', () => {
     expect(refused.mechanism).toBe('identifier-status');
   });
 
-  it('a TEXT-profile enum still refuses two members that read alike -- mechanism 1 relates values, not just names', () => {
-    const s = schema('https://x/s.tn', [
-      ['activity', def(textEnumOf(['active', CYR_A + 'ctive']))],
-    ]);
+  it('an enum’s members are one scope: two that read alike are refused, the relation first', () => {
+    const s = schema('https://x/s.tn', [['activity', def(enumOf(['active', CYR_A + 'ctive']))]]);
     const refused = refusalOf(() => linkSchema(s));
     expect(refused.mechanism).toBe('skeleton-distinctness');
     expect(refused.message).toContain('enum members');

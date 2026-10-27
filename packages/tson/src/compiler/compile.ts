@@ -10,7 +10,7 @@
  * already exists (`reader/tree/*.ts`, Wave 4) or is a small, local extension of that same family
  * (`atomBuilder.ts`'s per-atom-family dispatch, `choiceReader.ts`'s `!type-ref` dispatch) -- this
  * module's own job is the piece `reader/tree/factory.ts` names as its own reason for being
- * "deliberately narrow" and stops short of: resolving a {@link TypeDefinition.body}'s every
+ * "deliberately narrow" and stops short of: resolving an entry value's every
  * possible shape (not just the four `Product` ones `factory.ts` wires), and doing it once per
  * schema over the *whole* entry graph rather than once per definition handed in from outside --
  * cycles included, since a schema's own types routinely reference each other and one another's
@@ -42,8 +42,9 @@ import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import type { SchemaRef } from '../stream/event.js';
 import type { LinkedSchema } from '../link/link.js';
 import { canonicalizeIdentity } from '../link/identity.js';
-import type { Reference, Scoped, Top, TypeDefinition } from '../schema/meta/typedef.js';
-import { choiceDisjoint, isTemplateBody, typeKind } from '../schema/meta/typedef.js';
+import type { Reference, Scoped, Top } from '../schema/meta/typedef.js';
+import { choiceDisjoint, entryKind, isFamilyBase, isTemplateBody } from '../schema/meta/typedef.js';
+import { isNamespaceType, namespaceReadMapOf } from '../schema/meta/namespaces.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -63,6 +64,7 @@ import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
 import { resolvesToScoped, terminalDefinition } from '../link/referenceChain.js';
+import { fieldNameRule } from '../reader/tree/fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
@@ -96,41 +98,37 @@ export interface CompiledSchema {
 
 /** `name`'s own {@link SchemaLocation} within `schema` -- its origin schema id (§2.2.3: local or imported, `LinkedSchema.origins` says which) and an RFC 6901 pointer naming it directly, plus its source position when the entry carries one. */
 function locationOf(schema: LinkedSchema, name: string): SchemaLocation {
-  const definition = schema.entries.get(name);
+  const position = schema.facts.get(name)?.position;
   const schemaId = schema.origins.get(name) ?? schema.id;
   return {
     schemaId,
     pointer: `/${name}`,
-    ...(definition?.position === undefined ? {} : { position: definition.position }),
+    ...(position === undefined ? {} : { position }),
   };
 }
 
-// `Top`'s own union mixes closed literal-`kind` members (`RecordBody`, `Reference`, ...) with one
-// open one (`Data.kind: string`) -- a plain `switch (body.kind)` cannot exclude `Data` from any
-// case's own narrowing (TypeScript has no literal to rule out against an open `string`), so every
-// branch here is its own runtime type guard instead, exactly the pattern `reader/tree/factory.ts`
-// already uses for its four `Product` cases (`isRecordBody`, ...) -- duplicated rather than
-// imported, since that module's own guards are private to it.
+// One runtime guard per shape, so each branch below narrows `Top` on its own -- the held template
+// body carries no `kind` to switch on.
 function isRecordBody(body: Top): body is RecordBody {
-  return 'kind' in body && body.kind === 'record';
+  return !isTemplateBody(body) && body.kind === 'record';
 }
 function isMapBody(body: Top): body is MapBody {
-  return 'kind' in body && body.kind === 'map';
+  return !isTemplateBody(body) && body.kind === 'map';
 }
 function isArrayBody(body: Top): body is ArrayBody {
-  return 'kind' in body && body.kind === 'array';
+  return !isTemplateBody(body) && body.kind === 'array';
 }
 function isTupleBody(body: Top): body is TupleBody {
-  return 'kind' in body && body.kind === 'tuple';
+  return !isTemplateBody(body) && body.kind === 'tuple';
 }
 function isChoiceBody(body: Top): body is ChoiceBody {
-  return 'kind' in body && body.kind === 'choice';
+  return !isTemplateBody(body) && body.kind === 'choice';
 }
 function isReference(body: Top): body is Reference {
-  return 'kind' in body && body.kind === 'reference';
+  return !isTemplateBody(body) && body.kind === 'reference';
 }
 function isScoped(body: Top): body is Scoped {
-  return 'kind' in body && body.kind === 'scoped';
+  return !isTemplateBody(body) && body.kind === 'scoped';
 }
 
 /**
@@ -167,8 +165,7 @@ export interface CompileDeps {
 }
 
 /**
- * Builds `name`'s own reader from its resolved {@link TypeDefinition}, dispatching on {@link
- * TypeDefinition.body}'s shape. `resolve` is the whole-schema `name -> reader` lookup this
+ * Builds `name`'s own reader from its resolved value, dispatching on the value's shape. `resolve` is the whole-schema `name -> reader` lookup this
  * function's own children (a record field, an array element, a choice variant, ...) are built
  * against -- passed down rather than closed over directly by this function so `resolve` alone
  * owns the cycle-breaking cache. `compileForeign` is threaded through to a `scoped` body alone
@@ -177,21 +174,21 @@ export interface CompileDeps {
 function buildReader(
   schema: LinkedSchema,
   name: string,
-  definition: TypeDefinition,
+  definition: Top,
   resolve: (name: string) => TypeReader<Value>,
   compileForeign: (uri: string) => CompiledSchema | undefined,
   foreignSchemasConfigured: boolean,
   policy: IdentifierPolicy,
 ): TypeReader<Value> {
-  const body = definition.body;
+  const body = definition;
   // Whether `typeName` is an identifier family (§8.3 followed to its constructor): a name wherever
   // a value of it stands, so a scope of them meets skeleton distinctness when the policy asks.
   const isNameType = (typeName: string): boolean => {
     if (!policy.skeletonDistinctness) return false;
-    const terminalBody = terminalDefinition(typeName, (n) => schema.entries.get(n))?.body;
+    const terminalBody = terminalDefinition(typeName, (n) => schema.entries.get(n));
     return (
       terminalBody !== undefined &&
-      'kind' in terminalBody &&
+      !isTemplateBody(terminalBody) &&
       terminalBody.kind === 'identifier_type'
     );
   };
@@ -203,29 +200,27 @@ function buildReader(
   const isScopedType = (typeName: string): boolean =>
     resolvesToScoped(typeName, (n) => schema.entries.get(n));
 
-  if (!('kind' in body)) {
-    // §5.10: a record-bodied template is a family base and MAY be named bare at a type position --
-    // dispatching exactly as an ABSTRACT record's own position does, over its instantiations, and
-    // never reading the held body (there is nothing of its own to read: a value at such a position
-    // is always a value of some member, never of the template itself). Every other open shape
-    // (reference, container, constructor-application, atom template) is no type at all and has no
-    // reader to build.
-    if (isTemplateBody(body) && body.extension !== undefined) {
-      // `guardSubsumption` never invokes this, zero discriminators or many: it either reports a
-      // validation error, refuses a tag naming the base, or dispatches to a subtype's/member's
-      // own reader -- so there is no "own" record to read and none to build here.
-      const neverRead: TypeReader<Value> = {
-        read(): Task<Value> {
-          throw new TsonInternalError(
-            `'${name}': a template family base has no reader of its own -- this should be unreachable`,
-          );
-        },
-      };
-      return guardSubsumption(name, definition, neverRead, schema.entries, resolve);
-    }
-    // An open (parameterised) entry that is no type at all was named directly rather than through
-    // a closed application -- §5.10's materialisation should have produced a closed entry for
-    // every use site before linking; naming this declaration itself has no reader of its own.
+  // §5.10: a record template is a family base and MAY be named bare at a type position --
+  // dispatching exactly as an ABSTRACT record's own position does, over its members, and never
+  // reading the template itself (a value at such a position is always a value of some member).
+  if (isFamilyBase(body)) {
+    // `guardSubsumption` never invokes this, zero discriminators or many: it either reports a
+    // validation error, refuses a tag naming the base, or dispatches to a subtype's/member's own
+    // reader -- so there is no "own" record to read and none to build here.
+    const neverRead: TypeReader<Value> = {
+      read(): Task<Value> {
+        throw new TsonInternalError(
+          `'${name}': a template family base has no reader of its own -- this should be unreachable`,
+        );
+      },
+    };
+    return guardSubsumption(name, definition, neverRead, schema.entries, resolve);
+  }
+  if (isTemplateBody(body)) {
+    // An open entry that is no type at all (reference, container, constructor-application, atom
+    // template) was named directly rather than through a closed application -- §5.10's
+    // materialisation should have produced a closed entry for every use site before linking;
+    // naming this declaration itself has no reader of its own.
     throw new TsonNotImplementedError(
       `'${name}' declares type parameters and has no reader of its own -- apply it (§5.10) before reading against it`,
     );
@@ -235,7 +230,30 @@ function buildReader(
   // declared type -- applied at every position it governs (every `Atom`/`Product` body) rather
   // than only where a record happens to declare subtypes; see `subsumption.ts`'s own doc for which
   // kinds it deliberately leaves alone (`choice`, `reference`, `scoped`).
+  // §4.1: a namespace type resolves to a record of the facets it states, and a value of it is the
+  // map they describe, never a record of those facets -- a record's `fields` is its `field_map`.
+  const namespaceMap = isNamespaceType(body, name) ? namespaceReadMapOf(body) : undefined;
+  if (namespaceMap !== undefined) {
+    const map: MapBody = {
+      kind: 'map',
+      keyType: { name: namespaceMap.keyType, arguments: [], annotations: [] },
+      valueType: { name: namespaceMap.valueType, arguments: [], annotations: [] },
+      voidable: false,
+      ordered: namespaceMap.ordered,
+    };
+    const built = mapTreeReader(
+      name,
+      name,
+      map,
+      resolve,
+      location(),
+      isScopedType,
+      isNameType(namespaceMap.keyType),
+    );
+    return guardSubsumption(name, definition, built, schema.entries, resolve);
+  }
   if (isRecordBody(body)) {
+    const fieldNames = fieldNameRule(schema.nameTypes.get(name));
     const built = recordTreeReader(
       name,
       name,
@@ -243,8 +261,10 @@ function buildReader(
       (field) => resolve(field.type.name),
       location(),
       isScopedType,
+      fieldNames,
+      policy,
     );
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guardSubsumption(name, definition, built, schema.entries, resolve, fieldNames.form);
   }
   if (isArrayBody(body)) {
     const built = arrayTreeReader(
@@ -283,7 +303,6 @@ function buildReader(
       location(),
       choiceDisjoint(definition) === true,
       schema.entries,
-      schema.textEnums,
     );
   }
   if (isReference(body)) {
@@ -306,17 +325,19 @@ function buildReader(
     const enumForm = schema.enumForms.get(name);
     const built = buildAtomReader(name, body, {
       identifierPolicy: policy,
+      // A meta layer's documents name the types of the schema they describe (§4.2).
+      judgesKindMembers: schema.kernelGoverned !== true && !schema.bootstrap,
       ...(enumForm === undefined ? {} : { enumForm }),
     });
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }
-  // A `DATA`-kind entry (meta-schema vocabulary, not a data type, §4.1) named where a type is
-  // expected -- `typedef.ts`'s own doc calls this "a resolver error checked at schema load", so
-  // reaching it here through an already-linked schema means something upstream let it through;
-  // reported as this module's own gap rather than silently misread as a type.
+  // A namespace value (a meta layer's own vocabulary, a value and never a type, §4.1) named where a
+  // type is expected -- a resolver error checked at schema load, so reaching it here through an
+  // already-linked schema means something upstream let it through; reported as this module's own
+  // gap rather than silently misread as a type.
   throw new TsonNotImplementedError(
-    `'${name}' (kind ${typeKind(definition, (n) => schema.entries.get(n))}) is not a data type -- ` +
-      'it describes meta-schema vocabulary, not a value, and has no compiled reader',
+    `'${name}' (kind ${entryKind(definition)}) is not a data type -- it is a value of a meta ` +
+      "layer's vocabulary, not a type, and has no compiled reader",
   );
 }
 
@@ -355,7 +376,7 @@ function buildReader(
  */
 function buildScopedReader(
   displayName: string,
-  entries: ReadonlyMap<string, TypeDefinition>,
+  entries: ReadonlyMap<string, Top>,
   body: Scoped,
   resolve: (name: string) => TypeReader<Value>,
   compileForeign: (uri: string) => CompiledSchema | undefined,

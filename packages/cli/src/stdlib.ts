@@ -2,7 +2,7 @@
  * The standard library, as this CLI wants it: `meta-kernel`/`meta.tn`/`core.tn` registered into a
  * fresh `@ltr8/tson` registry, offline, with no `SchemaSource` configured at all.
  *
- * All of that lives in `@ltr8/tson/stdlib`, which embeds the same three documents as string
+ * All of that lives in `@ltr8/tson/stdlib`, which embeds the same five documents as string
  * constants generated from `spec/m/` — so `tson validate --schema ...` works with no network
  * access, and nothing here ever reaches a `SchemaSource`. This module is the named seam over it,
  * so `commands/*.ts` say what they want ("the standard library") rather than how it is assembled.

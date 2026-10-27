@@ -14,9 +14,11 @@
  * is compared.
  *
  * **It reads the leading members and no others.** §6.1.5 puts the discriminators first, after any
- * reserved members (§3.3), in any order among themselves, so `reservedMembers.ts`'s own `lead`
+ * annotation members (§3.3), in any order among themselves, so `tagMembers.ts`'s own `lead`
  * answers both the tag and the selectors from as many members as the family declares
- * discriminators — a count the schema fixes, whatever the document holds (§10.1).
+ * discriminators — a count the schema fixes, whatever the document holds (§10.1). A selector is
+ * matched in the base's name form ([TSON-SCHEMA] §5.5), as every member name of the family's
+ * records is (§6.1.1), so a case-folding family finds `KIND` for its selector `kind`.
  *
  * **The tag can only assert, and the selected reader is what holds it to that.** `$type` MAY be
  * present and MUST name the dispatched member or a subtype of it. The discriminators are still
@@ -28,9 +30,10 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
+import { FIELD_NAME_RULE, fieldNameRule, matchKey } from '../../link/fieldNameRule.js';
 import { directMembers, type Member } from '../../link/recordExtension.js';
 import type { RecordField } from '../../schema/meta/bodies.js';
-import type { TypeDefinition } from '../../schema/meta/typedef.js';
+import { subtypesOf, type Namespace, type Top } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/referenceChain.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { lookingAhead, type JsonReadContext } from '../readContext.js';
@@ -40,7 +43,7 @@ import type { CompileContext } from './compile.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
 import { fieldValueOf, resolveFieldBody } from './record.js';
-import { lead as leadOf, SCHEMA, TYPE, type Lead } from './reservedMembers.js';
+import { lead as leadOf, SCHEMA, TYPE, type Lead } from './tagMembers.js';
 import { routeTo, type ChoiceSelfTagReadable, type ExactReader, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost } from './valueIdentity.js';
@@ -54,24 +57,24 @@ interface Selector {
 export interface DispatchMemberOptions {
   readonly name: string;
   readonly displayName: string;
-  /** The discriminator field names, in declaration order (`RecordBody.discriminators`/`TemplateBody.discriminators`). */
+  /** The discriminator field names, in declaration order (`RecordBody.discriminators`). */
   readonly discriminators: readonly string[];
-  /** The base's own declared fields, when it has any of its own (a closed record); `undefined` for a record-bodied template family base, whose selectors are read off any member instead (§5.10 never reads the held body). */
-  readonly baseFields: readonly RecordField[] | undefined;
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
+  /** The base's own declared fields -- a closed record's, or a record template's (§5.10), whose selectors mention no parameter; `undefined` reads each selector off a member instead. */
+  readonly baseFields: Namespace<RecordField> | undefined;
+  readonly entries: ReadonlyMap<string, Top>;
   readonly schemaLocation: SchemaLocation;
   readonly ctx: CompileContext;
 }
 
 function fieldTypeOf(
   fieldName: string,
-  baseFields: readonly RecordField[] | undefined,
+  baseFields: Namespace<RecordField> | undefined,
   members: readonly Member[],
 ): string {
-  const own = baseFields?.find((f) => f.name === fieldName);
+  const own = baseFields?.entries.get(fieldName);
   if (own !== undefined) return own.type.name;
   for (const member of members) {
-    const field = member.body.fields.find((f) => f.name === fieldName);
+    const field = member.body.fields.entries.get(fieldName);
     if (field !== undefined) return field.type.name;
   }
   throw new Error(
@@ -82,7 +85,7 @@ function fieldTypeOf(
 function selectorsOf(
   ctx: CompileContext,
   discriminators: readonly string[],
-  baseFields: readonly RecordField[] | undefined,
+  baseFields: Namespace<RecordField> | undefined,
   members: readonly Member[],
 ): readonly Selector[] {
   return discriminators.map((fieldName) => {
@@ -105,7 +108,9 @@ function pinsOf(
 ): readonly string[] | undefined {
   const key: string[] = [];
   for (const selector of selectors) {
-    const field = member.body.fields.find((f) => toNfc(f.name) === selector.name);
+    const field = [...member.body.fields.entries].find(
+      ([fieldName]) => toNfc(fieldName) === selector.name,
+    )?.[1];
     if (field?.role !== 'FIXED' || field.value === undefined) return undefined;
     try {
       key.push(identityOfHost(fieldValueOf(ctx, field.type.name, field.value).hostValue));
@@ -140,7 +145,15 @@ export function buildMemberDispatcher(
   const own = selfNames(name, entries);
   const members = directMembers(name, entries);
   const selectors = selectorsOf(ctx, discriminators, baseFields, members);
-  const selectorNames = new Set(selectors.map((s) => s.name));
+  // The selectors' names in the base's name form ([TSON-SCHEMA] §5.5), what the leading-member
+  // peek matches: the family's members compose the base, so they share its name type, and a
+  // template base states none of its own.
+  const rule =
+    [...own]
+      .map((written) => fieldNameRule(ctx.linkedSchema.nameTypes.get(written)))
+      .find((candidate) => candidate.form !== 'NFC') ?? FIELD_NAME_RULE;
+  const nameKey = (nfcName: string): string => matchKey(rule, nfcName);
+  const selectorNames = new Set(selectors.map((s) => nameKey(s.name)));
 
   const membersByKey = new Map<string, string>();
   for (const member of members) {
@@ -155,7 +168,7 @@ export function buildMemberDispatcher(
   const routes = new Map<string, Route>();
   for (const member of members) {
     const definition = entries.get(member.name);
-    const under = [member.name, ...(definition?.subtypes ?? [])];
+    const under = [member.name, ...(definition === undefined ? [] : subtypesOf(definition))];
     for (const written of admitting(under, entries)) {
       if (!routes.has(written))
         routes.set(
@@ -210,7 +223,7 @@ export function buildMemberDispatcher(
 
   function* dispatch(rctx: JsonReadContext, lead: Lead, opened: boolean): Task<unknown> {
     if (lead.schema) {
-      // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s top
+      // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `tagMembers.ts`'s top
       // note.
       rctx
         .field(SCHEMA)
@@ -230,7 +243,7 @@ export function buildMemberDispatcher(
       // rule, not a second dispatch.
       if (lead.type === undefined) {
         // §9.4's table: "a `$value` in an object not led by `$type`" is resolver category, not
-        // `VALIDATION_ERROR` -- the same divergence `reservedMembers.ts`'s top note records.
+        // `VALIDATION_ERROR` -- the same divergence `tagMembers.ts`'s top note records.
         rctx.report(
           'UNKNOWN_TYPE_REF',
           `'${displayName}' is sealed, and a '$value' wrapper with no '$type' has nothing to ` +
@@ -249,7 +262,7 @@ export function buildMemberDispatcher(
 
     const key: string[] = [];
     for (const selector of selectors) {
-      const raw = lead.selectors.get(selector.name);
+      const raw = lead.selectors.get(nameKey(selector.name));
       if (raw === undefined) {
         // FIELD_REQUIRED, not VALIDATION_ERROR: the reference's own `RecordExtensionDiagnostics
         // .discriminatorMissing` (`tson-base`) files this code, and so does this port's own text
@@ -347,14 +360,14 @@ export function buildMemberDispatcher(
         yield* skipValue(rctx, found);
         return undefined;
       }
-      const lead = yield* leadOf(rctx, selectorNames);
+      const lead = yield* leadOf(rctx, selectorNames, nameKey);
       return yield* dispatch(rctx, lead, false);
     }
     // `opened` (`json/schema/route.ts`'s own top note): the caller has already consumed the
-    // object's opening brace and a leading tag naming this family's own base for real -- nothing
-    // reserved remains to recognize, so only the discriminators are read, from wherever the
-    // stream now sits.
-    const selectors = yield* leadingSelectors(rctx, selectorNames);
+    // object's opening brace and a leading tag naming this family's own base for real -- no
+    // annotation member remains to recognize, so only the discriminators are read, from wherever
+    // the stream now sits.
+    const selectors = yield* leadingSelectors(rctx, selectorNames, nameKey);
     const lead: Lead = {
       schema: false,
       schemaRef: undefined,
@@ -404,7 +417,7 @@ export function buildMemberDispatcher(
   return reader;
 }
 
-/** Whether `event` is one `leadingSelectors` may capture -- `reservedMembers.ts`'s own `isScalarEvent`, restated locally rather than exported for this module's one use. */
+/** Whether `event` is one `leadingSelectors` may capture -- `tagMembers.ts`'s own `isScalarEvent`, restated locally rather than exported for this module's one use. */
 function isScalarEvent(event: JsonEvent): boolean {
   return (
     event.kind === 'string' ||
@@ -415,19 +428,21 @@ function isScalarEvent(event: JsonEvent): boolean {
 }
 
 /**
- * `reservedMembers.ts`'s own `lead` selector loop, restated for a cursor that is already
- * positioned at the family's own leading members with nothing reserved before them to recognize
- * (`readAt`'s own `opened` branch, above) -- a bounded peek, rewound, exactly like `lead` itself.
+ * `tagMembers.ts`'s own `lead` selector loop, restated for a cursor that is already
+ * positioned at the family's own leading members with no annotation member before them to
+ * recognize (`readAt`'s own `opened` branch, above) -- a bounded peek, rewound, exactly like `lead`
+ * itself, matching each name in `key`'s form.
  */
 function* leadingSelectors(
   rctx: JsonReadContext,
   wanted: ReadonlySet<string>,
+  key: (nfcName: string) => string,
 ): Task<ReadonlyMap<string, JsonEvent>> {
   return yield* lookingAhead(rctx, function* (ahead): Task<ReadonlyMap<string, JsonEvent>> {
     const selectors = new Map<string, JsonEvent>();
     let event = yield* ahead.peek();
     while (selectors.size < wanted.size && event.kind === 'member-name') {
-      const name = toNfc(event.name);
+      const name = key(toNfc(event.name));
       yield* ahead.next(); // the member-name just peeked
       const value = yield* ahead.peek();
       if (!wanted.has(name) || selectors.has(name) || !isScalarEvent(value)) break;

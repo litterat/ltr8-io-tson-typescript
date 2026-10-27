@@ -139,6 +139,21 @@ describe('schemalessTreeReader -- record (§2.5)', () => {
     expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_FIELD']);
     expect(((value as RecordNode).fields.get('a') as AtomNode).value).toBe(2n);
   });
+  it("a schemaless record's field names are identifiers: a name that is not one is a resolver error, ATOM_FORM_INVALID (§2.5, §7.7)", () => {
+    const { diagnostics } = readCollect('{ "first name": 1  42x: 2  "_id": 3  ok: 4 }');
+    expect(diagnostics.map((d) => d.code)).toEqual([
+      'ATOM_FORM_INVALID',
+      'ATOM_FORM_INVALID',
+      'ATOM_FORM_INVALID',
+    ]);
+    expect(diagnostics[0]?.message).toContain("'first name' is not an identifier");
+  });
+
+  it('quoting a name the identifier grammar admits changes nothing (§2.5)', () => {
+    const { value, diagnostics } = readCollect('{ "order-id": 1 }');
+    expect(diagnostics).toEqual([]);
+    expect(((value as RecordNode).fields.get('order-id') as AtomNode).value).toBe(1n);
+  });
 });
 
 describe('schemalessTreeReader -- array (§2.7)', () => {

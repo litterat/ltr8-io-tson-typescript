@@ -1,8 +1,7 @@
 /**
- * Where in some original schema source text a resolved value — chiefly a {@link
- * TypeDefinition} — was declared: line, column, and byte offset (Part 2 §8.1's `position`
- * is this package's own addition to `type_definition`, carried for diagnostics; the kernel
- * declares no such field).
+ * Where in some original schema source text a resolved entry was declared: line, column, and
+ * byte offset -- an {@link EntryFacts} fact, this package's own, carried for diagnostics; the
+ * kernel declares no such field (Part 2 §8.1).
  *
  * `schema/meta` depends on nothing but itself and `core/` (see this package's module note),
  * yet a `SourcePosition` should be fillable with zero conversion from a real lexer position

@@ -2,15 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { validateReferences } from '../src/link/referenceValidation.js';
 import { collector } from '../src/core/diagnostic.js';
-import { TsonBindMismatchError, TsonSchemaValidationError } from '../src/core/errors.js';
-import { createHeldBody } from '../src/compiler/heldBody.js';
-import { heldRecord } from '../src/compiler/wireForm.js';
-import type { RecordBody, RecordField } from '../src/schema/meta/bodies.js';
-import type { Token, Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
-
-function isRecordBody(body: Top): body is RecordBody {
-  return 'fields' in body;
-}
+import { TsonSchemaValidationError } from '../src/core/errors.js';
+import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
+import { TYPE_KIND } from '../src/schema/meta/bodies.js';
+import type { MetaValue, Token, Top, TypeRef } from '../src/schema/meta/typedef.js';
+import { isTemplateBody, namespaceOf } from '../src/schema/meta/typedef.js';
+import { entry, fieldMapOf } from './model-fixtures.js';
 
 function ref(name: string, args: TypeRef['arguments'] = []): TypeRef {
   return { name, arguments: args, annotations: [] };
@@ -20,7 +17,7 @@ function token(text: string, form: Token['form'] = 'UNQUOTED'): Token {
   return { text, form };
 }
 
-function field(name: string, type: TypeRef, role: RecordField['role'], value?: Token): RecordField {
+function field(name: string, type: TypeRef, role: RecordField['role'], value?: Token): NamedField {
   const optional = role === 'DEFAULT';
   return {
     name,
@@ -37,72 +34,37 @@ function def(
   body: Top,
   options: {
     readonly parameters?: readonly string[];
-    readonly source?: TypeRef;
     readonly supertypes?: readonly string[];
     readonly subtypes?: readonly string[];
   } = {},
-): TypeDefinition {
-  // A non-empty `parameters` makes this an open entry (§5.10): its body must be a held
-  // `TemplateBody` for `typeParameters`/`typeKind` to see the parameter list at all, the same
-  // fold `definitionResolver.ts`'s own `holdIfOpen` performs.
+): Top {
+  // A non-empty `parameters` makes a record a record template (§5.10): the record it is, with
+  // its parameters, each a type parameter.
   const parameters = options.parameters ?? [];
-  const finalBody: Top =
-    parameters.length === 0 || !isRecordBody(body)
+  const value: Top =
+    parameters.length === 0 || isTemplateBody(body) || body.kind !== 'record'
       ? body
-      : createHeldBody(heldRecord(body), parameters);
-  return {
-    supertypes: options.supertypes ?? [],
-    subtypes: options.subtypes ?? [],
-    body: finalBody,
-    annotations: [],
-    ...(options.source === undefined ? {} : { source: options.source }),
-  };
+      : {
+          ...body,
+          parameters: parameters.map((name) => ({
+            name,
+            type: { name: TYPE_KIND, arguments: [], annotations: [] },
+          })),
+        };
+  return entry(value, options.supertypes ?? [], options.subtypes ?? []);
 }
 
 const text = def({ kind: 'text_type', normalization: 'NONE' });
 
-/**
- * `top`/`data` themselves, minimally, so a DATA-kind test entry's own `supertypes: ['data',
- * 'top']` resolves under `validateEntry`'s own supertype-resolution check -- `typeKind`'s
- * derivation needs the literal name `top` to appear for `isConstructor` to hold, and
- * `validateEntry` separately checks every named supertype actually resolves in scope.
- */
-const DATA_KIND_FIXTURE: readonly (readonly [string, TypeDefinition])[] = [
-  [
-    'top',
-    def({
-      kind: 'record',
-      supertypes: [],
-      fields: [],
-      groups: [],
-      extension: 'OPEN',
-    }),
-  ],
-  [
-    'data',
-    def(
-      {
-        kind: 'record',
-        supertypes: [],
-        fields: [],
-        groups: [],
-        extension: 'OPEN',
-      },
-      { supertypes: ['top'] },
-    ),
-  ],
-];
-
 describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   it('throws (fail-fast) on a field type that resolves to nothing', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [
+          fields: fieldMapOf([
             {
               name: 'x',
               type: ref('nowhere'),
@@ -111,7 +73,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
               role: 'FREE',
               annotations: [],
             },
-          ],
+          ]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -123,14 +85,13 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   });
 
   it('accepts every field/element/key/value/variant reference that does resolve', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [
+          fields: fieldMapOf([
             {
               name: 'x',
               type: ref('text'),
@@ -139,7 +100,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
               role: 'FREE',
               annotations: [],
             },
-          ],
+          ]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -154,7 +115,16 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
           uniqueItems: false,
         }),
       ],
-      ['m', def({ kind: 'map', keyType: ref('text'), valueType: ref('text') })],
+      [
+        'm',
+        def({
+          kind: 'map',
+          keyType: ref('text'),
+          valueType: ref('text'),
+          voidable: false,
+          ordered: false,
+        }),
+      ],
       [
         't',
         def({
@@ -170,7 +140,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   });
 
   it('reports through a receiver, letting every other entry still be checked', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['bad_a', def({ kind: 'reference', target: ref('nowhere_a') })],
       ['bad_b', def({ kind: 'reference', target: ref('nowhere_b') })],
@@ -182,26 +152,24 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
     expect(diagnostics.diagnostics.every((d) => d.code === 'SCHEMA_ERROR')).toBe(true);
   });
 
-  it('rejects a reference to an entry whose kind is DATA (§4.1)', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ...DATA_KIND_FIXTURE,
-      ['op', def({ kind: 'operation' }, { supertypes: ['data', 'top'] })],
-      ['user', def({ kind: 'reference', target: ref('op') })],
+  it('rejects a reference to an entry applying a namespace type, a value and not a type (§4.1)', () => {
+    const merged = new Map<string, Top>([
+      ['myapi', apiValue()],
+      ['user', def({ kind: 'reference', target: ref('myapi') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(/describes something other than a data value/u);
+    }).toThrow(/a value and not a type/u);
   });
 
   it('allows a reference to the enclosing declaration`s own type parameter', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'box',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [
+            fields: fieldMapOf([
               {
                 name: 'v',
                 type: ref('T'),
@@ -210,7 +178,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
                 role: 'FREE',
                 annotations: [],
               },
-            ],
+            ]),
             groups: [],
             extension: 'OPEN',
           },
@@ -224,68 +192,51 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   });
 });
 
-describe("validateReferences: a Data body's own references() contract (§4.1)", () => {
-  function brokenDataBody(returning: unknown): Top {
-    // Violates Data.references()'s "never null/undefined -- return [] for none" contract on
-    // purpose: `references` is present (so the "omitted means none" branch does not apply) but
-    // answers with something other than an array, e.g. an OPTIONAL bound component read straight
-    // through by a caller's own class.
-    return { kind: 'operation', references: () => returning } as unknown as Top;
-  }
+/** `myapi => !api { orders => { verb: GET } }` -- an entry applying a meta layer's namespace type (§4.1). */
+function apiValue(): Top {
+  const operation: MetaValue = {
+    form: 'record',
+    type: 'operation',
+    fields: new Map([['verb', { form: 'token', token: { text: 'GET', form: 'UNQUOTED' } }]]),
+  };
+  return namespaceOf('api', new Map([['orders', operation]]));
+}
 
-  it('names the entry and throws TsonBindMismatchError when references() returns undefined', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ...DATA_KIND_FIXTURE,
-      ['op', def(brokenDataBody(undefined), { supertypes: ['data', 'top'] })],
-    ]);
-    expect(() => {
-      validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(TsonBindMismatchError);
-    expect(() => {
-      validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(/'op'.*references\(\) returned undefined/u);
-  });
-
-  it('names the entry and throws TsonBindMismatchError when references() returns null', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ...DATA_KIND_FIXTURE,
-      ['op', def(brokenDataBody(null), { supertypes: ['data', 'top'] })],
-    ]);
-    expect(() => {
-      validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(/'op'.*references\(\) returned null/u);
-  });
-
-  it('reports BIND_MISMATCH (not SCHEMA_ERROR) through a receiver', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ...DATA_KIND_FIXTURE,
-      ['op', def(brokenDataBody(undefined), { supertypes: ['data', 'top'] })],
-    ]);
-    const diagnostics = collector();
-    validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
-    expect(diagnostics.diagnostics).toHaveLength(1);
-    expect(diagnostics.diagnostics[0]?.code).toBe('BIND_MISMATCH');
-  });
-
-  it('an omitted references() method (the ordinary case) is simply treated as no references', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ...DATA_KIND_FIXTURE,
-      ['op', def({ kind: 'operation' }, { supertypes: ['data', 'top'] })],
-    ]);
+describe('validateReferences: a namespace value is a value, never a type (§4.1)', () => {
+  it('links an entry applying a namespace type without reading it as a type', () => {
+    const merged = new Map<string, Top>([['myapi', apiValue()]]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).not.toThrow();
   });
 
-  it('a well-behaved references() still has its named types validated', () => {
-    const merged = new Map<string, TypeDefinition>([
-      ['text', text],
-      ...DATA_KIND_FIXTURE,
-      ['op', def(brokenDataBody([ref('nowhere')]), { supertypes: ['data', 'top'] })],
+  it('refuses a field typed by a namespace value, naming it a value', () => {
+    const merged = new Map<string, Top>([
+      ['myapi', apiValue()],
+      [
+        'holder',
+        def({
+          kind: 'record',
+          fields: fieldMapOf([field('api', ref('myapi'), 'FREE')]),
+          groups: [],
+          extension: 'OPEN',
+        }),
+      ],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(/unresolved reference 'nowhere'/u);
+    }).toThrow(/'myapi', which is a value and not a type/u);
+  });
+
+  it('reports the refusal through a receiver as a schema error', () => {
+    const merged = new Map<string, Top>([
+      ['myapi', apiValue()],
+      ['user', def({ kind: 'reference', target: ref('myapi') })],
+    ]);
+    const diagnostics = collector();
+    validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
+    expect(diagnostics.diagnostics).toHaveLength(1);
+    expect(diagnostics.diagnostics[0]?.code).toBe('SCHEMA_ERROR');
   });
 });
 
@@ -293,8 +244,7 @@ describe('validateReferences: arity (§5.10)', () => {
   const template = def(
     {
       kind: 'record',
-      supertypes: [],
-      fields: [
+      fields: fieldMapOf([
         {
           name: 'v',
           type: ref('T'),
@@ -303,7 +253,7 @@ describe('validateReferences: arity (§5.10)', () => {
           role: 'FREE',
           annotations: [],
         },
-      ],
+      ]),
       groups: [],
       extension: 'OPEN',
     },
@@ -311,7 +261,7 @@ describe('validateReferences: arity (§5.10)', () => {
   );
 
   it('rejects an application supplying too many arguments', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['box', template],
       [
@@ -330,10 +280,24 @@ describe('validateReferences: arity (§5.10)', () => {
     }).toThrow(/takes 1 type argument/u);
   });
 
-  it('rejects a bare reference to a template with no arguments at all', () => {
-    const merged = new Map<string, TypeDefinition>([
+  it('admits a bare reference to a record template, a family base and itself a type (§5.10)', () => {
+    const merged = new Map<string, Top>([
       ['box', template],
       ['user', def({ kind: 'reference', target: ref('box') })],
+    ]);
+    expect(() => {
+      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+    }).not.toThrow();
+  });
+
+  it('rejects a bare reference to a held template with no arguments at all (§5.10)', () => {
+    const held: Top = {
+      parameters: [{ name: 'T', type: { name: TYPE_KIND, arguments: [], annotations: [] } }],
+      template: '!array { element_type: T }',
+    };
+    const merged = new Map<string, Top>([
+      ['wrapped', held],
+      ['user', def({ kind: 'reference', target: ref('wrapped') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -341,7 +305,7 @@ describe('validateReferences: arity (§5.10)', () => {
   });
 
   it('rejects arguments applied to a name that declares no type parameters', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'user',
@@ -354,14 +318,13 @@ describe('validateReferences: arity (§5.10)', () => {
   });
 
   it('rejects a type parameter itself carrying an argument list (no head abstraction, §5.10)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'box',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [
+            fields: fieldMapOf([
               {
                 name: 'v',
                 type: ref('T', [{ kind: 'ref', ref: ref('text') }]),
@@ -370,7 +333,7 @@ describe('validateReferences: arity (§5.10)', () => {
                 role: 'FREE',
                 annotations: [],
               },
-            ],
+            ]),
             groups: [],
             extension: 'OPEN',
           },
@@ -387,7 +350,7 @@ describe('validateReferences: arity (§5.10)', () => {
 
 describe('validateReferences: choice variants (§5.4)', () => {
   it('rejects two variants that resolve to the same type', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['other_text', def({ kind: 'reference', target: ref('text') })],
       [
@@ -404,7 +367,7 @@ describe('validateReferences: choice variants (§5.4)', () => {
   });
 
   it('rejects a variant that resolves to void', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['void', def({ kind: 'void_type' })],
       ['c', def({ kind: 'choice', variants: [ref('text'), ref('void')] })],
@@ -415,7 +378,7 @@ describe('validateReferences: choice variants (§5.4)', () => {
   });
 
   it('accepts a choice whose variants are all distinct and none is void', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['int32', def({ kind: 'integer_type' })],
       ['c', def({ kind: 'choice', variants: [ref('text'), ref('int32')] })],
@@ -428,15 +391,14 @@ describe('validateReferences: choice variants (§5.4)', () => {
 
 describe('validateReferences: parameter usage (§5.10)', () => {
   it('rejects a declared type parameter the body never references', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'box',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [
+            fields: fieldMapOf([
               {
                 name: 'v',
                 type: ref('text'),
@@ -445,7 +407,7 @@ describe('validateReferences: parameter usage (§5.10)', () => {
                 role: 'FREE',
                 annotations: [],
               },
-            ],
+            ]),
             groups: [],
             extension: 'OPEN',
           },
@@ -461,14 +423,13 @@ describe('validateReferences: parameter usage (§5.10)', () => {
 
 describe('validateReferences: supertypes/subtypes must themselves resolve', () => {
   it('rejects an unresolved supertype', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'widget',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [],
+            fields: fieldMapOf([]),
             groups: [],
             extension: 'OPEN',
           },
@@ -482,14 +443,13 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
   });
 
   it('rejects an unresolved subtype (a broken reverse-index invariant)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'widget',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [],
+            fields: fieldMapOf([]),
             groups: [],
             extension: 'OPEN',
           },
@@ -502,8 +462,8 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
     }).toThrow(/unresolved subtype/u);
   });
 
-  it('resolves a `source` against the structure-namespace fallback (§3.3.1)', () => {
-    const structureNamespace = new Map<string, TypeDefinition>([
+  it("resolves an entry's head against the structure-namespace fallback (§3.3.1)", () => {
+    const structureNamespace = new Map<string, Top>([
       [
         'array',
         def({
@@ -515,28 +475,26 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
         }),
       ], // stands in for a constructor role
     ]);
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'widget',
-        def(
-          {
-            kind: 'record',
-            supertypes: [],
-            fields: [],
-            groups: [],
-            extension: 'OPEN',
-          },
-          { source: ref('array') },
-        ),
+        def({
+          kind: 'record',
+          fields: fieldMapOf([]),
+          groups: [],
+          extension: 'OPEN',
+        }),
       ],
     ]);
+    // The constructor `widget` was built with is a fact beside its value (§8.1).
+    const facts = new Map([['widget', { head: 'array' }]]);
     // `array` resolves only via the structure-namespace fallback, not the ordinary namespace --
     // this would throw with structureNamespace omitted.
     expect(() => {
-      validateReferences(merged, { schemaId: 'https://x/s.tn', structureNamespace });
+      validateReferences(merged, { schemaId: 'https://x/s.tn', facts, structureNamespace });
     }).not.toThrow();
     expect(() => {
-      validateReferences(merged, { schemaId: 'https://x/s.tn' });
+      validateReferences(merged, { schemaId: 'https://x/s.tn', facts });
     }).toThrow();
   });
 });
@@ -544,23 +502,21 @@ describe('validateReferences: supertypes/subtypes must themselves resolve', () =
 describe('validateReferences: field values (§5.2)', () => {
   const point = def({
     kind: 'record',
-    supertypes: [],
-    fields: [],
+    fields: fieldMapOf([]),
     groups: [],
     extension: 'OPEN',
   });
-  const status = def({ kind: 'enum', members: ['UP', 'DOWN'] });
+  const status = def({ kind: 'enum', members: ['UP', 'DOWN'], nameType: 'identifier' });
   const int = def({ kind: 'integer_type' });
 
   it('rejects a default on a record-typed field', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['point', point],
       [
         'odd',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('p', ref('point'), 'DEFAULT', token('3'))],
+          fields: fieldMapOf([field('p', ref('point'), 'DEFAULT', token('3'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -572,7 +528,7 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('rejects a fixed value on an array-typed field, naming "fixed value" rather than "default"', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'arr',
@@ -588,8 +544,7 @@ describe('validateReferences: field values (§5.2)', () => {
         'odd',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('a', ref('arr'), 'FIXED', token('x'))],
+          fields: fieldMapOf([field('a', ref('arr'), 'FIXED', token('x'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -601,7 +556,7 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('rejects a default on a choice-typed field', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['int', int],
       ['choice', def({ kind: 'choice', variants: [ref('text'), ref('int')] })],
@@ -609,8 +564,7 @@ describe('validateReferences: field values (§5.2)', () => {
         'odd',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('c', ref('choice'), 'DEFAULT', token('x'))],
+          fields: fieldMapOf([field('c', ref('choice'), 'DEFAULT', token('x'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -622,14 +576,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('accepts a default naming a real member of the field’s declared enum', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['status', status],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('state', ref('status'), 'DEFAULT', token('UP'))],
+          fields: fieldMapOf([field('state', ref('status'), 'DEFAULT', token('UP'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -641,14 +594,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('rejects a default naming something that is not a member of the field’s declared enum', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['status', status],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('state', ref('status'), 'DEFAULT', token('SIDEWAYS'))],
+          fields: fieldMapOf([field('state', ref('status'), 'DEFAULT', token('SIDEWAYS'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -660,14 +612,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('rejects a fixed value that is not shaped like the field’s declared atom type', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['int', int],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('n', ref('int'), 'FIXED', token('not-a-number'))],
+          fields: fieldMapOf([field('n', ref('int'), 'FIXED', token('not-a-number'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -679,15 +630,14 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it("checks a fixed value against the terminal of the field's own type when that type is itself an alias (§5.2, §8.3)", () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['int', int],
       ['count', def({ kind: 'reference', target: ref('int') })],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('n', ref('count'), 'FIXED', token('not-a-number'))],
+          fields: fieldMapOf([field('n', ref('count'), 'FIXED', token('not-a-number'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -701,15 +651,14 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it("accepts a fixed value that is a value of the terminal an alias-typed field's own chain leads to (§5.2, §8.3)", () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['int', int],
       ['count', def({ kind: 'reference', target: ref('int') })],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('n', ref('count'), 'FIXED', token('3'))],
+          fields: fieldMapOf([field('n', ref('count'), 'FIXED', token('3'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -721,14 +670,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('skips a field whose own type names one of the enclosing template’s parameters', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'box',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [field('v', ref('T'), 'DEFAULT', token('T'))],
+            fields: fieldMapOf([field('v', ref('T'), 'DEFAULT', token('T'))]),
             groups: [],
             extension: 'OPEN',
           },
@@ -742,14 +690,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('skips a field whose declared type is itself still open (a template, not yet applied)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'box',
         def(
           {
             kind: 'record',
-            supertypes: [],
-            fields: [field('v', ref('T'), 'FREE')],
+            fields: fieldMapOf([field('v', ref('T'), 'FREE')]),
             groups: [],
             extension: 'OPEN',
           },
@@ -760,10 +707,9 @@ describe('validateReferences: field values (§5.2)', () => {
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [
+          fields: fieldMapOf([
             field('b', ref('box', [{ kind: 'ref', ref: ref('text') }]), 'DEFAULT', token('x')),
-          ],
+          ]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -776,14 +722,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it("rejects a default on a field declared 'void' (unit's own non-scalar instance)", () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['void', def({ kind: 'void_type' })],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('v', ref('void'), 'DEFAULT', token('x'))],
+          fields: fieldMapOf([field('v', ref('void'), 'DEFAULT', token('x'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -795,14 +740,13 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it("accepts a default on unit's scalar, non-'void' instance without checking the value’s shape", () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['token', def({ kind: 'value_type' })],
       [
         'widget',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('t', ref('token'), 'DEFAULT', token('anything at all'))],
+          fields: fieldMapOf([field('t', ref('token'), 'DEFAULT', token('anything at all'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -814,14 +758,15 @@ describe('validateReferences: field values (§5.2)', () => {
   });
 
   it('quotes the echoed value in the message when it was written quoted', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['point', point],
       [
         'odd',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('p', ref('point'), 'DEFAULT', token('hi', 'SINGLE_LINE_QUOTED'))],
+          fields: fieldMapOf([
+            field('p', ref('point'), 'DEFAULT', token('hi', 'SINGLE_LINE_QUOTED')),
+          ]),
           groups: [],
           extension: 'OPEN',
         }),

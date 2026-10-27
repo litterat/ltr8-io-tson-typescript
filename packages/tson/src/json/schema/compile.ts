@@ -20,11 +20,18 @@
  * here, and an EXTERN value's foreign schema is looked up as it arrives through
  * {@link JsonCompileDeps.foreignSchemas}.
  *
- * **What it does not (one corner of §5.10).** A template naming no `extension` (a genuine open
- * template, never applied bare) compiles to {@link notImplementedReader}: the plan stays
- * **total** (every entry gets a reader, so a schema whose types include one still compiles), and
- * reading such a position reports `NOT_IMPLEMENTED`, [TSON-DATA] §8.1's own non-verdict "a
- * construct this implementation has not built yet".
+ * **A namespace type reads as its map** ([TSON-SCHEMA] §4.1): a field typed `headers`, where
+ * `headers => namespace & { key_type: = header_name  value_type: = text }`, takes a JSON object
+ * read as `{header_name => text}` and never as a record of the three facets ({@link namespaceMap}).
+ * Such a field stands only in a schema the meta-kernel governs, since an import stands at the
+ * importer's governing level (§2.2.3).
+ *
+ * **What it does not.** A template that is no family base (a genuine open template, never applied
+ * bare, §5.10) and an entry holding a namespace *value* (`defaults => !headers { ... }`, a value
+ * of a meta layer's vocabulary and never a type, §4.1) compile to {@link notImplementedReader}:
+ * the plan stays **total** (every entry gets a reader, so a schema holding one still compiles and
+ * its types read), and reading against such an entry reports `NOT_IMPLEMENTED`, [TSON-DATA]
+ * §8.1's own non-verdict, as the reference's `ErrorReader` does for both.
  *
  * **A closed reference collapses at compile time** ([TSON-SCHEMA] §8.3): `day => date` compiles
  * to exactly the reader `date` itself compiles to, resolved once here rather than walked on every
@@ -36,9 +43,17 @@
  */
 import { TsonInternalError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
-import { isDataBody, type NonDataTop } from '../../link/bodyKind.js';
+import type { NonHeldTop } from '../../link/bodyKind.js';
 import type { LinkedSchema } from '../../link/link.js';
-import { isTemplateBody, type TypeDefinition } from '../../schema/meta/typedef.js';
+import type { MapBody, RecordBody } from '../../schema/meta/bodies.js';
+import { isNamespaceType } from '../../schema/meta/namespaces.js';
+import {
+  isFamilyBase,
+  isTemplateBody,
+  subtypesOf,
+  type Top,
+  type TypeRef,
+} from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import {
   atomReader,
@@ -133,16 +148,51 @@ export interface JsonCompiledSchema {
   rootDeclaration(name: string): import('../../core/diagnostic.js').SchemaLocation | undefined;
 }
 
+/** What a namespace key of a host-supplied family is read as before the host judges it: its spelling. */
+const HOST_KEYS = 'text';
+
+/**
+ * The map a value of the namespace type `name` is read as ([TSON-SCHEMA] §4.1): keys of its
+ * `key_type`, values of its `value_type`, ordered as its `ordered` says, values never void and no
+ * size bounds -- never a record of those facets, which describe the map and are not written in it.
+ * `value_type` is pinned (`value_type: = T`); `key_type` is pinned, or stated by default (`key_type?:
+ * ~ F`) where the family the keys are names of is the one the value's host supplies -- a record's
+ * `field_map`, keyed by the record's `name_type` -- and such a key is read by its spelling alone,
+ * as `text`, the host judging it once its family is resolved. `undefined` for a record that is no
+ * namespace type, and for one leaving either facet open, which describes no map: the abstract
+ * `namespace` itself, and a namespace type leaving a facet to a subtype.
+ */
+function namespaceMap(name: string, body: RecordBody): MapBody | undefined {
+  if (!isNamespaceType(body, name)) return undefined;
+  const key = body.fields.entries.get('key_type');
+  const value = body.fields.entries.get('value_type');
+  if (key?.value === undefined || key.role === 'FREE') return undefined;
+  if (value?.value === undefined || value.role !== 'FIXED') return undefined;
+  const ordered = body.fields.entries.get('ordered')?.value?.text === 'true';
+  const typeRef = (typeName: string): TypeRef => ({
+    name: typeName,
+    arguments: [],
+    annotations: [],
+  });
+  return {
+    kind: 'map',
+    keyType: typeRef(key.role === 'FIXED' ? key.value.text : HOST_KEYS),
+    valueType: typeRef(value.value.text),
+    voidable: false,
+    ordered,
+  };
+}
+
 function locationOf(
   linked: LinkedSchema,
   name: string,
 ): import('../../core/diagnostic.js').SchemaLocation {
-  const def = linked.entries.get(name);
+  const position = linked.facts.get(name)?.position;
   const schemaId = linked.origins.get(name) ?? linked.id;
   return {
     schemaId,
     pointer: `/${name}`,
-    ...(def?.position === undefined ? {} : { position: def.position }),
+    ...(position === undefined ? {} : { position }),
   };
 }
 
@@ -210,24 +260,20 @@ export function compileJsonSchema(
     foreign: lookup,
   };
 
-  function build(name: string, def: TypeDefinition): JsonTypeReader {
-    const body = def.body;
+  function build(name: string, def: Top): JsonTypeReader {
+    const body = def;
     const location = locationOf(linkedSchema, name);
 
-    if (isTemplateBody(body)) {
-      if (body.extension === undefined) {
-        // Not yet a type at all (§5.10): a template is applied, never read directly. Matches the
-        // pinned Java reference's own `OpenTemplateReader`, which this package has not built as a
-        // dedicated "not a type" refusal yet -- reported as a gap rather than misdiagnosed.
-        return notImplementedReader(name, 'an open template family base');
-      }
+    if (isFamilyBase(body)) {
+      // A record template is a family base (§5.10): a position typed by it dispatches over its
+      // members and never reads the template itself.
       const discriminators = body.discriminators ?? [];
       return discriminators.length > 0
         ? buildMemberDispatcher({
             name,
             displayName: name,
             discriminators,
-            baseFields: undefined,
+            baseFields: body.fields,
             entries: linkedSchema.entries,
             schemaLocation: location,
             ctx: context,
@@ -236,16 +282,22 @@ export function compileJsonSchema(
             name,
             displayName: name,
             entries: linkedSchema.entries,
-            subtypes: def.subtypes,
+            subtypes: subtypesOf(def),
             untagged: undefined,
             schemaLocation: location,
             resolve,
           });
     }
-    if (isDataBody(body)) {
-      return notImplementedReader(name, "a meta-layer 'data' construct, which names no value");
+    if (isTemplateBody(body)) {
+      // Not yet a type at all (§5.10): a template is applied, never read directly. Matches the
+      // pinned Java reference's own `OpenTemplateReader`, which this package has not built as a
+      // dedicated "not a type" refusal yet -- reported as a gap rather than misdiagnosed.
+      return notImplementedReader(name, 'an open template');
     }
-    const nonData: NonDataTop = body;
+    if (body.kind === 'namespace') {
+      return notImplementedReader(name, "a namespace value, a meta layer's vocabulary and no type");
+    }
+    const nonData: NonHeldTop = body;
 
     if (nonData.kind === 'reference') {
       if (nonData.target.arguments.length > 0) {
@@ -280,7 +332,9 @@ export function compileJsonSchema(
         atomReaders.set(name, raw);
         return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
       }
-      case 'record':
+      case 'record': {
+        const map = namespaceMap(name, constructorBody);
+        if (map !== undefined) return buildMapReader(name, map, location, context);
         if (constructorBody.extension === 'ABSTRACT') {
           return constructorBody.discriminators !== undefined
             ? buildMemberDispatcher({
@@ -296,24 +350,25 @@ export function compileJsonSchema(
                 name,
                 displayName: name,
                 entries: linkedSchema.entries,
-                subtypes: def.subtypes,
+                subtypes: subtypesOf(def),
                 untagged: undefined,
                 schemaLocation: location,
                 resolve,
               });
         }
-        if (constructorBody.extension === 'OPEN' && def.subtypes.length > 0) {
+        if (constructorBody.extension === 'OPEN' && subtypesOf(def).length > 0) {
           return buildTagDispatcher({
             name,
             displayName: name,
             entries: linkedSchema.entries,
-            subtypes: def.subtypes,
+            subtypes: subtypesOf(def),
             untagged: buildRecordReader(name, constructorBody, location, context),
             schemaLocation: location,
             resolve,
           });
         }
         return buildRecordReader(name, constructorBody, location, context);
+      }
       case 'array':
         return withAnnotationObject(
           name,
@@ -340,7 +395,10 @@ export function compileJsonSchema(
           foreign: lookup,
         });
       default: {
-        const raw = atomReader(name, constructorBody, location);
+        const raw = atomReader(name, constructorBody, location, {
+          // A meta layer's documents name the types of the schema they describe (§4.2).
+          judgesKindMembers: linkedSchema.kernelGoverned !== true && !linkedSchema.bootstrap,
+        });
         atomReaders.set(name, raw);
         return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
       }

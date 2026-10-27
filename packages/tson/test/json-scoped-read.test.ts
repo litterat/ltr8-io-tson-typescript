@@ -23,8 +23,8 @@ const WIDE = 'https://例え.test/注文.tn';
 const LIBRARY = '/local/json-scope-orders.tn';
 
 const PREAMBLE = (id: string): string => `!!id:"${id}"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"`;
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"`;
 
 const HOST_SCHEMA = `${PREAMBLE('https://example.test/json-scope-host.tn')}
 {
@@ -305,7 +305,7 @@ describe('§8.5 the cells an instance does not hold', () => {
 describe('§5.10 extern_of and extern_type each mint their own entry', () => {
   it('three applications differing only in their `schemas` map are three entries, not one', () => {
     const bodies = [...host.entries.values()]
-      .map((d) => d.body)
+
       .filter((b): b is Extract<typeof b, { kind: 'scoped' }> => 'kind' in b && b.kind === 'scoped')
       .filter((b) => b.schemas !== undefined);
     const keys = new Set(bodies.map((b) => JSON.stringify([...(b.schemas ?? [])])));
@@ -357,8 +357,23 @@ describe('§8.5 narrowing: schemas is a closed set, matched by canonical identit
 describe('§8.5 reaching the foreign schema is not a verdict on the document', () => {
   const nowhere = `{"$schema": "https://example.test/nowhere.tn", "$type": "claim", "id": "C-1"}`;
 
-  it('a schema nothing supplies is SCHEMA_NOT_FOUND', () => {
+  it('§9.4: a schema this processor holds none of and has no source for is refused at the reference -- SCHEMA_NOT_PERMITTED, not a verdict', () => {
     const d = refusal('envelope', envelope('{"$type": "note", "body": "hi"}', nowhere, NOTE));
+    expect(d.code).toBe('SCHEMA_NOT_PERMITTED');
+    expect(isVerdict(d.code)).toBe(false);
+  });
+
+  it('§9.4: a source that looked and found nothing leaves the value undetermined -- SCHEMA_NOT_FOUND', () => {
+    const compiled = compileJsonSchema(host, {
+      foreignSchemas: (uri) => {
+        throw new TsonSchemaFetchError(uri, 'not-found', 'nothing there');
+      },
+    });
+    const d = refusal(
+      'envelope',
+      envelope('{"$type": "note", "body": "hi"}', nowhere, NOTE),
+      compiled,
+    );
     expect(d.code).toBe('SCHEMA_NOT_FOUND');
     expect(isVerdict(d.code)).toBe(false);
   });
@@ -404,9 +419,8 @@ describe('§8.5 reaching the foreign schema is not a verdict on the document', (
 
   it('only the unreachable value goes without a verdict: siblings still read on', () => {
     const found = problems('envelope', envelope('{"$type": "count", "$value": 10}', nowhere, NOTE));
-    expect(found.map((d) => d.code).sort()).toEqual(
-      ['SCHEMA_NOT_FOUND', expect.any(String)].sort(),
-    );
+    expect(found).toHaveLength(2);
+    expect(found.map((d) => d.code)).toContain('SCHEMA_NOT_PERMITTED');
   });
 });
 

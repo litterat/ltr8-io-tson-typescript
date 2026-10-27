@@ -6,7 +6,8 @@ import { refValue, scoped } from '../src/compiler/wireForm.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { Declaration } from '../src/ast/schema/document.js';
 import type { RecordField, RecordValue } from '../src/ast/value.js';
-import type { TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
+import { fieldMapOf } from './model-fixtures.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
 
@@ -44,7 +45,7 @@ function stubMaterialiser(
     closeApplication(): string {
       throw new Error('not exercised by this test');
     },
-    closeApplicationAs(): TypeDefinition | undefined {
+    closeApplicationAs(): Top | undefined {
       throw new Error('not exercised by this test');
     },
     materialise() {
@@ -53,27 +54,28 @@ function stubMaterialiser(
     syntheticNames(): ReadonlySet<string> {
       return new Set();
     },
+    expansionsByApplication() {
+      return new Map();
+    },
     setParameterKinds(): void {
       // not exercised by this test
     },
-    checkApplication(): void {
-      // not exercised by this test
+    checkApplication(application) {
+      return application.arguments; // not exercised by this test
     },
     recheckEarly(): void {
       // not exercised by this test
+    },
+    mintedFacts() {
+      return undefined;
     },
     closedFormName,
   };
 }
 
-function record(name: string, body: TypeDefinition['body'], source?: TypeRef): TypeDefinition {
-  return {
-    ...(source === undefined ? {} : { source }),
-    supertypes: [],
-    subtypes: [],
-    body,
-    annotations: [],
-  };
+/** `body` as the value of the entry `_name` (an entry is its value, §8.1). */
+function record(_name: string, body: Top): Top {
+  return body;
 }
 
 // ── renames ──────────────────────────────────────────────────────────────────────────────────
@@ -203,15 +205,14 @@ describe('renames', () => {
 // ── rewrite ──────────────────────────────────────────────────────────────────────────────────
 
 describe('rewrite', () => {
-  it("rewrites a field's type, a `source`, and an array's `elementType` onto the merged name", () => {
-    const entries = new Map<string, TypeDefinition>([
+  it("rewrites a field's type and an array's `elementType` onto the merged name", () => {
+    const entries = new Map<string, Top>([
       [
         'a',
         record('a', {
           kind: 'record',
-          supertypes: [],
           groups: [],
-          fields: [
+          fields: fieldMapOf([
             {
               name: 'v',
               type: refT('eager'),
@@ -220,45 +221,39 @@ describe('rewrite', () => {
               role: 'FREE',
               annotations: [],
             },
-          ],
+          ]),
           extension: 'OPEN',
         }),
       ],
       [
         'b',
-        record(
-          'b',
-          {
-            kind: 'array',
-            elementType: refT('eager'),
-            voidable: false,
-            ordered: true,
-            uniqueItems: false,
-          },
-          refT('eager'),
-        ),
+        record('b', {
+          kind: 'array',
+          elementType: refT('eager'),
+          voidable: false,
+          ordered: true,
+          uniqueItems: false,
+        }),
       ],
     ]);
     rewrite(entries, new Map([['eager', 'closed']]));
     const a = entries.get('a');
     const b = entries.get('b');
-    if (a === undefined || b === undefined || !('fields' in a.body) || !('elementType' in b.body)) {
+    if (a === undefined || b === undefined || !('fields' in a) || !('elementType' in b)) {
       throw new Error('unreachable');
     }
-    expect(a.body.fields[0]?.type.name).toBe('closed');
-    expect(b.body.elementType.name).toBe('closed');
-    expect(b.source?.name).toBe('closed');
+    expect(a.fields.entries.get('v')?.type.name).toBe('closed');
+    expect(b.elementType.name).toBe('closed');
   });
 
   it('leaves a reference untouched when it names nothing in the rename map', () => {
-    const entries = new Map<string, TypeDefinition>([
+    const entries = new Map<string, Top>([
       [
         'a',
         record('a', {
           kind: 'record',
-          supertypes: [],
           groups: [],
-          fields: [
+          fields: fieldMapOf([
             {
               name: 'v',
               type: refT('untouched'),
@@ -267,14 +262,14 @@ describe('rewrite', () => {
               role: 'FREE',
               annotations: [],
             },
-          ],
+          ]),
           extension: 'OPEN',
         }),
       ],
     ]);
     rewrite(entries, new Map([['eager', 'closed']]));
     const a = entries.get('a');
-    if (a === undefined || !('fields' in a.body)) throw new Error('unreachable');
-    expect(a.body.fields[0]?.type.name).toBe('untouched');
+    if (a === undefined || !('fields' in a)) throw new Error('unreachable');
+    expect(a.fields.entries.get('v')?.type.name).toBe('untouched');
   });
 });

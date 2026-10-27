@@ -10,7 +10,7 @@
  *
  * **§3.3's annotation object, read with no lookahead of its own.** A record position's own reader
  * is the one place §3.3's leading members are read *sequentially*, as the ordinary member loop
- * meets them, rather than peeked ahead (`json/schema/reservedMembers.ts`'s `lead`, which every
+ * meets them, rather than peeked ahead (`json/schema/tagMembers.ts`'s `lead`, which every
  * dispatcher in this directory uses instead): this reader is reached only once a dispatcher has
  * already decided the object is its own type to read (or reached directly, at a non-family
  * position, where nothing dispatches at all), so there is nothing left to decide from a peek —
@@ -29,31 +29,43 @@
  *   value inside may itself carry a tag selecting a subtype, which only `wrapped` (not this
  *   record's own, subtype-blind fields) knows how to place. This record's own fields are never
  *   read in this branch: a wrapper is apparatus, not a record (§3.3).
- * - **Anything else `$`-initial** — `$schema` at any position (never admitted: no record position
- *   is scoped, §7.8), `$type` anywhere but first, `$value` with no leading, admitted `$type`
- *   before it, or a name outside the closed three-member table — is a resolver error, and the
- *   whole record is abandoned: reading past it as ordinary fields would report false verdicts
- *   against a shape a misplaced or unknown selector has already made unreadable.
+ * - **Any other placement of the three** — `$schema` at any position (never admitted: no record
+ *   position is scoped, §7.8), `$type` anywhere but first, `$value` with no leading, admitted
+ *   `$type` before it — is a resolver error, and the whole record is abandoned: reading past it
+ *   as ordinary fields would report false verdicts against a shape a misplaced selector has
+ *   already made unreadable. Every other member name, `$`-initial or not, is a field name (§3.2).
  *
- * **A recognized field is read at `ctx.schemaField(name)`, never `ctx.field(name)` followed by a
- * second step.** `schemaField` extends both the data path and (once `inRecord` has anchored one)
- * the schema pointer in one step; `field` extends the data path alone, and is used here only for
- * an *unmatched* member (§6.1.1's closure test never reaches a name §3.2 already claimed) or a
- * misplaced/unknown reserved one, neither of which names a field for a schema pointer to extend to.
+ * **A member name is a value of the record's name type** (§6.1.1, [TSON-SCHEMA] §5.2,
+ * `link/fieldNameRule.ts`): matched in the type's form, so under a case-folding type `NAME` is the
+ * field `name` and the two in one object are a duplicate. One matching no declared field is judged
+ * by the type before closure: a name the type refuses is unrecognised, with the type's reason
+ * where the record states one, and meets no policy; a name the type admits meets [TSON-DATA]
+ * §8.2's per-name rules under the type's profile first (§9.4), and is unrecognised only if it
+ * passes them. A matched name carries the declaration's own verdict, judged when the schema linked.
+ *
+ * **A recognized field is read at `ctx.schemaField(written, declared)`, never `ctx.field(name)`
+ * followed by a second step.** `schemaField` extends both the data path (by the member as written,
+ * the only spelling RFC 6901 finds in the document) and, once `inRecord` has anchored one, the
+ * schema pointer (by the declared field) in one step; `field` extends the data path alone, and is
+ * used here only for an *unmatched* member or a misplaced annotation member, neither of which
+ * names a field for a schema pointer to extend to.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
+import type { Position } from '../../core/position.js';
 import type { Task } from '../../io/bytes.js';
-import { selfNames, terminal, terminalDefinition } from '../../link/referenceChain.js';
+import { fieldNameRule, matchKey, type FieldNameRule } from '../../link/fieldNameRule.js';
+import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
 import {
   fieldOmission,
   groupRefusals,
   isGroupMember,
   type FieldGroup,
   type FieldOmission,
+  namedFields,
+  type NamedField,
   type RecordBody,
-  type RecordField,
 } from '../../schema/meta/bodies.js';
-import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
+import { isTemplateBody, type Atom, type Top } from '../../schema/meta/typedef.js';
 import { toNfc } from '../../unicode/nfc.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -75,15 +87,15 @@ import {
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
-import { nameHygieneRefuses } from './nameHygiene.js';
+import { memberNameRefuses, nameHygieneRefuses } from './nameHygiene.js';
 import {
+  isTagMember,
   readWrappedValue,
   refuseMisplaced,
-  refuseUnknown,
   SCHEMA,
   TYPE,
   VALUE,
-} from './reservedMembers.js';
+} from './tagMembers.js';
 import type { ExactReader } from './route.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost } from './valueIdentity.js';
@@ -103,12 +115,7 @@ export interface FieldValue {
  * by its JS `typeof`, which cannot render a `number` family's {@link TsonDecimal} host value at
  * all.
  */
-function fieldValueNode(
-  form: AtomForm,
-  hostValue: unknown,
-  tokenText: string,
-  stringClass: boolean,
-): JsonValue {
+function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): JsonValue {
   switch (form) {
     case 'boolean':
       return jsonBoolean(hostValue as boolean);
@@ -127,9 +134,9 @@ function fieldValueNode(
     case 'string':
       return jsonString(tokenText);
     case 'enum':
-      // §5.2: an enum whose type is not an identifier family is string-class whatever its members
-      // spell, so only an identifier enum's `true`/`false` are JSON booleans.
-      return !stringClass && (tokenText === 'true' || tokenText === 'false')
+      // §7.4: an enum's members are values of an identifier family, so `true`/`false` are JSON
+      // booleans and every other member a string.
+      return tokenText === 'true' || tokenText === 'false'
         ? jsonBoolean(tokenText === 'true')
         : jsonString(tokenText);
   }
@@ -150,8 +157,8 @@ export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): At
       `'${fieldTypeName}' does not resolve -- linking should have refused this before compilation`,
     );
   }
-  const body = definition.body;
-  if ('template' in body && 'parameters' in body) {
+  const body = definition;
+  if (isTemplateBody(body)) {
     throw new Error(`'${fieldTypeName}' is an open template, and carries no atom parser`);
   }
   if (body.kind === 'reference') {
@@ -181,11 +188,7 @@ export function fieldValueOf(
   );
   const hostValue = parse(token.text);
   const text = write === undefined ? token.text : write(hostValue);
-  const entries = ctx.linkedSchema.entries;
-  const stringClass = ctx.linkedSchema.textEnums.has(
-    terminal(fieldTypeName, (n) => entries.get(n)),
-  );
-  return { hostValue, node: fieldValueNode(form, hostValue, text, stringClass) };
+  return { hostValue, node: fieldValueNode(form, hostValue, text) };
 }
 
 /**
@@ -225,17 +228,29 @@ interface RecordPlan {
   /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose reference chain terminates at it (`link/referenceChain.ts`'s `selfNames`). */
   readonly own: ReadonlySet<string>;
   /** The whole linked schema's namespace, for {@link admissibleTag}'s own two-step resolution question ("does the name resolve at all"). */
-  readonly entries: ReadonlyMap<string, TypeDefinition>;
+  readonly entries: ReadonlyMap<string, Top>;
   readonly schemaLocation: SchemaLocation;
   readonly names: readonly string[];
-  readonly fields: readonly RecordField[];
+  readonly fields: readonly NamedField[];
   readonly omitted: readonly FieldOmission[];
   readonly schemaReaders: readonly JsonTypeReader[];
   /** A FIXED field's own decoding reader ({@link fixedFieldReader}); `undefined` at every other field's slot. */
   readonly fixedReaders: readonly (JsonTypeReader | undefined)[];
   readonly stated: readonly (FieldValue | undefined)[];
+  /** Each field's slot, keyed by its NFC name in the name type's form ({@link nameKey}). */
   readonly index: ReadonlyMap<string, number>;
   readonly groups: readonly FieldGroup[];
+  /** The record's field-name rule: its name type, or the kernel's `field_name` ([TSON-SCHEMA] §5.2). */
+  readonly fieldNames: FieldNameRule;
+  /** Whether two spellings may be one name here, so a repeat names where the field was first given. */
+  readonly folds: boolean;
+  /** Every declared field, for an unrecognised member's message and `expected`. */
+  readonly declaredFields: string;
+}
+
+/** An NFC member name in the name type's form: the key a declared field and a document's name share. */
+function nameKey(plan: RecordPlan, nfcName: string): string {
+  return matchKey(plan.fieldNames, nfcName);
 }
 
 function buildRecordPlan(
@@ -244,18 +259,22 @@ function buildRecordPlan(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): RecordPlan {
-  const fields = body.fields;
+  const fields = namedFields(body);
   const names: string[] = [];
   const omitted: FieldOmission[] = [];
   const schemaReaders: JsonTypeReader[] = [];
   const fixedReaders: (JsonTypeReader | undefined)[] = [];
   const stated: (FieldValue | undefined)[] = [];
   const index = new Map<string, number>();
+  // §6.1.1: member names are NFC-normalized before matching, per [TSON-DATA] §7.2.1's resolver
+  // rule, and then put into the record's name type's form ([TSON-SCHEMA] §5.5), so a name the type
+  // holds equal to a field is that field.
+  const fieldNames = fieldNameRule(ctx.linkedSchema.nameTypes.get(name));
 
   fields.forEach((field, i) => {
     const fieldName = toNfc(field.name);
     names.push(fieldName);
-    index.set(fieldName, i);
+    index.set(matchKey(fieldNames, fieldName), i);
     omitted.push(fieldOmission(field, isGroupMember(body.groups, field.name)));
     schemaReaders.push(ctx.resolve(field.type.name));
     fixedReaders.push(
@@ -281,6 +300,9 @@ function buildRecordPlan(
     stated,
     index,
     groups: body.groups,
+    fieldNames,
+    folds: fieldNames.form !== 'NFC',
+    declaredFields: fields.map((field) => field.name).join(' | '),
   };
 }
 
@@ -339,14 +361,14 @@ function admissibleTag(ctx: JsonReadContext, plan: RecordPlan, content: JsonEven
 }
 
 /**
- * §3.3's `$schema`/misplaced-`$type`/misplaced-`$value`/unknown-`$`-name refusal, at a record
- * position: `$schema` is never admitted (no record position is scoped, [TSON-SCHEMA] §7.8), and
- * the rest are `reservedMembers.ts`'s own leading-member rules restated at whichever member this
+ * One of §3.2's three where none may stand (§3.3), at a record position: `$schema` is never
+ * admitted (no record position is scoped, [TSON-SCHEMA] §7.8), and `$type` or `$value` out of its
+ * leading place are `tagMembers.ts`'s own leading-member rules restated at whichever member this
  * loop actually met. Always a resolver error, and always abandons the whole record: reading past
- * a misplaced or unknown selector as ordinary fields would report false verdicts against a shape
- * it has already made unreadable.
+ * a misplaced selector as ordinary fields would report false verdicts against a shape it has
+ * already made unreadable.
  */
-function refuseReserved(ctx: JsonReadContext, name: string, displayName: string): void {
+function refuseTagMember(ctx: JsonReadContext, name: string, displayName: string): void {
   if (name === SCHEMA) {
     // §3.3's closing paragraph states this directly: `$schema` "is a resolver error at any
     // position whose effective type is not a `scoped` instance" -- §9.4 file drawer, not
@@ -363,7 +385,7 @@ function refuseReserved(ctx: JsonReadContext, name: string, displayName: string)
       );
   } else if (name === TYPE) {
     refuseMisplaced(ctx, TYPE);
-  } else if (name === VALUE) {
+  } else {
     // §9.4: "a `$value` in an object not led by `$type`" is resolver category.
     ctx
       .field(VALUE)
@@ -374,8 +396,6 @@ function refuseReserved(ctx: JsonReadContext, name: string, displayName: string)
         "'$value' immediately after a leading '$type'",
         VALUE,
       );
-  } else {
-    refuseUnknown(ctx, name);
   }
 }
 
@@ -417,14 +437,15 @@ export function buildRecordReader(
 
       const reportedBefore = outer.reported();
       const slots: Slot[] = new Array<Slot>(plan.names.length).fill(undefined);
-      // Every ordinary (non-`$`) member name seen so far, NFC-normalized -- tracked whether or
-      // not it matches a declared field. §3.1/§9.4's table puts a repeated member name at a
-      // record position under the resolver category unconditionally: identity is name identity,
-      // not "identity among declared fields", so a repeated *undeclared* member is the same
-      // `DUPLICATE_FIELD` error at its second occurrence, not a second `UNRECOGNIZED_FIELD`
+      // Every field-name member seen so far, by its key (NFC, then the name type's form) -- tracked
+      // whether or not it matches a declared field. §3.1/§9.4's table puts a repeated member name
+      // at a record position under the resolver category unconditionally: identity is name
+      // identity, not "identity among declared fields", so a repeated *undeclared* member is the
+      // same `DUPLICATE_FIELD` error at its second occurrence, not a second `UNRECOGNIZED_FIELD`
       // (closure is validation-category and asks a different question -- does this name denote a
-      // field at all -- answered once, at the name's first occurrence).
-      const seen = new Set<string>();
+      // field at all -- answered once, at the name's first occurrence). Each key holds the member
+      // that first gave it, which a repeat names where the name type folds (§6.1.1).
+      const seen = new Map<string, FirstGiven>();
       let position = 0;
       let tagged = false;
 
@@ -435,7 +456,7 @@ export function buildRecordReader(
           throw new Error(`a member name or '}' was due and the stream produced '${event.kind}'`);
         }
         const rawName = event.name;
-        if (rawName.startsWith('$')) {
+        if (isTagMember(rawName)) {
           if (tagged && position === 1 && rawName === VALUE) {
             const value = yield* readWrappedValue(outer, wrapped);
             return value;
@@ -451,22 +472,27 @@ export function buildRecordReader(
             yield* skipRestOfObject(outer);
             return undefined;
           }
-          refuseReserved(outer, rawName, plan.displayName);
+          refuseTagMember(outer, rawName, plan.displayName);
           yield* skipRestOfObject(outer);
           return undefined;
         }
         position += 1;
         const memberName = toNfc(rawName);
-        const at = plan.index.get(memberName);
-        if (seen.has(memberName)) {
-          yield* duplicateField(outer, memberName, at !== undefined);
+        const key = nameKey(plan, memberName);
+        const at = plan.index.get(key);
+        const first = seen.get(key);
+        if (first !== undefined) {
+          yield* duplicateField(outer, plan, memberName, at, first);
           continue;
         }
-        seen.add(memberName);
         if (at === undefined) {
-          yield* unmatched(outer, memberName);
+          // A name §8.2 refused was never read as a name, so it joins no duplicate check.
+          if (!(yield* unmatched(outer, plan, memberName, key))) {
+            seen.set(key, { name: memberName, position: event.position });
+          }
           continue;
         }
+        seen.set(key, { name: memberName, position: event.position });
         slots[at] = yield* readField(outer, plan, at, memberName);
       }
 
@@ -488,35 +514,90 @@ export function buildRecordReader(
   return reader;
 }
 
+/** The member that first gave a name in one record: its NFC spelling and where it stood. */
+interface FirstGiven {
+  readonly name: string;
+  readonly position: Position;
+}
+
+/** `ctx` one declared field deeper: the data path by the member as written, the schema pointer by the field. */
+function fieldContext(
+  ctx: JsonReadContext,
+  plan: RecordPlan,
+  at: number,
+  memberName: string,
+): JsonReadContext {
+  return ctx.schemaField(memberName, plan.fields[at]?.name);
+}
+
 /**
- * §3.1/§9.4: a member name (declared or not) repeated within one record, NFC identity, reported at
- * its second and every later occurrence -- resolver category throughout, unlike the
- * validation-category closure test `unmatched` runs for a name's first, undeclared occurrence.
- * `declared` picks `schemaField` over `field` exactly where `unmatched`/`readField` would have --
- * a repeated declared field still has a schema position to descend the pointer through.
+ * §3.1/§9.4: a member name (declared or not) repeated within one record, reported at its second
+ * and every later occurrence -- resolver category throughout, unlike the validation-category
+ * closure test `unmatched` runs for a name's first, undeclared occurrence. Identity is the NFC name
+ * in the record's name type's form (§6.1.1), so under a folding type a repeat may be another
+ * spelling, and the report then names the field and where it was first given. A repeated declared
+ * field descends the schema pointer as `readField` would have; an undeclared one has none to.
  */
-function* duplicateField(ctx: JsonReadContext, memberName: string, declared: boolean): Task<void> {
-  const at = declared ? ctx.schemaField(memberName) : ctx.field(memberName);
-  at.report(
+function* duplicateField(
+  ctx: JsonReadContext,
+  plan: RecordPlan,
+  memberName: string,
+  at: number | undefined,
+  first: FirstGiven,
+): Task<void> {
+  const where = at === undefined ? ctx.field(memberName) : fieldContext(ctx, plan, at, memberName);
+  const declared = at === undefined ? first.name : (plan.fields[at]?.name ?? first.name);
+  const spelling = plan.folds
+    ? ` -- the field '${declared}' is already given, as '${first.name}' at ` +
+      `${String(first.position.line)}:${String(first.position.column)}, and under its name type ` +
+      `'${plan.fieldNames.typeName ?? 'field_name'}' the two are one name`
+    : '';
+  where.report(
     'DUPLICATE_FIELD',
-    `'${memberName}' is written more than once in this record`,
+    `'${memberName}' is written more than once in this record${spelling}`,
     'each field written at most once',
     memberName,
   );
-  yield* skipNextValue(at);
+  yield* skipNextValue(where);
 }
 
-function* unmatched(ctx: JsonReadContext, memberName: string): Task<void> {
+/**
+ * A member no declared field matches: §6.1.1's closure error, judged by the record's name type
+ * ([TSON-SCHEMA] §5.2). A name that is no value of the type can be no field and is no name, so it
+ * is unrecognised, with the type's reason where the record states a type of its own, and meets no
+ * hygiene rule. One the type admits meets §8.2 first, under the type's profile, and the order is
+ * the point (§9.4): a name-hygiene refusal MUST NOT be reported in one of §8.1's four categories,
+ * so a look-alike field name is refused here rather than told it is unknown -- which would be a
+ * verdict on the document for a policy rule, and would advise adding a field already declared.
+ * Answers whether §8.2 refused the name.
+ */
+function* unmatched(
+  ctx: JsonReadContext,
+  plan: RecordPlan,
+  memberName: string,
+  key: string,
+): Task<boolean> {
   const at = ctx.field(memberName);
-  if (!nameHygieneRefuses(at, memberName)) {
+  const notAName = plan.fieldNames.refusal(memberName);
+  const refused =
+    notAName === undefined && memberNameRefuses(at, memberName, key, plan.fieldNames.profile);
+  if (!refused) {
+    // Under the default the message is the plain one any undeclared name draws; only an author's
+    // own name type is named, with its reason, since its rules are the ones to look up.
+    const reason =
+      notAName === undefined || plan.fieldNames.typeName === undefined
+        ? ''
+        : ` -- it is not a value of the record's name type '${plan.fieldNames.typeName}': ${notAName}`;
     at.report(
       'UNRECOGNIZED_FIELD',
-      `'${memberName}' is not a declared field of this record`,
-      'a declared field',
+      `'${memberName}' is not a declared field of '${plan.displayName}', whose fields are ` +
+        `(${plan.declaredFields})${reason}`,
+      plan.declaredFields === '' ? 'no member' : plan.declaredFields,
       memberName,
     );
   }
   yield* skipNextValue(at);
+  return refused;
 }
 
 function* readField(
@@ -527,7 +608,7 @@ function* readField(
 ): Task<Slot> {
   const field = plan.fields[at];
   if (field === undefined) throw new Error('unreachable: slot index out of range');
-  const fctx = ctx.schemaField(memberName);
+  const fctx = fieldContext(ctx, plan, at, memberName);
   if (field.role === 'FIXED') {
     return yield* verifyFixed(fctx, plan, at, memberName);
   }
@@ -622,7 +703,7 @@ function* verifyFixed(
 
 function validateGroups(ctx: JsonReadContext, plan: RecordPlan, slots: readonly Slot[]): void {
   const isPresent = (member: string): boolean => {
-    const at = plan.index.get(toNfc(member));
+    const at = plan.index.get(nameKey(plan, toNfc(member)));
     return at !== undefined && slots[at] !== undefined;
   };
   for (const group of plan.groups) {

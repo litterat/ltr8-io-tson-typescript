@@ -28,23 +28,29 @@
  * drift from.
  */
 import { TsonSchemaFetchError, TsonSchemaValidationError } from '../core/errors.js';
-import { canonicalizeIdentity } from '../link/identity.js';
+import {
+  identityAsciiHost,
+  identityHostKey,
+  readIdentity,
+  type IdentityReading,
+} from '../link/identity.js';
 import { declaredSha256 } from '../link/contentHash.js';
 
 /** A reference that has passed every identity/policy check §2.2.1 states — what it names, split for a source's own use. */
 export interface PermittedReference {
   /** The canonical identity (`host + path`) — what this reference *names*, per §2.2.1. */
   readonly canonical: string;
-  /** The lowercase host alone — what an allow-list is matched against. */
+  /**
+   * The identity's canonical host alone -- a host name's lowercase U-labels, a dotted-quad, an
+   * IPv6 address in brackets -- what an allow-list is matched against once its own entries are put
+   * into the same form ({@link hostKey}).
+   */
   readonly host: string;
-  /** The path alone (always `canonical.slice(host.length)`), always starting `/` or empty. */
+  /** The identity's path alone (always `canonical.slice(host.length)`), always starting `/`. */
   readonly path: string;
+  /** The path as a URI carries it: each character beyond US-ASCII percent-encoded as UTF-8. */
+  readonly uriPath: string;
 }
-
-// RFC 3986 Appendix B's own generic-syntax splitting regex, narrowed to the one capture this
-// module needs (the authority). Run only *after* `canonicalizeIdentity` has already required an
-// absolute URI with no userinfo/port in that authority, so the captured text is exactly the host.
-const SCHEME_AUTHORITY = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^/?#]*)/u;
 
 /** Builds a {@link TsonSchemaFetchError} with reason `'not-permitted'` — the shared shape every policy refusal in `httpSchemaSource.ts`/`fileSchemaSource.ts` throws. */
 export function notPermitted(reference: string, message: string): TsonSchemaFetchError {
@@ -68,18 +74,15 @@ export function permittedReference(
   reference: string,
   requireContentHashPin: boolean,
 ): PermittedReference {
-  let canonical: string;
+  let reading: IdentityReading;
   try {
-    canonical = canonicalizeIdentity(reference);
+    reading = readIdentity(reference);
   } catch (error) {
     throw notPermitted(reference, messageOf(error));
   }
-  const host = SCHEME_AUTHORITY.exec(reference)?.[1];
-  // Unreachable against a `reference` that already passed `canonicalizeIdentity`: that function
-  // itself requires an absolute URI with a non-empty authority, and this regex captures exactly
-  // that authority. Guarded rather than asserted away, matching this project's own rule against
-  // non-null assertions.
-  if (host === undefined || host === '') {
+  // An identifying reference a source can fetch names an absolute URI with a host: a scheme, which
+  // is the transport hint, and an authority naming the host that holds the document.
+  if (reading.scheme === undefined || reading.host === '') {
     throw notPermitted(reference, 'is not an absolute URI with a host');
   }
   // Checked unconditionally, not only when a pin is required: a malformed `?sha256=` value (bad
@@ -100,7 +103,36 @@ export function permittedReference(
       );
     }
   }
-  return { canonical, host, path: canonical.slice(host.length) };
+  return {
+    canonical: reading.identity,
+    host: reading.host,
+    path: reading.path,
+    uriPath: reading.uriPath,
+  };
+}
+
+/**
+ * A source's own host key in the form an identity's host takes -- a host name's lowercase U-labels,
+ * a dotted-quad, an IPv6 address in brackets -- so allowing `xn--bcher-kva.example` and an identity
+ * written `bücher.example` meet (§2.2.1).
+ *
+ * @throws TypeError if `host` is not a host.
+ */
+export function hostKey(host: string): string {
+  try {
+    return identityHostKey(host);
+  } catch (error) {
+    throw new TypeError(messageOf(error), { cause: error });
+  }
+}
+
+/** `host`'s ASCII form, for locating a document: a host name's A-labels, an IPv6 address in brackets. */
+export function asciiHost(host: string): string {
+  try {
+    return identityAsciiHost(host);
+  } catch (error) {
+    throw new TypeError(messageOf(error), { cause: error });
+  }
 }
 
 function messageOf(error: unknown): string {

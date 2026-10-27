@@ -212,7 +212,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('status', {
       kind: 'enum',
       members: ['PENDING', 'SHIPPED', 'DELIVERED'],
-      type: 'identifier',
+      nameType: 'identifier',
     });
     expect(runSync(reader.read(bodyContextOver('SHIPPED')))).toEqual({
       kind: 'atom',
@@ -226,7 +226,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('status', {
       kind: 'enum',
       members: ['UP', 'DOWN'],
-      type: 'identifier',
+      nameType: 'identifier',
     });
     const { ctx, diagnostics } = collectingContextOver('SIDEWAYS');
     runSync(reader.read(ctx));
@@ -237,7 +237,7 @@ describe('buildAtomReader -- enum (§5.4, §9)', () => {
     const reader = buildAtomReader('boolean', {
       kind: 'enum',
       members: ['true', 'false'],
-      type: 'identifier',
+      nameType: 'identifier',
     });
     expect(runSync(reader.read(bodyContextOver('true')))).toEqual({
       kind: 'atom',

@@ -34,29 +34,44 @@ const GENERATED = [
   'packages/tson/src/unicode/xid.ts',
   'packages/tson/src/regex/categories.ts',
   'packages/tson/src/unicode/normalization-tables.ts',
+  'packages/tson/src/unicode/idna-tables.ts',
 ];
 
-/** The generator that writes each file; two scripts produce the three tables. */
-const GENERATORS = ['scripts/gen-unicode-tables.mjs', 'scripts/gen-normalization-tables.mjs'];
+/**
+ * A table the host cannot regenerate: `Bidi_Class` has no ECMAScript property escape, so
+ * `scripts/gen-bidi-tables.mjs` reads the UCD data package instead. It is held to the same
+ * recorded version as the others, and not regenerated here.
+ */
+const RECORDED_ONLY = ['packages/tson/src/unicode/bidi-tables.ts'];
+
+/** The generator that writes each file; three scripts produce the four host-derivable tables. */
+const GENERATORS = [
+  'scripts/gen-unicode-tables.mjs',
+  'scripts/gen-normalization-tables.mjs',
+  'scripts/gen-idna-tables.mjs',
+];
 
 /** @param {string} relative */
 function recordedVersion(relative) {
   const source = readFileSync(join(REPO_ROOT, relative), 'utf8');
-  const match = /export const (?:NORMALIZATION_)?UNICODE_VERSION = '([^']+)'/.exec(source);
+  const match = /export const (?:[A-Z0-9]+_)?UNICODE_VERSION = '([^']+)'/.exec(source);
   if (match === null) {
     throw new Error(`${relative}: no UNICODE_VERSION found — is the file generated?`);
   }
   return match[1];
 }
 
-const versions = GENERATED.map((f) => ({ file: f, version: recordedVersion(f) }));
+const versions = [...GENERATED, ...RECORDED_ONLY].map((f) => ({
+  file: f,
+  version: recordedVersion(f),
+}));
 const distinct = [...new Set(versions.map((v) => v.version))];
 
 if (distinct.length !== 1) {
   console.error('The generated tables disagree about their Unicode version:');
   for (const v of versions) console.error(`  ${v.file}  ${v.version}`);
   console.error(
-    '\nRegenerate them together with `npm run gen:unicode` and `npm run gen:normalization`.',
+    '\nRegenerate them together with `npm run gen:unicode`, `npm run gen:normalization`,\n`npm run gen:idna` and `npm run gen:bidi`.',
   );
   process.exit(1);
 }

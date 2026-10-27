@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SchemaLocation } from '../src/core/diagnostic.js';
 import type { ChoiceBody } from '../src/schema/meta/bodies.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top } from '../src/schema/meta/typedef.js';
 import { choiceTreeReader } from '../src/compiler/choiceReader.js';
 import { compile, validate } from '../src/compiler/compile.js';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
@@ -16,9 +16,10 @@ import {
 } from './reader-tree-helpers.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 import { runSync } from '../src/io/bytes.js';
+import { entry } from './model-fixtures.js';
 
 /** No entries -- every call below that exercises only the tagged path passes a `false`/empty pair, since none of it turns on a real namespace. */
-const NO_NAMESPACE: ReadonlyMap<string, TypeDefinition> = new Map();
+const NO_NAMESPACE: ReadonlyMap<string, Top> = new Map();
 
 /**
  * `compiler/choiceReader.ts` -- the `!type-ref` dispatch `reader/tree/grammar.ts`'s own top note
@@ -113,16 +114,8 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
   it("reports TYPE_MISMATCH when the !type-ref names a real schema entry that just isn't a member of this choice (§7.2's two-step rule: resolves, but not admitted here)", () => {
     // `fax` resolves in the schema (declared alongside the choice, an unrelated entry) but is not
     // one of `phone`/`email` -- admissibility fails, not resolution.
-    const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
-      [
-        'fax',
-        {
-          supertypes: [],
-          subtypes: [],
-          annotations: [],
-          body: { kind: 'text_type', normalization: 'NONE' },
-        },
-      ],
+    const namespace: ReadonlyMap<string, Top> = new Map([
+      ['fax', entry({ kind: 'text_type', normalization: 'NONE' })],
     ]);
     const reader = choiceTreeReader(
       'contact_method',
@@ -159,15 +152,13 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
    * `json-alias-tag-read.test.ts` pins the same reading for the JSON encoding.
    */
   it('dispatches an alias of a variant to the variant it names (§5.4, §8.3)', () => {
-    const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
+    const namespace: ReadonlyMap<string, Top> = new Map([
       [
         'phone_of',
-        {
-          supertypes: [],
-          subtypes: [],
-          annotations: [],
-          body: { kind: 'reference', target: { name: 'phone', arguments: [] } },
-        },
+        entry({
+          kind: 'reference',
+          target: { name: 'phone', arguments: [], annotations: [] },
+        }),
       ],
     ]);
     const reader = choiceTreeReader(
@@ -189,16 +180,8 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
   });
 
   it('a proper subtype of a variant is not itself admitted -- a deliberate divergence from the reference (§7.2, §8.4)', () => {
-    const namespace: ReadonlyMap<string, TypeDefinition> = new Map([
-      [
-        'phone_sub',
-        {
-          supertypes: ['phone'],
-          subtypes: [],
-          annotations: [],
-          body: { kind: 'text_type', normalization: 'NONE' },
-        },
-      ],
+    const namespace: ReadonlyMap<string, Top> = new Map([
+      ['phone_sub', entry({ kind: 'text_type', normalization: 'NONE' }, ['phone'])],
     ]);
     const reader = choiceTreeReader(
       'contact_method',
@@ -225,8 +208,8 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
 
 const DISJOINT_SCHEMA = `
 !!id:"test://choice-disjoint.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }
@@ -356,8 +339,8 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"test://choice-sealed.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   pet => abstract {
     pet_type: text =?
@@ -433,8 +416,8 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
  */
 const ALIAS_VARIANT_SCHEMA = `
 !!id:"test://choice-alias-variant.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   note    => { body: text }
   n_of    => note

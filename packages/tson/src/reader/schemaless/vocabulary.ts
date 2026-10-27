@@ -5,9 +5,10 @@
  * resolves via schema machinery -- exactly the property that lets schemaless reading skip the
  * compiler entirely (`reader/schemaless/tree.ts`'s own top note).
  *
- * **Every entry mirrors one `core.tn` line verbatim** (`spec/m/core.tn`, the vendored copy this
- * package ships and is checked against by `vendored-spec.test.ts`), not an independently-derived
- * "sensible default": `int32 => !integer ^ { size: { bits: 32  signed: true } }`,
+ * **Every entry mirrors one `core.tn` or `net.tn` line verbatim** (`spec/m/core.tn` and
+ * `spec/m/net.tn`, the vendored copies this package ships and is checked against by
+ * `vendored-spec.test.ts`), not an independently-derived "sensible default":
+ * `int32 => !integer ^ { size: { bits: 32  signed: true } }`,
  * `float32 => !float_type { format: BINARY32 }`, `bytes => !bytes_type { encoding: BASE64 }`, and
  * so on. Where `core.tn` applies a bare constructor with no refinement (`uuid => !uuid_type {}`),
  * the matching entry here passes a constraints record with every optional field absent.
@@ -62,6 +63,9 @@ import { createIpv4Parser } from '../../atom/network/ipv4.js';
 import { createIpv6Parser } from '../../atom/network/ipv6.js';
 import { createCidr4Parser } from '../../atom/network/cidr4.js';
 import { createCidr6Parser } from '../../atom/network/cidr6.js';
+import { createHostParser } from '../../atom/network/host.js';
+import { createHostnameParser } from '../../atom/network/hostName.js';
+import { createMediaTypeParser } from '../../atom/network/mediaType.js';
 import { createDateParser } from '../../atom/temporal/date.js';
 import { createTimeParser } from '../../atom/temporal/time.js';
 import { createDateTimeParser } from '../../atom/temporal/datetime.js';
@@ -205,6 +209,13 @@ function buildVocabulary(): ReadonlyMap<string, AtomType<unknown>> {
       excluding: [],
     }),
   );
+
+  // net.tn's three: each a string-class atom whose host value is its canonical text (§5.5). The
+  // RFC pins live on the `hostname_type`/`host_type`/`media_type_type` constructors, whose facets
+  // these unconstrained instances leave at their defaults.
+  types.set('hostname', createHostnameParser('hostname'));
+  types.set('host', createHostParser('host'));
+  types.set('media_type', createMediaTypeParser('media_type'));
 
   return types;
 }

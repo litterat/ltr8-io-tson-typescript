@@ -17,13 +17,27 @@ import {
   type SchemaResolverDeps,
 } from '../src/compiler/schemaResolver.js';
 import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
-import { FIELDS, NAME, OPTIONAL, field } from '../src/compiler/wireForm.js';
-import type { HeldBody } from '../src/compiler/heldBody.js';
 import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
-import type { ArrayBody, EnumBody, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
-import type { Top, TypeArgument, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
-import { typeParameters } from '../src/schema/meta/typedef.js';
+import type {
+  ArrayBody,
+  EnumBody,
+  NamedField,
+  RecordBody,
+  RecordField,
+} from '../src/schema/meta/bodies.js';
+import { fieldMap, fieldMapOf, namedField } from '../src/schema/meta/bodies.js';
+import type { Top, TypeArgument, TypeRef } from '../src/schema/meta/typedef.js';
+import {
+  applicationOf,
+  isFamilyBase,
+  isTemplateBody,
+  parentsOf,
+  supertypesOf,
+  typeChain,
+  typeParameters,
+  withChain,
+} from '../src/schema/meta/typedef.js';
 
 // ── Parsing helper ───────────────────────────────────────────────────────────────────────────
 
@@ -60,13 +74,12 @@ function testMetaReader(type: string, value: DataValue): Top {
   const record = value.coreValue as RecordValue;
   if (type === 'record') {
     const fieldsField = fieldOf(record, 'fields')?.coreValue;
-    const fields: RecordField[] = [];
-    if (fieldsField?.kind === 'array') {
-      for (const element of fieldsField.elements) {
-        const fieldRecord = element.value.coreValue as RecordValue;
-        const name = (fieldOf(fieldRecord, 'name')?.coreValue as TokenValue).text;
-        fields.push({
-          name,
+    const fields = new Map<string, RecordField>();
+    if (fieldsField?.kind === 'map') {
+      for (const entry of fieldsField.entries) {
+        const fieldRecord = entry.value.value.coreValue as RecordValue;
+        const name = (entry.key.coreValue as TokenValue).text;
+        fields.set(name, {
           type: typeRefField(fieldRecord, 'type'),
           optional: false,
           voidable: false,
@@ -92,8 +105,7 @@ function testMetaReader(type: string, value: DataValue): Top {
     }
     return {
       kind: 'record',
-      supertypes: [],
-      fields,
+      fields: fieldMap(fields),
       groups: [],
       extension,
       discriminators,
@@ -121,22 +133,17 @@ const neverCalled = (type: string): Top => {
  * `testMetaReader` to have somewhere to bind them, mirroring the real `record`/`array` shapes
  * `spec/m/meta-kernel-resolved.tn` declares (`heldBody.ts`'s own `RECORD`/`ARRAY` wire fields).
  */
-function testStructureNamespace(): (name: string) => TypeDefinition | undefined {
+/** A constructor entry over `fields`: IS-A `top` through `product` (hand-built) is what makes `isConstructor` true. */
+function constructorEntry(fields: readonly NamedField[]): Top {
+  return withChain(
+    { kind: 'record', fields: fieldMapOf(fields), groups: [], extension: 'OPEN' },
+    typeChain(['product', 'top']),
+  );
+}
+
+function testStructureNamespace(): (name: string) => Top | undefined {
   const anyType: TypeRef = { name: 'any', arguments: [], annotations: [] };
-  const constructorEntry = (fields: readonly RecordField[]): TypeDefinition => ({
-    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
-    supertypes: ['product', 'top'],
-    subtypes: [],
-    body: {
-      kind: 'record',
-      supertypes: [],
-      fields,
-      groups: [],
-      extension: 'OPEN',
-    },
-    annotations: [],
-  });
-  const structure = new Map<string, TypeDefinition>([
+  const structure = new Map<string, Top>([
     [
       'record',
       constructorEntry([
@@ -187,53 +194,33 @@ function depsWithReader(): SchemaResolverDeps {
 }
 
 function isRecordBody(body: Top): body is RecordBody {
-  return 'fields' in body;
+  return !isTemplateBody(body) && body.kind === 'record';
 }
 
 function isArrayBody(body: Top): body is ArrayBody {
-  return 'elementType' in body;
+  return !isTemplateBody(body) && body.kind === 'array';
 }
 
-function entryOf(schema: Schema, name: string): TypeDefinition {
+function entryOf(schema: Schema, name: string): Top {
   const entry = schema.entries.get(name);
   if (entry === undefined) throw new Error(`resolved schema has no entry '${name}'`);
   return entry;
 }
 
 function recordBodyOf(schema: Schema, name: string): RecordBody {
-  const body = entryOf(schema, name).body;
+  const body = entryOf(schema, name);
   if (!isRecordBody(body)) throw new Error(`'${name}' is not record-shaped`);
   return body;
 }
 
-function fieldTypeOf(schema: Schema, name: string, field: string): TypeRef {
-  const found = recordBodyOf(schema, name).fields.find((f) => f.name === field);
-  if (found === undefined) throw new Error(`'${name}' has no field '${field}'`);
-  return found.type;
+function fieldNamesOf(body: RecordBody): string[] {
+  return [...body.fields.entries.keys()];
 }
 
-/**
- * Whether a *still-open* entry's held wire (`wireForm.ts`'s own `heldRecord` spelling, §5.10)
- * marks one field `optional` -- `heldRecord` writes the `optional` member only when the fact is
- * `true`, so this reads the held text directly rather than through a `RecordBody`, which a held
- * entry's `TypeDefinition.body` is not (it is a `HeldBody`, unread until its parameters close).
- */
-function heldFieldOptional(schema: Schema, name: string, fieldName: string): boolean {
-  const body = entryOf(schema, name).body;
-  if (!('application' in body)) throw new Error(`'${name}' is not a held (open) entry`);
-  const coreValue = (body as HeldBody).application.coreValue;
-  if (coreValue.kind !== 'record') throw new Error(`'${name}' holds no record wire`);
-  const fieldsValue = field(coreValue, FIELDS);
-  if (fieldsValue?.kind !== 'array') throw new Error(`'${name}' holds no 'fields' array`);
-  for (const element of fieldsValue.elements) {
-    const fieldRecord = element.value.coreValue;
-    if (fieldRecord.kind !== 'record') continue;
-    const nameToken = field(fieldRecord, NAME);
-    if (nameToken?.kind === 'token' && nameToken.text === fieldName) {
-      return field(fieldRecord, OPTIONAL) !== undefined;
-    }
-  }
-  throw new Error(`'${name}' has no held field '${fieldName}'`);
+function fieldTypeOf(schema: Schema, name: string, field: string): TypeRef {
+  const found = namedField(recordBodyOf(schema, name), field);
+  if (found === undefined) throw new Error(`'${name}' has no field '${field}'`);
+  return found.type;
 }
 
 // ── !!id / header handling ───────────────────────────────────────────────────────────────────
@@ -274,20 +261,16 @@ describe('resolving a whole document, on demand and dependency-following', () =>
     const schema = resolveSchema(doc, deps());
     expect(schema.entries.size).toBe(2);
     const child = recordBodyOf(schema, 'child');
-    expect(child.fields.map((f) => f.name).sort()).toEqual(['x', 'y']);
-    expect(child.supertypes).toEqual([{ name: 'parent', arguments: [], annotations: [] }]);
+    expect(fieldNamesOf(child).sort()).toEqual(['x', 'y']);
+    expect(supertypesOf(child)).toEqual(['parent']);
   });
 
   it('resolves every declaration exactly once, however many others depend on it', () => {
     const doc = document('a => base & {} b => base & {} base => { x: text }');
     const schema = resolveSchema(doc, deps());
     expect(schema.entries.size).toBe(3);
-    expect(recordBodyOf(schema, 'a').supertypes).toEqual([
-      { name: 'base', arguments: [], annotations: [] },
-    ]);
-    expect(recordBodyOf(schema, 'b').supertypes).toEqual([
-      { name: 'base', arguments: [], annotations: [] },
-    ]);
+    expect(supertypesOf(recordBodyOf(schema, 'a'))).toEqual(['base']);
+    expect(supertypesOf(recordBodyOf(schema, 'b'))).toEqual(['base']);
   });
 
   it('rejects a circular composition chain', () => {
@@ -306,22 +289,8 @@ describe('resolving a whole document, on demand and dependency-following', () =>
 
 describe('!!import merging into the type-name namespace', () => {
   it('lets a local declaration compose with an imported one', () => {
-    const imported = new Map<string, TypeDefinition>([
-      [
-        'base',
-        {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            kind: 'record',
-            supertypes: [],
-            fields: [],
-            groups: [],
-            extension: 'OPEN',
-          },
-          annotations: [],
-        },
-      ],
+    const imported = new Map<string, Top>([
+      ['base', { kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' }],
     ]);
     const doc = parse(
       '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
@@ -337,30 +306,14 @@ describe('!!import merging into the type-name namespace', () => {
         },
       }),
     );
-    expect(recordBodyOf(schema, 'child').supertypes).toEqual([
-      { name: 'base', arguments: [], annotations: [] },
-    ]);
+    expect(supertypesOf(recordBodyOf(schema, 'child'))).toEqual(['base']);
     // Imported entries are visible during resolution but never part of the local-only result.
     expect(schema.entries.has('base')).toBe(false);
   });
 
   it('rejects a local declaration colliding with an imported name', () => {
-    const imported = new Map<string, TypeDefinition>([
-      [
-        'base',
-        {
-          supertypes: [],
-          subtypes: [],
-          body: {
-            kind: 'record',
-            supertypes: [],
-            fields: [],
-            groups: [],
-            extension: 'OPEN',
-          },
-          annotations: [],
-        },
-      ],
+    const imported = new Map<string, Top>([
+      ['base', { kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' }],
     ]);
     const doc = parse(
       '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
@@ -403,10 +356,10 @@ describe('collecting mode (a DiagnosticsReceiver in options)', () => {
     expect(receiver.diagnostics[0]?.code).toBe('SCHEMA_ERROR');
     expect(receiver.diagnostics[0]?.schemaPointer).toBe('/bad');
     // `good` resolved cleanly despite `bad`'s failure.
-    expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
+    expect(fieldNamesOf(recordBodyOf(schema, 'good'))).toEqual(['x']);
     // `bad` is present as an absorbing placeholder, not missing.
     expect(schema.entries.has('bad')).toBe(true);
-    expect(recordBodyOf(schema, 'bad').fields).toEqual([]);
+    expect(fieldNamesOf(recordBodyOf(schema, 'bad'))).toEqual([]);
   });
 });
 
@@ -414,20 +367,8 @@ describe('collecting mode (a DiagnosticsReceiver in options)', () => {
 //    catch-all, and an error none of the four categories claims still propagates as itself ─────
 
 /** A structure namespace exposing one constructor entry, `ctorName`, for `!ctorName { }` declarations to resolve against. */
-function structureNamespaceWith(ctorName: string): (name: string) => TypeDefinition | undefined {
-  const entry: TypeDefinition = {
-    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
-    supertypes: ['product', 'top'],
-    subtypes: [],
-    body: {
-      kind: 'record',
-      supertypes: [],
-      fields: [],
-      groups: [],
-      extension: 'OPEN',
-    },
-    annotations: [],
-  };
+function structureNamespaceWith(ctorName: string): (name: string) => Top | undefined {
+  const entry = constructorEntry([]);
   return (name) => (name === ctorName ? entry : undefined);
 }
 
@@ -448,7 +389,7 @@ describe('positive classification of a failed declaration', () => {
     expect(receiver.diagnostics).toHaveLength(1);
     expect(receiver.diagnostics[0]?.code).toBe('BIND_MISMATCH');
     expect(receiver.diagnostics[0]?.schemaPointer).toBe('/bad');
-    expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
+    expect(fieldNamesOf(recordBodyOf(schema, 'good'))).toEqual(['x']);
   });
 
   it('reports the code belonging to the fetch reason for a TsonSchemaFetchError the structure namespace throws', () => {
@@ -478,7 +419,7 @@ describe('positive classification of a failed declaration', () => {
     expect(receiver.diagnostics).toHaveLength(1);
     expect(receiver.diagnostics[0]?.code).toBe('SCHEMA_NOT_PERMITTED');
     expect(receiver.diagnostics[0]?.schemaPointer).toBe('/bad');
-    expect(recordBodyOf(schema, 'good').fields.map((f) => f.name)).toEqual(['x']);
+    expect(fieldNamesOf(recordBodyOf(schema, 'good'))).toEqual(['x']);
   });
 
   it('rethrows a BIND_MISMATCH-worthy error unchanged when there is no receiver (fail-fast)', () => {
@@ -528,8 +469,8 @@ describe('a sugar form lifts to a synthetic entry, marked @synthetic at its key'
     const schema = resolveSchema(doc, depsWithReader());
     expect(schema.entries.size).toBe(2); // wrapper + one lifted array entry
     const fieldType = fieldTypeOf(schema, 'wrapper', 'v');
-    const synthetic = entryOf(schema, fieldType.name);
-    expect(synthetic.source).toEqual({ name: 'array', arguments: [], annotations: [] });
+    expect(isArrayBody(entryOf(schema, fieldType.name))).toBe(true);
+    expect(schema.facts.get(fieldType.name)?.head).toBe('array');
     expect(schema.keyAnnotations.get(fieldType.name)).toEqual([{ name: 'synthetic' }]);
     // The author's own declaration carries no @synthetic marker.
     expect(schema.keyAnnotations.has('wrapper')).toBe(false);
@@ -545,13 +486,11 @@ describe('template materialisation (§5.10), end to end through the real Templat
     // `box` itself stays a template (it is still open, with a parameter list).
     expect(typeParameters(entryOf(schema, 'box'))).toEqual(['T']);
     // §8.2: a declaration whose body is a fully-bound application IS the instantiation entry --
-    // `text_box` is the closed record itself, carrying the application in its own `source`, with
-    // no minted twin beside it and no `!reference` hop.
+    // `text_box` is the closed record itself, carrying the application as its key's
+    // `@application`, with no minted twin beside it and no `!reference` hop.
     const text_box = entryOf(schema, 'text_box');
-    // Not `kindOf` (whose own note says it never needs the structure-namespace fourth branch in
-    // this file's fixtures): `text_box` is a genuine, closed `!record` body, not a `!reference`.
-    expect(isRecordBody(text_box.body)).toBe(true);
-    expect(text_box.source).toEqual({
+    expect(isRecordBody(text_box)).toBe(true);
+    expect(applicationOf(schema.keyAnnotations.get('text_box'))).toEqual({
       name: 'box',
       arguments: [{ kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } }],
       annotations: [],
@@ -564,41 +503,40 @@ describe('template materialisation (§5.10), end to end through the real Templat
     const schema = resolveSchema(doc, depsWithReader());
     const wrapped = recordBodyOf(schema, 'wrapped');
     // Absorbed box<text>'s own field (v: text) plus wrapped's own (w: text).
-    expect(wrapped.fields.map((f) => f.name).sort()).toEqual(['v', 'w']);
+    expect(fieldNamesOf(wrapped).sort()).toEqual(['v', 'w']);
   });
 
   it('rejects head abstraction -- a type parameter applied to arguments (§5.10)', () => {
     const doc = document('bad => <T> { v: T<text> }');
-    expect(() => resolveSchema(doc, depsWithReader())).toThrow(TsonSchemaValidationError);
+    expect(() => resolveSchema(doc, richDeps())).toThrow(TsonSchemaValidationError);
   });
 
-  it('a record-bodied template is a family base, ABSTRACT and derived, with no discriminators of its own to erase (§5.10, §8.1)', () => {
+  it('a record template is a family base, ABSTRACT by construction, with no discriminators of its own to erase (§5.10, §8.1)', () => {
     const doc = document('box => <T> { v: T }');
     const schema = resolveSchema(doc, depsWithReader());
     const box = entryOf(schema, 'box');
     expect(typeParameters(box)).toEqual(['T']);
-    // Never OPEN and never FINAL: nothing is ever read against the template itself (§5.10).
-    expect((box.body as { readonly extension?: string }).extension).toBe('ABSTRACT');
+    // ABSTRACT by construction, never by its own field: the record's `extension` is each
+    // application's, OPEN where the author wrote no mark (§5.10).
+    expect(isFamilyBase(box)).toBe(true);
+    expect((box as { readonly extension?: string }).extension).toBe('OPEN');
     // The list is present only where a selector survives erasure of the parameters, so a base
     // with none is tag-dispatched (§5.10).
-    expect(
-      (box.body as { readonly discriminators?: readonly string[] }).discriminators,
-    ).toBeUndefined();
+    expect((box as { readonly discriminators?: readonly string[] }).discriminators).toBeUndefined();
   });
 
-  it("an author-written 'abstract' on a record template travels inside the held text to every instantiation (§5.10)", () => {
+  it("an author-written 'abstract' on a record template travels to every instantiation (§5.10)", () => {
     const doc = document('outcome => abstract <T> { code: T } outcome_of => outcome<text>');
     const schema = resolveSchema(doc, depsWithReader());
     // The template's own entry states the derived fact regardless of the author's own word.
-    expect((entryOf(schema, 'outcome').body as { readonly extension?: string }).extension).toBe(
+    expect((entryOf(schema, 'outcome') as { readonly extension?: string }).extension).toBe(
       'ABSTRACT',
     );
     // §8.2: `outcome_of` is the instantiation entry itself (no minted twin) -- and the `abstract`
-    // the author wrote on `outcome` is baked into the held text, so this *closed* record's own
-    // `extension` states it too (the "instantiation's own... stated, by `abstract` inside the held
-    // text" level, distinct from the template's own derived fact just above).
+    // the author wrote on `outcome` is each application's, so this *closed* record's own
+    // `extension` states it too, distinct from the template's own derived fact just above.
     const outcomeOf = entryOf(schema, 'outcome_of');
-    expect(isRecordBody(outcomeOf.body) && outcomeOf.body.extension).toBe('ABSTRACT');
+    expect(isRecordBody(outcomeOf) && outcomeOf.extension).toBe('ABSTRACT');
   });
 
   it("'final' on a template is refused -- a template's applications are subtypes by construction (§5.10)", () => {
@@ -655,11 +593,11 @@ function richMetaReader(type: string, value: DataValue): Top {
   const record = value.coreValue as RecordValue;
   if (type === 'record') {
     const fieldsField = fieldOf(record, 'fields')?.coreValue;
-    const fields: RecordField[] = [];
-    if (fieldsField?.kind === 'array') {
-      for (const element of fieldsField.elements) {
-        const fieldRecord = element.value.coreValue as RecordValue;
-        const fname = (fieldOf(fieldRecord, 'name')?.coreValue as TokenValue).text;
+    const fields: NamedField[] = [];
+    if (fieldsField?.kind === 'map') {
+      for (const entry of fieldsField.entries) {
+        const fieldRecord = entry.value.value.coreValue as RecordValue;
+        const fname = (entry.key.coreValue as TokenValue).text;
         const roleWire = fieldOf(fieldRecord, 'role')?.coreValue;
         const role: RecordField['role'] =
           roleWire?.kind === 'token' && (roleWire.text === 'DEFAULT' || roleWire.text === 'FIXED')
@@ -683,8 +621,7 @@ function richMetaReader(type: string, value: DataValue): Top {
     }
     return {
       kind: 'record',
-      supertypes: [],
-      fields,
+      fields: fieldMapOf(fields),
       groups: [],
       extension: 'OPEN',
     } satisfies RecordBody;
@@ -706,7 +643,7 @@ function richMetaReader(type: string, value: DataValue): Top {
         members.push((element.value.coreValue as TokenValue).text);
       }
     }
-    return { kind: 'enum', members, type: 'identifier' } satisfies EnumBody;
+    return { kind: 'enum', members, nameType: 'identifier' } satisfies EnumBody;
   }
   throw new Error(`richMetaReader: unhandled constructor '${type}'`);
 }
@@ -719,22 +656,9 @@ function richMetaReader(type: string, value: DataValue): Top {
  * right for these two describe blocks. Plus `enum`/`enum_set`/`identifier`, the VALUE-parameter
  * motivating case's own vocabulary.
  */
-function richStructureNamespace(): (name: string) => TypeDefinition | undefined {
-  const typeRefType: TypeRef = { name: 'type_ref', arguments: [], annotations: [] };
-  const constructorEntry = (fields: readonly RecordField[]): TypeDefinition => ({
-    // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
-    supertypes: ['product', 'top'],
-    subtypes: [],
-    body: {
-      kind: 'record',
-      supertypes: [],
-      fields,
-      groups: [],
-      extension: 'OPEN',
-    },
-    annotations: [],
-  });
-  const extra = new Map<string, TypeDefinition>([
+function richStructureNamespace(): (name: string) => Top | undefined {
+  const typeRefType: TypeRef = { name: 'type_kind', arguments: [], annotations: [] };
+  const extra = new Map<string, Top>([
     [
       'record',
       constructorEntry([
@@ -776,27 +700,20 @@ function richStructureNamespace(): (name: string) => TypeDefinition | undefined 
     ],
     [
       'enum_set',
-      {
-        supertypes: ['product', 'top'],
-        subtypes: [],
-        body: {
+      withChain(
+        {
           kind: 'array',
           elementType: { name: 'identifier', arguments: [], annotations: [] },
           voidable: false,
           ordered: true,
           uniqueItems: false,
         },
-        annotations: [],
-      },
+        typeChain(['product', 'top']),
+      ),
     ],
     [
       'identifier',
-      {
-        supertypes: ['atom', 'top'],
-        subtypes: [],
-        body: { kind: 'text_type', normalization: 'NONE' },
-        annotations: [],
-      },
+      withChain({ kind: 'text_type', normalization: 'NONE' }, typeChain(['atom', 'top'])),
     ],
   ]);
   return (name) => extra.get(name);
@@ -811,21 +728,21 @@ function richDeps(): SchemaResolverDeps {
 describe('§5.10 parameter kinds, end to end through the real schemaResolver', () => {
   it(
     "the enum-member motivating case: 'e => <M> !enum { members: [a b M] }' applied as 'e<c>' " +
-      "records source.arguments as a literal, not a namespace reference to a type called 'c'",
+      "records the application's argument as a literal, not a namespace reference to a type called 'c'",
     () => {
       const doc = document('e => <M> !enum { members: [a b M] } used => e<c>');
       const schema = resolveSchema(doc, richDeps());
       expect(typeParameters(entryOf(schema, 'e'))).toEqual(['M']);
       // §8.2, §8.3: `used => e<c>` names a fully-bound application, so `used` IS the instantiation
-      // entry itself -- `source` the canonical application, the substituted binding record its own
-      // body, with nothing minted beside it and no `!reference` hop.
+      // entry itself -- its key's `@application` the canonical application, the substituted
+      // binding record its own value, with nothing minted beside it and no `!reference` hop.
       const used = entryOf(schema, 'used');
-      expect(used.source).toEqual({
+      expect(applicationOf(schema.keyAnnotations.get('used'))).toEqual({
         name: 'e',
         arguments: [{ kind: 'value', value: { text: 'c', form: 'UNQUOTED' } }],
         annotations: [],
       });
-      expect((used.body as EnumBody).members).toEqual(['a', 'b', 'c']);
+      expect((used as EnumBody).members).toEqual(['a', 'b', 'c']);
     },
   );
 });
@@ -843,20 +760,20 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       const schema = resolveSchema(doc, richDeps());
       const dog = entryOf(schema, 'dog');
       // One IS-A edge, to the template `pet` itself -- never to a minted `pet_dog_text_...`.
-      expect(dog.supertypes).toEqual(['pet']);
+      expect(supertypesOf(dog)).toEqual(['pet']);
       const dogBody = recordBodyOf(schema, 'dog');
-      // `record.supertypes` names `pet` bare too: the hand-written equivalent this sentence
+      // A closed record keeps no written parents: the hand-written equivalent this sentence
       // states (`dog => pet & { type?: = "dog"  pet: text  breed: text }`) never carries the
       // application's own arguments forward, because there is no entry for them to belong to.
-      expect(dogBody.supertypes).toEqual([{ name: 'pet', arguments: [], annotations: [] }]);
+      expect(parentsOf(dogBody)).toEqual([]);
       // The application's own arguments are absorbed as the member's own contribution.
-      expect(dogBody.fields.map((f) => f.name)).toEqual(['type', 'pet', 'breed']);
+      expect(fieldNamesOf(dogBody)).toEqual(['type', 'pet', 'breed']);
       expect(fieldTypeOf(schema, 'dog', 'type').name).toBe('text');
       expect(fieldTypeOf(schema, 'dog', 'pet').name).toBe('text');
       // §5.7 "Open modifiers": `type: text = N` in `pet`'s held body is a marker, and binds to the
       // literal "dog" the moment this operand's own parameters close with the name mark the
       // author wrote -- unmarked, so a document states `type` (§3.2 item 33).
-      const typeField = dogBody.fields.find((f) => f.name === 'type');
+      const typeField = namedField(dogBody, 'type');
       expect(typeField?.optional).toBe(false);
       expect(typeField?.role).toBe('FIXED');
       expect(typeField?.value).toEqual({ text: 'dog', form: 'SINGLE_LINE_QUOTED' });
@@ -878,12 +795,12 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       );
       const schema = resolveSchema(doc, richDeps());
       // `w` stays open while resolving the composition operand (its own `S` is unbound): the
-      // routed field's substituted value is `S` itself, and the held wire states the name mark
-      // the author wrote.
-      expect(heldFieldOptional(schema, 'w', 'type')).toBe(false);
+      // routed field's substituted value is `S` itself, and the record template states the name
+      // mark the author wrote.
+      expect(namedField(recordBodyOf(schema, 'w'), 'type')?.optional).toBe(false);
       // Once `w<"dog">` itself closes, `S` becomes concrete: the field is the marker the
       // fully-bound operand reaches directly (the test above).
-      const usedType = recordBodyOf(schema, 'used').fields.find((f) => f.name === 'type');
+      const usedType = namedField(recordBodyOf(schema, 'used'), 'type');
       expect(usedType?.optional).toBe(false);
       expect(usedType?.role).toBe('FIXED');
       expect(usedType?.value).toEqual({ text: 'dog', form: 'SINGLE_LINE_QUOTED' });
@@ -900,16 +817,14 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       );
       const schema = resolveSchema(doc, richDeps());
       // §5.9: subtraction breaks IS-A -- `ok` itself (still open) carries no edge to `result`.
-      expect(entryOf(schema, 'ok').supertypes).toEqual([]);
+      expect(supertypesOf(entryOf(schema, 'ok'))).toEqual([]);
+      expect(parentsOf(entryOf(schema, 'ok'))).toEqual([]);
       // `ok<text>`'s own instantiation carries no edge to `result` or to any instantiation of it
-      // -- only #13's own self-edge to its family base, `ok` -- and its own closed
-      // `record.supertypes` is empty too: rule 10's dropped open application never survived
-      // substitution to close into a live edge one pass later.
+      // -- only its self-edge to its family base, `ok`: rule 10's dropped open application never
+      // survived substitution to close into a live edge one pass later.
       const used = entryOf(schema, 'used');
-      expect(used.supertypes).toEqual(['ok']);
-      const usedBody = recordBodyOf(schema, 'used');
-      expect(usedBody.supertypes).toEqual([]);
-      expect(usedBody.fields.map((f) => f.name)).toEqual(['payload']);
+      expect(supertypesOf(used)).toEqual(['ok']);
+      expect(fieldNamesOf(recordBodyOf(schema, 'used'))).toEqual(['payload']);
       expect([...schema.entries.keys()].some((k) => k.startsWith('result_'))).toBe(false);
     },
   );
@@ -941,12 +856,12 @@ describe('§8.2 synthetic merge (SyntheticMerge), end to end through the real sc
       expect(materialisedName).toBe(eagerName);
       expect(schema.entries.has(eagerName)).toBe(true);
       const form = entryOf(schema, eagerName);
-      if (!isArrayBody(form.body)) throw new Error('unreachable');
-      expect(form.body.elementType.arguments).toEqual([]);
-      const elementTypeName = form.body.elementType.name;
+      if (!isArrayBody(form)) throw new Error('unreachable');
+      expect(form.elementType.arguments).toEqual([]);
+      const elementTypeName = form.elementType.name;
       // No leftover second entry for the eager (unreduced) spelling of the same form.
       const arrayEntries = [...schema.entries.values()].filter(
-        (e) => isArrayBody(e.body) && e.body.elementType.name === elementTypeName,
+        (e) => isArrayBody(e) && e.elementType.name === elementTypeName,
       );
       expect(arrayEntries).toHaveLength(1);
     },

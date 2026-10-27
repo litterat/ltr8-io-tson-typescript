@@ -42,7 +42,14 @@ import type {
   PeriodType,
   TimeType,
 } from '../schema/meta/atoms-temporal.js';
-import type { Cidr4Type, Cidr6Type, Ipv4Type, Ipv6Type } from '../schema/meta/atoms-network.js';
+import type {
+  Cidr4Type,
+  Cidr6Type,
+  HostnameType,
+  Ipv4Type,
+  Ipv6Type,
+  MediaTypeType,
+} from '../schema/meta/atoms-network.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
 import type {
@@ -1222,19 +1229,47 @@ function enumCoherence(t: EnumBody): string[] {
 
 /**
  * An enum's value set is written out in full, so narrowing is plain subset containment (`members`
- * may drop members but never introduce one the source does not admit). `type` is fixed where the
- * enum is constructed (§5.7): a refinement narrows the members and never the type, so restating
- * the source's `type` verbatim is the only form that narrows.
+ * may drop members but never introduce one the source does not admit). `name_type` is fixed where
+ * the enum is constructed (§5.7): a refinement narrows the members and never the name type, so
+ * restating the source's `name_type` verbatim is the only form that narrows.
  */
 function enumNarrows(source: EnumBody, refined: EnumBody): string[] {
   const out: string[] = [];
   checkSubset(out, 'members', source.members, refined.members);
-  if (source.type !== refined.type) {
+  if (source.nameType !== refined.nameType) {
     out.push(
-      `type '${refined.type}' replaces the source's own '${source.type}' -- an enum's type is ` +
-        'fixed where it is constructed, and a refinement narrows its members',
+      `name_type '${refined.nameType}' replaces the source's own '${source.nameType}' -- an ` +
+        "enum's name_type is fixed where it is constructed, and a refinement narrows its members",
     );
   }
+  return out;
+}
+
+/** A kind's one authored facet is `of`, and it is what the kind is: fixed where it is constructed (§4.2, §5.7). */
+function ofNarrows(label: string, source: string, refined: string): string[] {
+  return source === refined
+    ? []
+    : [
+        `of '${refined}' replaces the source's own '${source}' -- ${label} is fixed where it is ` +
+          'constructed',
+      ];
+}
+
+/** `hostname_type`'s `allow_idn` may be withdrawn and never granted back (§5.7). */
+function hostnameNarrows(source: HostnameType, refined: HostnameType): string[] {
+  const out: string[] = [];
+  checkOnlyWithdraws(out, 'allow_idn', source.allowIdn, refined.allowIdn);
+  return out;
+}
+
+/** `media_type_type` withdraws `allow_parameters` and shrinks `types` and `suffixes`, compared without ASCII case (§5.7). */
+function mediaTypeNarrows(source: MediaTypeType, refined: MediaTypeType): string[] {
+  const out: string[] = [];
+  checkOnlyWithdraws(out, 'allow_parameters', source.allowParameters, refined.allowParameters);
+  const fold = (names: readonly string[] | undefined): readonly string[] =>
+    (names ?? []).map(asciiLowercase);
+  checkSubset(out, 'types', fold(source.types), fold(refined.types));
+  checkSubset(out, 'suffixes', fold(source.suffixes), fold(refined.suffixes));
   return out;
 }
 
@@ -1356,12 +1391,30 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'ipv6_type'
         ? ipv6Narrows(source, refined)
         : mismatch('an ipv6', refined);
+    case 'kind_type':
+      return refined.kind === 'kind_type'
+        ? ofNarrows('a kind', source.of, refined.of)
+        : mismatch('a kind', refined);
+    case 'ref_type':
+      return refined.kind === 'ref_type'
+        ? ofNarrows('a reference', source.of, refined.of)
+        : mismatch('a reference', refined);
+    case 'hostname_type':
+      return refined.kind === 'hostname_type'
+        ? hostnameNarrows(source, refined)
+        : mismatch('a hostname', refined);
+    case 'media_type_type':
+      return refined.kind === 'media_type_type'
+        ? mediaTypeNarrows(source, refined)
+        : mismatch('a media_type', refined);
     // No orderable facet and no selector at all: `value_type` and `void_type` (empty
-    // vocabularies), `uuid_type`, and `mac_type` (spec-pinned, no facet of its own to compare).
+    // vocabularies), `uuid_type`, `mac_type` and `host_type` (spec-pinned, no facet of their own
+    // to compare).
     case 'value_type':
     case 'void_type':
     case 'uuid_type':
     case 'mac_type':
+    case 'host_type':
       return [];
   }
 }
@@ -1398,6 +1451,11 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'ipv4_type',
   'ipv6_type',
   'complex_type',
+  'kind_type',
+  'ref_type',
+  'hostname_type',
+  'host_type',
+  'media_type_type',
 ]);
 
 /**
@@ -1478,6 +1536,30 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'uuid_type':
     case 'complex_type':
     case 'mac_type':
+    case 'kind_type':
+    case 'ref_type':
+    case 'hostname_type':
+    case 'host_type':
       return [];
+    case 'media_type_type':
+      return mediaTypeCoherence(atom);
   }
+}
+
+/**
+ * `media_type_type`'s own coherence (§5.5): a `types` or `suffixes` facet that is present and
+ * empty admits no media type at all, and a suffix holding `+` is no suffix (a suffix is the text
+ * after a subtype's last `+`). Whether each name is an RFC 6838 name is the media-type grammar's
+ * question, asked once that grammar is wired in.
+ */
+function mediaTypeCoherence(atom: MediaTypeType): string[] {
+  const out: string[] = [];
+  if (atom.types?.length === 0) out.push('types is empty, so no media type is admitted');
+  if (atom.suffixes?.length === 0) out.push('suffixes is empty, so no media type is admitted');
+  for (const suffix of atom.suffixes ?? []) {
+    if (suffix.includes('+')) {
+      out.push(`suffixes holds '${suffix}', and a suffix is the text after a subtype's last '+'`);
+    }
+  }
+  return out;
 }

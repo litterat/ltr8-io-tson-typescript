@@ -143,6 +143,16 @@ describe('bindReader -- record (§2.5)', () => {
     expect(diagnostics.map((d) => d.code)).toEqual(['UNRECOGNIZED_FIELD']);
   });
 
+  it('Part 1 §3.2: a tag outside the built-in vocabulary is a resolver error, a host-typed read included', () => {
+    const { value, diagnostics } = readCollecting(pointReader, '!point { x: 1 }');
+    expect(value).toBeUndefined();
+    expect(diagnostics.map((d) => d.code)).toEqual(['UNKNOWN_TYPE_REF']);
+    expect(() => readWith(bindReader(INT, { readAtom: intReader }), '!nonesuch 1')).toThrow(
+      /UNKNOWN_TYPE_REF/,
+    );
+    expect(readWith(bindReader(INT, { readAtom: intReader }), '!int32 1')).toBe(1);
+  });
+
   it('reports DUPLICATE_FIELD for a repeated field name, keeping the last value for the field it can still use', () => {
     const { diagnostics } = readCollecting(pointReader, '{ x: 1, x: 2 }');
     expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_FIELD']);

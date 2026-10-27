@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { checkEveryEntryIsInhabited } from '../src/link/typeInhabitance.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
-import type { RecordField } from '../src/schema/meta/bodies.js';
-import type { Top, TypeDefinition, TypeRef } from '../src/schema/meta/typedef.js';
+import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
+import type { MetaValue, Top, TypeRef } from '../src/schema/meta/typedef.js';
+import { namespaceOf } from '../src/schema/meta/typedef.js';
+import { entry, fieldMapOf } from './model-fixtures.js';
 
 function ref(name: string): TypeRef {
   return { name, arguments: [], annotations: [] };
@@ -14,7 +16,7 @@ function field(
   name: string,
   type: TypeRef,
   marks: { optional?: boolean; voidable?: boolean; role?: RecordField['role'] } = {},
-): RecordField {
+): NamedField {
   return {
     name,
     type,
@@ -25,37 +27,28 @@ function field(
   };
 }
 
-function def(body: Top): TypeDefinition {
-  return {
-    supertypes: [],
-    subtypes: [],
-    body,
-    annotations: [],
-  };
+function def(body: Top): Top {
+  return body;
 }
 
-const text: TypeDefinition = def({ kind: 'text_type', normalization: 'NONE' });
+const text: Top = def({ kind: 'text_type', normalization: 'NONE' });
 
-function names(namespace: ReadonlyMap<string, TypeDefinition>): ReadonlySet<string> {
+function names(namespace: ReadonlyMap<string, Top>): ReadonlySet<string> {
   return new Set(namespace.keys());
 }
 
-function check(
-  namespace: ReadonlyMap<string, TypeDefinition>,
-  localNames = names(namespace),
-): void {
+function check(namespace: ReadonlyMap<string, Top>, localNames = names(namespace)): void {
   checkEveryEntryIsInhabited(namespace, localNames, { schemaId: 'https://x/s.tn' });
 }
 
 describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1)', () => {
   it('rejects a direct self-reference through a required field', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('self', ref('loop'))],
+          fields: fieldMapOf([field('self', ref('loop'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -73,13 +66,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects mutual recursion with no base case (x needs y needs x)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'x',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('y', ref('y'))],
+          fields: fieldMapOf([field('y', ref('y'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -88,8 +80,7 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
         'y',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('x', ref('x'))],
+          fields: fieldMapOf([field('x', ref('x'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -106,13 +97,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects a required array element with a non-empty minimum recursing with no base case', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'tree',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('children', ref('forest'))],
+          fields: fieldMapOf([field('children', ref('forest'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -135,14 +125,13 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects a required map with a non-empty minimum recursing through its value type', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'tree',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('children', ref('forest'))],
+          fields: fieldMapOf([field('children', ref('forest'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -165,7 +154,7 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects a required tuple position that recurses with no base case', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['loop', def({ kind: 'tuple', elements: [{ elementType: ref('loop'), voidable: false }] })],
     ]);
     expect(() => {
@@ -174,13 +163,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects a required, non-voidable void-typed field on its own -- the record has no member at all (§5.10.1, §5.2)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'sealed_off',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('name', ref('text')), field('never', ref('void'))],
+          fields: fieldMapOf([field('name', ref('text')), field('never', ref('void'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -194,15 +182,14 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects a required, non-voidable field typed by an ALIAS of void, followed through the reference chain (§5.10.1, §5.2, §8.3)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['void', def({ kind: 'void_type' })],
       ['nothing', def({ kind: 'reference', target: ref('void') })],
       [
         'sealed_off',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('name', ref('text')), field('never', ref('nothing'))],
+          fields: fieldMapOf([field('name', ref('text')), field('never', ref('nothing'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -218,13 +205,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects a record field group that must be chosen with no satisfiable member', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('a', ref('loop')), field('b', ref('loop'))],
+          fields: fieldMapOf([field('a', ref('loop')), field('b', ref('loop'))]),
           groups: [{ members: [['a'], ['b']], optional: false }],
           extension: 'OPEN',
         }),
@@ -236,13 +222,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('rejects an entry whose own reference body points at an uninhabited target', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('self', ref('loop'))],
+          fields: fieldMapOf([field('self', ref('loop'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -261,13 +246,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   });
 
   it('does not report a non-local (imported) uninhabited entry', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('self', ref('loop'))],
+          fields: fieldMapOf([field('self', ref('loop'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -283,13 +267,12 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
 
 describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () => {
   it('accepts a self-reference behind an optional field', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('self', ref('loop'), { optional: true })],
+          fields: fieldMapOf([field('self', ref('loop'), { optional: true })]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -301,13 +284,15 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts an optional void-typed field -- `a?: void` only empties the field, not the record (§5.2)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'person',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('name', ref('text')), field('retired', ref('void'), { optional: true })],
+          fields: fieldMapOf([
+            field('name', ref('text')),
+            field('retired', ref('void'), { optional: true }),
+          ]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -320,13 +305,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a self-reference behind an OPTIONAL_FIXED field', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('self', ref('loop'), { optional: true, voidable: true })],
+          fields: fieldMapOf([field('self', ref('loop'), { optional: true, voidable: true })]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -338,13 +322,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a self-reference inside an array that may be empty (no minItems)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'tree',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('children', ref('forest'))],
+          fields: fieldMapOf([field('children', ref('forest'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -366,13 +349,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a self-reference inside an array explicitly declaring minItems: 0', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'tree',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('children', ref('forest'))],
+          fields: fieldMapOf([field('children', ref('forest'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -395,13 +377,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a voidable array element, regardless of minItems', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'tree',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('children', ref('forest'))],
+          fields: fieldMapOf([field('children', ref('forest'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -424,15 +405,14 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a choice with one inhabited variant, even though another recurses with no base case', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       ['shape', def({ kind: 'choice', variants: [ref('text'), ref('node')] })],
       [
         'node',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('left', ref('shape')), field('right', ref('shape'))],
+          fields: fieldMapOf([field('left', ref('shape')), field('right', ref('shape'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -444,7 +424,7 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a self-reference through a voidable tuple position', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['loop', def({ kind: 'tuple', elements: [{ elementType: ref('loop'), voidable: true }] })],
     ]);
     expect(() => {
@@ -453,13 +433,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a self-reference behind an optional record field group', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('a', ref('loop')), field('b', ref('loop'))],
+          fields: fieldMapOf([field('a', ref('loop')), field('b', ref('loop'))]),
           groups: [{ members: [['a'], ['b']], optional: true }],
           extension: 'OPEN',
         }),
@@ -471,14 +450,13 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('accepts a required field group with at least one inhabited member alongside a recursive one', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('a', ref('loop')), field('b', ref('text'))],
+          fields: fieldMapOf([field('a', ref('loop')), field('b', ref('text'))]),
           groups: [{ members: [['a'], ['b']], optional: false }],
           extension: 'OPEN',
         }),
@@ -490,19 +468,18 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('a required group is satisfied by an option whose unmarked members are all inhabited (§5.10.1)', () => {
-    const loopOption = (marked: boolean): Map<string, TypeDefinition> =>
-      new Map<string, TypeDefinition>([
+    const loopOption = (marked: boolean): Map<string, Top> =>
+      new Map<string, Top>([
         ['text', text],
         [
           'loop',
           def({
             kind: 'record',
-            supertypes: [],
-            fields: [
+            fields: fieldMapOf([
               field('a', ref('loop'), { optional: true }),
               field('b', ref('text'), { optional: true }),
               field('c', ref('text'), { optional: true }),
-            ],
+            ]),
             // Option one holds the recursive `a`; option two holds `b` and `c`.
             groups: [
               {
@@ -521,17 +498,16 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('a required group whose every option holds an uninhabited unmarked member is uninhabited, and a marked member is not demanded (§5.10.1)', () => {
-    const only = (optionalMembers: string[]): Map<string, TypeDefinition> =>
-      new Map<string, TypeDefinition>([
+    const only = (optionalMembers: string[]): Map<string, Top> =>
+      new Map<string, Top>([
         [
           'loop',
           def({
             kind: 'record',
-            supertypes: [],
-            fields: [
+            fields: fieldMapOf([
               field('a', ref('loop'), { optional: true }),
               field('b', ref('loop'), { optional: true }),
-            ],
+            ]),
             groups: [
               {
                 members: [['a'], ['b']],
@@ -549,17 +525,16 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('a member marked optional within its option is not demanded once the option is chosen (§5.10.1)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [
+          fields: fieldMapOf([
             field('a', ref('loop'), { optional: true }),
             field('b', ref('text'), { optional: true }),
-          ],
+          ]),
           groups: [{ members: [['a', 'b'], ['b']], optionalMembers: ['a'], optional: false }],
           extension: 'OPEN',
         }),
@@ -571,13 +546,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('an optional group never demands an option (§5.10.1)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'loop',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('a', ref('loop'), { optional: true })],
+          fields: fieldMapOf([field('a', ref('loop'), { optional: true })]),
           groups: [{ members: [['a']], optional: true }],
           extension: 'OPEN',
         }),
@@ -589,13 +563,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('a set may be empty, so a self-reference through one is productive; an array of voidable elements is too (§5.3, §5.10.1)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'tree',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('children', ref('children'))],
+          fields: fieldMapOf([field('children', ref('children'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -617,7 +590,7 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   });
 
   it('treats every atom body as inhabited, whatever its own facets say', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['n', def({ kind: 'integer_type', min: 300n, max: 200n })], // incoherent, but not this rule's question
     ]);
     expect(() => {
@@ -628,16 +601,19 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   it('treats a held (open template) body as inhabited unconditionally', () => {
     const held: Top = {
       parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-      template: '!record { fields: [] }',
+      template: '!record { fields: {} }',
     };
-    const merged = new Map<string, TypeDefinition>([['tree', def(held)]]);
+    const merged = new Map<string, Top>([['tree', def(held)]]);
     expect(() => {
       check(merged);
     }).not.toThrow();
   });
 
-  it('treats a Data body as inhabited unconditionally', () => {
-    const merged = new Map<string, TypeDefinition>([['op', def({ kind: 'operation' })]]);
+  it('treats a namespace value as inhabited unconditionally: it is a value, not a type (§4.1)', () => {
+    const operation: MetaValue = { form: 'record', type: 'operation', fields: new Map() };
+    const merged = new Map<string, Top>([
+      ['op', def(namespaceOf('api', new Map([['orders', operation]])))],
+    ]);
     expect(() => {
       check(merged);
     }).not.toThrow();
@@ -647,13 +623,12 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
     // The three bundled schemas are recursive by design (e.g. a schema's own `type_definition`
     // recurring through `record_field`/`record`/...); the guard that keeps this legal is the same
     // one exercised here at small scale: at least one edge in the cycle is optional.
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'x',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('y', ref('y'), { optional: true })],
+          fields: fieldMapOf([field('y', ref('y'), { optional: true })]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -662,8 +637,7 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
         'y',
         def({
           kind: 'record',
-          supertypes: [],
-          fields: [field('x', ref('x'))],
+          fields: fieldMapOf([field('x', ref('x'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -677,25 +651,20 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
 
 describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT records (§5.2, §5.10.1)', () => {
   it("an ABSTRACT record with no subtype in this schema's closure is not itself a productivity error -- its own (satisfiable) field set is what answers the question, not the absence of members its importers have yet to supply", () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'pet',
-        {
-          supertypes: [],
-          subtypes: [], // no member anywhere in this closure
-          annotations: [],
-          body: {
-            kind: 'record',
-            supertypes: [],
-            // A selector (§5.2's own example): unmarked, atom-typed, ordinarily satisfiable on
-            // its own -- nothing here recurs, so the ordinary field walk finds this inhabited
-            // with no need for a subtype to exist at all.
-            fields: [field('pet_type', ref('text')), field('name', ref('text'))],
-            groups: [],
-            extension: 'ABSTRACT',
-            discriminators: ['pet_type'],
-          },
-        },
+        // No member anywhere in this closure.
+        entry({
+          kind: 'record',
+          // A selector (§5.2's own example): unmarked, atom-typed, ordinarily satisfiable on
+          // its own -- nothing here recurs, so the ordinary field walk finds this inhabited
+          // with no need for a subtype to exist at all.
+          fields: fieldMapOf([field('pet_type', ref('text')), field('name', ref('text'))]),
+          groups: [],
+          extension: 'ABSTRACT',
+          discriminators: ['pet_type'],
+        }),
       ],
       ['text', text],
     ]);
@@ -705,23 +674,17 @@ describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT r
   });
 
   it('an ABSTRACT record whose own field set cannot be satisfied is uninhabited exactly as an OPEN record with the same fields would be -- gains no exemption from having no subtype either', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'lib',
-        {
-          supertypes: [],
-          subtypes: [],
-          annotations: [],
-          body: {
-            kind: 'record',
-            supertypes: [],
-            // A required, non-voidable self-reference: the ordinary loop this file's own top
-            // describes (`x => { y: y }`), unaffected by `extension`.
-            fields: [field('inner', ref('lib'))],
-            groups: [],
-            extension: 'ABSTRACT',
-          },
-        },
+        entry({
+          kind: 'record',
+          // A required, non-voidable self-reference: the ordinary loop this file's own top
+          // describes (`x => { y: y }`), unaffected by `extension`.
+          fields: fieldMapOf([field('inner', ref('lib'))]),
+          groups: [],
+          extension: 'ABSTRACT',
+        }),
       ],
     ]);
     expect(() => {
@@ -730,22 +693,16 @@ describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT r
   });
 
   it('an ABSTRACT record with an unmarked `void`-typed field is uninhabited (§5.2: `a: void` empties the record, §5.10.1)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['void', def({ kind: 'void_type' })],
       [
         'lib',
-        {
-          supertypes: [],
-          subtypes: [],
-          annotations: [],
-          body: {
-            kind: 'record',
-            supertypes: [],
-            fields: [field('a', ref('void'))],
-            groups: [],
-            extension: 'ABSTRACT',
-          },
-        },
+        entry({
+          kind: 'record',
+          fields: fieldMapOf([field('a', ref('void'))]),
+          groups: [],
+          extension: 'ABSTRACT',
+        }),
       ],
     ]);
     expect(() => {
@@ -754,36 +711,31 @@ describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT r
   });
 
   it("an ABSTRACT base's own inhabitance does not depend on its subtypes at all: an uninhabited-looking base with an uninhabited subtype is judged on its own (satisfiable) fields alone, and an inhabited-looking base with only uninhabited subtypes stays inhabited", () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       [
         'pet',
-        {
-          supertypes: [],
-          subtypes: ['dog'],
-          annotations: [],
-          body: {
+        entry(
+          {
             kind: 'record',
-            supertypes: [],
-            fields: [], // trivially satisfiable by itself, whatever dog does
+            fields: fieldMapOf([]), // trivially satisfiable by itself, whatever dog does
             groups: [],
             extension: 'ABSTRACT',
           },
-        },
+          [],
+          ['dog'],
+        ),
       ],
       [
         'dog',
-        {
-          supertypes: ['pet'],
-          subtypes: [],
-          annotations: [],
-          body: {
+        entry(
+          {
             kind: 'record',
-            supertypes: [ref('pet')],
-            fields: [field('self', ref('dog'))], // dog itself never terminates
+            fields: fieldMapOf([field('self', ref('dog'))]), // dog itself never terminates
             groups: [],
             extension: 'OPEN',
           },
-        },
+          ['pet'],
+        ),
       ],
     ]);
     // `dog` is uninhabited and reported; `pet` is judged on its own empty field set and is not.
@@ -794,17 +746,17 @@ describe('checkEveryEntryIsInhabited: "Inhabitance gains no case" for ABSTRACT r
 });
 
 describe('checkEveryEntryIsInhabited: chosen options (§5.10.1, §5.11)', () => {
-  const void_: TypeDefinition = def({ kind: 'void_type' });
+  const void_: Top = def({ kind: 'void_type' });
   const recordOf = (
-    fields: RecordField[],
+    fields: NamedField[],
     groups: { members: string[][]; optionalMembers?: string[]; optional: boolean }[],
-  ): TypeDefinition => def({ kind: 'record', supertypes: [], fields, groups, extension: 'OPEN' });
+  ): Top => def({ kind: 'record', fields: fieldMapOf(fields), groups, extension: 'OPEN' });
   const group = (
-    fields: RecordField[],
+    fields: NamedField[],
     members: string[][],
     optionalMembers?: string[],
-  ): ReadonlyMap<string, TypeDefinition> =>
-    new Map<string, TypeDefinition>([
+  ): ReadonlyMap<string, Top> =>
+    new Map<string, Top>([
       ['void', void_],
       ['text', text],
       [
@@ -818,7 +770,7 @@ describe('checkEveryEntryIsInhabited: chosen options (§5.10.1, §5.11)', () => 
         ]),
       ],
     ]);
-  const optionalField = (name: string, type: string, marks = {}): RecordField =>
+  const optionalField = (name: string, type: string, marks = {}): NamedField =>
     field(name, ref(type), { optional: true, ...marks });
 
   it('a group is productive when one option is choosable (§5.11)', () => {
@@ -865,7 +817,7 @@ describe('checkEveryEntryIsInhabited: chosen options (§5.10.1, §5.11)', () => 
   });
 
   it('a map whose values may be void is productive when its keys are (§5.10.1)', () => {
-    const merged = new Map<string, TypeDefinition>([
+    const merged = new Map<string, Top>([
       ['text', text],
       [
         'm',

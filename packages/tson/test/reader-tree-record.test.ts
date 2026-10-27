@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SchemaLocation } from '../src/core/diagnostic.js';
-import type { FieldRole, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
+import type { FieldRole, NamedField, RecordBody } from '../src/schema/meta/bodies.js';
+import { fieldMapOf } from '../src/schema/meta/bodies.js';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
 import { recordTreeReader } from '../src/reader/tree/record.js';
 import type { TypeReader } from '../src/reader/contracts.js';
@@ -42,7 +43,7 @@ function field(
   type: 'text' | 'int32',
   marks: { optional?: boolean; voidable?: boolean; role?: FieldRole } = {},
   value?: string,
-): RecordField {
+): NamedField {
   return {
     name,
     type: { name: type, arguments: [], annotations: [] },
@@ -54,11 +55,10 @@ function field(
   };
 }
 
-function reader(fields: RecordField[], groups: RecordBody['groups'] = []): TypeReader<Value> {
+function reader(fields: NamedField[], groups: RecordBody['groups'] = []): TypeReader<Value> {
   const body: RecordBody = {
     kind: 'record',
-    supertypes: [],
-    fields,
+    fields: fieldMapOf(fields),
     groups,
     extension: 'OPEN',
   };

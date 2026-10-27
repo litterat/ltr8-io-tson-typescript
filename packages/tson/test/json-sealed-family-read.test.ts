@@ -18,8 +18,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/pets.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   pet => abstract { pet_type: text =?  name: text }
   dog => pet & { pet_type?: = "dog"  breed: text }
@@ -97,7 +97,7 @@ describe('SEALED: the member is the selector', () => {
   it('a member of the family the selected type does not declare is still §6.1.1’s closure error', () => {
     expect(
       message('{"pet_type": "dog", "name": "Rex", "breed": "corgi", "indoor": true}', 'pet'),
-    ).toContain("'indoor' is not a declared field of this record");
+    ).toContain("'indoor' is not a declared field of 'dog'");
   });
 
   it('a missing discriminator is refused and never falls back to the tag', () => {

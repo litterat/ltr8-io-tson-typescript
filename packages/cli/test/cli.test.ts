@@ -67,18 +67,18 @@ describe('top-level dispatch', () => {
 });
 
 describe('validate (schemaless)', () => {
-  it('Part 1 §9.1: a document past the nesting-depth limit is NOT_CHECKED and exits 1, not INVALID', async () => {
+  it('Part 1 §9.1, §8.1: a document past the nesting-depth limit is refused -- REJECTED, exit 1', async () => {
     const file = join(dir, 'deep.tn');
     await writeFile(file, '['.repeat(200) + ']'.repeat(200) + '\n', 'utf8');
     const text = captureOutput();
     const code = await main(['validate', file]);
     expect(code).toBe(EXIT.INVALID);
     expect(text.stdout()).toContain('LIMIT_REFUSED');
-    expect(text.stdout().split('\n')).toContain('not checked');
-    expect(text.stdout().split('\n')).not.toContain('invalid');
+    expect(text.stdout().split('\n')).toContain('rejected');
+    expect(text.stdout().split('\n')).not.toContain('undetermined');
     const json = captureOutput();
     await main(['validate', '--format', 'json', file]);
-    expect((JSON.parse(json.stdout()) as { outcome: string }).outcome).toBe('NOT_CHECKED');
+    expect((JSON.parse(json.stdout()) as { outcome: string }).outcome).toBe('REJECTED');
   });
 
   it('a well-formed document is valid, exit 0', async () => {
@@ -87,7 +87,7 @@ describe('validate (schemaless)', () => {
     const io = captureOutput();
     const code = await main(['validate', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 
   it('a malformed document is invalid, exit 1 -- via the base-syntax classifyReadError path', async () => {
@@ -96,7 +96,7 @@ describe('validate (schemaless)', () => {
     const io = captureOutput();
     const code = await main(['validate', file]);
     expect(code).toBe(EXIT.INVALID);
-    expect(io.stdout()).toContain('invalid');
+    expect(io.stdout()).toContain('rejected');
   });
 
   it('an unreadable file is a fault, exit 70', async () => {
@@ -157,7 +157,7 @@ describe('an unrecognized option is a usage error, not a file name', () => {
     const io = captureOutput();
     const code = await main(['validate', '--', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 });
 
@@ -216,7 +216,7 @@ describe('compile', () => {
     const io = captureOutput();
     const code = await main(['compile', file]);
     expect(code).toBe(EXIT.INVALID);
-    expect(io.stdout()).toContain('invalid');
+    expect(io.stdout()).toContain('rejected');
   });
 
   it('no files: usage error, exit 2', async () => {
@@ -255,7 +255,7 @@ describe('hash', () => {
       outcome: string;
       files: { content_hash: string }[];
     };
-    expect(parsed.outcome).toBe('VALID');
+    expect(parsed.outcome).toBe('ACCEPTED');
     expect(parsed.files[0]?.content_hash).toBe(publishedPin('core.tn'));
   });
 
@@ -263,7 +263,7 @@ describe('hash', () => {
     const io = captureOutput();
     const code = await main(['hash', '--format', 'tson', join(SPEC_M, 'meta.tn')]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('outcome: "VALID"');
+    expect(io.stdout()).toContain('outcome: "ACCEPTED"');
     expect(io.stdout()).toContain('content_hash');
   });
 });
@@ -501,11 +501,11 @@ describe('policy flags reach validate/compile', () => {
       policy: { identifier_policy: { level: string }; limits: { max_depth: number } };
       files: { outcome: string }[];
     };
-    expect(parsed.outcome).toBe('VALID');
+    expect(parsed.outcome).toBe('ACCEPTED');
     expect(parsed.policy.identifier_policy.level).toBe('HIGHLY_RESTRICTIVE');
     // §9.1's depth limit rides inside the policy, as policy.tn's `limits`.
     expect(parsed.policy.limits.max_depth).toBe(64);
-    expect(parsed.files[0]?.outcome).toBe('VALID');
+    expect(parsed.files[0]?.outcome).toBe('ACCEPTED');
   });
 
   it('compile: --token-scripts admits a named combination and raises the implied level to single-script', async () => {
@@ -541,7 +541,7 @@ describe('policy flags reach validate/compile', () => {
       outcome: string;
       policy: { token_policy: { level: string } };
     };
-    expect(parsed.outcome).toBe('VALID');
+    expect(parsed.outcome).toBe('ACCEPTED');
     expect(parsed.policy.token_policy.level).toBe('UNRESTRICTED');
   });
 });
@@ -578,7 +578,7 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
       jsonFile,
     ]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 
   it('.JSON (any case) is classified the same way', async () => {
@@ -654,14 +654,14 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
       main(['validate', '--schema', join(dir, 'person.tn'), '--root', 'person', '-']),
     );
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 
   it('standard input is TSON text with no binding either', async () => {
     const io = captureOutput();
     const code = await withStdin('{ a: 1 }\n', () => main(['validate', '-']));
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 
   it('--input json forces standard input to be read as JSON', async () => {
@@ -682,7 +682,7 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
         ]),
     );
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 
   it('--input json on unbound standard input is a usage error, exit 2, before any file opens', async () => {
@@ -698,7 +698,7 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
     const io = captureOutput();
     const code = await main(['validate', '--input', 'tson', jsonNamedTson]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toContain('valid');
+    expect(io.stdout()).toContain('accepted');
   });
 
   it('--input json forces a non-.json file to be read as JSON, ignoring its extension', async () => {
@@ -777,13 +777,13 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
         'person',
         jsonFile,
       ]);
-      // §8.1's fifth outcome: not a verdict, so the file is NOT_CHECKED -- and still exit 1.
+      // §8.1's refused outcome: not a verdict, yet a rejection here -- REJECTED, exit 1.
       expect(code).toBe(EXIT.INVALID);
       expect(io.stdout()).toContain('RESTRICTED_SCRIPT');
       expect(io.stdout()).not.toContain('UNRECOGNIZED_FIELD');
-      // The text report states the real outcome: a refusal reached no verdict, so it is not 'invalid'.
-      expect(io.stdout().split('\n')).toContain('not checked');
-      expect(io.stdout().split('\n')).not.toContain('invalid');
+      // The text report states the real outcome: a refusal rejects the document here.
+      expect(io.stdout().split('\n')).toContain('rejected');
+      expect(io.stdout().split('\n')).not.toContain('undetermined');
       const json = captureOutput();
       await main([
         'validate',
@@ -796,7 +796,7 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
         jsonFile,
       ]);
       const report = JSON.parse(json.stdout()) as { outcome: string };
-      expect(report.outcome).toBe('NOT_CHECKED');
+      expect(report.outcome).toBe('REJECTED');
     });
 
     it('--identifier-policy unrestricted admits the name, which then reports UNRECOGNIZED_FIELD instead', async () => {
@@ -822,8 +822,8 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
 describe('strip', () => {
   const SCHEMA = [
     '!!id:"https://example.test/thing-1.tn"',
-    '!!meta:"https://tson.io/2026/37/m/meta.tn"',
-    '!!import:"https://tson.io/2026/37/m/core.tn"',
+    '!!meta:"https://tson.io/2026/38/m/meta.tn"',
+    '!!import:"https://tson.io/2026/38/m/core.tn"',
     '{',
     '  @doc:"A thing."',
     '  thing => int32',
@@ -837,7 +837,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!meta:"37/meta"\n!!import:"37/core"\n{\nthing => int32\n}\n');
+    expect(io.stdout()).toBe('!!meta:"38/meta"\n!!import:"38/core"\n{\nthing => int32\n}\n');
     expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
   });
 
@@ -848,7 +848,7 @@ describe('strip', () => {
     const code = await main(['strip', '--keep-docs', file]);
     expect(code).toBe(EXIT.OK);
     expect(io.stdout()).toBe(
-      '!!meta:"37/meta"\n!!import:"37/core"\n{\n@doc:"A thing." thing => int32\n}\n',
+      '!!meta:"38/meta"\n!!import:"38/core"\n{\n@doc:"A thing." thing => int32\n}\n',
     );
   });
 
@@ -865,7 +865,7 @@ describe('strip', () => {
 
   it('a malformed schema is rejected where it breaks, as file:line:col: message, exit 1', async () => {
     const file = join(dir, 'broken.tn');
-    await writeFile(file, '!!meta:"https://tson.io/2026/37/m/meta.tn"\n{ thing => }\n', 'utf8');
+    await writeFile(file, '!!meta:"https://tson.io/2026/38/m/meta.tn"\n{ thing => }\n', 'utf8');
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.INVALID);

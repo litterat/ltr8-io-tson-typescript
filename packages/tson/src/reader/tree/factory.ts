@@ -1,6 +1,6 @@
 /**
  * Wires the four structural tree readers up to the frozen {@link ValueReaderFactory} contract
- * (`reader/contracts.ts`) against `schema/meta`'s concrete {@link TypeDefinition} -- a starting point
+ * (`reader/contracts.ts`) against `schema/meta`'s {@link Top} -- an entry is its value -- a starting point
  * for Wave 5's compiler, which builds the real per-schema {@link TreeReaderContext} (a whole-schema
  * `name -> reader` table, wired for the recursive/cyclic case) and instantiates the frozen generic
  * `Def`/`Context` parameters this way.
@@ -11,7 +11,7 @@
  * not tree-reader work -- see this package's own work-package report.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
-import type { TypeDefinition, Top } from '../../schema/meta/typedef.js';
+import { isTemplateBody, type Top } from '../../schema/meta/typedef.js';
 import type { ArrayBody, MapBody, RecordBody, TupleBody } from '../../schema/meta/bodies.js';
 import type { ValueReaderFactory } from '../contracts.js';
 import { recordTreeReader } from './record.js';
@@ -27,7 +27,7 @@ import type { TreeTypeResolver } from './support.js';
  */
 export interface TreeReaderContext {
   readonly resolve: TreeTypeResolver;
-  readonly locationOf: (name: string, definition: TypeDefinition) => SchemaLocation;
+  readonly locationOf: (name: string, definition: Top) => SchemaLocation;
   /**
    * §7.8's typed-position question for one declared type name -- whether it resolves to a
    * `scoped` instance, so a nested `!!schema` may stand at a position of that type at all.
@@ -43,35 +43,35 @@ const NEVER_SCOPED = (): boolean => false;
 
 /** A body's own constructor name for an error message -- `Top`'s one member with none, `TemplateBody`, renders as a fixed label instead. */
 function bodyKindLabel(body: Top): string {
-  return 'kind' in body ? body.kind : 'an open template body';
+  return isTemplateBody(body) ? 'an open template body' : body.kind;
 }
 
 function isRecordBody(body: Top): body is RecordBody {
-  return 'kind' in body && body.kind === 'record';
+  return !isTemplateBody(body) && body.kind === 'record';
 }
 
 function isMapBody(body: Top): body is MapBody {
-  return 'kind' in body && body.kind === 'map';
+  return !isTemplateBody(body) && body.kind === 'map';
 }
 
 function isArrayBody(body: Top): body is ArrayBody {
-  return 'kind' in body && body.kind === 'array';
+  return !isTemplateBody(body) && body.kind === 'array';
 }
 
 function isTupleBody(body: Top): body is TupleBody {
-  return 'kind' in body && body.kind === 'tuple';
+  return !isTemplateBody(body) && body.kind === 'tuple';
 }
 
 /** Builds the tree reader for one `record`-shaped resolved entry. */
-export const recordReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderContext> = {
+export const recordReaderFactory: ValueReaderFactory<Top, TreeReaderContext> = {
   create(name, definition, context) {
-    if (!isRecordBody(definition.body)) {
-      throw new Error(`'${name}' is not record-shaped: '${bodyKindLabel(definition.body)}'`);
+    if (!isRecordBody(definition)) {
+      throw new Error(`'${name}' is not record-shaped: '${bodyKindLabel(definition)}'`);
     }
     return recordTreeReader(
       name,
       name,
-      definition.body,
+      definition,
       (field) => context.resolve(field.type.name),
       context.locationOf(name, definition),
       context.isScopedType ?? NEVER_SCOPED,
@@ -80,15 +80,15 @@ export const recordReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderC
 };
 
 /** Builds the tree reader for one `map`-shaped resolved entry. */
-export const mapReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderContext> = {
+export const mapReaderFactory: ValueReaderFactory<Top, TreeReaderContext> = {
   create(name, definition, context) {
-    if (!isMapBody(definition.body)) {
-      throw new Error(`'${name}' is not map-shaped: '${bodyKindLabel(definition.body)}'`);
+    if (!isMapBody(definition)) {
+      throw new Error(`'${name}' is not map-shaped: '${bodyKindLabel(definition)}'`);
     }
     return mapTreeReader(
       name,
       name,
-      definition.body,
+      definition,
       context.resolve,
       context.locationOf(name, definition),
       context.isScopedType ?? NEVER_SCOPED,
@@ -97,15 +97,15 @@ export const mapReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderCont
 };
 
 /** Builds the tree reader for one `array`-shaped resolved entry. */
-export const arrayReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderContext> = {
+export const arrayReaderFactory: ValueReaderFactory<Top, TreeReaderContext> = {
   create(name, definition, context) {
-    if (!isArrayBody(definition.body)) {
-      throw new Error(`'${name}' is not array-shaped: '${bodyKindLabel(definition.body)}'`);
+    if (!isArrayBody(definition)) {
+      throw new Error(`'${name}' is not array-shaped: '${bodyKindLabel(definition)}'`);
     }
     return arrayTreeReader(
       name,
       name,
-      definition.body,
+      definition,
       context.resolve,
       context.locationOf(name, definition),
       context.isScopedType ?? NEVER_SCOPED,
@@ -114,15 +114,15 @@ export const arrayReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderCo
 };
 
 /** Builds the tree reader for one `tuple`-shaped resolved entry. */
-export const tupleReaderFactory: ValueReaderFactory<TypeDefinition, TreeReaderContext> = {
+export const tupleReaderFactory: ValueReaderFactory<Top, TreeReaderContext> = {
   create(name, definition, context) {
-    if (!isTupleBody(definition.body)) {
-      throw new Error(`'${name}' is not tuple-shaped: '${bodyKindLabel(definition.body)}'`);
+    if (!isTupleBody(definition)) {
+      throw new Error(`'${name}' is not tuple-shaped: '${bodyKindLabel(definition)}'`);
     }
     return tupleTreeReader(
       name,
       name,
-      definition.body,
+      definition,
       context.resolve,
       context.locationOf(name, definition),
       context.isScopedType ?? NEVER_SCOPED,

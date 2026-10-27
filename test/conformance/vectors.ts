@@ -2,19 +2,27 @@ import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /**
- * A conformance-suite processing layer: `lexer`, `parser`, `reader`, `resolver`, `vocabulary`.
+ * A conformance-suite processing layer: `lexer`, `parser`, `reader`, `resolver`, `vocabulary`,
+ * `identity`.
  * Also the directory name under `tests/<class>/` (see {@link discoverVectors}). This is a
  * *pipeline stage*, not one of §8.1's four error categories — RUNNER.md rule 3 is explicit that
  * the two do not coincide (the vocabulary layer raises `resolver` and `validation` errors and
  * never a "vocabulary" one), and `sidecar.ts`'s `Category` type is the other vocabulary.
  */
-export type Layer = 'lexer' | 'parser' | 'reader' | 'resolver' | 'vocabulary';
+export type Layer = 'lexer' | 'parser' | 'reader' | 'resolver' | 'vocabulary' | 'identity';
 
 /**
  * Every layer the suite defines, in the order the runner reports them — matching the reference
  * implementation's own `@TestFactory` declaration order in `ConformanceSuiteTest`.
  */
-export const LAYERS: readonly Layer[] = ['lexer', 'parser', 'reader', 'resolver', 'vocabulary'];
+export const LAYERS: readonly Layer[] = [
+  'lexer',
+  'parser',
+  'reader',
+  'resolver',
+  'vocabulary',
+  'identity',
+];
 
 /**
  * A Class 2 processing layer — `tests/class2/<layer>/`. Its own pipeline-stage vocabulary,

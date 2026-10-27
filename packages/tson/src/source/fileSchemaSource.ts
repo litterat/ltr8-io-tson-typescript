@@ -18,6 +18,12 @@
  * and **none is optional**:
  *
  * - **Deny by default.** No mapped host means nothing is read, and a host is compared exactly.
+ * - **A failure discloses neither the allow-list nor the disk.** A refusal names the reference and
+ *   that this deployment will not supply it, never the hosts that are mapped -- [TSON-SCHEMA] §11.2
+ *   says the report SHOULD NOT disclose the allowlist, that being reconnaissance for an untrusted
+ *   sender -- and no message names a local path: not the mapped directory, not the file a
+ *   reference resolved to, not a filesystem error's own text, which carries the path. The error's
+ *   `cause` keeps the detail for an operator's log.
  * - **The resolved file must be inside its directory, checked AFTER the path is made real.**
  *   `node:fs/promises`'s `realpath` resolves `..` and follows every symlink, so one check
  *   (`real === root || real.startsWith(root + path.sep)`) covers traversal and symlink escape
@@ -47,7 +53,7 @@ import { resolve, sep } from 'node:path';
 
 import { TsonSchemaFetchError } from '../core/errors.js';
 import type { SchemaSource } from '../config.js';
-import { notPermitted, permittedReference } from './reference.js';
+import { hostKey, notPermitted, permittedReference } from './reference.js';
 import { readCapped } from './capped.js';
 
 /** A schema document larger than this is refused. */
@@ -101,7 +107,7 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
     if (!isExistingDirectory(directory)) {
       throw new TypeError(`'${directory}' is not an existing directory`);
     }
-    hosts.set(host.toLowerCase(), directory);
+    hosts.set(hostKey(host), directory);
   }
   const maxDocumentBytes = options.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES;
   const maxCachedSchemas = options.maxCachedSchemas ?? DEFAULT_MAX_CACHED_SCHEMAS;
@@ -116,13 +122,13 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
       throw notPermitted(
         reference,
         hosts.size === 0
-          ? 'no host is mapped to a directory by this source'
-          : `host '${identity.host}' is not one of ${[...hosts.keys()].join(', ')}`,
+          ? 'no host is mapped to a directory by this source, so this deployment will not supply it'
+          : `host '${identity.host}' is not an allowed host, so this deployment will not supply it`,
       );
     }
     const relative = identity.path.startsWith('/') ? identity.path.slice(1) : identity.path;
     if (relative === '') {
-      throw notPermitted(reference, `names no path under '${directory}'`);
+      throw notPermitted(reference, 'names no path');
     }
     return { canonical: identity.canonical, directory, relative };
   }
@@ -142,14 +148,14 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
         throw new TsonSchemaFetchError(
           reference,
           'not-found',
-          `cannot fetch schema '${reference}': no file backs it under '${permitted.directory}'`,
+          `cannot fetch schema '${reference}': no file backs it`,
           { cause: error },
         );
       }
       throw new TsonSchemaFetchError(
         reference,
         'transport',
-        `cannot fetch schema '${reference}': could not be resolved under '${permitted.directory}': ${String(error)}`,
+        `cannot fetch schema '${reference}': it could not be resolved to a file`,
         { cause: error },
       );
     }
@@ -160,12 +166,11 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
     if (real !== root && !real.startsWith(boundary)) {
       throw notPermitted(
         reference,
-        `resolves to '${real}', which is outside '${root}' -- a schema path may not escape the ` +
-          'directory its host is mapped to',
+        'resolves outside the directory its host is mapped to -- a schema path may not escape it',
       );
     }
     if (!isRegularFile(real)) {
-      throw notPermitted(reference, `resolves to '${real}', which is not a regular file`);
+      throw notPermitted(reference, 'does not resolve to a regular file');
     }
     return real;
   }
@@ -188,7 +193,7 @@ export function fileSchemaSource(options: FileSchemaSourceOptions = {}): FileSch
         throw new TsonSchemaFetchError(
           reference,
           'not-found',
-          `cannot fetch schema '${reference}': no file backs it at '${file}'`,
+          `cannot fetch schema '${reference}': no file backs it`,
           { cause: error },
         );
       }

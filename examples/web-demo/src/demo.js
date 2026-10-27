@@ -1,8 +1,8 @@
 /**
  * The TSON validation-diagnostics demo.
  *
- * Everything here runs in the browser: no server, no network. `@ltr8/tson/stdlib` carries the three
- * bundled schemas (`meta-kernel`, `meta.tn`, `core.tn`) as embedded text, so a user schema resolves,
+ * Everything here runs in the browser: no server, no network. `@ltr8/tson/stdlib` carries the five
+ * bundled schemas (`meta-kernel`, `meta.tn`, `core.tn`, `net.tn`, `policy.tn`) as embedded text, so a user schema resolves,
  * links and compiles client-side, and a data document is then validated against it.
  *
  * The point the page is making is `validate()`'s collecting mode: every fault in one pass. A

@@ -51,6 +51,11 @@ import { createBinaryParser } from '../atom/numeric/binary.js';
 import { createMembershipCheck, createPatternCheck, createTextParser } from '../atom/text/text.js';
 import { createIdentifierParser } from '../atom/text/identifier.js';
 import { createEnumParser } from '../atom/enum.js';
+import {
+  createKindParser,
+  createQualifiedNameParser,
+  TYPE_NAME_GRAMMAR,
+} from '../atom/reference.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
 import { DEFAULT_IDENTIFIER_POLICY, judgeName, type IdentifierPolicy } from '../unicode/policy.js';
 import { reportNameViolations } from '../reader/tree/refusal.js';
@@ -62,6 +67,11 @@ import { createIpv4Parser } from '../atom/network/ipv4.js';
 import { createIpv6Parser } from '../atom/network/ipv6.js';
 import { createCidr4Parser } from '../atom/network/cidr4.js';
 import { createCidr6Parser } from '../atom/network/cidr6.js';
+import {
+  createHostParser,
+  createHostnameParser,
+  createMediaTypeParser,
+} from '../atom/network/index.js';
 import { createDateParser } from '../atom/temporal/date.js';
 import { createTimeParser } from '../atom/temporal/time.js';
 import { createDateTimeParser } from '../atom/temporal/datetime.js';
@@ -198,6 +208,12 @@ export interface AtomReaderOptions {
   readonly enumForm?: Normalization;
   /** [TSON-DATA] §8.2's name-hygiene policy over the values of identifier families; {@link DEFAULT_IDENTIFIER_POLICY} when absent. */
   readonly identifierPolicy?: IdentifierPolicy;
+  /**
+   * Whether a kind's value is judged a member of the kind's linked `members` (§4.2): true for a
+   * schema whose documents' names resolve in its own closure, false for a meta layer, whose
+   * documents name the types of the schema they describe. Absent, the grammar alone is read.
+   */
+  readonly judgesKindMembers?: boolean;
 }
 
 /**
@@ -285,5 +301,35 @@ export function buildAtomReader(
       return wrap(createIpv6Parser(name, atom), name);
     case 'complex_type':
       return wrap(createComplexParser(name), name);
+    case 'kind_type': {
+      // A kind's value is a type name (§4.2): read by the name grammar, a name under §8.2's policy,
+      // and a member of the kind where the document's names resolve in the closure it was linked
+      // over.
+      const profile = identifierProfileOf(TYPE_NAME_GRAMMAR);
+      const policy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
+      return atomTreeReader(
+        atomTypeReader(
+          createKindParser(name, atom, options.judgesKindMembers ?? false),
+          name,
+          (ctx, value) => {
+            const violations = judgeName(value, profile, policy);
+            if (violations.length === 0) return false;
+            reportNameViolations(ctx, value, violations);
+            return true;
+          },
+        ),
+        name,
+      );
+    }
+    case 'ref_type':
+      // A reference's value is a qualified name (§5.12), its referent judged when the schema
+      // holding it links: only a kernel-governed document holds one.
+      return wrap(createQualifiedNameParser(name), name);
+    case 'hostname_type':
+      return wrap(createHostnameParser(name, atom), name);
+    case 'host_type':
+      return wrap(createHostParser(name), name);
+    case 'media_type_type':
+      return wrap(createMediaTypeParser(name, atom), name);
   }
 }

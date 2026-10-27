@@ -1,7 +1,9 @@
 /**
- * The network atom families' resolved constraint vocabularies (§9): IPv4/IPv6 addresses,
- * their CIDR-network counterparts, and EUI-48 MAC addresses.
+ * The network atom families' resolved constraint vocabularies (§9): IPv4/IPv6 addresses, their
+ * CIDR-network counterparts, EUI-48 MAC addresses, host names, hosts and media types. meta.tn
+ * declares the constructors and `net.tn` their instances.
  */
+import type { TypeBase } from './typedef.js';
 
 /**
  * meta.tn's `ipv4_type` constructor (IPv4 address constraint vocabulary, RFC 3986's
@@ -10,8 +12,7 @@
  * `spec` is a bare string, not a richer URI type, matching every other
  * externally-cited-document field in this package. `within`/`excluding` are the kernel's
  * own `[value]?` — **absent and empty are the same list**; a resolver MUST normalise an
- * absent value to `[]`, the convention {@link TypeDefinition}'s own note states in full —
- * each entry is CIDR text, carried exactly as written and uninterpreted by this shape.
+ * absent value to `[]` — each entry is CIDR text, carried exactly as written and uninterpreted by this shape.
  *
  * Same shape as {@link Cidr4Type} minus `minPrefix`/`maxPrefix` — an address, not a network,
  * has no prefix length.
@@ -19,7 +20,7 @@
  * Also an {@link Atom} variant: `ipv4 => !ipv4_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with `spec` pinned and both lists empty.
  */
-export interface Ipv4Type {
+export interface Ipv4Type extends TypeBase {
   readonly kind: 'ipv4_type';
   readonly spec: string;
   readonly within: readonly string[];
@@ -34,7 +35,7 @@ export interface Ipv4Type {
  * Also an {@link Atom} variant: `ipv6 => !ipv6_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with `spec` pinned and both lists empty.
  */
-export interface Ipv6Type {
+export interface Ipv6Type extends TypeBase {
   readonly kind: 'ipv6_type';
   readonly spec: string;
   readonly within: readonly string[];
@@ -47,14 +48,14 @@ export interface Ipv6Type {
  * CIDR-text network lists.
  *
  * `spec` is a bare string, not a richer URI type, for the reason {@link Ipv4Type}'s own note
- * gives. `within`/`excluding` are **absent-equals-empty**, the same convention {@link
- * TypeDefinition} states in full; a resolver MUST normalise an absent value to `[]`.
+ * gives. `within`/`excluding` are **absent-equals-empty**; a resolver MUST normalise an absent value to
+ * `[]`.
  *
  * Also an {@link Atom} variant: `cidr4 => !cidr4_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with `spec` pinned, both prefix bounds
  * absent, and both lists empty.
  */
-export interface Cidr4Type {
+export interface Cidr4Type extends TypeBase {
   readonly kind: 'cidr4_type';
   readonly spec: string;
   readonly minPrefix?: bigint;
@@ -73,7 +74,7 @@ export interface Cidr4Type {
  * instance (§5.5) whose resolved body is this shape with `spec` pinned, both prefix bounds
  * absent, and both lists empty.
  */
-export interface Cidr6Type {
+export interface Cidr6Type extends TypeBase {
   readonly kind: 'cidr6_type';
   readonly spec: string;
   readonly minPrefix?: bigint;
@@ -93,7 +94,47 @@ export interface Cidr6Type {
  * Also an {@link Atom} variant: `mac => !mac_type {}` is a constructor-application instance
  * (§5.5) whose resolved body is this shape with `spec` pinned.
  */
-export interface MacType {
+export interface MacType extends TypeBase {
   readonly kind: 'mac_type';
   readonly spec: string;
+}
+
+/**
+ * meta.tn's `hostname_type` constructor (host name constraint vocabulary, RFC 5890 to RFC 5893
+ * over RFC 1123's labels): a domain name in LDH, A-label or U-label form, in any mix. `allowIdn`
+ * false admits only names with no internationalized label, in either spelling; it defaults to
+ * `true` and a refinement may only withdraw it.
+ *
+ * Also an {@link Atom} variant: `hostname => !hostname_type {}` is an instance whose resolved
+ * body is this shape with `spec` pinned and `allowIdn` true.
+ */
+export interface HostnameType extends TypeBase {
+  readonly kind: 'hostname_type';
+  readonly spec: string;
+  readonly allowIdn: boolean;
+}
+
+/**
+ * meta.tn's `host_type` constructor (RFC 3987's `ihost` profiled to DNS): a host name as
+ * `hostname_type` has it, an IPv4 address, or an IPv6 address with or without brackets. No facet
+ * beyond the pinned `spec`.
+ */
+export interface HostType extends TypeBase {
+  readonly kind: 'host_type';
+  readonly spec: string;
+}
+
+/**
+ * meta.tn's `media_type_type` constructor (RFC 6838 media types with RFC 9110 §8.3.1
+ * parameters). `allowParameters` admits parameters, false by default; `types` lists the top-level
+ * types admitted and `suffixes` the RFC 6839 structured suffixes, each absent meaning
+ * unrestricted. A refinement withdraws `allowParameters` and shrinks `types` and `suffixes`; it
+ * never widens them.
+ */
+export interface MediaTypeType extends TypeBase {
+  readonly kind: 'media_type_type';
+  readonly spec: string;
+  readonly allowParameters: boolean;
+  readonly types?: readonly string[];
+  readonly suffixes?: readonly string[];
 }

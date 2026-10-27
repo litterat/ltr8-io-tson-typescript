@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { compile, validate } from '../src/compiler/compile.js';
 import type { LinkedSchema } from '../src/link/link.js';
-import type { TypeDefinition } from '../src/schema/meta/typedef.js';
+import type { Top } from '../src/schema/meta/typedef.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 import { requireValue } from './reader-tree-helpers.js';
+import { entry, fieldMapOf } from './model-fixtures.js';
 
 /**
  * `compiler/compile.ts`'s `scoped` reader ([TSON-SCHEMA] §7.8) -- the open sum a value's own
@@ -16,8 +17,8 @@ const FOREIGN_ID = 'https://tson.io/test-suite/scoped-reader/claim.tn';
 
 const FOREIGN_SCHEMA = `
 !!id:"${FOREIGN_ID}"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   claim => {
     id: text
@@ -32,8 +33,8 @@ const FOREIGN_SCHEMA = `
 
 const HOST_SCHEMA = `
 !!id:"test://scoped-reader/host.tn"
-!!meta:"https://tson.io/2026/37/m/meta.tn"
-!!import:"https://tson.io/2026/37/m/core.tn"
+!!meta:"https://tson.io/2026/38/m/meta.tn"
+!!import:"https://tson.io/2026/38/m/core.tn"
 {
   note => {
     body: text
@@ -206,39 +207,28 @@ describe('scoped reader -- the foreign-schema lookup seam', () => {
 // template application resolves to one (`extern_of`/`extern_type` themselves, §5.10's own
 // materialisation, are a different package's own concern this stage does not touch).
 function narrowingSchema(): LinkedSchema {
-  const entries = new Map<string, TypeDefinition>([
+  const entries = new Map<string, Top>([
     [
       'narrow_scope',
-      {
-        supertypes: [],
-        subtypes: [],
-        annotations: [],
-        body: { kind: 'scoped', scope: ['EXTERN'], schemas: new Map([[FOREIGN_ID, ['claim']]]) },
-      },
+      entry({ kind: 'scoped', scope: ['EXTERN'], schemas: new Map([[FOREIGN_ID, ['claim']]]) }),
     ],
     [
       'attachment_holder',
-      {
-        supertypes: [],
-        subtypes: [],
-        annotations: [],
-        body: {
-          kind: 'record',
-          supertypes: [],
-          groups: [],
-          extension: 'OPEN',
-          fields: [
-            {
-              name: 'attachment',
-              type: { name: 'narrow_scope', arguments: [], annotations: [] },
-              optional: false,
-              voidable: false,
-              role: 'FREE',
-              annotations: [],
-            },
-          ],
-        },
-      },
+      entry({
+        kind: 'record',
+        groups: [],
+        extension: 'OPEN',
+        fields: fieldMapOf([
+          {
+            name: 'attachment',
+            type: { name: 'narrow_scope', arguments: [], annotations: [] },
+            optional: false,
+            voidable: false,
+            role: 'FREE',
+            annotations: [],
+          },
+        ]),
+      }),
     ],
   ]);
   return {
@@ -247,12 +237,13 @@ function narrowingSchema(): LinkedSchema {
     imports: [],
     entries,
     keyAnnotations: new Map(),
+    facts: new Map(),
     bootstrap: false,
     origins: new Map(
       [...entries.keys()].map((name) => [name, 'test://scoped-reader/narrowing.tn']),
     ),
-    textEnums: new Set(),
     enumForms: new Map(),
+    nameTypes: new Map(),
   };
 }
 

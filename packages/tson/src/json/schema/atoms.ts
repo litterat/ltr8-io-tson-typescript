@@ -27,6 +27,13 @@
  * this encoding adds is [TSON-DATA] §8.2's name hygiene over the *value* ({@link
  * valueNameRefuses}): a value of an identifier family is a name wherever it stands.
  *
+ * **A kind is a string naming a member** ([TSON-JSON] §5.6, [TSON-SCHEMA] §4.2): its content is
+ * read as the kernel's `type_name` reads it and judged a member of the kind's linked `members`
+ * (`atom/reference.ts`'s `createKindParser`), so `kind<uuid_type>` takes `"stock_id"` and refuses
+ * a uuid, which is a value of a member and no type name. It is an atom like any other here, never
+ * a discrimination case over its members. `hostname`, `host` and `media_type` are string content
+ * read by the network parsers `atomParserFor` routes them to, as every other string family is.
+ *
  * **§5.2's enum rule is applied uniformly, `boolean` included**: `boolean` is the kernel's own
  * `!enum [true false]`, and {@link enumReader} special-cases it (by declared name) only for the
  * *decode* side — every enum, `boolean`'s own instances (an alias, via reference collapse) and
@@ -48,6 +55,7 @@
 import type { AtomToken } from '../../atom/contract.js';
 import { atomParserFor, type ScalarParser } from '../../atom/forType.js';
 import { createEnumParser } from '../../atom/enum.js';
+import { createKindParser } from '../../atom/reference.js';
 import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import { toExactDecimal, toExactInteger } from '../../base/numberNarrowing.js';
@@ -55,7 +63,7 @@ import { isHexFloat, tryParseNumber } from '../../base/numberGrammar.js';
 import { identifierProfileOf, type IdentifierProfile } from '../../unicode/identifier-profile.js';
 import type { Normalization } from '../../schema/meta/atoms-text.js';
 import type { EnumBody } from '../../schema/meta/bodies.js';
-import type { Atom, TypeDefinition } from '../../schema/meta/typedef.js';
+import type { Atom, Top } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import type { LinkedSchema } from '../../link/link.js';
@@ -66,7 +74,7 @@ import type { JsonEvent } from '../stream.js';
 import { jsonBoolean, jsonNull, jsonNumber, jsonString, type JsonValue } from '../tree.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses, valueNameRefuses } from './nameHygiene.js';
-import { lead as leadOf, leadPresent, readWrapped, SCHEMA, TYPE } from './reservedMembers.js';
+import { lead as leadOf, leadPresent, readWrapped, SCHEMA, TYPE } from './tagMembers.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost, type Identified } from './valueIdentity.js';
 
@@ -234,7 +242,7 @@ export function* reportUnreadable(
 /**
  * Wraps `inner` (an atom, array or tuple position's own reader — a shape with no subtype of its
  * own to select into) with §3.3's voluntary recognition: "at any typed position other than a
- * map-typed one, when the object's first member is a reserved member — this is what admits
+ * map-typed one, when the object's first member is an annotation member — this is what admits
  * voluntary tags: a redundant `$type` restating the position's own type". §7.2 subsumption at a
  * shape with no subtypes reduces to exactly that — itself, or an alias of itself
  * ({@link selfNames}) — so a `$type` naming anything else is refused the same way a record-family
@@ -250,7 +258,7 @@ export function* reportUnreadable(
  */
 export function withAnnotationObject(
   displayName: string,
-  entries: ReadonlyMap<string, TypeDefinition>,
+  entries: ReadonlyMap<string, Top>,
   inner: JsonTypeReader,
 ): JsonTypeReader {
   const own = selfNames(displayName, entries);
@@ -261,7 +269,7 @@ export function withAnnotationObject(
       const found = yield* leadOf(ctx);
       if (!leadPresent(found)) return yield* inner.read(ctx);
       if (found.schema) {
-        // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s
+        // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `tagMembers.ts`'s
         // top note on this port's reading of §9.4's table (a deliberate divergence from the Java
         // reference, which reports `UNRECOGNIZED_FIELD` here too).
         ctx
@@ -278,7 +286,7 @@ export function withAnnotationObject(
       }
       if (found.type === undefined) {
         // §9.4's table: "a `$value` in an object not led by `$type`" is a resolver error, not
-        // `VALIDATION_ERROR` -- the same divergence `reservedMembers.ts`'s top note records. A
+        // `VALIDATION_ERROR` -- the same divergence `tagMembers.ts`'s top note records. A
         // bare `$value` (`found.wrapper`) with nothing naming a type has nothing for this
         // no-subtype position to validate it as.
         ctx.report(
@@ -318,6 +326,19 @@ export function withAnnotationObject(
   };
 }
 
+/** What an atom position's reader needs beyond its body: facts of the closure the schema linked over. */
+export interface AtomReaderOptions {
+  /**
+   * Whether a kind's value is judged a member of the kind ([TSON-JSON] §5.6, [TSON-SCHEMA] §4.2):
+   * `kind<uuid_type>` takes `"stock_id"` where the governing schema's closure builds `stock_id`
+   * with `uuid_type`, and refuses `"sku"`, a text type, as no member. True wherever the names a
+   * document writes resolve in the closure the kind's `members` were listed over -- everywhere but
+   * a schema the meta-kernel governs and the bootstrap, whose documents name the types of the
+   * schema they describe, which that schema's own link judges (`atom/reference.ts`).
+   */
+  readonly judgesKindMembers?: boolean;
+}
+
 /**
  * The atom-position reader for an ordinary (non-`value_type`, non-`void_type`, non-`enum`) family:
  * §5's table, then `atomParserFor`'s own parser. An identifier family's value is then judged as a
@@ -328,9 +349,13 @@ export function atomReader(
   displayName: string,
   body: Atom,
   schemaLocation: SchemaLocation,
+  options: AtomReaderOptions = {},
 ): AtomReader {
   const form = atomFormOf(body);
-  const parser: ScalarParser | undefined = atomParserFor(displayName, body);
+  const parser: ScalarParser | undefined =
+    body.kind === 'kind_type'
+      ? createKindParser(displayName, body, options.judgesKindMembers ?? false)
+      : atomParserFor(displayName, body);
   const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;
   return makeAtomReader(
     displayName,

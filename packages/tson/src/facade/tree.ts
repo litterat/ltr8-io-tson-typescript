@@ -77,11 +77,17 @@ export interface SchemalessReadOptions extends SchemalessTreeReaderOptions {
 
 export type ReadTreeOptions = SchemaGovernedReadOptions | SchemalessReadOptions;
 
-function pickReader(options: ReadTreeOptions | undefined): TypeReader<Value> {
+/**
+ * The reader for one document. A schemaless read of a document that names a schema holds its
+ * field names to no name rule (`judgeFieldNames`): they are values of that schema's record types'
+ * name types (Part 2 §7.7), which a reader without the schema cannot know.
+ */
+function pickReader(options: ReadTreeOptions | undefined, namesSchema: boolean): TypeReader<Value> {
   if (options?.schema !== undefined) {
     return options.schema.reader(options.root);
   }
   return schemalessTreeReader({
+    judgeFieldNames: !namesSchema,
     ...(options?.preserveUnknownTypeRefs === undefined
       ? {}
       : { preserveUnknownTypeRefs: options.preserveUnknownTypeRefs }),
@@ -129,7 +135,6 @@ function reportCaused(receiver: DiagnosticsReceiver, diagnostic: Diagnostic, cau
 
 /** {@link compiler/compile.ts}'s own `readValue`, generalised over any `TypeReader<Value>` -- see this module's own top note. */
 function* readDocumentValue(
-  reader: TypeReader<Value>,
   input: ByteInput,
   receiver: DiagnosticsReceiver,
   options: ReadTreeOptions | undefined,
@@ -145,7 +150,7 @@ function* readDocumentValue(
         'an event-stream invariant, not a document problem',
     );
   }
-  const value = yield* reader.read(ctx);
+  const value = yield* pickReader(options, start.schema !== undefined).read(ctx);
   const end = yield* ctx.next();
   if (end.kind !== 'document-end') {
     ctx.report(
@@ -187,13 +192,12 @@ function* readDocumentValue(
  * their input was bad when the bug is here.
  */
 function* readWholeDocument(
-  reader: TypeReader<Value>,
   input: ByteInput,
   receiver: DiagnosticsReceiver,
   options: ReadTreeOptions | undefined,
 ): Task<Value> {
   try {
-    return yield* readDocumentValue(reader, input, receiver, options);
+    return yield* readDocumentValue(input, receiver, options);
   } catch (error) {
     if (isBaseSyntaxError(error)) {
       reportCaused(
@@ -215,8 +219,7 @@ function readTreeTask(
   options: ReadTreeOptions | undefined,
   receiver: DiagnosticsReceiver,
 ): (input: ByteInput) => Task<Value> {
-  const reader = pickReader(options);
-  return (input: ByteInput): Task<Value> => readWholeDocument(reader, input, receiver, options);
+  return (input: ByteInput): Task<Value> => readWholeDocument(input, receiver, options);
 }
 
 /**

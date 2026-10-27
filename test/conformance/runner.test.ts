@@ -15,6 +15,7 @@ import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
 import { UTS39_VERSION } from '../../packages/tson/src/unicode/uts39.js';
 
 import { spliceSchemaDirective, spliceSchemaDirectives } from './bundled-ids.js';
+import { checkIdentityVector } from './identity.js';
 import { checkLinkVector } from './link.js';
 import { lexTokens } from './lexer.js';
 import { parseDocument } from './parser.js';
@@ -34,6 +35,7 @@ import {
   type SidecarSummary,
   type ValidateSidecar,
   type VocabularySidecar,
+  parseIdentitySidecar,
   parseLexerSidecar,
   parseLinkSidecar,
   parseParserSidecar,
@@ -249,6 +251,9 @@ function checkVector(vector: Vector, subject: Uint8Array, sidecarRaw: Uint8Array
     case 'vocabulary':
       checkVocabularyVector(vector, subject, parseVocabularySidecar(sidecarRaw));
       return;
+    case 'identity':
+      checkIdentityVector(vector, subject, parseIdentitySidecar(sidecarRaw));
+      return;
   }
 }
 
@@ -301,6 +306,10 @@ function errorClassForCategory(
       if (category === 'resolver') return TsonAtomParseError;
       if (category === 'validation') return TsonAtomValidationError;
       throw unexpectedCategory(vector, category, ['resolver', 'validation']);
+    case 'identity':
+      // `checkIdentityVector` judges its own error vectors (identity.ts); no flat exception class
+      // stands for "the reference names no identity" across the layers this function serves.
+      throw new Error(`${vector.name}: the identity layer judges its own error vectors`);
   }
 }
 

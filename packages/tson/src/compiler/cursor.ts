@@ -26,7 +26,6 @@ import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
 import { isIriReference } from '../atom/network/uri.js';
-import { isIdentifierText } from '../unicode/identifier-profile.js';
 import { toNfc } from '../unicode/nfc.js';
 
 /** The cursor's whole mutable state, threaded through this module's generator functions. */
@@ -303,33 +302,21 @@ export function isFieldNameTokenType(type: TokenType): boolean {
 }
 
 /**
- * A field name is an identifier at every layer, schemaless or governed (§2.5, §7.7): `token`'s
- * decoded text, NFC-normalised, matched in full against the identifier grammar. Quoting escapes a
- * lexical accident -- it is relief from what the unquoted form cannot spell, never a wider name
- * set -- so both of {@link isFieldNameTokenType}'s spellings are held to exactly this one check,
- * and it is the *normalised* text that identity and every later comparison sees.
+ * A field name is any single-line token (Part 1 §2.5, Part 2 §12.1): `token`'s decoded text,
+ * NFC-normalised so that identity and every later comparison sees one spelling. What a field name
+ * may be is its record's to say -- a value of the record's `name_type` (§7.7), judged when the
+ * schema links or the document is read, never by the grammar.
  *
- * Throws naming `construct` when `token`'s form is not one a field name may take at all, and
- * with a dedicated message when the form is right but the decoded text fails the identifier
- * grammar -- the position §2.5 says a key that is not a name belongs in instead.
+ * Throws naming `construct` when `token`'s form is not one a field name may take at all.
  */
 export function fieldNameText(token: Token, construct: string): string {
   if (!isFieldNameTokenType(token.type)) {
     throw mismatch(construct, token);
   }
-  const text = toNfc(token.text);
-  if (!isIdentifierText(text)) {
-    throw parseError(
-      token,
-      `'${token.text}' is not an identifier, so it names no field (§2.5, §7.7): a name starts ` +
-        "with an XID_Start character and continues with XID_Continue or '-', in NFC -- a key " +
-        "that is not a name belongs in a map ('key => value')",
-    );
-  }
-  return text;
+  return toNfc(token.text);
 }
 
-/** `field-name = unquoted-token / single-line-token` (§2.5, §7.4), held to the identifier grammar (§7.7). */
+/** `field-name = unquoted-token / single-line-token` (§2.5, §7.4). */
 export function* expectFieldNameToken(state: CursorState, construct: string): Task<Token> {
   const name = yield* peekToken(state);
   const text = fieldNameText(name, construct);
