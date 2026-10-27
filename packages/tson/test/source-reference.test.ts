@@ -62,10 +62,18 @@ describe('permittedReference', () => {
     }
   });
 
-  it('splits a non-ASCII host and path as written, the path undecoded (RFC 3987)', () => {
-    const permitted = permittedReference('https://bücher.example/sch%C3%A9mas/x.tn', false);
+  it('splits a non-ASCII host and path into the identity canonical form, with the URI path beside it (§2.2.1)', () => {
+    const permitted = permittedReference('https://xn--bcher-kva.example/sch%C3%A9mas/x.tn', false);
     expect(permitted.host).toBe('bücher.example');
-    expect(permitted.path).toBe('/sch%C3%A9mas/x.tn');
+    expect(permitted.path).toBe('/schémas/x.tn');
+    expect(permitted.uriPath).toBe('/sch%C3%A9mas/x.tn');
+    expect(permitted.canonical).toBe('bücher.example/schémas/x.tn');
+  });
+
+  it('refuses a reference with no scheme or no host, which names nothing a source can fetch', () => {
+    expect(() => permittedReference('//example.com/a.tn', false)).toThrow(TsonSchemaFetchError);
+    expect(() => permittedReference('/a.tn', false)).toThrow(TsonSchemaFetchError);
+    expect(() => permittedReference('file:///a.tn', false)).toThrow(TsonSchemaFetchError);
   });
 
   it('requires a ?sha256= pin only when asked', () => {

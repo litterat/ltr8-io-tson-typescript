@@ -153,4 +153,24 @@ describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
       lookupBuiltinAtom('mac')?.read({ text: 'aa-bb-cc-dd-ee-ff', form: 'unquoted' }),
     ).toBeDefined();
   });
+
+  it('hostname/host/media_type are built in, each reading to its canonical text (§5.5)', () => {
+    const form = 'unquoted' as const;
+    expect(lookupBuiltinAtom('hostname')?.read({ text: 'Example.COM', form })).toBe('example.com');
+    expect(lookupBuiltinAtom('host')?.read({ text: '[2001:DB8::1]', form })).toBe('2001:db8::1');
+    expect(lookupBuiltinAtom('media_type')?.read({ text: 'Text/HTML', form })).toBe('text/html');
+  });
+
+  it('media_type admits no parameters unconstrained, and hostname admits an internationalized name (§5.5)', () => {
+    const form = 'unquoted' as const;
+    expect(() =>
+      lookupBuiltinAtom('media_type')?.read({ text: 'text/plain;charset=utf-8', form }),
+    ).toThrow(TsonAtomValidationError);
+    expect(lookupBuiltinAtom('hostname')?.read({ text: 'xn--bcher-kva.example', form })).toBe(
+      'b\u00fccher.example',
+    );
+    expect(() => lookupBuiltinAtom('hostname')?.read({ text: 'exa_mple', form })).toThrow(
+      TsonAtomParseError,
+    );
+  });
 });
