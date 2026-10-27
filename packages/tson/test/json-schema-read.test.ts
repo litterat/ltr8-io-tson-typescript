@@ -43,7 +43,8 @@ const SCHEMA = resolveUserSchema(`
   day        => date
   blob       => bytes
   colour     => !enum [ RED GREEN BLUE ]
-  activity   => !text ^ { members: ["sedentary" "lightly active"] }
+  words      => !identifier_type { continue_add: "-"  medial: " " }
+  activity   => !enum_type { name_type: words  members: [sedentary "lightly active"] }
   country    => !text ^ { length: 2  members: ["AU" "NZ"] }
   flag       => boolean
   nothing    => void
@@ -221,7 +222,13 @@ describe('§5 atoms', () => {
     expect(refusal('colour', '"MAUVE"').code).toBe('ATOM_CONSTRAINT_VIOLATION');
   });
 
-  it('a value-set enum reads a member no identifier rule would admit', () => {
+  /**
+   * [TSON-JSON] §5.2: an enum over an author's own identifier type needs nothing from this
+   * encoding -- its members are held as text, and a JSON string is matched against them by content
+   * exactly as a TSON token is (§5.1). The profile governs what may be *declared*, a schema-load
+   * question this encoding never sees.
+   */
+  it('§5.2: an enum over its own identifier type reads a member the kernel’s identifier would not admit', () => {
     expect(accepted('activity', '"lightly active"')).toBe('"lightly active"');
     expect(refusal('activity', '"very active"').code).toBe('ATOM_CONSTRAINT_VIOLATION');
   });
@@ -395,9 +402,9 @@ describe('§6.1 records', () => {
     ]);
   });
 
-  it('a reserved member outside the three-name table is a resolver error (§3.2, §9.4 -- json-dispatch.test.ts has the full annotation-object surface)', () => {
+  it('§3.2: a $-initial member outside the three is a field name, so an undeclared one is §6.1.1’s closure error (json-dispatch.test.ts has the full annotation-object surface)', () => {
     const d = refusal('person', '{"name": "Ada", "$bogus": 1}');
-    expect(d.code).toBe('UNKNOWN_TYPE_REF');
+    expect(d.code).toBe('UNRECOGNIZED_FIELD');
     expect(d.path).toBe('/$bogus');
   });
 

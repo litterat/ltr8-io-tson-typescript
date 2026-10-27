@@ -7,7 +7,7 @@
  *
  * **The leading members pick the cell** ({@link lead}). An annotation object leading with
  * `$schema` is EXTERN; one leading with `$type` alone is LOCAL; any other value -- a bare scalar,
- * an array, an object with no reserved member -- names no type, and is a validation error in every
+ * an array, an object with no annotation member -- names no type, and is a validation error in every
  * mode, the position promising no type for it to be read as. A cell the instance's `scope` does not
  * hold refuses the value it would have taken, as a validation error: §8.5 owns the cell rule at a
  * scoped position, and the resolver error for a `$schema` (`SCOPE_NOT_ADMITTED`) reaches only
@@ -36,7 +36,7 @@ import { consumeLeadingMember, type JsonReadContext } from '../readContext.js';
 import { skipNextValue } from './eventSkip.js';
 import type { ForeignLookup } from './foreign.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
-import { lead as leadOf, leadPresent, SCHEMA, type Lead } from './reservedMembers.js';
+import { lead as leadOf, leadPresent, SCHEMA, type Lead } from './tagMembers.js';
 import { routeTo, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 

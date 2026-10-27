@@ -1,15 +1,21 @@
 /**
- * [TSON-JSON] §3.2's reserved member namespace, and the peek at an object's leading members that
- * every dispatcher in this directory ({@link ./dispatchTag.js}, {@link ./dispatchMember.js},
- * {@link ./dispatchChoice.js}) decides from. Ported from the Java reference's `ReservedMembers`
- * (`tson-json/.../reader/ReservedMembers.java`); see that file's own doc for the exhaustive
- * rationale, restated here only where this port differs.
+ * [TSON-JSON] §3.2's three annotation members -- `$schema`, `$type`, `$value` -- and the peek at an
+ * object's leading members that every dispatcher in this directory ({@link ./dispatchTag.js},
+ * {@link ./dispatchMember.js}, {@link ./dispatchChoice.js}) decides from. Ported from the Java
+ * reference's `TagMembers` (`tson-json/.../reader/TagMembers.java`); see that file's own doc for
+ * the exhaustive rationale, restated here only where this port differs.
  *
- * **Named for the namespace it reads, not for the spec's own "annotation object" noun** — this
+ * **The three are the only member names the encoding gives a meaning, and they are used, not
+ * reserved** (§3.2). Every other name, `$`-initial or not, is a record's field name or a map's key:
+ * `$ref` at a record whose `name_type` admits a leading `$` is that record's field, and an
+ * undeclared `$comment` is an unrecognised member under §6.1.1 like any other ({@link
+ * isTagMember}). A record that declares one of the three obscures it: a leading `$type` is always
+ * read as the annotation member, so the field can never be read.
+ *
+ * **Named for the tag its members carry, not for the spec's own "annotation object" noun** — this
  * port's `Annotations`/`@name` vocabulary (`annotations/`, `tree/nodes.ts`) means one specific
  * thing already, and it has no JSON carrier at all (§4.3), so a module named for §3.3 would be the
- * one place "annotation" meant something else. This module reads §3.2's `$`-namespace and cites
- * §3.3 throughout for what that namespace carries.
+ * one place "annotation" meant something else.
  *
  * **The selectors lead, so a bounded peek answers the question.** §3.3 puts `$schema` first where
  * present and `$type` after it; §6.1.5 puts a sealed position's discriminators next, in any order
@@ -20,26 +26,22 @@
  * matching the Java reference's own `isScalar` gate.
  *
  * **Every refusal this module reports is `UNKNOWN_TYPE_REF`, a resolver-category code.** §9.4's
- * own table is explicit and unambiguous here: "unknown reserved members (§3.2); a `$schema` or
- * `$type` that does not lead its object, and a `$value` in an object not led by `$type` (§3.3);
- * wrapper-form objects with extra members (§3.3)" are listed beside duplicate members and an
- * unresolvable `$type` under the **resolver** row, not the validation row two lines below it where
- * closure violations live. `UNKNOWN_TYPE_REF` is the closest of this codebase's existing
- * resolver-category codes (`core/diagnostic.ts`, whose own TSDoc on this code states the second,
- * narrower use directly): what denotes nothing admissible is the reserved **member name itself**
- * at the position it was written — `$schema`/`$type` out of lead position, a `$`-initial name
- * outside the closed set, a non-reserved member beside `$value` — never a question about whether a
- * `$type`'s own *value* resolves to a declared type. A misplaced `$type: "dog"` reports this way
- * even where `dog` is a perfectly good type name elsewhere in the schema: the violation is that
- * `$type` was written in this slot at all, a resolver-phase question about the reserved namespace,
- * not a `TYPE_MISMATCH`-shaped question about `dog`'s own admissibility.
+ * table puts "a `$schema` or `$type` that does not lead its object, and a `$value` in an object not
+ * led by `$type` (§3.3); wrapper-form objects with extra members (§3.3)" under the **resolver**
+ * row, not the validation row where closure violations live. `UNKNOWN_TYPE_REF` is the closest of
+ * this codebase's resolver-category codes (`core/diagnostic.ts`, whose own TSDoc on this code
+ * states the second, narrower use directly): what denotes nothing admissible is the annotation
+ * member's **name itself** at the position it was written — `$schema`/`$type` out of lead
+ * position, any member beside `$value` — never a question about whether a `$type`'s own *value*
+ * resolves to a declared type. A misplaced `$type: "dog"` reports this way even where `dog` is a
+ * perfectly good type name elsewhere in the schema: the violation is that `$type` was written in
+ * this slot at all.
  *
  * **This is a deliberate divergence from the Java reference, not an oversight.** The reference's
- * own `ReservedMembers.refuseUnknown`/`refuseMisplaced` (`tson-json/.../reader/ReservedMembers.java`)
- * report `Diagnostic.Code.UNRECOGNIZED_FIELD`, which that codebase's own
- * `Class2ConformanceSuiteTest.categoryOf` files under `validation` — the same wrong category §9.4
- * puts these under here. Reported upstream as a §9.4 conformance gap in the reference; this port
- * follows Part 3's table instead of the Java it otherwise mirrors structurally.
+ * own `TagMembers.refuseMisplaced` and its wrapper walk report `Diagnostic.Code.UNRECOGNIZED_FIELD`,
+ * which that codebase's own `Class2ConformanceSuiteTest.categoryOf` files under `validation` — a
+ * category §9.4 does not put these under. This port follows Part 3's table instead of the Java it
+ * otherwise mirrors structurally.
  */
 import type { Task } from '../../io/bytes.js';
 import { toNfc } from '../../unicode/nfc.js';
@@ -48,11 +50,11 @@ import type { JsonEvent } from '../stream.js';
 import { skipNextValue } from './eventSkip.js';
 import type { JsonTypeReader } from './types.js';
 
-/** §3.2's closed set. */
+/** §3.2's closed set: the names this encoding gives a meaning, and there is no fourth. */
 export const SCHEMA = '$schema';
 export const TYPE = '$type';
 export const VALUE = '$value';
-export const RESERVED: readonly string[] = [SCHEMA, TYPE, VALUE];
+export const TAG_MEMBERS: readonly string[] = [SCHEMA, TYPE, VALUE];
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const EMPTY_MAP: ReadonlyMap<string, JsonEvent> = new Map();
@@ -65,9 +67,10 @@ const EMPTY_MAP: ReadonlyMap<string, JsonEvent> = new Map();
  * @param schemaRef that member's string content, or `undefined` where it is missing or not a string
  * @param typed whether a `$type` member leads, whatever its value
  * @param type that member's string content, or `undefined` where it is missing or not a string
- * @param wrapper whether `$value` follows the reserved members — §3.3's wrapper form
- * @param selectors the scalar value of each requested member found leading after the reserved
- *   ones, by NFC name; a requested member not among them is missing here
+ * @param wrapper whether `$value` follows the annotation members — §3.3's wrapper form
+ * @param selectors the scalar value of each requested member found leading after the annotation
+ *   members, keyed in the form {@link lead} was asked to match in; a requested member not among
+ *   them is missing here
  */
 export interface Lead {
   readonly schema: boolean;
@@ -90,6 +93,15 @@ export const NO_LEAD: Lead = {
 /** Whether `lead` opens a §3.3 reading at all — the recognition test itself (§3.3, §8.3.1). */
 export function leadPresent(lead: Lead): boolean {
   return lead.schema || lead.typed || lead.wrapper;
+}
+
+/**
+ * Whether `name` is one of §3.2's three: true of `$type`, and false of `$ref` or `$comment`, which
+ * a record whose `name_type` admits them declares as any other field, and which are otherwise
+ * unrecognised members (§6.1.1).
+ */
+export function isTagMember(name: string): boolean {
+  return name === SCHEMA || name === TYPE || name === VALUE;
 }
 
 function isScalarEvent(event: JsonEvent): boolean {
@@ -117,12 +129,21 @@ function isMemberNamed(
 }
 
 /**
- * The leading reserved members (and, where `wanted` names any, the leading selectors after them)
+ * The leading annotation members (and, where `wanted` names any, the leading selectors after them)
  * of the object at `ctx`'s cursor — `NO_LEAD` where `ctx` is not positioned at an `object-start`.
  * Always a peek: every event consumed while deciding is rewound (`lookingAhead`), so whichever
  * reader is selected next sees the object exactly as if this had never run.
+ *
+ * The names in `wanted` are in `key`'s form — the base's name form ([TSON-SCHEMA] §5.5), so a
+ * selector under a case-folding name type is found however the document cased it — and a member's
+ * name is put into that form after NFC, as every member-name comparison in this encoding is
+ * ([TSON-DATA] §2.5). The selectors come back keyed in that form.
  */
-export function* lead(ctx: JsonReadContext, wanted: ReadonlySet<string> = EMPTY_SET): Task<Lead> {
+export function* lead(
+  ctx: JsonReadContext,
+  wanted: ReadonlySet<string> = EMPTY_SET,
+  key: (nfcName: string) => string = (name) => name,
+): Task<Lead> {
   return yield* lookingAhead(ctx, function* (ahead): Task<Lead> {
     const opening = yield* ahead.next();
     if (opening.kind !== 'object-start') return NO_LEAD;
@@ -171,7 +192,7 @@ export function* lead(ctx: JsonReadContext, wanted: ReadonlySet<string> = EMPTY_
 
     const selectors = new Map<string, JsonEvent>();
     while (selectors.size < wanted.size && event.kind === 'member-name') {
-      const name = toNfc(event.name);
+      const name = key(toNfc(event.name));
       const value = yield* ahead.peek();
       if (!wanted.has(name) || selectors.has(name) || !isScalarEvent(value)) break;
       selectors.set(name, value);
@@ -182,11 +203,6 @@ export function* lead(ctx: JsonReadContext, wanted: ReadonlySet<string> = EMPTY_
   });
 }
 
-/** Whether `name` is one this encoding reserves — true of any `$`-initial name, closed set or not (§3.2). */
-export function isReservedName(name: string): boolean {
-  return name.startsWith('$');
-}
-
 // ── The wrapper form, read ──────────────────────────────────────────────────────────────────
 
 /**
@@ -194,7 +210,7 @@ export function isReservedName(name: string): boolean {
  * annotated value is the `$value` member, read at `target` — the reader `$type` selected, or the
  * position's own reader for a redundant restatement. Walks the object rather than assuming
  * `$value` comes last (§6.1.6: member order carries no meaning), and any member other than the
- * three reserved names is a resolver error — "the wrapper is apparatus, not a record".
+ * three annotation members is a resolver error — "the wrapper is apparatus, not a record".
  */
 export function* readWrapped(ctx: JsonReadContext, target: JsonTypeReader): Task<unknown> {
   yield* ctx.next(); // object-start
@@ -250,7 +266,7 @@ function* walkWrapper(
           .report(
             'DUPLICATE_FIELD',
             `'${VALUE}' is written more than once in this annotation object`,
-            'each reserved member written at most once',
+            'each annotation member written at most once',
             VALUE,
           );
         yield* skipNextValue(ctx.field(name));
@@ -265,19 +281,17 @@ function* walkWrapper(
     awaiting = leading && name === SCHEMA ? TYPE : undefined;
     if (name === SCHEMA || name === TYPE) {
       if (!leading) refuseMisplaced(ctx, name);
-    } else if (isReservedName(name)) {
-      refuseUnknown(ctx, name);
     } else {
       // §9.4: "wrapper-form objects with extra members" is a resolver error, not the ordinary
       // closure violation `record.ts`'s own `unmatched` reports for a record -- the wrapper is
-      // apparatus, not a record, and admits nothing outside the three reserved names.
+      // apparatus, not a record, and admits nothing beside the three, `$`-initial or not.
       ctx
         .field(name)
         .report(
           'UNKNOWN_TYPE_REF',
           `'${name}' stands beside '$value' in an annotation object, which is apparatus and not ` +
-            `a record (§3.3) -- it admits the reserved members and nothing else`,
-          RESERVED.join(' | '),
+            "a record (§3.3) -- it admits '$schema', '$type' and '$value' and nothing else",
+          TAG_MEMBERS.join(' | '),
           name,
         );
     }
@@ -298,23 +312,6 @@ export function refuseMisplaced(ctx: JsonReadContext, name: string): void {
       `'${name}' must lead its object -- '$schema' first where present, then '$type' (§3.3) -- ` +
         'and here it follows another member',
       `'${name}' as a leading member`,
-      name,
-    );
-}
-
-/**
- * Reports a `$`-initial member outside §3.2's closed set (`UNKNOWN_TYPE_REF` — this module's own
- * top note on the code): the name is not a declared field (no identifier begins with `$`, §3.2)
- * and not one of the three reserved names either, so §6.1.1's ordinary closure test never gets to
- * run on it at all — §3.2's reserved-namespace test runs first and in its place.
- */
-export function refuseUnknown(ctx: JsonReadContext, name: string): void {
-  ctx
-    .field(name)
-    .report(
-      'UNKNOWN_TYPE_REF',
-      `'${name}' begins with '$', which this encoding reserves (§3.2), and the reserved set is closed`,
-      RESERVED.join(' | '),
       name,
     );
 }
