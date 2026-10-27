@@ -223,7 +223,7 @@ the file is never rewritten.
 Removed or shortened, and nothing else:
   !!id                       dropped
   ?query on a header         dropped (the ?sha256= pin); a #fragment stays
-  meta-kernel, meta, core    shortened to revision and name, "38/core"; other references keep their URL
+  meta-kernel, meta, core, net   shortened to revision and name, "38/net"; other references keep their URL
   @doc @title @examples @comment   dropped (with --keep-docs only @comment)
 
 Whitespace is collapsed to one space, never removed; one line per header directive and per

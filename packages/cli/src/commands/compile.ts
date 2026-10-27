@@ -1,6 +1,6 @@
 /**
  * `tson compile [<policy options>] <schema>...` -- checks that each schema document resolves and
- * links against the bundled standard library (meta-kernel, meta.tn, core.tn; see `../stdlib.ts`),
+ * links against the bundled standard library (meta-kernel, meta.tn, core.tn, net.tn, policy.tn; see `../stdlib.ts`),
  * under `identifierPolicy` ([TSON-SCHEMA] §11.4's schema-layer name hygiene).
  *
  * **Deliberately does not force every entry's compiled reader.** `@ltr8/tson`'s `compile()` is

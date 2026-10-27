@@ -20,10 +20,9 @@ REF_DIR="$REPO_ROOT/.references"
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
 JAVA_PIN="d4bba8f3f0e6cc1ce75fa59e9b6212aca6595b93"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-# 459 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
-# 2026 Revision 37 baseline: field-group options and the `+` form, typed template parameters,
-# identifier as a text family and enum_type, value_type and void_type, the order facet, RFC 3986
-# and RFC 3987 for uri and iri, text normalization, and declared family members.
+# 695 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
+# 2026 Revision 38 baseline: the kernel reshaped around `type`, `chain`, `namespace`, kinds and
+# references, a record's fields as a map under a name type, the net library, an identity layer.
 SUITE_PIN="1a558b404ecad7b0a2230e21e1de371aac39c0b3"
 
 if [ "${1:-}" = "--force" ]; then

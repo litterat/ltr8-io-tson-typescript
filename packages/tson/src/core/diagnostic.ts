@@ -61,7 +61,7 @@ export type DiagnosticCode =
    * unadmitted name reports {@link TYPE_MISMATCH} unconditionally rather than this code.
    *
    * **A second, narrower use: [TSON-JSON] §3.2/§3.3's reserved `$`-member namespace**
-   * (`json/schema/reservedMembers.ts`). There the name in question is the *member name itself* --
+   * (`json/schema/tagMembers.ts`). There the name in question is the *member name itself* --
    * an unknown `$`-initial member, a `$schema`/`$type` that does not lead its object, a `$value`
    * with no leading `$type`, or a non-reserved member beside `$value` in wrapper form -- and what
    * denotes nothing is the member's own position: the closed reserved namespace admits no such

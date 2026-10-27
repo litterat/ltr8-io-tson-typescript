@@ -5,7 +5,13 @@
  * reference's pin goes, and the spec's own library is named by revision and name.
  */
 import { describe, expect, it } from 'vitest';
-import { CORE_TN, META_KERNEL_TN, META_TN, POLICY_TN } from '../src/stdlib/schemas.generated.js';
+import {
+  CORE_TN,
+  META_KERNEL_TN,
+  META_TN,
+  NET_TN,
+  POLICY_TN,
+} from '../src/stdlib/schemas.generated.js';
 import { TsonLexError, TsonParseError } from '../src/core/errors.js';
 import { stripSchema, stripSchemaKeepingDocs } from '../src/compiler/strip.js';
 
@@ -86,11 +92,12 @@ thing => int32
     );
   });
 
-  it('shortens only meta-kernel, meta and core under tson.io/<year>/<revision>/m/ (§2.2.1)', () => {
+  it('shortens only meta-kernel, meta, core and net under tson.io/<year>/<revision>/m/ (§2.2.1)', () => {
     const schema = `!!meta:"http://tson.io/2026/38/m/meta.tn${PIN}"
 !!import:"https://tson.io/2026/38/m/meta-kernel.tn"
 !!import:"https://tson.io/2026/38/x/core.tn"
 !!import:"https://example.test/2026/38/m/core.tn"
+!!import:"https://tson.io/2026/38/m/net.tn"
 !!import:"https://tson.io/2026/38/m/policy.tn"
 { thing => int32 }
 `;
@@ -98,6 +105,7 @@ thing => int32
 !!import:"38/meta-kernel"
 !!import:"https://tson.io/2026/38/x/core.tn"
 !!import:"https://example.test/2026/38/m/core.tn"
+!!import:"38/net"
 !!import:"https://tson.io/2026/38/m/policy.tn"
 {
 thing => int32
@@ -117,6 +125,7 @@ thing => int32
     ['meta-kernel', META_KERNEL_TN],
     ['meta', META_TN],
     ['core', CORE_TN],
+    ['net', NET_TN],
     ['policy', POLICY_TN],
   ])('strips the bundled %s schema to valid syntax with no prose', (_name, source) => {
     const stripped = stripSchema(source);

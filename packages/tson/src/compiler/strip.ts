@@ -10,8 +10,8 @@
  *   (§2.2.1).
  * - **A header reference's query** goes, and its `#fragment` stays. In an identifying URI the
  *   query holds nothing but `?sha256=` pins, which are verification metadata (§2.2.1).
- * - **A header reference to the spec's own library** -- `meta-kernel`, `meta` and `core` at any
- *   revision -- is shortened to its revision and name (`"38/meta"`). Any other reference keeps its
+ * - **A header reference to the spec's own library** -- `meta-kernel`, `meta`, `core` and `net` at
+ *   any revision -- is shortened to its revision and name (`"38/meta"`). Any other reference keeps its
  *   URL, which is the only thing that tells a reader which schema it names.
  * - **The documentary annotations** (§3.1) go, wherever they are written: `@doc`, `@title` and
  *   `@examples`, which are for the schema's readers, and `@comment`, which is for its maintainers.
@@ -214,7 +214,7 @@ function shortened(reference: string): string {
   } catch {
     return unpinned; // not an identity at all, so not the library's: the spelling stays
   }
-  // `tson.io/<year>/<revision>/m/<meta-kernel|meta|core>.tn` (§2.2.1)
+  // `tson.io/<year>/<revision>/m/<meta-kernel|meta|core|net>.tn` (§2.2.1)
   const [host, year, revision, directory, file, ...rest] = identity.split('/');
   if (host !== 'tson.io' || directory !== 'm' || file === undefined || rest.length > 0) {
     return unpinned;
@@ -222,7 +222,7 @@ function shortened(reference: string): string {
   if (year === undefined || revision === undefined) return unpinned;
   if (!isDigits(year, 4) || !isDigits(revision)) return unpinned;
   const library = file.endsWith('.tn') ? file.slice(0, -3) : '';
-  return library === 'meta-kernel' || library === 'meta' || library === 'core'
+  return library === 'meta-kernel' || library === 'meta' || library === 'core' || library === 'net'
     ? `${revision}/${library}`
     : unpinned;
 }
