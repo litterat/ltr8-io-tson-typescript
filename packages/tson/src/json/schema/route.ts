@@ -20,7 +20,7 @@
  */
 import type { Task } from '../../io/bytes.js';
 import type { JsonReadContext } from '../readContext.js';
-import { type Lead, readWrapped } from './reservedMembers.js';
+import { type Lead, readWrapped } from './tagMembers.js';
 import type { JsonTypeReader } from './types.js';
 
 /**

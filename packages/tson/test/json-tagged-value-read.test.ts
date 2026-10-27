@@ -1,7 +1,7 @@
 /**
  * A port of the Java reference's `JsonTaggedValueReadTest`
  * (`tson-json/src/test/java/io/ltr8/tson/json/JsonTaggedValueReadTest.java`) -- [TSON-JSON] §3.2's
- * reserved namespace and §3.3's annotation object, at the position §6.1.5 defines them for: a
+ * annotation members and §3.3's annotation object, at the position §6.1.5 defines them for: a
  * record, where `$type` is the JSON spelling of `!employee` at a `person` field.
  */
 import { describe, expect, it } from 'vitest';
@@ -104,7 +104,7 @@ describe('§3.3 wrapper form', () => {
     ).toBe('{"name":"Ada","department":"Engines"}');
   });
 
-  it('in wrapper form any member but the reserved three is a resolver error -- it is apparatus, not a record', () => {
+  it('§3.3: in wrapper form any member but the three is a resolver error -- it is apparatus, not a record', () => {
     const problem = refusal('person', '{"$type": "person", "$value": {"name": "Ada"}, "stray": 1}');
     expect(problem.code).toBe('UNKNOWN_TYPE_REF');
     expect(problem.path).toBe('/stray');
@@ -120,9 +120,9 @@ describe('§3.3 wrapper form', () => {
 // ── §3.2's closed set ───────────────────────────────────────────────────────────────────────
 
 describe('§3.2 closed set', () => {
-  it('§3.2: the set is closed. There is no unknown-reserved-member category and no extension mechanism', () => {
+  it('§3.2: the three are the only names the encoding gives a meaning, so any other $-initial name is an ordinary member -- here one person does not declare, refused as any undeclared member is (§6.1.1)', () => {
     const problem = refusal('person', '{"$comment": "hi", "name": "Ada"}');
-    expect(problem.code).toBe('UNKNOWN_TYPE_REF');
+    expect(problem.code).toBe('UNRECOGNIZED_FIELD');
     expect(problem.path).toBe('/$comment');
   });
 
@@ -148,7 +148,7 @@ describe('§3.2 closed set', () => {
     expect(problem.path).toBe('/$schema');
   });
 
-  it('§3.2’s carve-out: at a map position every member name is an ordinary key, $-initial or not', () => {
+  it('§3.2: at a map position every member name is an ordinary key, the three included', () => {
     expect(accepted('lookup', '{"$type": 1, "$comment": 2}')).toBe('{"$type":1,"$comment":2}');
   });
 });

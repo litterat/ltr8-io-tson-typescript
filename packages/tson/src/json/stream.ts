@@ -30,7 +30,8 @@
  * deduped here (§3.1 makes a repeat an error whose *category* follows the position's type, a fact
  * this layer holds none of — `json/schemalessTree.ts` is where the raw tree read applies the
  * rule); no value is interpreted (a number is its lexeme, a string its decoded content); and no
- * member name is reserved (§3.2's `$`-namespace is a question about the position's type).
+ * member name is given a meaning (§3.2's three annotation members mean something where an object is
+ * read as a record or an annotation object, which is a question about the position's type).
  *
  * **Nesting depth is bounded here** ([TSON-JSON] §10.1) — the one place every container opens, so
  * a refusal lands before any consumer descends. §10.1 states the bound is [TSON-DATA] §9.1's

@@ -84,9 +84,25 @@ describe('the case the rule exists for', () => {
   });
 
   it('a restricted character in a field name is refused', () => {
-    expect(refusal('account', '{"password": "s3cret", "no te": 1}').code).toBe(
+    // U+0132 LATIN CAPITAL LIGATURE IJ: an identifier character, so a value of the kernel's
+    // `field_name`, whose Identifier_Status is Restricted.
+    expect(refusal('account', '{"password": "s3cret", "aĲb": 1}').code).toBe(
       'RESTRICTED_CHARACTER',
     );
+  });
+
+  /**
+   * [TSON-JSON] §9.4: a member name that is no value of the record's name type is no name, so no
+   * name rule reaches it -- it can be no field, and is unknown. Under the default the message is
+   * the plain one any undeclared name draws.
+   */
+  it('§9.4: a member name outside the name type is unknown, not refused', () => {
+    const problems = problemsOf('account', '{"password": "s3cret", "no te": 1}');
+    expect(problems).toHaveLength(1);
+    const unknown = problems[0];
+    expect(unknown?.code).toBe('UNRECOGNIZED_FIELD');
+    expect(unknown?.path).toBe('/no te');
+    expect(unknown?.message).not.toContain('name type');
   });
 
   it('§9.4 reaches every $type too: a look-alike variant name is refused, not called no variant', () => {

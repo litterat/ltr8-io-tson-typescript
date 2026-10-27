@@ -40,9 +40,9 @@
  * with the records (§6.1.5)". An author who wants a subtype reachable by tag types the position by
  * the record family instead (§8.4's own closing paragraph), which is the edit that buys it.
  *
- * **§8.3.1's map escape.** An object whose first member is reserved is read as the tagged form
- * before anything else, even at an untagged, disjoint choice whose brace-class variant is an
- * object-form map: a map's keys are data that may legitimately spell a reserved name, and this is
+ * **§8.3.1's map escape.** An object whose first member is an annotation member is read as the
+ * tagged form before anything else, even at an untagged, disjoint choice whose brace-class variant
+ * is an object-form map: a map's keys are data that may legitimately spell one of the three, and this is
  * the one combination where an untagged object could be misread as an annotation object.
  *
  * **A sealed or abstract-with-subtypes variant's own name is still an admissible tag, and reading
@@ -70,7 +70,7 @@ import { describeEvent } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
-import { lead as leadOf, leadPresent, SCHEMA, TYPE, type Lead } from './reservedMembers.js';
+import { lead as leadOf, leadPresent, SCHEMA, TYPE, type Lead } from './tagMembers.js';
 import { hasChoiceSelfTag, routeTo, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 
@@ -161,8 +161,8 @@ export function buildChoiceReader(
       const rctx = readCtx.underDeclaration(schemaLocation);
       const first = yield* rctx.peek();
 
-      // §8.2's decode order, step 1, and §8.3.1's escape: an object whose first member is
-      // reserved is the tagged form, before any other reading -- checked from one member name
+      // §8.2's decode order, step 1, and §8.3.1's escape: an object whose first member is one of
+      // the three is the tagged form, before any other reading -- checked from one member name
       // alone, never the object's content.
       if (first.kind === 'object-start') {
         const lead = yield* leadOf(rctx);
@@ -208,7 +208,7 @@ function* tagged(
 ): Task<unknown> {
   const { schema, type } = lead;
   if (schema) {
-    // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `reservedMembers.ts`'s top
+    // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `tagMembers.ts`'s top
     // note.
     ctx
       .field(SCHEMA)
@@ -229,7 +229,7 @@ function* tagged(
     // `TYPE_MISMATCH`'s validation one.
     ctx.report(
       'UNKNOWN_TYPE_REF',
-      `this object leads with this encoding's reserved members but no '$type' naming a variant ` +
+      `this object leads with this encoding's annotation members but no '$type' naming a variant ` +
         `of '${displayName}' (§3.3)`,
       `a '$type' member holding a variant name`,
       'no $type',

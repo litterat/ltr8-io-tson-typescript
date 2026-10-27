@@ -123,8 +123,16 @@ function classify(
       return 'NUMBER';
     case 'float_type':
       return isClassStableFloat(body) ? 'NUMBER' : undefined;
+    // A kind's value is a type name and a reference's a qualified name, each written as a token
+    // ([TSON-SCHEMA] §4.2, §5.12) and a JSON string ([TSON-JSON] §5.6), and the network families
+    // are string content in both encodings.
     case 'text_type':
     case 'identifier_type':
+    case 'kind_type':
+    case 'ref_type':
+    case 'hostname_type':
+    case 'host_type':
+    case 'media_type_type':
     case 'uri_type':
     case 'iri_type':
     case 'regex_type':

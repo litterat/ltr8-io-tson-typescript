@@ -71,6 +71,32 @@ export function valueNameRefuses(
 }
 
 /**
+ * The same per-name rules over a record member name that matches no declared field and is a value
+ * of the record's name type ([TSON-JSON] §9.4), under that type's `profile`, whose added
+ * characters are its own ([TSON-SCHEMA] §5.2). `key` is the name in the type's form, the value
+ * judged -- as the text reader judges it (`reader/tree/fieldNames.ts`), so both encodings refuse
+ * one name for one reason -- and `written` the member as the document spelled it, which a refusal
+ * quotes.
+ */
+export function memberNameRefuses(
+  ctx: JsonReadContext,
+  written: string,
+  key: string,
+  profile: IdentifierProfile,
+): boolean {
+  const violations = judgeName(key, profile, ctx.identifierPolicy());
+  for (const violation of violations) {
+    ctx.report(
+      diagnosticCodeForMechanism(violation.mechanism),
+      `the name ${violation.detail}`,
+      'a name this processor will accept',
+      `'${written}'`,
+    );
+  }
+  return violations.length > 0;
+}
+
+/**
  * Reports a look-alike pair at the second name, as §8.2 places a refused pair. `scope` names it:
  * "keys", "elements".
  */

@@ -16,7 +16,7 @@
  * **{@link lookingAhead}, and the `rewound`/`recording` pair on {@link Cursor} it runs on**, give
  * every reader in `json/schema/**` more than the one event of lookahead {@link next}/{@link peek}
  * offer on their own — what a dispatcher needs to decide which reader owns an object from its
- * opening members (`json/schema/reservedMembers.ts`'s own `lead`) before any reader actually
+ * opening members (`json/schema/tagMembers.ts`'s own `lead`) before any reader actually
  * consumes them, and to then hand that reader the object exactly as if nothing had peeked at it
  * first, `object-start` included.
  *
@@ -62,6 +62,8 @@ interface PathStep {
   readonly name: string | undefined;
   readonly index: number;
   readonly schemaToo: boolean;
+  /** The step's spelling in the schema pointer, where it differs from `name` (a folded member name). */
+  readonly declared?: string;
 }
 
 /**
@@ -134,8 +136,15 @@ export interface JsonReadContext {
    * nested atom field doesn't reset the pointer to its own type's root).
    */
   underDeclaration(declaration: SchemaLocation): JsonReadContext;
-  /** This context one declared field deeper: extends both the data path and, once anchored, the schema pointer. */
-  schemaField(name: string): JsonReadContext;
+  /**
+   * This context one declared field deeper: extends both the data path and, once anchored, the
+   * schema pointer. **Two names, because the document and the schema may spell one field two
+   * ways**: under a case-folding name type the member `Content-Type` is the field `content-type`
+   * ([TSON-JSON] §6.1.1). The data path takes `stated`, the member as written, since RFC 6901
+   * compares exactly and a pointer to the declared spelling names nothing in the document; the
+   * schema pointer takes `declared`, which defaults to `stated` where the two are one.
+   */
+  schemaField(stated: string, declared?: string): JsonReadContext;
   /** This read's identifier-hygiene policy ([TSON-DATA] §8.2), for a reader judging a name. */
   identifierPolicy(): IdentifierPolicy;
   /**
@@ -173,7 +182,9 @@ function renderPath(tail: PathStep | undefined): string {
 function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | undefined): string {
   let out = anchor?.pointer ?? '';
   for (const step of collectSteps(tail)) {
-    if (step.schemaToo) out = appendStep(out, step);
+    if (step.schemaToo) {
+      out = appendStep(out, step.declared === undefined ? step : { ...step, name: step.declared });
+    }
   }
   return out;
 }
@@ -253,10 +264,16 @@ function makeContext(
         ? ctx
         : anchoredOn(declaration.pointer, declaration.schemaId, declaration.position);
     },
-    schemaField(name: string): JsonReadContext {
+    schemaField(stated: string, declared?: string): JsonReadContext {
       return makeContext(
         cursor,
-        { parent: tail, name, index: -1, schemaToo: schemaAnchor !== undefined },
+        {
+          parent: tail,
+          name: stated,
+          index: -1,
+          schemaToo: schemaAnchor !== undefined,
+          ...(declared === undefined || declared === stated ? {} : { declared }),
+        },
         schemaAnchor,
       );
     },
