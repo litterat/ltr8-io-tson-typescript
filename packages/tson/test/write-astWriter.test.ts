@@ -87,20 +87,25 @@ describe('§3.3 directives', () => {
     expect(roundTrip(text)).toBe(text);
   });
 
-  it('!!id and !!schema together round-trip in order', () => {
-    const text = '!!id:"https://example.com/doc.tn"\n!!schema:"https://example.com/schema.tn"\n42';
+  it('!!id and every !!import round-trip in order (§2.2)', () => {
+    const text =
+      '!!id:"https://example.com/doc.tn"\n!!import:"https://example.com/schema.tn"\n' +
+      '!!import:"https://example.com/other.tn"\n42';
     expect(roundTrip(text)).toBe(text);
   });
 
-  it('a scoped-value !!schema writes its own line terminator, exactly like a header directive', () => {
-    // A directive's argument is a single-line token (§3.3), and this emitter's one `directive`
-    // helper backs both the header form and this scoped-value form identically -- so the
-    // terminator appears here too, not just in the header. `ws` after a directive admits a
-    // newline (§2.3's `scoped-value = [ schema-directive ws ] data-value`), so this is valid
-    // TSON and reads back to the identical value.
-    const written = roundTrip('{ x: !!schema:"https://example.com/s.tn" 1 }');
-    expect(written).toBe('{ x: !!schema:"https://example.com/s.tn"\n1 }');
-    expect(parse(written).root).toEqual(parse('{ x: !!schema:"https://example.com/s.tn" 1 }').root);
+  it('a reference round-trips unquoted, an application in canonical form and a sibling reference as written (§7.4)', () => {
+    expect(roundTrip('{ t: map<text list<int32>> }')).toBe('{ t: map<text list<int32>> }');
+    expect(roundTrip('{ t: map< text, list<int32> > }')).toBe('{ t: map<text list<int32>> }');
+    expect(roundTrip('{ v: kind! }')).toBe('{ v: kind! }');
+    const text = '{ t: pair<"a b" 201> }';
+    expect(parse(roundTrip(text)).root).toEqual(parse(text).root);
+  });
+
+  it('a directive written at a value position would not read back: the writer has no way to put one there (§2.2, §3.3)', () => {
+    // The data grammar is closed: a directive stands in the header alone, so the AST has no node
+    // that could carry one at a field value, an entry value or an element.
+    expect(() => parse('{ x: !!import:"https://example.com/s.tn" 1 }')).toThrow();
   });
 });
 

@@ -259,3 +259,62 @@ describe('schemalessTreeReader -- the void sentinel is not a map key (§2.9)', (
     expect(diagnostics).toEqual([]);
   });
 });
+
+describe('schemalessTreeReader -- a reference is kept as the structured value it is (§4, §7.4)', () => {
+  it('an application keeps its name segments and each argument read as a token is read', () => {
+    const record = readFail('{ t: pair<box<text> 201 "a b" true> }') as RecordNode;
+    const reference = record.fields.get('t');
+    expect(reference).toMatchObject({
+      kind: 'application-reference',
+      segments: ['pair'],
+      text: 'pair<box<text> 201 "a b" true>',
+    });
+    if (reference?.kind !== 'application-reference') throw new Error('unreachable');
+    const [nested, number, quoted, boolean] = reference.arguments;
+    expect(nested).toMatchObject({ kind: 'application-reference', segments: ['box'] });
+    expect((nested as { arguments: readonly AtomNode[] }).arguments[0]?.value).toBe('text');
+    expect((number as AtomNode).value).toBe(201n);
+    expect((quoted as AtomNode).value).toBe('a b');
+    expect((boolean as AtomNode).value).toBe(true);
+  });
+
+  it('a qualified head is its segments', () => {
+    expect(readFail('geo.address<T>')).toMatchObject({
+      kind: 'application-reference',
+      segments: ['geo', 'address'],
+    });
+  });
+
+  it('a sibling reference is its field and the mark', () => {
+    expect(readFail('{ value: kind! }')).toMatchObject({ kind: 'record' });
+    const field = (readFail('{ value: kind! }') as RecordNode).fields.get('value');
+    expect(field).toMatchObject({ kind: 'sibling-reference', field: 'kind', text: 'kind!' });
+  });
+
+  it('a qualified name without arguments is a token, read as any token is', () => {
+    expect((readFail('geo.address') as AtomNode).value).toBe('geo.address');
+  });
+
+  it('carries the annotations and the tag written on it, the tag judged as any is', () => {
+    const { value, diagnostics } = readCollect('@doc:"x" !meta.alias box<text>', {
+      preserveUnknownTypeRefs: true,
+    });
+    expect(diagnostics).toEqual([]);
+    expect(value).toMatchObject({
+      kind: 'application-reference',
+      typeRef: 'meta.alias',
+      annotations: { values: [{ name: 'doc' }] },
+    });
+  });
+
+  it('a built-in tag on a reference reports it as no scalar (§5)', () => {
+    const { diagnostics } = readCollect('!uuid box<text>');
+    expect(diagnostics.map((d) => d.code)).toContain('TYPE_MISMATCH');
+  });
+
+  it('a reference at a map key takes part in key identity: the same application twice is a duplicate (§2.6)', () => {
+    const { diagnostics } = readCollect('{ box<text> => 1 box<text> => 2 }');
+    expect(diagnostics.map((d) => d.code)).toEqual(['DUPLICATE_MAP_KEY']);
+    expect(readCollect('{ box<text> => 1 box<int32> => 2 }').diagnostics).toEqual([]);
+  });
+});

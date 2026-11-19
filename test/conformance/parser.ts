@@ -16,8 +16,11 @@ import type {
   Document,
   MapEntry,
   RecordField,
-  ScopedValue,
 } from '../../packages/tson/src/ast/value.js';
+import type {
+  ApplicationReference,
+  ReferenceArgument,
+} from '../../packages/tson/src/ast/reference.js';
 import type {
   ExpectedAnnotation,
   ExpectedCoreValue,
@@ -25,7 +28,7 @@ import type {
   ExpectedDocument,
   ExpectedMapEntry,
   ExpectedRecordField,
-  ExpectedScopedValue,
+  ExpectedReferenceArgument,
 } from './sidecar.js';
 
 /**
@@ -41,7 +44,7 @@ export function parseDocument(subject: Uint8Array): ExpectedDocument {
 function toExpectedDocument(doc: Document): ExpectedDocument {
   return {
     ...(doc.id !== undefined ? { id: doc.id } : {}),
-    ...(doc.schema !== undefined ? { schema: doc.schema } : {}),
+    imports: doc.imports,
     root: toExpectedDataValue(doc.root),
   };
 }
@@ -61,25 +64,24 @@ function toExpectedAnnotation(annotation: Annotation): ExpectedAnnotation {
   };
 }
 
-function toExpectedScopedValue(scoped: ScopedValue): ExpectedScopedValue {
-  return {
-    ...(scoped.schemaRef !== undefined ? { schemaRef: scoped.schemaRef } : {}),
-    value: toExpectedDataValue(scoped.value),
-  };
-}
-
 function toExpectedRecordField(field: RecordField): ExpectedRecordField {
-  return { name: field.name, value: toExpectedScopedValue(field.value) };
+  return { name: field.name, value: toExpectedDataValue(field.value) };
 }
 
 function toExpectedMapEntry(entry: MapEntry): ExpectedMapEntry {
-  return { key: toExpectedDataValue(entry.key), value: toExpectedScopedValue(entry.value) };
+  return { key: toExpectedDataValue(entry.key), value: toExpectedDataValue(entry.value) };
 }
 
 function toExpectedCoreValue(core: CoreValue): ExpectedCoreValue {
   switch (core.kind) {
     case 'token':
       return { kind: 'token', form: core.form, text: core.text };
+    case 'reference':
+      // A sibling reference has no member in `parser-sidecar.tn`'s `reference_core`, so it reduces
+      // to its own text: a vector expecting one would have nothing to state it with.
+      return core.reference.kind === 'sibling'
+        ? { kind: 'reference', name: `${core.reference.field}!`, arguments: [] }
+        : toExpectedReference(core.reference);
     case 'void':
       return { kind: 'absent' };
     case 'empty-brace':
@@ -89,6 +91,29 @@ function toExpectedCoreValue(core: CoreValue): ExpectedCoreValue {
     case 'map':
       return { kind: 'map', entries: core.entries.map(toExpectedMapEntry) };
     case 'array':
-      return { kind: 'array', elements: core.elements.map(toExpectedScopedValue) };
+      return { kind: 'array', elements: core.elements.map(toExpectedDataValue) };
   }
+}
+
+function toExpectedReference(reference: ApplicationReference): {
+  readonly kind: 'reference';
+  readonly name: string;
+  readonly arguments: readonly ExpectedReferenceArgument[];
+} {
+  return {
+    kind: 'reference',
+    name: reference.name,
+    arguments: reference.arguments.map(toExpectedArgument),
+  };
+}
+
+function toExpectedArgument(argument: ReferenceArgument): ExpectedReferenceArgument {
+  if (argument.kind === 'value') {
+    return { kind: 'token', form: argument.form, text: argument.text };
+  }
+  const reference = argument.reference;
+  // A qualified name without arguments is a token in the grammar's own terms (§7.4).
+  return reference.kind === 'name'
+    ? { kind: 'token', form: 'unquoted', text: reference.name }
+    : toExpectedReference(reference);
 }

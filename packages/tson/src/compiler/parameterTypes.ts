@@ -490,7 +490,7 @@ function walkRecord(
   ctx: WalkContext,
 ): void {
   for (const written of wire.fields) {
-    const value = written.value.value.coreValue;
+    const value = written.value.coreValue;
     if (
       constructor === RECORD_FIELD &&
       written.name === VALUE &&
@@ -543,7 +543,7 @@ function walkValue(written: CoreValue, declared: TypeRef, slot: string, ctx: Wal
       const valueType = namespaceValueType(type);
       if (valueType !== undefined) {
         for (const entry of written.entries) {
-          walkValue(entry.value.value.coreValue, valueType, slot, ctx);
+          walkValue(entry.value.coreValue, valueType, slot, ctx);
         }
       }
       return;
@@ -573,7 +573,7 @@ function walkEntries(
 ): void {
   for (const entry of map.entries) {
     walkValue(entry.key.coreValue, declared.keyType, `a key of ${slot}`, ctx);
-    walkValue(entry.value.value.coreValue, declared.valueType, slot, ctx);
+    walkValue(entry.value.coreValue, declared.valueType, slot, ctx);
   }
 }
 
@@ -611,7 +611,7 @@ function walkElements(
 ): void {
   if (type !== undefined && 'elementType' in type) {
     for (const element of array.elements) {
-      walkValue(element.value.coreValue, type.elementType, slot, ctx);
+      walkValue(element.coreValue, type.elementType, slot, ctx);
     }
     return;
   }
@@ -620,7 +620,7 @@ function walkElements(
     array.elements.forEach((element, i) => {
       const position = positions[Math.min(i, positions.length - 1)];
       if (position !== undefined) {
-        walkValue(element.value.coreValue, position.elementType, slot, ctx);
+        walkValue(element.coreValue, position.elementType, slot, ctx);
       }
     });
   }
@@ -644,7 +644,7 @@ function walkApplication(application: RecordValue, ctx: WalkContext): void {
     return;
   }
   argumentsValue.elements.forEach((element, index) => {
-    walkArgument(element.value.coreValue, head, index, ctx);
+    walkArgument(element.coreValue, head, index, ctx);
   });
 }
 
@@ -654,7 +654,7 @@ function walkArgument(argument: CoreValue, head: string, index: number, ctx: Wal
     return;
   }
   for (const member of argument.fields) {
-    const memberValue = member.value.value.coreValue;
+    const memberValue = member.value.coreValue;
     if (member.name === VALUE) {
       continue; // a literal argument says nothing about this declaration's parameters
     }

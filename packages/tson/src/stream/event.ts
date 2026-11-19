@@ -1,5 +1,6 @@
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
+import type { CoreReference } from '../ast/reference.js';
 import type { TokenForm } from '../lexer/token.js';
 
 /**
@@ -12,8 +13,8 @@ import type { TokenForm } from '../lexer/token.js';
  * Every value position (document root, record field, map key/value, array element, an
  * annotation's own value) has the same self-delimiting shape in the stream: zero or more
  * {@link AnnotationStart}/{@link AnnotationEnd} pairs, an optional {@link TypeRef}, then exactly
- * one core-value — either a single leaf event ({@link TokenEvent}, {@link VoidEvent},
- * {@link EmptyBraceEvent}) or a matched {@link RecordStart}/{@link RecordEnd},
+ * one core-value — either a single leaf event ({@link TokenEvent}, {@link ReferenceEvent},
+ * {@link VoidEvent}, {@link EmptyBraceEvent}) or a matched {@link RecordStart}/{@link RecordEnd},
  * {@link MapStart}/{@link MapEnd}, or {@link ArrayStart}/{@link ArrayEnd} pair.
  *
  * Discriminated on `kind`; every member carries a `position`.
@@ -24,7 +25,6 @@ export type TsonEvent =
   | AnnotationStart
   | AnnotationEnd
   | TypeRef
-  | SchemaRef
   | RecordStart
   | FieldName
   | RecordEnd
@@ -34,19 +34,37 @@ export type TsonEvent =
   | ArrayStart
   | ArrayEnd
   | TokenEvent
+  | ReferenceEvent
   | VoidEvent
   | EmptyBraceEvent;
 
 /**
- * Opens the event stream: the document's header directives (§2.2) — `id`/`schema`, the raw URI
- * arguments, uninterpreted — exactly as `ast.Document` carries them. Always the first event;
- * `!!meta` in the header is rejected before this or any other event is ever produced.
+ * Opens the event stream: the document's header directives (§2.2) — its `!!id` and its `!!import`s
+ * in header order, the raw URI arguments, uninterpreted — exactly as `ast.Document` carries them.
+ * Always the first event.
+ *
+ * The header does not classify a document: a schema document is one whose root is tagged `!schema`
+ * (§2.2), which the events after this one say, and which {@link DataStream.rootTag} reads without
+ * consuming anything. A retired or unknown directive, or one out of place, is refused before this
+ * or any other event is produced.
  */
 export interface DocumentStart {
   readonly kind: 'document-start';
   readonly id?: string;
-  readonly schema?: string;
+  readonly imports: readonly string[];
   readonly position: Position;
+}
+
+/**
+ * The root tag that makes a document a schema document (§2.2): the kernel root's `schema`,
+ * whatever the document imports. The tag says what the document is before any import is read, so
+ * classification matches this spelling rather than looking a name up.
+ */
+export const SCHEMA_TAG = 'schema';
+
+/** Whether `rootTag`, a root's tag or its absence, makes the document a schema document (§2.2). */
+export function isSchemaTag(rootTag: string | undefined): boolean {
+  return rootTag === SCHEMA_TAG;
 }
 
 /** Closes the event stream, once the document's root value is complete and only end-of-input remains. */
@@ -56,7 +74,7 @@ export interface DocumentEnd {
 }
 
 /**
- * `"@" unquoted-token [ ":" data-value ]` (§3.1): opens one annotation. If the annotation
+ * `"@" qualified-name-token [ ":" data-value ]` (§3.1): opens one annotation. If the annotation
  * carries a value, that value's own event sequence follows immediately; either way an
  * {@link AnnotationEnd} closes it before the next sibling annotation, an optional
  * {@link TypeRef}, or the enclosing value's core-value.
@@ -74,25 +92,13 @@ export interface AnnotationEnd {
 }
 
 /**
- * `"!" type-name` (§3.2): a value's type reference, preserved uninterpreted — resolving it
- * against the built-in type vocabulary (§5) or a declared schema is a later layer's job. No
- * matching end event: a type reference is a bare name, never a nested value.
+ * `"!" qualified-name-token` (§3.2): a value's type reference, preserved uninterpreted — resolving
+ * it against the built-in type vocabulary (§5) or a declared schema is a later layer's job. No
+ * matching end event: a type reference is a qualified name, never a nested value.
  */
 export interface TypeRef {
   readonly kind: 'type-ref';
   readonly name: string;
-  readonly position: Position;
-}
-
-/**
- * `"!!schema" ":" single-line-token` (§2.3, §3.3): a scoped-value's schema binding, preserved
- * uninterpreted. Precedes a record field's, map entry's, or array element's own data-value
- * events — never present at the document root or in map-key position, since those are a plain
- * `data-value`, not a `scoped-value`.
- */
-export interface SchemaRef {
-  readonly kind: 'schema-ref';
-  readonly uri: string;
   readonly position: Position;
 }
 
@@ -105,7 +111,7 @@ export interface RecordStart {
   readonly position: Position;
 }
 
-/** One record field's name (§2.5, §7.4): announces the field; its scoped-value events follow immediately. */
+/** One record field's name (§2.5, §7.4): announces the field; its data-value events follow immediately. */
 export interface FieldName {
   readonly kind: 'field-name';
   readonly name: string;
@@ -146,7 +152,7 @@ export interface ArrayStart {
   readonly position: Position;
 }
 
-/** Closes an {@link ArrayStart}. Elements are back-to-back scoped-value event sequences, no per-element marker. */
+/** Closes an {@link ArrayStart}. Elements are back-to-back data-value event sequences, no per-element marker. */
 export interface ArrayEnd {
   readonly kind: 'array-end';
   readonly position: Position;
@@ -161,6 +167,22 @@ export interface TokenEvent {
   readonly kind: 'token';
   readonly text: string;
   readonly form: TokenForm;
+  readonly position: Position;
+}
+
+/**
+ * A `reference` core-value (§7.4) that is no bare name, assembled whole by the stream and delivered as
+ * one value: a qualified name with an adjacent argument list, `geo.address<T>` or
+ * `map<text list<int32>>`, or a sibling reference, `kind!`. A qualified name without arguments is a
+ * {@link TokenEvent}, and a reader at a reference-typed position rolls either into one reference.
+ *
+ * One event, not a pair: an argument is a reference or a token and never a structure, so a reference
+ * is small, and assembling it before it is emitted keeps every reader, skip and replay treating it
+ * as the one value it is. `reference` carries each argument as the grammar classified it.
+ */
+export interface ReferenceEvent {
+  readonly kind: 'reference';
+  readonly reference: CoreReference;
   readonly position: Position;
 }
 

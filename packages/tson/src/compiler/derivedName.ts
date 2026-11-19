@@ -52,7 +52,7 @@ import { canonicalNumber, numericTextOf } from './numericIdentity.js';
 export function ofBinding(head: string, fields: readonly RecordField[]): string {
   const readable: string[] = [part(head)];
   for (const field of fields) {
-    appendReadable(readable, field.value.value.coreValue);
+    appendReadable(readable, field.value.coreValue);
   }
   const hash = fnv1a32(canonicalBinding(head, fields));
   return `${readable.join('')}_${hash.toString(16).padStart(8, '0')}`;
@@ -66,18 +66,18 @@ function appendReadable(out: string[], value: CoreValue): void {
       break;
     case 'record':
       value.fields.forEach((field) => {
-        appendReadable(out, field.value.value.coreValue);
+        appendReadable(out, field.value.coreValue);
       });
       break;
     case 'array':
       value.elements.forEach((element) => {
-        appendReadable(out, element.value.coreValue);
+        appendReadable(out, element.coreValue);
       });
       break;
     case 'map':
       value.entries.forEach((entry) => {
         appendReadable(out, entry.key.coreValue);
-        appendReadable(out, entry.value.value.coreValue);
+        appendReadable(out, entry.value.coreValue);
       });
       break;
     case 'empty-brace':
@@ -103,7 +103,7 @@ function appendFields(out: string[], fields: readonly RecordField[]): void {
   for (const field of fields) {
     out.push('f');
     appendText(out, field.name);
-    appendValue(out, field.value.value.coreValue);
+    appendValue(out, field.value.coreValue);
   }
   out.push(')');
 }
@@ -122,7 +122,7 @@ function appendValue(out: string[], value: CoreValue): void {
     case 'array':
       out.push('a(');
       value.elements.forEach((element) => {
-        appendValue(out, element.value.coreValue);
+        appendValue(out, element.coreValue);
       });
       out.push(')');
       break;
@@ -132,7 +132,7 @@ function appendValue(out: string[], value: CoreValue): void {
       out.push('m(');
       value.entries.forEach((entry) => {
         appendValue(out, entry.key.coreValue);
-        appendValue(out, entry.value.value.coreValue);
+        appendValue(out, entry.value.coreValue);
       });
       out.push(')');
       break;

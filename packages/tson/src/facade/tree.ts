@@ -44,7 +44,7 @@ import {
   TsonReadError,
   TsonUnsupportedDocumentError,
 } from '../core/errors.js';
-import { createDataStream } from '../stream/dataStream.js';
+import { createDataStream, requireDataDocument } from '../stream/dataStream.js';
 import { createReadContext } from '../reader/context.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import {
@@ -150,7 +150,10 @@ function* readDocumentValue(
         'an event-stream invariant, not a document problem',
     );
   }
-  const value = yield* pickReader(options, start.schema !== undefined).read(ctx);
+  // A schemaless read is Class 1, which refuses a schema document (§1.5); a read naming its root
+  // type against a compiled schema is how a resolved form, a data document rooted `!schema`, reads.
+  if (options?.schema === undefined) yield* requireDataDocument(events, start.position);
+  const value = yield* pickReader(options, start.imports.length > 0).read(ctx);
   const end = yield* ctx.next();
   if (end.kind !== 'document-end') {
     ctx.report(

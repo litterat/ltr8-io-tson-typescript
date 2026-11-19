@@ -60,7 +60,7 @@ function document(declarations: string, id = 'https://example.com/s.tn'): Schema
 // logic, which is agnostic to how a value gets bound.
 
 function fieldOf(record: RecordValue, name: string): DataValue | undefined {
-  return record.fields.find((f) => f.name === name)?.value.value;
+  return record.fields.find((f) => f.name === name)?.value;
 }
 
 function typeRefField(record: RecordValue, name: string): TypeRef {
@@ -77,7 +77,7 @@ function testMetaReader(type: string, value: DataValue): Top {
     const fields = new Map<string, RecordField>();
     if (fieldsField?.kind === 'map') {
       for (const entry of fieldsField.entries) {
-        const fieldRecord = entry.value.value.coreValue as RecordValue;
+        const fieldRecord = entry.value.coreValue as RecordValue;
         const name = (entry.key.coreValue as TokenValue).text;
         fields.set(name, {
           type: typeRefField(fieldRecord, 'type'),
@@ -99,7 +99,7 @@ function testMetaReader(type: string, value: DataValue): Top {
     const discriminators: string[] = [];
     if (discriminatorsField?.kind === 'array') {
       for (const element of discriminatorsField.elements) {
-        const token = element.value.coreValue as TokenValue;
+        const token = element.coreValue as TokenValue;
         discriminators.push(token.text);
       }
     }
@@ -567,7 +567,7 @@ function richTypeRefField(record: RecordValue, name: string): TypeRef {
   const args: TypeArgument[] = [];
   if (argumentsValue?.kind === 'array') {
     for (const element of argumentsValue.elements) {
-      const argRecord = element.value.coreValue as RecordValue;
+      const argRecord = element.coreValue as RecordValue;
       const literal = fieldOf(argRecord, 'value')?.coreValue;
       if (literal !== undefined) {
         const token = literal as TokenValue;
@@ -596,7 +596,7 @@ function richMetaReader(type: string, value: DataValue): Top {
     const fields: NamedField[] = [];
     if (fieldsField?.kind === 'map') {
       for (const entry of fieldsField.entries) {
-        const fieldRecord = entry.value.value.coreValue as RecordValue;
+        const fieldRecord = entry.value.coreValue as RecordValue;
         const fname = (entry.key.coreValue as TokenValue).text;
         const roleWire = fieldOf(fieldRecord, 'role')?.coreValue;
         const role: RecordField['role'] =
@@ -640,7 +640,7 @@ function richMetaReader(type: string, value: DataValue): Top {
     const members: string[] = [];
     if (membersField?.kind === 'array') {
       for (const element of membersField.elements) {
-        members.push((element.value.coreValue as TokenValue).text);
+        members.push((element.coreValue as TokenValue).text);
       }
     }
     return { kind: 'enum', members, nameType: 'identifier' } satisfies EnumBody;

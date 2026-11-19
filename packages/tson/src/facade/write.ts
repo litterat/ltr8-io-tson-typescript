@@ -18,14 +18,13 @@ import type { Value } from '../tree/nodes.js';
 export interface WriteOptions {
   /** The document's own identity (`!!id`). */
   readonly id?: string;
-  /** The schema governing this document's value (`!!schema`). */
-  readonly schema?: string;
+  /** The schemas this document's value is read under (`!!import`), in header order. */
+  readonly imports?: readonly string[];
 }
 
-/** Writes `value` to TSON text, canonical form. With `options.id`/`options.schema`, writes the `!!id`/`!!schema` header directives (§2.2) ahead of it; with neither, writes a plain, headerless document. */
+/** Writes `value` to TSON text, canonical form. With `options.id`/`options.imports`, writes the `!!id`/`!!import` header directives (§2.2) ahead of it; with neither, writes a plain, headerless document. */
 export function write(value: Value, options?: WriteOptions): string {
-  if (options?.id === undefined && options?.schema === undefined) {
-    return writeTreeValue(value);
-  }
-  return writeTree(tsonDocument(value, options.id, options.schema));
+  const imports = options?.imports ?? [];
+  if (options?.id === undefined && imports.length === 0) return writeTreeValue(value);
+  return writeTree(tsonDocument(value, options?.id, imports));
 }

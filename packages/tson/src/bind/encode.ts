@@ -24,7 +24,6 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
-  ScopedValue,
   TokenValue,
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
@@ -65,10 +64,6 @@ function resolveRef<T>(ref: BindingRef<T>): Exclude<Binding<T>, { readonly kind:
 
 function dataValueOf(coreValue: CoreValue): DataValue {
   return { annotations: [], coreValue };
-}
-
-function scopedValueOf<T>(binding: BindingRef<T>, value: T, encodeAtom: AtomEncoder): ScopedValue {
-  return { value: toDataValue(binding, value, encodeAtom) };
 }
 
 /**
@@ -122,7 +117,7 @@ export function toDataValue<T>(
  *
  * Every composite case (`record`/`tuple`/`array`/`map`) builds its children through {@link
  * toDataValue}, so a child bound through `variant`/`annotated` still carries its own framing
- * correctly at the {@link ScopedValue}/{@link DataValue} position that holds it -- only *this*
+ * correctly at the {@link DataValue} position that holds it -- only *this*
  * position's own framing is unrepresentable, because `CoreValue` has nowhere to put it. Calling
  * this directly with a `variant` or `annotated` binding still returns a value (the chosen
  * member's/unwrapped value's own core-value), it just drops that framing at the top; use {@link
@@ -146,7 +141,7 @@ export function toCoreValue<T>(
         if (!slot.isPresent(value)) continue;
         fields.push({
           name: slot.wireName,
-          value: scopedValueOf(slot.binding, slot.get(value), encodeAtom),
+          value: toDataValue(slot.binding, slot.get(value), encodeAtom),
         });
       }
       const record: RecordValue = { kind: 'record', fields };
@@ -155,7 +150,7 @@ export function toCoreValue<T>(
 
     case 'tuple': {
       const elements = resolved.elements.map((slot) =>
-        scopedValueOf(slot.binding, slot.get(value), encodeAtom),
+        toDataValue(slot.binding, slot.get(value), encodeAtom),
       );
       const array: ArrayValue = { kind: 'array', elements };
       return array;
@@ -163,9 +158,9 @@ export function toCoreValue<T>(
 
     case 'array': {
       const element = resolved.element;
-      const elements: ScopedValue[] = [];
+      const elements: DataValue[] = [];
       for (const item of resolved.read(value)) {
-        elements.push(scopedValueOf(element, item, encodeAtom));
+        elements.push(toDataValue(element, item, encodeAtom));
       }
       const array: ArrayValue = { kind: 'array', elements };
       return array;
@@ -178,7 +173,7 @@ export function toCoreValue<T>(
       for (const [k, v] of resolved.read(value)) {
         entries.push({
           key: toDataValue(keyBinding, k, encodeAtom),
-          value: scopedValueOf(valueBinding, v, encodeAtom),
+          value: toDataValue(valueBinding, v, encodeAtom),
         });
       }
       const map: MapValue = { kind: 'map', entries };

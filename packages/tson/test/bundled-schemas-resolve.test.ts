@@ -212,13 +212,13 @@ function liftedAnnotations(value: CoreValue): Canonical[] {
   if (value.kind !== 'record') return [];
   const field = value.fields.find((f) => f.name === 'annotations');
   if (field === undefined) return [];
-  const list = field.value.value.coreValue;
+  const list = field.value.coreValue;
   if (list.kind !== 'array') return [];
   return list.elements.map((element) => {
-    const record = element.value.coreValue;
-    if (record.kind !== 'record') return canonical(element.value);
-    const name = record.fields.find((f) => f.name === 'name')?.value.value.coreValue;
-    const held = record.fields.find((f) => f.name === 'value')?.value.value;
+    const record = element.coreValue;
+    if (record.kind !== 'record') return canonical(element);
+    const name = record.fields.find((f) => f.name === 'name')?.value.coreValue;
+    const held = record.fields.find((f) => f.name === 'value')?.value;
     return annotationOf(
       name?.kind === 'token' ? name.text : '?',
       held === undefined ? undefined : canonical(held),
@@ -235,20 +235,20 @@ function canonicalCore(value: CoreValue, head?: string): Canonical {
     case 'void':
       return '_';
     case 'array':
-      return value.elements.map((element) => canonical(element.value));
+      return value.elements.map((element) => canonical(element));
     case 'map':
-      return value.entries.map((e) => [canonical(e.key), canonical(e.value.value)]);
+      return value.entries.map((e) => [canonical(e.key), canonical(e.value)]);
     case 'record': {
       const record: Record<string, Canonical> = {};
       for (const field of value.fields) {
         if (field.name === 'annotations') continue; // lifted to the framing position
-        const core = field.value.value.coreValue;
+        const core = field.value.coreValue;
         const held =
           TEXT_FACETS.has(field.name) && core.kind === 'token'
             ? JSON.stringify(core.text)
             : field.name === 'template' && head === 'template' && core.kind === 'token'
               ? JSON.stringify(parsedTemplate(core.text))
-              : canonical(field.value.value);
+              : canonical(field.value);
         if (Array.isArray(held) && held.length === 0) continue;
         // An empty braced value and an empty map are one empty field map (§8.1: absent and
         // empty are the same, and `fields: {}` is how a document writes an empty map).
@@ -377,7 +377,7 @@ function fixture(name: string): Map<string, FixtureEntry> {
       throw new Error(`${name}-resolved.tn: a schema-map key is not a token`);
     }
     entries.set(canonicalName(key.text), {
-      definition: canonical(entry.value.value),
+      definition: canonical(entry.value),
       keyAnnotations: entry.key.annotations
         .filter((a) => a.name !== 'doc')
         .map((a) =>

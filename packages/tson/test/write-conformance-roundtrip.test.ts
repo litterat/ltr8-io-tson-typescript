@@ -13,6 +13,7 @@ import { schemalessTreeReader } from '../src/reader/schemaless/tree.js';
 import { tsonDocument, type TsonDocument, type Value } from '../src/tree/nodes.js';
 import { writeTree, writeTreeValue } from '../src/write/treeWriter.js';
 import { TsonWriteError } from '../src/core/errors.js';
+import { classifyDocument } from '../src/facade/classify.js';
 import { compareDecimal } from '../src/atom/numeric/decimalMath.js';
 
 /**
@@ -45,7 +46,8 @@ function bestEffortSidecarSummary(vector: Vector): SidecarSummary | undefined {
 }
 
 /**
- * Vectors this round trip applies to: a plain valid data document, real UTF-8, no schema splice.
+ * Vectors this round trip applies to: a valid data document, real UTF-8 -- a subject whose root is
+ * tagged `!schema` is a schema document (§2.2), which no data writer represents.
  *
  * **Never the lexer layer.** A lexer-layer `valid` vector's sidecar promises only a well-formed
  * *token stream* (`schemas/lexer-sidecar.tn`'s own `lexer_valid`), not a single parseable
@@ -62,9 +64,12 @@ function roundTrippableVectors(): Vector[] {
   return discoverAllVectors().filter((vector) => {
     if (vector.layer === 'lexer') return false;
     const summary = bestEffortSidecarSummary(vector);
-    return (
-      summary?.outcome === 'valid' && summary.encoding === undefined && summary.meta === undefined
-    );
+    if (summary?.outcome !== 'valid' || summary.encoding !== undefined) return false;
+    try {
+      return classifyDocument(readFileSync(vector.subjectPath)).kind === 'data';
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -149,12 +154,12 @@ function readSchemaless(bytes: Uint8Array, namesSchema?: boolean): TsonDocument 
   const root = runSync(
     schemalessTreeReader({
       preserveUnknownTypeRefs: true,
-      judgeFieldNames: !(namesSchema ?? start.schema !== undefined),
+      judgeFieldNames: !(namesSchema ?? start.imports.length > 0),
     }).read(ctx),
   );
   const end = runSync(ctx.next());
   if (end.kind !== 'document-end') throw new Error(`expected document-end, got ${end.kind}`);
-  return tsonDocument(root, start.id, start.schema);
+  return tsonDocument(root, start.id, start.imports);
 }
 
 describe.skipIf(!suitePresent)(
@@ -182,10 +187,10 @@ describe.skipIf(!suitePresent)(
           const subjectBytes = readFileSync(vector.subjectPath);
           const first = readSchemaless(subjectBytes);
           if (
-            first.schema !== undefined &&
+            first.imports.length > 0 &&
             (first.root.kind === 'missing' || first.root.typeRef === undefined)
           ) {
-            // A document can legitimately declare `!!schema` over a root with no type annotation
+            // A document can legitimately declare `!!import`s over a root with no type annotation
             // of its own (§2.2/§3.2: the annotation is permitted, not required) -- a schema-driven
             // read would attach the declared type itself, but a schemaless read has no schema in
             // scope to attach one from, so `writeTree`'s own header/root consistency check
@@ -202,7 +207,7 @@ describe.skipIf(!suitePresent)(
           const second = readSchemaless(new TextEncoder().encode(written));
           expect(valueEqual(second.root, first.root)).toBe(true);
           expect(second.id).toBe(first.id);
-          expect(second.schema).toBe(first.schema);
+          expect(second.imports).toEqual(first.imports);
         });
       }
     });

@@ -2,7 +2,7 @@
  * Event-stream grammar helpers every tree reader in this directory needs, beyond whatever its own
  * shape-specific decoding does -- consuming a `data-value`'s leading `annotation* type-ref?` framing
  * (§2.3-§2.4) before a reader inspects its own core-value's shape, and discarding a whole
- * `data-value`/`scoped-value`/`core-value`'s worth of events outright when a reader has nothing to do
+ * `data-value`/`core-value`'s worth of events outright when a reader has nothing to do
  * with one (the wrong shape entirely, or a record field name with no match in the compiled schema).
  *
  * Ported from `tson-compiler/.../reader/EventSkip.java`, minus the `aheadOfValue`/`typeRefAhead`
@@ -50,15 +50,6 @@ export function* skipDataValue(ctx: ReadContext): Task<void> {
   yield* skipCoreValue(ctx);
 }
 
-/** Discards `[ schema-directive ] data-value` -- a record field value, a map entry value, an array element. */
-export function* skipScopedValue(ctx: ReadContext): Task<void> {
-  const e = yield* ctx.peek();
-  if (e.kind === 'schema-ref') {
-    yield* ctx.next();
-  }
-  yield* skipDataValue(ctx);
-}
-
 /**
  * Discards one core-value whose own first event has *not* yet been consumed (only peeked) by the
  * caller -- the natural shape for a reader that peeked to decide "this isn't what I expected" and now
@@ -72,7 +63,7 @@ export function* skipCoreValue(ctx: ReadContext): Task<void> {
         const peeked = yield* ctx.peek();
         if (peeked.kind === 'record-end') break;
         yield* ctx.next(); // field-name
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
       }
       yield* ctx.next(); // record-end
       return;
@@ -83,7 +74,7 @@ export function* skipCoreValue(ctx: ReadContext): Task<void> {
         if (peeked.kind === 'map-end') break;
         yield* skipDataValue(ctx); // key
         yield* ctx.next(); // map-arrow
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
       }
       yield* ctx.next(); // map-end
       return;
@@ -92,15 +83,16 @@ export function* skipCoreValue(ctx: ReadContext): Task<void> {
       for (;;) {
         const peeked = yield* ctx.peek();
         if (peeked.kind === 'array-end') break;
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
       }
       yield* ctx.next(); // array-end
       return;
     }
     case 'token':
+    case 'reference':
     case 'void':
     case 'empty-brace':
-      // leaf, already consumed
+      // leaf (a reference is one value), already consumed
       return;
     default:
       throw new Error(`unexpected event while skipping a core-value: ${e.kind}`);
@@ -121,40 +113,6 @@ export function* typeRefAhead(ctx: ReadContext): Task<string | undefined> {
   });
 }
 
-/**
- * §7.8's typed-position restriction, the policy half kept apart from a `scoped` position's own
- * reader (`compiler/compile.ts`'s own scoped-body builder), which is the reading half. A nested
- * `!!schema` is admitted at a position exactly when the position's own type resolves to a
- * `scoped` instance -- `isScopedPosition` is that structural fact, computed once per position at
- * compile time (`link/referenceChain.ts`'s own `resolvesToScoped`). Where it does, this is a
- * no-op: the event is left exactly where it was, for that position's own reader to consume and
- * dispatch on (which cell it lands in -- LOCAL, EXTERN, or neither -- is that reader's own
- * concern, §7.8's own admits-EXTERN check included, and a validation error). Where it does not,
- * the directive is consumed and reported as `SCOPE_NOT_ADMITTED` (§7.1, §7.8), a resolver error, and the value it prefixed still reads -- normally, as it would have with no
- * directive at all -- so a stray directive costs one diagnostic rather than a value.
- *
- * Costs nothing for the near-totality of values that carry no directive at all: everything below
- * is guarded by "is the next event a directive in the first place".
- */
-export function* refuseUnscopedSchemaRef(
-  ctx: ReadContext,
-  isScopedPosition: boolean,
-  typeName: string,
-): Task<void> {
-  if (isScopedPosition) return;
-  const peeked = yield* ctx.peek();
-  if (peeked.kind !== 'schema-ref') return;
-  yield* ctx.next();
-  ctx.report(
-    'SCOPE_NOT_ADMITTED',
-    `'${typeName}' is not a scoped type, so a value here cannot open a schema scope with ` +
-      `'!!schema:"${peeked.uri}"' -- a position takes a value from a foreign schema only where ` +
-      `its own schema said so, by declaring it scoped (§7.8)`,
-    `a value of '${typeName}', carrying no '!!schema' of its own`,
-    peeked.uri,
-  );
-}
-
 /** A core-value's shape as a word, for a diagnostic's `actual` -- ported from `TypeRefCheck.describe`. */
 export function describeEvent(e: TsonEvent): string {
   switch (e.kind) {
@@ -170,6 +128,8 @@ export function describeEvent(e: TsonEvent): string {
       return "the void sentinel '_'";
     case 'token':
       return `token '${e.text}'`;
+    case 'reference':
+      return e.reference.kind === 'sibling' ? 'a sibling reference' : 'a reference';
     default:
       return e.kind;
   }

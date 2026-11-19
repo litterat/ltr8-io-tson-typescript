@@ -127,7 +127,7 @@ function namespaceMapValue(value: Namespace<MetaValue>): CoreValue {
           form: isIdentifierText(key) ? 'unquoted' : 'single-line',
         },
       },
-      value: { value: metaDataValue(entry) },
+      value: metaDataValue(entry),
     })),
   };
 }
@@ -150,7 +150,7 @@ function metaDataValue(value: MetaValue): DataValue {
         annotations: [],
         coreValue: {
           kind: 'array',
-          elements: value.elements.map((element) => ({ value: metaDataValue(element) })),
+          elements: value.elements.map((element) => metaDataValue(element)),
         },
       };
     case 'map':
@@ -160,7 +160,7 @@ function metaDataValue(value: MetaValue): DataValue {
           kind: 'map',
           entries: value.entries.map(([key, entry]) => ({
             key: metaDataValue(key),
-            value: { value: metaDataValue(entry) },
+            value: metaDataValue(entry),
           })),
         },
       };
@@ -175,7 +175,7 @@ function metaDataValue(value: MetaValue): DataValue {
                 kind: 'record',
                 fields: [...value.fields].map(([name, field]) => ({
                   name,
-                  value: { value: metaDataValue(field) },
+                  value: metaDataValue(field),
                 })),
               },
       };
@@ -299,7 +299,7 @@ class ValueBodyReader {
       if (entry.key.annotations.length > 0) {
         keyAnnotations.set(key, entry.key.annotations.map(annotationOf));
       }
-      entries.push([key, this.value(entry.value.value, map.valueType, [...path, key])]);
+      entries.push([key, this.value(entry.value, map.valueType, [...path, key])]);
     }
     const keyFamily = this.identifierFamily(map.keyType);
     if (keyFamily !== undefined) this.judgeNames([...seen], keyFamily, path);
@@ -545,7 +545,7 @@ class ValueBodyReader {
           message: `${at(path)}'${name}' writes the field '${field.name}' twice`,
         });
       }
-      const written = field.value.value;
+      const written = field.value;
       const at_ = [...path, field.name];
       if (written.coreValue.kind === 'void' && written.typeRef === undefined) {
         if (!declaration.voidable) {
@@ -608,9 +608,9 @@ class ValueBodyReader {
       });
     }
     const elements = core.elements.map((element, index) =>
-      element.value.coreValue.kind === 'void' && body.voidable
+      element.coreValue.kind === 'void' && body.voidable
         ? ({ form: 'void' } as const)
-        : this.value(element.value, body.elementType.name, [...path, String(index)]),
+        : this.value(element, body.elementType.name, [...path, String(index)]),
     );
     // A unique array of names is a scope of them (§8.2), as an identifier-keyed map's keys are.
     const family = body.uniqueItems ? this.identifierFamily(body.elementType.name) : undefined;
@@ -643,7 +643,7 @@ class ValueBodyReader {
         }
         seen.add(text);
       }
-      const written = entry.value.value;
+      const written = entry.value;
       const read =
         written.coreValue.kind === 'void' && body.voidable
           ? ({ form: 'void' } as const)
@@ -668,9 +668,9 @@ class ValueBodyReader {
     const elements = core.elements.map((element, index) => {
       const declared = body.elements[index];
       if (declared === undefined) throw mismatch(path, `a '${name}' tuple`, core);
-      return element.value.coreValue.kind === 'void' && declared.voidable
+      return element.coreValue.kind === 'void' && declared.voidable
         ? ({ form: 'void' } as const)
-        : this.value(element.value, declared.elementType.name, [...path, String(index)]);
+        : this.value(element, declared.elementType.name, [...path, String(index)]);
     });
     return { form: 'list', elements };
   }
@@ -773,6 +773,8 @@ function describe(core: CoreValue): string {
       return "the void sentinel '_'";
     case 'token':
       return `the token '${core.text}'`;
+    case 'reference':
+      return core.reference.kind === 'sibling' ? 'a sibling reference' : 'a reference';
   }
 }
 

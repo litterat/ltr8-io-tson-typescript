@@ -57,12 +57,14 @@ async function parseChunked(text: string, chunkSize: number): Promise<Document> 
 describe('root value shapes (§2.3, §7.4)', () => {
   it('a bare unquoted token', () => {
     expect(doc('hello')).toEqual({
+      imports: [],
       root: { annotations: [], coreValue: { kind: 'token', text: 'hello', form: 'unquoted' } },
     });
   });
 
   it('a single-line quoted token', () => {
     expect(doc('"hi there"')).toEqual({
+      imports: [],
       root: {
         annotations: [],
         coreValue: { kind: 'token', text: 'hi there', form: 'single-line' },
@@ -72,26 +74,35 @@ describe('root value shapes (§2.3, §7.4)', () => {
 
   it('a multi-line quoted token', () => {
     expect(doc('"""\n  hi\n  """')).toEqual({
+      imports: [],
       root: { annotations: [], coreValue: { kind: 'token', text: 'hi', form: 'multi-line' } },
     });
   });
 
   it('the void sentinel (§2.9)', () => {
-    expect(doc('_')).toEqual({ root: { annotations: [], coreValue: { kind: 'void' } } });
+    expect(doc('_')).toEqual({
+      imports: [],
+      root: { annotations: [], coreValue: { kind: 'void' } },
+    });
   });
 
   it('empty braces (§2.8), left unresolved at this layer', () => {
-    expect(doc('{}')).toEqual({ root: { annotations: [], coreValue: { kind: 'empty-brace' } } });
+    expect(doc('{}')).toEqual({
+      imports: [],
+      root: { annotations: [], coreValue: { kind: 'empty-brace' } },
+    });
   });
 
   it('empty array', () => {
     expect(doc('[]')).toEqual({
+      imports: [],
       root: { annotations: [], coreValue: { kind: 'array', elements: [] } },
     });
   });
 
   it('a record (§2.5), field order preserved', () => {
     expect(doc('{ b: 2 a: 1 }')).toEqual({
+      imports: [],
       root: {
         annotations: [],
         coreValue: {
@@ -100,19 +111,15 @@ describe('root value shapes (§2.3, §7.4)', () => {
             {
               name: 'b',
               value: {
-                value: {
-                  annotations: [],
-                  coreValue: { kind: 'token', text: '2', form: 'unquoted' },
-                },
+                annotations: [],
+                coreValue: { kind: 'token', text: '2', form: 'unquoted' },
               },
             },
             {
               name: 'a',
               value: {
-                value: {
-                  annotations: [],
-                  coreValue: { kind: 'token', text: '1', form: 'unquoted' },
-                },
+                annotations: [],
+                coreValue: { kind: 'token', text: '1', form: 'unquoted' },
               },
             },
           ],
@@ -123,6 +130,7 @@ describe('root value shapes (§2.3, §7.4)', () => {
 
   it('a map (§2.6), key is a full data-value', () => {
     expect(doc('{ WELCOME10 => "10%" }')).toEqual({
+      imports: [],
       root: {
         annotations: [],
         coreValue: {
@@ -134,10 +142,8 @@ describe('root value shapes (§2.3, §7.4)', () => {
                 coreValue: { kind: 'token', text: 'WELCOME10', form: 'unquoted' },
               },
               value: {
-                value: {
-                  annotations: [],
-                  coreValue: { kind: 'token', text: '10%', form: 'single-line' },
-                },
+                annotations: [],
+                coreValue: { kind: 'token', text: '10%', form: 'single-line' },
               },
             },
           ],
@@ -148,20 +154,15 @@ describe('root value shapes (§2.3, §7.4)', () => {
 
   it('an array (§2.7) of three whitespace-separated tokens', () => {
     expect(doc('[1 2 3]')).toEqual({
+      imports: [],
       root: {
         annotations: [],
         coreValue: {
           kind: 'array',
           elements: [
-            {
-              value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
-            },
-            {
-              value: { annotations: [], coreValue: { kind: 'token', text: '2', form: 'unquoted' } },
-            },
-            {
-              value: { annotations: [], coreValue: { kind: 'token', text: '3', form: 'unquoted' } },
-            },
+            { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
+            { annotations: [], coreValue: { kind: 'token', text: '2', form: 'unquoted' } },
+            { annotations: [], coreValue: { kind: 'token', text: '3', form: 'unquoted' } },
           ],
         },
       },
@@ -174,15 +175,15 @@ describe('root value shapes (§2.3, §7.4)', () => {
       (
         d.root.coreValue as {
           kind: 'record';
-          fields: readonly { name: string; value: { value: { coreValue: unknown } } }[];
+          fields: readonly { name: string; value: { coreValue: unknown } }[];
         }
       ).fields[0],
-    ).value.value.coreValue;
+    ).value.coreValue;
     expect(items).toMatchObject({
       kind: 'array',
       elements: [
-        { value: { coreValue: { kind: 'record', fields: [{ name: 'id' }] } } },
-        { value: { coreValue: { kind: 'record', fields: [{ name: 'id' }] } } },
+        { coreValue: { kind: 'record', fields: [{ name: 'id' }] } },
+        { coreValue: { kind: 'record', fields: [{ name: 'id' }] } },
       ],
     });
   });
@@ -191,6 +192,7 @@ describe('root value shapes (§2.3, §7.4)', () => {
 describe('annotations (§3.1)', () => {
   it('a valueless annotation', () => {
     expect(doc('@deprecated GOLD')).toEqual({
+      imports: [],
       root: {
         annotations: [{ name: 'deprecated' }],
         coreValue: { kind: 'token', text: 'GOLD', form: 'unquoted' },
@@ -200,6 +202,7 @@ describe('annotations (§3.1)', () => {
 
   it('an annotation with a value', () => {
     expect(doc('@expires:"2026-12-31" GOLD')).toEqual({
+      imports: [],
       root: {
         annotations: [
           {
@@ -250,41 +253,116 @@ describe('type references (§3.2)', () => {
   });
 });
 
-describe('document header (§2.2)', () => {
-  it('both !!id and !!schema', () => {
+describe('document header (§2.2, §3.3)', () => {
+  it('both !!id and !!import', () => {
     const d = doc(
-      '!!id:"https://example.com/orders/1042.tn"\n!!schema:"https://example.com/order.tn"\nAlice\n',
+      '!!id:"https://example.com/orders/1042.tn"\n!!import:"https://example.com/order.tn"\nAlice\n',
     );
     expect(d.id).toBe('https://example.com/orders/1042.tn');
-    expect(d.schema).toBe('https://example.com/order.tn');
+    expect(d.imports).toEqual(['https://example.com/order.tn']);
     expect(d.root.coreValue).toEqual({ kind: 'token', text: 'Alice', form: 'unquoted' });
   });
 
-  it('neither directive: id/schema are absent, never empty strings', () => {
+  it('several !!import directives are kept in header order (§2.2)', () => {
+    const d = doc('!!import:"https://example.com/a.tn"\n!!import:"https://example.com/b.tn"\n_');
+    expect(d.imports).toEqual(['https://example.com/a.tn', 'https://example.com/b.tn']);
+  });
+
+  it('no directive: id is absent, never an empty string, and imports is empty', () => {
     const d = doc('Alice');
     expect(d.id).toBeUndefined();
-    expect(d.schema).toBeUndefined();
+    expect(d.imports).toEqual([]);
     expect('id' in d).toBe(false);
-    expect('schema' in d).toBe(false);
   });
 
-  it('a schema-directive on a record field, not the document header', () => {
-    const d = doc('{ x: !!schema:"https://example.com/s.tn" !t 1 }');
-    const field = defined(
-      (d.root.coreValue as { kind: 'record'; fields: readonly { value: { schemaRef?: string } }[] })
-        .fields[0],
-    );
-    expect(field.value.schemaRef).toBe('https://example.com/s.tn');
+  it('a directive on a record field is a parse error: directives stand in the header alone (§2.2, §3.3)', () => {
+    expect(() => doc('{ x: !!import:"https://example.com/s.tn" !t 1 }')).toThrow(TsonParseError);
   });
 
-  it('!!meta routes through TsonUnsupportedDocumentError, never reaching this layer as a Document', () => {
-    expect(() => doc('!!meta:"https://example.com/m.tn"\n{}')).toThrow(
+  it("a root tagged '!schema' routes through TsonUnsupportedDocumentError, never reaching this layer as a Document (§1.5, §2.2)", () => {
+    expect(() => doc('!!id:"https://example.com/s.tn"\n!schema {}')).toThrow(
       TsonUnsupportedDocumentError,
     );
+    expect(() => doc('@doc:"a schema"\n!schema {}')).toThrow(TsonUnsupportedDocumentError);
+  });
+
+  it("'!meta.schema' does not classify: it is a data document tagged with a qualified name (§2.2)", () => {
+    expect(doc('!meta.schema {}').root.typeRef).toBe('meta.schema');
+  });
+
+  it('a resolved form, a document rooted !schema whose entries are values, reads as data on request (§8.1)', () => {
+    const { document } = runSync(
+      parseDocument(fromString('!schema { a => !meta.alias { target: text } }'), {
+        resolvedForm: true,
+      }),
+    );
+    expect(document.root.typeRef).toBe('schema');
+    expect(document.root.coreValue.kind).toBe('map');
+  });
+
+  it("a retired '!!meta' or '!!schema' in the header is a parse error naming '!!import' (§3.3)", () => {
+    expect(() => doc('!!meta:"https://example.com/m.tn"\n{}')).toThrow(/!!import/);
+    expect(() => doc('!!schema:"https://example.com/m.tn"\n{}')).toThrow(TsonParseError);
   });
 
   it('a directive argument that is not a URI is rejected (§3.3)', () => {
     expect(() => doc('!!id:"not a uri"\n_')).toThrow(TsonParseError);
+  });
+});
+
+describe('a reference is one core value, kept structured (§4, §7.4)', () => {
+  it('an application reduces to a reference value: its name and each argument as classified', () => {
+    const value = doc('{ t: pair<uuid "a b" 201> }').root.coreValue as {
+      fields: readonly { value: { coreValue: unknown } }[];
+    };
+    expect(defined(value.fields[0]).value.coreValue).toEqual({
+      kind: 'reference',
+      reference: {
+        kind: 'application',
+        name: 'pair',
+        arguments: [
+          { kind: 'reference', reference: { kind: 'name', name: 'uuid' } },
+          { kind: 'value', text: 'a b', form: 'single-line' },
+          { kind: 'value', text: '201', form: 'unquoted' },
+        ],
+      },
+    });
+  });
+
+  it('a nested application is a reference argument of its own', () => {
+    expect(doc('a<b<c>>').root.coreValue).toEqual({
+      kind: 'reference',
+      reference: {
+        kind: 'application',
+        name: 'a',
+        arguments: [
+          {
+            kind: 'reference',
+            reference: {
+              kind: 'application',
+              name: 'b',
+              arguments: [{ kind: 'reference', reference: { kind: 'name', name: 'c' } }],
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  it('a sibling reference reduces to its field name', () => {
+    expect(doc('kind! ').root.coreValue).toEqual({
+      kind: 'reference',
+      reference: { kind: 'sibling', field: 'kind' },
+    });
+  });
+
+  it('records the reference like any core value, at its own start position', () => {
+    const { document, positions } = parse('{ t: box<text> }');
+    const record = document.root.coreValue as {
+      fields: readonly { value: { coreValue: CoreValue } }[];
+    };
+    const reference = defined(record.fields[0]).value.coreValue;
+    expect(positions.get(reference)).toMatchObject({ line: 1, column: 6 });
   });
 });
 
@@ -334,11 +412,11 @@ describe('positions are identity-keyed, never structural (WeakMap<CoreValue, Pos
     const { document, positions } = parse('[42 42]');
     const array = document.root.coreValue as {
       kind: 'array';
-      elements: readonly { value: { coreValue: CoreValue } }[];
+      elements: readonly { coreValue: CoreValue }[];
     };
     const [first, second] = array.elements;
-    const firstValue = defined(first).value.coreValue;
-    const secondValue = defined(second).value.coreValue;
+    const firstValue = defined(first).coreValue;
+    const secondValue = defined(second).coreValue;
 
     // Same content, but two different object occurrences.
     expect(firstValue).toEqual(secondValue);
@@ -365,7 +443,7 @@ describe('positions are identity-keyed, never structural (WeakMap<CoreValue, Pos
     expect(positions.get(document.root.coreValue)).toBeDefined();
   });
 
-  it('only CoreValue occurrences are recorded — Document/DataValue/Annotation/ScopedValue carry no position of their own', () => {
+  it('only CoreValue occurrences are recorded — Document/DataValue/Annotation carry no position of their own', () => {
     const { positions } = parse('@deprecated { x: 1 }');
     const otherSource = createDataStream(fromString('{ x: 1 }'));
     runSync(otherSource.next()); // document-start
@@ -381,10 +459,10 @@ describe('the void sentinel is a value, not a missing key (§2.9)', () => {
     const d = doc('{ x: _ }');
     const record = d.root.coreValue as {
       kind: 'record';
-      fields: readonly { name: string; value: { value: { coreValue: CoreValue } } }[];
+      fields: readonly { name: string; value: { coreValue: CoreValue } }[];
     };
     expect(record.fields).toHaveLength(1);
-    expect(defined(record.fields[0]).value.value.coreValue).toEqual({ kind: 'void' });
+    expect(defined(record.fields[0]).value.coreValue).toEqual({ kind: 'void' });
   });
 
   it('"{}" is its own empty-brace core-value, never an empty record with zero fields', () => {
@@ -428,7 +506,7 @@ describe('shared reduction entry points (parseDataValue/parseCoreValue/parseAnno
     // stream produced something the grammar cannot" — TsonInternalError guards a bug in this
     // library, never a malformed document (a malformed document is always a TsonParseError,
     // raised by Tier 2 before Tier 3 ever sees an event for it).
-    const bogusEvent: TsonEvent = { kind: 'document-start', position: START };
+    const bogusEvent: TsonEvent = { kind: 'document-start', imports: [], position: START };
     function* bogus(): Task<TsonEvent> {
       if (false as boolean) yield NEED_INPUT; // never taken: keeps this a real Task<T> generator
       return bogusEvent;
@@ -457,7 +535,7 @@ describe('a bare "+" is a special token reserved by the schema grammar (§7.2.4,
   it('leaves a sign that begins an unquoted token alone: +5 and +0.5 read as before', () => {
     const root = doc('[+5 +0.5]').root.coreValue;
     if (root.kind !== 'array') throw new Error('expected an array');
-    expect(root.elements.map((element) => element.value.coreValue)).toEqual([
+    expect(root.elements.map((element) => element.coreValue)).toEqual([
       { kind: 'token', text: '+5', form: 'unquoted' },
       { kind: 'token', text: '+0.5', form: 'unquoted' },
     ]);

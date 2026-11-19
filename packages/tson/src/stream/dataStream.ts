@@ -38,29 +38,62 @@
  *
  * ## Header handling (§2.2)
  *
- * The document header is a fixed directive sequence needing at most two directives of lookahead
- * and no backtracking: an optional `!!id`, then — for a data document — an optional `!!schema`.
- * If the token past an optional `!!id` is `!!meta`, the document is a *schema* document, which
- * this stream (a Class 1, data-only path) does not support; it raises
- * {@link TsonUnsupportedDocumentError} rather than mis-parsing the schema-map body that follows.
+ * The header is one grammar for every document: an optional `!!id`, then any number of `!!import`s.
+ * It is judged here in full -- a retired directive (`!!meta`, `!!schema`), an unknown one and an
+ * `!!id` out of place are each refused, naming the rule they broke -- and it does not say what a
+ * document is. The root's tag does ({@link DataStream.rootTag}): a root tagged `!schema` is a schema
+ * document, any other a data document. Whether a document may be read at all is a
+ * conformance-class question this tier is below: the Class 1 callers refuse a schema document, and
+ * the schema parser requires one.
  *
- * `id`/`schema` are preserved on {@link DocumentStart} exactly as written, uninterpreted — this
- * module performs no URI syntax validation and no I/O, matching §3.3's "no parse-time I/O" and
- * the "raw URI arguments, uninterpreted" contract {@link DocumentStart} itself documents.
+ * `id`/`imports` are preserved on {@link DocumentStart} exactly as written, uninterpreted -- this
+ * module performs no I/O, matching §3.3's "no parse-time I/O" and the "raw URI arguments,
+ * uninterpreted" contract {@link DocumentStart} itself documents.
+ *
+ * ## References (§4, §7.4, §7.5)
+ *
+ * An unquoted token followed by an adjacent `<` heads a reference with arguments, and one followed
+ * by an adjacent `!` is a sibling reference. Each is assembled whole from its tokens and delivered
+ * as one {@link ReferenceEvent}, so every reader, skip and replay treats it as the one value it is.
  */
 
 import { isIriReference } from '../atom/network/uri.js';
 import { TsonInternalError, TsonParseError, TsonUnsupportedDocumentError } from '../core/errors.js';
 import { START, type Position } from '../core/position.js';
+import type {
+  ApplicationReference,
+  ReferenceArgument,
+  SiblingReference,
+} from '../ast/reference.js';
+import { isQualifiedName, isSiblingField } from '../atom/referenceGrammar.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import { toNfc } from '../unicode/nfc.js';
-import type { DocumentStart, EventSource, TsonEvent } from './event.js';
+import { isSchemaTag, type DocumentStart, type EventSource, type TsonEvent } from './event.js';
 
-/** Creates an {@link EventSource} over `input`. Nothing is read until {@link EventSource.next}/{@link EventSource.peek} is driven. */
-export function createDataStream(input: ByteInput): EventSource {
+/**
+ * An {@link EventSource} over a data document that can also say what kind of document it is
+ * without consuming anything.
+ */
+export interface DataStream extends EventSource {
+  /**
+   * The root value's tag, looked for past the root's leading annotations, consuming nothing -- what
+   * classifies a document (§2.2: a root tagged `!schema` is a schema document). `undefined` when the
+   * root carries no type annotation.
+   *
+   * The events read stay in this stream, unconsumed: the root is stepped only until the event after
+   * the root's annotations is ready, so a reader continuing from here receives every event as if
+   * nothing had looked. The root's core value is never entered, so a schema map, whose sugar no data
+   * frame reads, is classified without being parsed. What this reads beyond the header is the root's
+   * annotations, whose values are parsed to find their end.
+   */
+  rootTag(): Task<string | undefined>;
+}
+
+/** Creates a {@link DataStream} over `input`. Nothing is read until {@link EventSource.next}/{@link EventSource.peek} is driven. */
+export function createDataStream(input: ByteInput): DataStream {
   const state: StreamState = {
     lexer: createLexer(input),
     current: undefined,
@@ -74,7 +107,25 @@ export function createDataStream(input: ByteInput): EventSource {
   return {
     next: () => nextEvent(state),
     peek: () => peekEvent(state),
+    rootTag: () => rootTagOf(state),
   };
+}
+
+/**
+ * Refuses a schema document on a Class 1 path (§1.5, §2.2): consumes nothing, reads the root's tag
+ * past its annotations, and throws {@link TsonUnsupportedDocumentError} at `at` when it is
+ * `!schema`. The refusal is the caller's rather than the stream's, because the stream reads the
+ * header for everyone and judges nobody -- the schema parser sits on the same grammar and requires
+ * the tag this refuses.
+ */
+export function* requireDataDocument(stream: DataStream, at: Position): Task<void> {
+  if (isSchemaTag(yield* stream.rootTag())) {
+    throw new TsonUnsupportedDocumentError(
+      'this is a TSON schema document (its root is tagged !schema); a Class 1 (data-format-only) ' +
+        'processor does not support schema documents',
+      at,
+    );
+  }
 }
 
 // ── State ────────────────────────────────────────────────────────────────
@@ -107,16 +158,14 @@ interface StreamState {
 type Frame =
   /** Below the document root's `data-value`: checks for trailing content and closes the stream. */
   | { readonly kind: 'root' }
-  /** `*annotation [type-ref] core-value` (§2.3) at the current cursor position. */
+  /** `*annotation [tag] core-value` (§2.3) at the current cursor position. */
   | { readonly kind: 'data-value' }
-  /** One `"@" unquoted-token [ ":" data-value ]` (§3.1). */
+  /** One `"@" qualified-name-token [ ":" data-value ]` (§3.1). */
   | { readonly kind: 'annotation-only' }
   /** A bare `core-value` (§2.3) — no annotation/type-ref layer. */
   | { readonly kind: 'core-value' }
   /** Closes the most recently opened annotation. */
   | { readonly kind: 'annotation-end' }
-  /** `[ schema-directive ws ] data-value` (§2.3): a record field value, map entry value, or array element. */
-  | { readonly kind: 'scoped-value' }
   /** Repeatable step for every record field after the first (whose name/colon disambiguation already ran). */
   | { readonly kind: 'record' }
   /** Repeatable step for every map entry: `after-entry` awaits the next key or close, `awaiting-arrow` awaits `=>`. */
@@ -168,45 +217,82 @@ function* ensureStarted(state: StreamState): Task<void> {
   const docStart = (yield* peekToken(state)).start;
 
   let id: string | undefined;
-  if ((yield* check(state, 'directive-token')) && (yield* peekDirectiveName(state)) === 'id') {
-    id = yield* parseNamedDirective(state, 'id');
-  }
-
-  if ((yield* check(state, 'directive-token')) && (yield* peekDirectiveName(state)) === 'meta') {
-    const metaStart = (yield* peekToken(state)).start;
-    yield* parseNamedDirective(state, 'meta');
-    throw new TsonUnsupportedDocumentError(
-      'this is a TSON schema document (header contains !!meta); a Class 1 (data-format-only) ' +
-        'processor does not support schema documents',
-      metaStart,
-    );
-  }
-
-  let schema: string | undefined;
-  if (yield* check(state, 'directive-token')) {
+  const imports: string[] = [];
+  while (yield* check(state, 'directive-token')) {
     const bangbang = yield* peekToken(state);
     const name = yield* peekDirectiveName(state);
-    if (name === 'schema') {
-      schema = yield* parseNamedDirective(state, 'schema');
-    } else {
-      const second = yield* peekSecond(state);
-      const label = name ?? describe(second);
-      throw parseError(
-        bangbang,
-        `directive '!!${label}' is not permitted here (expected '!!schema' or the start of the document's value)`,
-      );
+    switch (name) {
+      case 'id':
+        if (id !== undefined || imports.length > 0) {
+          throw parseError(
+            bangbang,
+            "'!!id' must be the header's first directive, and appear once (§2.2)",
+          );
+        }
+        id = yield* parseNamedDirective(state, 'id');
+        break;
+      case 'import':
+        imports.push(yield* parseNamedDirective(state, 'import'));
+        break;
+      case 'meta':
+      case 'schema':
+        throw parseError(
+          bangbang,
+          `the '!!${name}' directive is retired: a document names the schemas it uses with ` +
+            "'!!import', and a schema document says what it is by tagging its root '!schema' (§2.2)",
+        );
+      case undefined:
+        // Not a directive name at all: the named parse says what is wrong with the token.
+        yield* parseNamedDirective(state, 'import');
+        break;
+      default:
+        throw parseError(
+          bangbang,
+          `unknown directive '!!${name}': a header holds an optional '!!id' then any number of '!!import's (§2.2)`,
+        );
     }
   }
 
   const event: DocumentStart = {
     kind: 'document-start',
     position: docStart,
+    imports,
     ...(id !== undefined ? { id } : {}),
-    ...(schema !== undefined ? { schema } : {}),
   };
   state.ready.push(event);
   pushFrame(state, { kind: 'root' });
   pushFrame(state, { kind: 'data-value' });
+}
+
+/** See {@link DataStream.rootTag}. */
+function* rootTagOf(state: StreamState): Task<string | undefined> {
+  yield* ensureStarted(state);
+  let scanned = 0;
+  let depth = 0;
+  for (;;) {
+    while (scanned < state.ready.length) {
+      const event: TsonEvent | undefined = state.ready[scanned];
+      scanned++;
+      if (event === undefined) break;
+      switch (event.kind) {
+        case 'document-start':
+          break;
+        case 'annotation-start':
+          depth++;
+          break;
+        case 'annotation-end':
+          depth--;
+          break;
+        default:
+          if (depth === 0) return event.kind === 'type-ref' ? event.name : undefined;
+      }
+    }
+    const top = state.frames[state.frames.length - 1];
+    // The root's core value is next with no tag before it: the root is untagged, and is not entered.
+    if (top === undefined || (depth === 0 && top.kind === 'core-value')) return undefined;
+    state.frames.pop();
+    yield* stepFrame(state, top);
+  }
 }
 
 // ── Cursor primitives over Lexer.nextToken() (bounded 2-token lookahead) ─
@@ -441,7 +527,29 @@ function* parseNamedDirective(state: StreamState, expectedName: string): Task<st
   return arg.text;
 }
 
-/** `"!" unquoted-token` (§3.2), rejecting the schema-only type-expression forms (array brackets, `<...>`, `?`) that have no role in a data value. */
+/**
+ * A qualified name at a naming position (§7.4): one identifier, or several joined by `.`, each
+ * matched as the identifier grammar matches a name (§7.7). A leading, trailing or doubled `.` and a
+ * segment that is no identifier are parse errors.
+ */
+function requireQualifiedName(name: Token, role: string, section: string): void {
+  if (isQualifiedName(name.text)) return;
+  const segments = name.text.split('.');
+  const bad = segments.find((segment) => !isIdentifierText(segment));
+  const why =
+    bad === undefined
+      ? ''
+      : bad.length === 0
+        ? ' (a segment between the dots is empty)'
+        : ` ('${bad}' is not an identifier)`;
+  throw parseError(
+    name,
+    `'${name.text}' is not a qualified name, so it names no ${role} (${section}, §7.7)${why}: ` +
+      "each segment starts with an XID_Start character and continues with XID_Continue or '-', in NFC",
+  );
+}
+
+/** `"!" qualified-name-token` (§3.2), rejecting the schema-only type-expression forms (array brackets, `<...>`, `?`) that have no role in a data value. */
 function* parseTypeRefName(state: StreamState): Task<string> {
   const bang = yield* advance(state);
   const name = yield* peekToken(state);
@@ -459,24 +567,25 @@ function* parseTypeRefName(state: StreamState): Task<string> {
   if (!adjacentTo(bang, name)) {
     throw parseError(name, "'!' must be immediately adjacent to the type name (no whitespace)");
   }
-  if (!isIdentifierText(name.text)) {
-    // §3.2: "the type name is an unquoted token whose text matches the identifier grammar
-    // (§7.7); `!42x` is a parse error, not a reference to an undeclared type."
-    throw parseError(
-      name,
-      `'${name.text}' is not an identifier, so it names no type (§3.2, §7.7): a name starts with ` +
-        `an XID_Start character and continues with XID_Continue or '-', in NFC`,
-    );
-  }
+  // §3.2: "the type name is an unquoted token whose text matches the qualified-name grammar
+  // (§7.7); `!42x` is a parse error, not a reference to an undeclared type."
+  requireQualifiedName(name, 'type', '§3.2');
   yield* advance(state); // name
 
   const next = yield* peekToken(state);
   if (next.type === 'less-than') {
     throw parseError(
       next,
-      `'!${name.text}<...>' applies type arguments, which is schema syntax and not available in a ` +
-        `data value (§3.2): a data type-ref is a bare name. Name the application in the schema ` +
-        `('my_type => ${name.text}<...>') and write '!my_type' here`,
+      `'!${name.text}<...>' applies type arguments, which is not available on a tag (§3.2): a ` +
+        `tag is '!' and a qualified name and nothing more. Write the application where a value ` +
+        `stands, or name it in the schema ('my_type => ${name.text}<...>') and write '!my_type' here`,
+    );
+  }
+  if (next.type === 'bang' && adjacentTo(name, next)) {
+    throw parseError(
+      next,
+      `'!${name.text}!' marks a type's name as a sibling reference, and a tag names a type (§7.4): ` +
+        "a tag is '!' and a qualified name, never a reference to a field",
     );
   }
   if (next.type === 'question' && adjacentTo(name, next)) {
@@ -494,6 +603,147 @@ function* parseTypeRefName(state: StreamState): Task<string> {
     );
   }
   return name.text;
+}
+
+// ── A reference (§4, §7.4, §7.5) ─────────────────────────────────────────
+
+/**
+ * Whether the token just consumed, `head`, opens a reference's argument list: the next token is a
+ * `<` adjacent to it. A `<` with whitespace before it opens nothing and is refused, as is one after
+ * a quoted token, which is never a reference (§7.5).
+ */
+function* opensArguments(state: StreamState, head: Token): Task<boolean> {
+  const next = yield* peekToken(state);
+  if (next.type !== 'less-than') return false;
+  if (!adjacentTo(head, next)) {
+    throw parseError(
+      next,
+      `'<' opens a reference's argument list only adjacent to the name it applies (§7.5): write ` +
+        `'${head.text}<...>' with no whitespace before '<'`,
+    );
+  }
+  if (head.type !== 'unquoted-token') {
+    throw parseError(
+      next,
+      "a quoted token is never a reference, so '<' cannot apply it: write the qualified name unquoted",
+    );
+  }
+  return true;
+}
+
+/**
+ * The reference `head` heads, its argument list next at the cursor: `"<" ws type-args ws ">"`, each
+ * argument a qualified name (a reference, itself possibly applied) or any other token (a value),
+ * separated as an array's elements are. Assembled whole, so the stream delivers one value.
+ */
+function* referenceArguments(state: StreamState, head: Token): Task<ApplicationReference> {
+  requireApplicable(head);
+  yield* advance(state); // '<'
+  const args: ReferenceArgument[] = [];
+  const first = yield* peekToken(state);
+  if (first.type === 'greater-than') {
+    throw parseError(
+      first,
+      `an argument list holds at least one argument, and '${head.text}<>' holds none`,
+    );
+  }
+  args.push(yield* referenceArgument(state));
+  while (yield* consumeSeparatorOrCloseCheck(state, 'greater-than')) {
+    args.push(yield* referenceArgument(state));
+  }
+  yield* expect(state, 'greater-than', "a reference's closing '>'");
+  return { kind: 'application', name: head.text, arguments: args };
+}
+
+/** `type-arg = application / token` (§7.4). */
+function* referenceArgument(state: StreamState): Task<ReferenceArgument> {
+  const t = yield* peekToken(state);
+  switch (t.type) {
+    case 'unquoted-token': {
+      yield* advance(state);
+      if (yield* marksSibling(state, t)) {
+        throw parseError(
+          t,
+          `a sibling reference ('${t.text}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not at a template argument`,
+        );
+      }
+      const applied = yield* opensArguments(state, t);
+      if (isQualifiedName(t.text)) {
+        return {
+          kind: 'reference',
+          reference: applied ? yield* referenceArguments(state, t) : { kind: 'name', name: t.text },
+        };
+      }
+      if (applied) requireApplicable(t);
+      return { kind: 'value', text: t.text, form: 'unquoted' };
+    }
+    case 'single-line-token':
+    case 'multi-line-token':
+      yield* advance(state);
+      yield* opensArguments(state, t);
+      return { kind: 'value', text: t.text, form: tokenFormOf(t.type) };
+    default:
+      throw mismatch(
+        "a reference's argument: a qualified name, an application or a token (no structure stands in an argument list in data)",
+        t,
+      );
+  }
+}
+
+/**
+ * Whether the token just consumed, `head`, is marked as a sibling reference (§7.4): the next token
+ * is a `!` adjacent to it. A prefix `!` is adjacent to the token after it and so is never adjacent
+ * to the one before. A quoted token is never a reference, so a `!` after one is refused.
+ */
+function* marksSibling(state: StreamState, head: Token): Task<boolean> {
+  const next = yield* peekToken(state);
+  // A multi-line token's end is past its closing line's terminator, where the next line starts, so
+  // a prefix `!` opening that line would read as adjacent to it.
+  if (next.type !== 'bang' || !adjacentTo(head, next) || head.type === 'multi-line-token') {
+    return false;
+  }
+  if (head.type !== 'unquoted-token') {
+    throw parseError(
+      next,
+      "a quoted token is never a reference, so '!' cannot mark it as a sibling reference: a " +
+        'sibling is a field named by one unquoted identifier',
+    );
+  }
+  return true;
+}
+
+/**
+ * The sibling reference `head` and the `!` next at the cursor spell: `sibling-ref = unquoted-token
+ * "!"`, the token one identifier (a single segment), and the `!` followed by whitespace (§7.5) or
+ * the end of the document. The whitespace is what keeps a postfix `!` apart from a prefix one, so
+ * `a!b`, `kind!}`, `kind!]` and `kind!?` are refused here. Assembled whole.
+ */
+function* siblingReference(state: StreamState, head: Token): Task<SiblingReference> {
+  if (!isSiblingField(head.text)) {
+    throw parseError(
+      head,
+      `'${head.text}!' is no sibling reference -- the '!' marks one field of the same record, ` +
+        'named by one identifier, a single segment (§7.4)',
+    );
+  }
+  const bang = yield* advance(state);
+  const next = yield* peekToken(state);
+  if (next.type !== 'eof' && adjacentTo(bang, next)) {
+    throw parseError(
+      next,
+      `a sibling reference's '!' must be followed by whitespace (§7.5): write '${head.text}! ' before ${describe(next)}`,
+    );
+  }
+  return { kind: 'sibling', field: head.text };
+}
+
+function requireApplicable(head: Token): void {
+  if (!isQualifiedName(head.text)) {
+    throw parseError(
+      head,
+      `'${head.text}' is no qualified name, so it takes no argument list -- each segment between the dots is an identifier (§7.7)`,
+    );
+  }
 }
 
 /**
@@ -535,9 +785,6 @@ function* stepFrame(state: StreamState, frame: Frame): Task<void> {
       return;
     case 'annotation-end':
       yield* stepAnnotationEnd(state);
-      return;
-    case 'scoped-value':
-      yield* stepScopedValue(state);
       return;
     case 'record':
       yield* stepRecord(state);
@@ -587,16 +834,9 @@ function* stepAnnotationOnly(state: StreamState): Task<void> {
       "'@' must be immediately adjacent to the annotation name (no whitespace)",
     );
   }
-  if (!isIdentifierText(name.text)) {
-    // §3.1's name is the same `identifier` the type-ref position takes (§7.7); a token that
-    // fails the grammar names no annotation, and the position admits no quoted form to fall
-    // back on.
-    throw parseError(
-      name,
-      `'${name.text}' is not an identifier, so it names no annotation (§3.1, §7.7): a name ` +
-        `starts with an XID_Start character and continues with XID_Continue or '-', in NFC`,
-    );
-  }
+  // §3.1's name is a qualified name (§7.4), matched segment by segment as a tag's is; a token that
+  // fails the grammar names no annotation, and the position admits no quoted form to fall back on.
+  requireQualifiedName(name, 'annotation', '§3.1');
   yield* advance(state); // name
 
   const afterName = yield* peekToken(state);
@@ -638,13 +878,34 @@ function* stepCoreValue(state: StreamState): Task<void> {
     case 'single-line-token':
     case 'multi-line-token':
       yield* advance(state);
-      state.ready.push({
-        kind: 'token',
-        text: t.text,
-        form: tokenFormOf(t.type),
-        position: t.start,
-      });
+      if (yield* opensArguments(state, t)) {
+        state.ready.push({
+          kind: 'reference',
+          reference: yield* referenceArguments(state, t),
+          position: t.start,
+        });
+      } else if (yield* marksSibling(state, t)) {
+        state.ready.push({
+          kind: 'reference',
+          reference: yield* siblingReference(state, t),
+          position: t.start,
+        });
+      } else {
+        state.ready.push({
+          kind: 'token',
+          text: t.text,
+          form: tokenFormOf(t.type),
+          position: t.start,
+        });
+      }
       return;
+    case 'directive-token': {
+      const name = yield* peekDirectiveName(state);
+      throw parseError(
+        t,
+        `directive '!!${name ?? ''}' is not permitted here: a directive stands only in the document header (§2.2, §3.3)`,
+      );
+    }
     default:
       throw parseError(
         t,
@@ -684,7 +945,17 @@ function* parseBraceValue(state: StreamState): Task<void> {
       state.ready.push({ kind: 'record-start', position: lbrace.start });
       state.ready.push({ kind: 'field-name', name, position: t1.start });
       pushFrame(state, { kind: 'record' });
-      pushFrame(state, { kind: 'scoped-value' });
+      pushFrame(state, { kind: 'data-value' });
+      return;
+    }
+    if (
+      (t2.type === 'less-than' || (t2.type === 'bang' && t1.type === 'unquoted-token')) &&
+      adjacentTo(t1, t2)
+    ) {
+      // A reference as the first key: the entry's own frame reads it, and the arrow after it.
+      state.ready.push({ kind: 'map-start', position: lbrace.start });
+      pushFrame(state, { kind: 'map', mode: 'awaiting-arrow' });
+      pushFrame(state, { kind: 'data-value' });
       return;
     }
     if (t2.type === 'map-arrow-token') {
@@ -699,7 +970,7 @@ function* parseBraceValue(state: StreamState): Task<void> {
       });
       state.ready.push({ kind: 'map-arrow', position: t2.start });
       pushFrame(state, { kind: 'map', mode: 'after-entry' });
-      pushFrame(state, { kind: 'scoped-value' });
+      pushFrame(state, { kind: 'data-value' });
       return;
     }
     throw parseError(
@@ -720,25 +991,6 @@ function* stepAnnotationEnd(state: StreamState): Task<void> {
   state.ready.push({ kind: 'annotation-end', position: t.start });
 }
 
-function* stepScopedValue(state: StreamState): Task<void> {
-  if (yield* check(state, 'directive-token')) {
-    const bangbang = yield* peekToken(state);
-    const name = yield* peekDirectiveName(state);
-    if (name !== 'schema') {
-      const second = yield* peekSecond(state);
-      const label = name ?? describe(second);
-      throw parseError(
-        bangbang,
-        `directive '!!${label}' is not permitted here (only '!!schema' is)`,
-      );
-    }
-    const pos = bangbang.start;
-    const uri = yield* parseNamedDirective(state, 'schema');
-    state.ready.push({ kind: 'schema-ref', uri, position: pos });
-  }
-  pushFrame(state, { kind: 'data-value' });
-}
-
 function* stepRecord(state: StreamState): Task<void> {
   if (yield* check(state, 'rbrace')) {
     const rb = yield* advance(state);
@@ -755,7 +1007,7 @@ function* stepRecord(state: StreamState): Task<void> {
   yield* expect(state, 'colon', "a record field's ':'");
   state.ready.push({ kind: 'field-name', name: name.text, position: name.start });
   pushFrame(state, { kind: 'record' });
-  pushFrame(state, { kind: 'scoped-value' });
+  pushFrame(state, { kind: 'data-value' });
 }
 
 function* stepMap(state: StreamState, mode: 'after-entry' | 'awaiting-arrow'): Task<void> {
@@ -778,7 +1030,7 @@ function* stepMap(state: StreamState, mode: 'after-entry' | 'awaiting-arrow'): T
   const arrow = yield* expect(state, 'map-arrow-token', "a map entry's '=>'");
   state.ready.push({ kind: 'map-arrow', position: arrow.start });
   pushFrame(state, { kind: 'map', mode: 'after-entry' });
-  pushFrame(state, { kind: 'scoped-value' });
+  pushFrame(state, { kind: 'data-value' });
 }
 
 function* stepArray(state: StreamState, first: boolean): Task<void> {
@@ -794,5 +1046,5 @@ function* stepArray(state: StreamState, first: boolean): Task<void> {
     return;
   }
   pushFrame(state, { kind: 'array', first: false });
-  pushFrame(state, { kind: 'scoped-value' });
+  pushFrame(state, { kind: 'data-value' });
 }

@@ -60,7 +60,7 @@ function personDataText(): string {
     ['active', atomNode(true)],
   ]);
   const root = recordNode(fields, 'person');
-  return `${write(root, { schema: PERSON_SCHEMA_ID })}\n`;
+  return `${write(root, { imports: [PERSON_SCHEMA_ID] })}\n`;
 }
 
 export interface InitExampleResult {

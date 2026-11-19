@@ -366,7 +366,7 @@ function requireStated(
   const body = instance.value.coreValue;
   if (body.kind === 'record') {
     for (const field of body.fields) {
-      const value = field.value.value.coreValue;
+      const value = field.value.coreValue;
       if (value.kind === 'token') stated.set(field.name, value.text);
     }
   }
@@ -428,7 +428,7 @@ function bindingField(value: DataValue, name: string): string {
     if (field.name !== name) {
       continue;
     }
-    const core = field.value.value.coreValue;
+    const core = field.value.coreValue;
     if (core.kind === 'token') {
       return core.text;
     }
@@ -454,7 +454,7 @@ function toEnumBody(value: DataValue): EnumBody {
   }
   const members: string[] = [];
   for (const element of value.coreValue.elements) {
-    const core = element.value.coreValue;
+    const core = element.coreValue;
     if (core.kind !== 'token') {
       throw new TsonInternalError(`expected a token enum member, found ${core.kind}`);
     }

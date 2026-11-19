@@ -16,10 +16,9 @@ import { voidNode, mapNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
-  refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
-  skipScopedValue,
+  skipDataValue,
 } from './grammar.js';
 import { valuesEqual } from './equality.js';
 import { declareOrder } from '../../value/orderedness.js';
@@ -36,9 +35,7 @@ function keySegmentFor(e: TsonEvent): string {
 
 /**
  * Builds a `map` tree reader for one compiled schema entry. `resolveType` resolves the key and
- * value types' own readers, once, at construction; `isScopedType` answers §7.8's typed-position
- * question for the value type at that same step -- a map key is a plain `data-value`, never a
- * `scoped-value` (§2.6), so it never carries a nested `!!schema` for this to guard.
+ * value types' own readers, once, at construction.
  *
  * `keysAreNames` is true when the key type is an identifier family: its keys are then one naming
  * scope (§11.4), and a key reading alike with an earlier one is reported (`CONFUSABLE_NAMES`) at
@@ -53,12 +50,10 @@ export function mapTreeReader(
   body: MapBody,
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
-  isScopedType: (typeName: string) => boolean,
   keysAreNames = false,
 ): TypeReader<Value> {
   const keyParser = resolveType(body.keyType.name);
   const valueParser = resolveType(body.valueType.name);
-  const scopedValue = isScopedType(body.valueType.name);
 
   function validateSize(size: number, ctx: ReadContext): void {
     const count = BigInt(size);
@@ -118,7 +113,7 @@ export function mapTreeReader(
           '_',
         );
         yield* ctx.next(); // map-arrow
-        yield* skipScopedValue(ctx); // no meaningful key to associate the value with -- discard it
+        yield* skipDataValue(ctx); // no meaningful key to associate the value with -- discard it
         count += 1;
         continue;
       }
@@ -147,7 +142,6 @@ export function mapTreeReader(
       }
       yield* ctx.next(); // map-arrow
       const valueCtx = ctx.field(keySegment);
-      yield* refuseUnscopedSchemaRef(valueCtx, scopedValue, body.valueType.name);
       const valuePeek = yield* ctx.peek();
       let value: Value;
       if (valuePeek.kind === 'void') {

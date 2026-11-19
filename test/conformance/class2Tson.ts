@@ -1,49 +1,49 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import type { Tson } from '../../packages/tson/src/config.js';
 import { standardLibrary } from '../../packages/tson/src/stdlib/index.js';
 
+import { CORPUS_SCHEMA_PREFIX } from './bundled-ids.js';
+
 /**
- * A fresh Class 2 {@link Tson} for one vector: the standard library (meta-kernel, meta.tn,
- * core.tn) plus the corpus fixture schemas that vector's `subject` reaches, transitively.
+ * A fresh Class 2 {@link Tson} for one vector: the standard library (the six bundled schemas) plus
+ * the corpus schemas that vector's `subject` reaches, transitively.
  *
  * **A fresh instance per vector, always** (`newClass2Tson()` builds one, never a shared
  * singleton) -- the reference implementation's own `Class2ConformanceSuiteTest.newTson()` note
  * applies here too: "each holds its own schema registry, and a vector registering a schema must
  * not be able to satisfy the next one's reference to it".
  *
- * **Fixtures are resolved on demand, per vector** (RUNNER.md, "Schema-governed vectors": a runner
- * serves a fixture from its checkout and "each one resolves on its own"). The reference serves
- * `https://tson.io/test-suite/schemas/...` lazily through its schema access, so a fixture that
- * fails to resolve fails exactly the vectors that import it. Here the reach is read off the
- * subject -- the spliced `!!schema`/`!!import` directives name a fixture by its full identity --
- * and off each reached fixture's own `!!import`/`!!schema` headers, so the topology stays a rule
- * about which files exist rather than a table.
+ * **The corpus's schemas are served by path** (RUNNER.md, "Every subject is a complete document"):
+ * `https://tson.io/test-suite/schemas/<path>` is the file `schemas/<path>` of the checkout, a rule
+ * rather than a table, and any other identity a subject imports is a bundled schema this processor
+ * already holds. The reach is read off the subject's own text and off each reached schema's own
+ * `!!import` headers, so the topology stays a rule about which files exist. Each reached schema
+ * resolves on its own; one that does not fails exactly the vectors that import it.
  *
- * **No {@link SchemaSource} is wired up for the corpus's fixtures, deliberately.**
+ * **No {@link SchemaSource} is wired up for the corpus's schemas, deliberately.**
  * `config.ts`'s own top note is explicit that `Tson.resolveSchema` "resolves only against what is
- * already registered... never fetches", so a `SchemaSource` would still need every reached fixture
+ * already registered... never fetches", so a `SchemaSource` would still need every reached schema
  * preloaded before a subject naming one could resolve. Registering the reached files directly,
- * dependencies first, is `config.ts`'s own "simpler" alternative. A reached fixture that never
+ * dependencies first, is `config.ts`'s own "simpler" alternative. A reached schema that never
  * resolves throws here with its real error, which is what fails the vectors that need it.
  */
 export function newClass2Tson(subject: Uint8Array): Tson {
   const tson = standardLibrary();
-  if (!existsSync(FIXTURES_ROOT)) {
+  if (!existsSync(SCHEMAS_ROOT)) {
     return tson;
   }
-  const available = readdirSync(FIXTURES_ROOT, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.tn'))
-    .map((entry) => entry.name);
 
   const reached = new Map<string, Uint8Array>();
   const queue: string[] = [new TextDecoder().decode(subject)];
   for (let text = queue.pop(); text !== undefined; text = queue.pop()) {
-    for (const name of available) {
-      if (reached.has(name) || !text.includes(`${FIXTURE_IDENTITY_PREFIX}${name}`)) continue;
-      const bytes = readFileSync(`${FIXTURES_ROOT}/${name}`);
-      reached.set(name, bytes);
+    for (const path of corpusPathsIn(text)) {
+      if (reached.has(path)) continue;
+      const file = `${SCHEMAS_ROOT}/${path}`;
+      if (!existsSync(file)) continue; // not a schema the corpus serves: a bundled identity, or none
+      const bytes = readFileSync(file);
+      reached.set(path, bytes);
       queue.push(new TextDecoder().decode(bytes));
     }
   }
@@ -68,15 +68,26 @@ export function newClass2Tson(subject: Uint8Array): Tson {
         ([name, error]) => `${name}: ${error instanceof Error ? error.message : String(error)}`,
       );
       throw new Error(
-        `a fixture schema this vector imports does not resolve -- ${causes.join('; ')}`,
+        `a corpus schema this vector imports does not resolve -- ${causes.join('; ')}`,
       );
     }
   }
   return tson;
 }
 
-const FIXTURE_IDENTITY_PREFIX = 'https://tson.io/test-suite/schemas/fixtures/';
+/** Every path under the corpus's schema prefix that `text` names, in order of appearance. */
+function corpusPathsIn(text: string): string[] {
+  const paths: string[] = [];
+  for (let at = text.indexOf(CORPUS_SCHEMA_PREFIX); at >= 0;) {
+    const start = at + CORPUS_SCHEMA_PREFIX.length;
+    const end = text.indexOf('"', start);
+    if (end < 0) break;
+    paths.push(text.slice(start, end));
+    at = text.indexOf(CORPUS_SCHEMA_PREFIX, end);
+  }
+  return paths;
+}
 
-const FIXTURES_ROOT = fileURLToPath(
-  new URL('../../.references/ltr8-io-tson-test-suite/schemas/fixtures', import.meta.url),
+const SCHEMAS_ROOT = fileURLToPath(
+  new URL('../../.references/ltr8-io-tson-test-suite/schemas', import.meta.url),
 );

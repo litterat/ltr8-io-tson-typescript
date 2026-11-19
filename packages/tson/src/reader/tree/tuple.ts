@@ -23,24 +23,20 @@ import { voidNode, tupleNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
 import {
   describeEvent,
-  refuseUnscopedSchemaRef,
   skipAnnotationsAndTypeRef,
   skipCoreValue,
-  skipScopedValue,
+  skipDataValue,
 } from './grammar.js';
 import { abandonedValue, type TreeTypeResolver } from './support.js';
 
 interface CompiledSlot {
   readonly schema: TupleElement;
   readonly parser: TypeReader<Value>;
-  /** Whether this slot's own declared type resolves to a `scoped` instance (§7.8). */
-  readonly scoped: boolean;
 }
 
 /**
  * Builds a `tuple` tree reader for one compiled schema entry. `resolveType` resolves every
- * position's own reader once, at construction; `isScopedType` answers §7.8's typed-position
- * question for that same position's declared type, at the same step.
+ * position's own reader once, at construction.
  */
 export function tupleTreeReader(
   name: string,
@@ -48,12 +44,10 @@ export function tupleTreeReader(
   body: TupleBody,
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
-  isScopedType: (typeName: string) => boolean,
 ): TypeReader<Value> {
   const slots: readonly CompiledSlot[] = body.elements.map((schema) => ({
     schema,
     parser: resolveType(schema.elementType.name),
-    scoped: isScopedType(schema.elementType.name),
   }));
 
   function* expectTupleStart(ctx: ReadContext): Task<boolean> {
@@ -93,7 +87,7 @@ export function tupleTreeReader(
           );
           reportedExtra = true;
         }
-        yield* skipScopedValue(ctx); // ref included -- no declared position to admit or refuse one
+        yield* skipDataValue(ctx);
         index += 1;
         continue;
       }
@@ -104,7 +98,6 @@ export function tupleTreeReader(
         );
       }
       const slotCtx = ctx.index(index);
-      yield* refuseUnscopedSchemaRef(slotCtx, slot.scoped, slot.schema.elementType.name);
       const elementPeek = yield* ctx.peek();
       if (elementPeek.kind === 'void') {
         yield* ctx.next(); // consume the void event regardless of voidability

@@ -463,18 +463,18 @@ describe('round trip: parse, write, parse, compare', () => {
   it('has one spelling: the document form is the header plus exactly the value form', () => {
     // `write/index.ts`'s own contract -- canonical and readable are the same call, so there is no
     // second entry point here whose whitespace could differ from this one's.
-    const document = tsonDocument(firstValue, 'test://reading-1', 'test://catalog.tn');
+    const document = tsonDocument(firstValue, 'test://reading-1', ['test://catalog.tn']);
     expect(writeTree(document)).toBe(
-      `!!id:"test://reading-1"\n!!schema:"test://catalog.tn"\n${writeTreeValue(firstValue)}`,
+      `!!id:"test://reading-1"\n!!import:"test://catalog.tn"\n${writeTreeValue(firstValue)}`,
     );
   });
 
   it('a written document keeps its header readable and its value equal on re-read', () => {
-    const document = tsonDocument(firstValue, 'test://reading-1', 'test://catalog.tn');
+    const document = tsonDocument(firstValue, 'test://reading-1', ['test://catalog.tn']);
     const text = writeTree(document);
     const reparsed = runSync(parseDocument(fromBytes(bytes(text))));
     expect(reparsed.document.id).toBe('test://reading-1');
-    expect(reparsed.document.schema).toBe('test://catalog.tn');
+    expect(reparsed.document.imports).toEqual(['test://catalog.tn']);
     const back = validate(compiled, 'reading', bytes(text));
     expect(back.diagnostics).toEqual([]);
     expect(back.value).toEqual(EXPECTED_TREE);

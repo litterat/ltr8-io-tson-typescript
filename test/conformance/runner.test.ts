@@ -14,7 +14,6 @@ import { parseDocument as parseDataDocument } from '../../packages/tson/src/comp
 import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
 import { UTS39_VERSION } from '../../packages/tson/src/unicode/uts39.js';
 
-import { spliceSchemaDirective, spliceSchemaDirectives } from './bundled-ids.js';
 import { checkIdentityVector } from './identity.js';
 import { checkLinkVector } from './link.js';
 import { lexTokens } from './lexer.js';
@@ -142,30 +141,6 @@ function bestEffortSidecarSummary(vector: Vector<string>): SidecarSummary | unde
   }
 }
 
-/**
- * Splices a schema-governed vector's real `!!meta`/`!!import`/`!!schema` directives in, per
- * `bundled-ids.ts`. `meta`/`import` govern a schema-document subject (`class2/schema/` and
- * `class2/link/`); `schema` governs a data-document subject (`class2/validate/`) -- the two
- * headers are different grammars, so exactly one of the two splice functions ever applies, never
- * both. A no-op for every Class 1 vector, none of which declares either field yet.
- */
-function resolveSchemaDirectives(subject: Uint8Array, summary: SidecarSummary): Uint8Array {
-  const { meta, schema } = summary;
-  if (meta === undefined && schema === undefined) {
-    return subject;
-  }
-  const raw = new TextDecoder('utf-8', { fatal: true }).decode(subject);
-  let spliced: string;
-  if (meta !== undefined) {
-    spliced = spliceSchemaDirectives(raw, meta, summary.import ?? []);
-  } else if (schema !== undefined) {
-    spliced = spliceSchemaDirective(raw, schema);
-  } else {
-    throw new Error('unreachable: checked above that meta or schema is present');
-  }
-  return new TextEncoder().encode(spliced);
-}
-
 /** One `it` per vector in `vectors`, registered under whatever `describe` block is currently open. */
 function registerVectors<L extends string>(
   vectors: readonly Vector<L>[],
@@ -203,9 +178,9 @@ function registerVectors<L extends string>(
       // vectors (malformed UTF-8 among them) only exist as raw bytes.
       const subjectBytes = readFileSync(vector.subjectPath);
       const sidecarRaw = readFileSync(vector.sidecarPath);
-      const summary = peekSidecarSummary(sidecarRaw);
-      const subject = resolveSchemaDirectives(subjectBytes, summary);
-      check(vector, subject, sidecarRaw);
+      // Every subject is a complete document (RUNNER.md): it is handed over exactly as on disk, its
+      // own header naming whatever it imports.
+      check(vector, subjectBytes, sidecarRaw);
     });
   }
 }
@@ -350,8 +325,8 @@ function checkParserVector(vector: Vector, subject: Uint8Array, sidecar: ParserS
       );
       return;
     case 'schema-document':
-      // A header containing !!meta identifies a schema document: a Class 1 processor must
-      // recognise and reject it with a distinct diagnostic, never attempt to parse it as data.
+      // A root tagged !schema identifies a schema document: a Class 1 processor must recognise
+      // and reject it with a distinct diagnostic, never attempt to parse it as data.
       expect(() => parseDocument(subject)).toThrow(TsonUnsupportedDocumentError);
       return;
   }

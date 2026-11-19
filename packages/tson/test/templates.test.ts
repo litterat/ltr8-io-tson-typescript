@@ -75,19 +75,19 @@ function field(
  * substitution and closure end to end rather than mocking the bound body away.
  */
 function readTypeRefField(record: RecordValue, name: string): TypeRef {
-  const value = record.fields.find((f) => f.name === name)?.value.value.coreValue;
+  const value = record.fields.find((f) => f.name === name)?.value.coreValue;
   if (value === undefined) throw new Error(`missing '${name}'`);
   if (value.kind === 'token') return { name: value.text, arguments: [], annotations: [] };
   const nameField = (value as RecordValue).fields.find((f) => f.name === 'name');
   const argsField = (value as RecordValue).fields.find((f) => f.name === 'arguments');
-  const head = (nameField?.value.value.coreValue as TokenValue).text;
+  const head = (nameField?.value.coreValue as TokenValue).text;
   const args: TypeArgument[] = [];
-  if (argsField?.value.value.coreValue.kind === 'array') {
-    for (const element of argsField.value.value.coreValue.elements) {
-      const argRecord = element.value.coreValue as RecordValue;
+  if (argsField?.value.coreValue.kind === 'array') {
+    for (const element of argsField.value.coreValue.elements) {
+      const argRecord = element.coreValue as RecordValue;
       const valueMember = argRecord.fields.find((f) => f.name === 'value');
       if (valueMember !== undefined) {
-        const token = valueMember.value.value.coreValue as TokenValue;
+        const token = valueMember.value.coreValue as TokenValue;
         args.push({
           kind: 'value',
           value: { text: token.text, form: metaFormOfLexer(token.form) },
@@ -102,7 +102,7 @@ function readTypeRefField(record: RecordValue, name: string): TypeRef {
 
 /** Reads one wire boolean member (`optional`/`voidable`), `false` when absent -- §8.1's own default. */
 function readBooleanField(record: RecordValue, name: string): boolean {
-  const wire = record.fields.find((f) => f.name === name)?.value.value.coreValue;
+  const wire = record.fields.find((f) => f.name === name)?.value.coreValue;
   return wire?.kind === 'token' && wire.text === 'true';
 }
 
@@ -111,17 +111,17 @@ function testMetaReader(type: string, value: DataValue): Top {
   if (type === 'record') {
     const fieldsField = record.fields.find((f) => f.name === 'fields');
     const fields: NamedField[] = [];
-    if (fieldsField?.value.value.coreValue.kind === 'map') {
-      for (const mapEntry of fieldsField.value.value.coreValue.entries) {
-        const fieldRecord = mapEntry.value.value.coreValue as RecordValue;
+    if (fieldsField?.value.coreValue.kind === 'map') {
+      for (const mapEntry of fieldsField.value.coreValue.entries) {
+        const fieldRecord = mapEntry.value.coreValue as RecordValue;
         const fname = (mapEntry.key.coreValue as TokenValue).text;
         const ftype = readTypeRefField(fieldRecord, 'type');
-        const roleWire = fieldRecord.fields.find((f) => f.name === 'role')?.value.value.coreValue;
+        const roleWire = fieldRecord.fields.find((f) => f.name === 'role')?.value.coreValue;
         const role: RecordField['role'] =
           roleWire?.kind === 'token' && (roleWire.text === 'DEFAULT' || roleWire.text === 'FIXED')
             ? roleWire.text
             : 'FREE';
-        const valueWire = fieldRecord.fields.find((f) => f.name === 'value')?.value.value.coreValue;
+        const valueWire = fieldRecord.fields.find((f) => f.name === 'value')?.value.coreValue;
         const fieldValue =
           valueWire?.kind === 'token'
             ? { text: valueWire.text, form: metaFormOfLexer(valueWire.form) }
@@ -438,10 +438,8 @@ describe('a use-site application of an open-instance template is its expansion (
                 {
                   name: 'element_type',
                   value: {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
-                    },
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
                   },
                 },
               ],
@@ -480,10 +478,8 @@ describe('a use-site application of an open-instance template is its expansion (
                 {
                   name: 'element_type',
                   value: {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
-                    },
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
                   },
                 },
               ],
@@ -520,10 +516,8 @@ describe('a use-site application of an open-instance template is its expansion (
                 {
                   name: 'element_type',
                   value: {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
-                    },
+                    annotations: [],
+                    coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
                   },
                 },
               ],
@@ -570,81 +564,67 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
                 {
                   name: 'target',
                   value: {
-                    value: {
-                      annotations: [],
-                      coreValue: {
-                        kind: 'record',
-                        fields: [
-                          {
-                            name: 'name',
-                            value: {
-                              value: {
-                                annotations: [],
-                                coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
-                              },
-                            },
+                    annotations: [],
+                    coreValue: {
+                      kind: 'record',
+                      fields: [
+                        {
+                          name: 'name',
+                          value: {
+                            annotations: [],
+                            coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
                           },
-                          {
-                            name: 'arguments',
-                            value: {
-                              value: {
-                                annotations: [],
-                                coreValue: {
-                                  kind: 'array',
-                                  elements: [
-                                    {
-                                      value: {
-                                        annotations: [],
-                                        coreValue: {
-                                          kind: 'record',
-                                          fields: [
-                                            {
-                                              name: 'name',
-                                              value: {
-                                                value: {
-                                                  annotations: [],
-                                                  coreValue: {
-                                                    kind: 'token',
-                                                    text: 'uuid',
-                                                    form: 'unquoted',
-                                                  },
-                                                },
-                                              },
-                                            },
-                                          ],
+                        },
+                        {
+                          name: 'arguments',
+                          value: {
+                            annotations: [],
+                            coreValue: {
+                              kind: 'array',
+                              elements: [
+                                {
+                                  annotations: [],
+                                  coreValue: {
+                                    kind: 'record',
+                                    fields: [
+                                      {
+                                        name: 'name',
+                                        value: {
+                                          annotations: [],
+                                          coreValue: {
+                                            kind: 'token',
+                                            text: 'uuid',
+                                            form: 'unquoted',
+                                          },
                                         },
                                       },
-                                    },
-                                    {
-                                      value: {
-                                        annotations: [],
-                                        coreValue: {
-                                          kind: 'record',
-                                          fields: [
-                                            {
-                                              name: 'name',
-                                              value: {
-                                                value: {
-                                                  annotations: [],
-                                                  coreValue: {
-                                                    kind: 'token',
-                                                    text: 'B',
-                                                    form: 'unquoted',
-                                                  },
-                                                },
-                                              },
-                                            },
-                                          ],
-                                        },
-                                      },
-                                    },
-                                  ],
+                                    ],
+                                  },
                                 },
-                              },
+                                {
+                                  annotations: [],
+                                  coreValue: {
+                                    kind: 'record',
+                                    fields: [
+                                      {
+                                        name: 'name',
+                                        value: {
+                                          annotations: [],
+                                          coreValue: {
+                                            kind: 'token',
+                                            text: 'B',
+                                            form: 'unquoted',
+                                          },
+                                        },
+                                      },
+                                    ],
+                                  },
+                                },
+                              ],
                             },
                           },
-                        ],
-                      },
+                        },
+                      ],
                     },
                   },
                 },
@@ -689,58 +669,48 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
                 {
                   name: 'target',
                   value: {
-                    value: {
-                      annotations: [],
-                      coreValue: {
-                        kind: 'record',
-                        fields: [
-                          {
-                            name: 'name',
-                            value: {
-                              value: {
-                                annotations: [],
-                                coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
-                              },
-                            },
+                    annotations: [],
+                    coreValue: {
+                      kind: 'record',
+                      fields: [
+                        {
+                          name: 'name',
+                          value: {
+                            annotations: [],
+                            coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
                           },
-                          {
-                            name: 'arguments',
-                            value: {
-                              value: {
-                                annotations: [],
-                                coreValue: {
-                                  kind: 'array',
-                                  elements: [
-                                    {
-                                      value: {
-                                        annotations: [],
-                                        coreValue: {
-                                          kind: 'record',
-                                          fields: [
-                                            {
-                                              name: 'name',
-                                              value: {
-                                                value: {
-                                                  annotations: [],
-                                                  coreValue: {
-                                                    kind: 'token',
-                                                    text: 'T',
-                                                    form: 'unquoted',
-                                                  },
-                                                },
-                                              },
-                                            },
-                                          ],
+                        },
+                        {
+                          name: 'arguments',
+                          value: {
+                            annotations: [],
+                            coreValue: {
+                              kind: 'array',
+                              elements: [
+                                {
+                                  annotations: [],
+                                  coreValue: {
+                                    kind: 'record',
+                                    fields: [
+                                      {
+                                        name: 'name',
+                                        value: {
+                                          annotations: [],
+                                          coreValue: {
+                                            kind: 'token',
+                                            text: 'T',
+                                            form: 'unquoted',
+                                          },
                                         },
                                       },
-                                    },
-                                  ],
+                                    ],
+                                  },
                                 },
-                              },
+                              ],
                             },
                           },
-                        ],
-                      },
+                        },
+                      ],
                     },
                   },
                 },
@@ -923,7 +893,7 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
     }
     const record = value.coreValue as RecordValue;
     const readBound = (name: string): bigint | undefined => {
-      const field = record.fields.find((f) => f.name === name)?.value.value.coreValue;
+      const field = record.fields.find((f) => f.name === name)?.value.coreValue;
       return field === undefined ? undefined : BigInt((field as TokenValue).text);
     };
     const min = readBound('min');
@@ -948,19 +918,15 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
               {
                 name: 'min',
                 value: {
-                  value: {
-                    annotations: [],
-                    coreValue: { kind: 'token', text: 'N', form: 'unquoted' },
-                  },
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'N', form: 'unquoted' },
                 },
               },
               {
                 name: 'max',
                 value: {
-                  value: {
-                    annotations: [],
-                    coreValue: { kind: 'token', text: '10', form: 'unquoted' },
-                  },
+                  annotations: [],
+                  coreValue: { kind: 'token', text: '10', form: 'unquoted' },
                 },
               },
             ],
@@ -1136,17 +1102,13 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
               {
                 name: 'members',
                 value: {
-                  value: {
-                    annotations: [],
-                    coreValue: {
-                      kind: 'array',
-                      elements: (['a', 'b', 'M'] as const).map((text) => ({
-                        value: {
-                          annotations: [],
-                          coreValue: { kind: 'token', text, form: 'unquoted' },
-                        },
-                      })),
-                    },
+                  annotations: [],
+                  coreValue: {
+                    kind: 'array',
+                    elements: (['a', 'b', 'M'] as const).map((text) => ({
+                      annotations: [],
+                      coreValue: { kind: 'token', text, form: 'unquoted' },
+                    })),
                   },
                 },
               },
@@ -1164,11 +1126,11 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
       return testMetaReader(type, value);
     }
     const record = value.coreValue as RecordValue;
-    const membersField = record.fields.find((f) => f.name === 'members')?.value.value.coreValue;
+    const membersField = record.fields.find((f) => f.name === 'members')?.value.coreValue;
     const members: string[] = [];
     if (membersField?.kind === 'array') {
       for (const element of membersField.elements) {
-        members.push((element.value.coreValue as TokenValue).text);
+        members.push((element.coreValue as TokenValue).text);
       }
     }
     return { kind: 'enum', members, nameType: 'identifier' } satisfies EnumBody;
@@ -1293,7 +1255,7 @@ describe('closedFormName', () => {
     // the base case the merge pass falls back to when nothing needs reducing.
     const bindingFields = fields.map((f) => ({
       name: f.name,
-      value: { value: { annotations: [], coreValue: refValue(f.type) } },
+      value: { annotations: [], coreValue: refValue(f.type) },
     }));
     expect(materialiser.closedFormName('array', bindingFields)).toBe(
       materialiser.closedFormName('array', bindingFields),
@@ -1318,10 +1280,8 @@ describe('closedFormName', () => {
       {
         name: 'element_type',
         value: {
-          value: {
-            annotations: [],
-            coreValue: refValue({ name: 'box', arguments: [ref('text')], annotations: [] }),
-          },
+          annotations: [],
+          coreValue: refValue({ name: 'box', arguments: [ref('text')], annotations: [] }),
         },
       },
     ];
@@ -1336,10 +1296,8 @@ describe('closedFormName', () => {
       {
         name: 'element_type',
         value: {
-          value: {
-            annotations: [],
-            coreValue: { kind: 'token', text: boxedTextName, form: 'unquoted' },
-          },
+          annotations: [],
+          coreValue: { kind: 'token', text: boxedTextName, form: 'unquoted' },
         },
       },
     ]);

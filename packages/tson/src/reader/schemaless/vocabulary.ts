@@ -1,16 +1,19 @@
 /**
  * The built-in type vocabulary's name -> {@link AtomType} table (§5) -- the port of
- * `atom/BuiltinTypeVocabulary.java`. A hardcoded transliteration of `spec/m/core.tn`'s own
- * instances, because the vocabulary is a fixed, closed set (§5.1) a Class 1 processor never
- * resolves via schema machinery -- exactly the property that lets schemaless reading skip the
- * compiler entirely (`reader/schemaless/tree.ts`'s own top note).
+ * `atom/BuiltinTypeVocabulary.java`. A hardcoded transliteration of the instances the bundled
+ * libraries declare -- the kernel (`meta.tn`: `boolean`, `text`, `bytes`, `iri`, `iri_reference`,
+ * `integer`, `int64`), `numeric.tn`, `temporal.tn` and `net.tn` (`uuid`, `uri`, `uri_reference`,
+ * `email` and the network rows) -- because the vocabulary is a fixed, closed set (§5.1) a Class 1
+ * processor never resolves via schema machinery -- exactly the property that lets schemaless
+ * reading skip the compiler entirely (`reader/schemaless/tree.ts`'s own top note). Each name
+ * denotes the type its library declares under it, so a document that moves under a schema
+ * importing that library keeps the meaning it had (§5.5's library column).
  *
- * **Every entry mirrors one `core.tn` or `net.tn` line verbatim** (`spec/m/core.tn` and
- * `spec/m/net.tn`, the vendored copies this package ships and is checked against by
- * `vendored-spec.test.ts`), not an independently-derived "sensible default":
- * `int32 => !integer ^ { size: { bits: 32  signed: true } }`,
+ * **Every entry mirrors one library line verbatim** (`spec/m/*.tn`, the vendored copies this
+ * package ships and is checked against by `vendored-spec.test.ts`), not an independently-derived
+ * "sensible default": `int32 => !integer ^ { size: { bits: 32  signed: true } }`,
  * `float32 => !float_type { format: BINARY32 }`, `bytes => !bytes_type { encoding: BASE64 }`, and
- * so on. Where `core.tn` applies a bare constructor with no refinement (`uuid => !uuid_type {}`),
+ * so on. Where a library applies a bare constructor with no refinement (`uuid => !uuid_type {}`),
  * the matching entry here passes a constraints record with every optional field absent.
  *
  * **`bytes` is the one binary entry.** `!bytes` is Part 1's only binary annotation (§5.3): an
@@ -35,13 +38,13 @@
  *
  * **Deliberately incomplete otherwise, matching the Java reference's own table exactly, gap for
  * gap.** `BuiltinTypeVocabulary.java`'s own Javadoc lists what it seeds and stops there; two more
- * `core.tn` names are *not* built-in-vocabulary entries in the reference and are not here either:
+ * kernel names are *not* entries in the reference and are not here either:
  *
- * - `regex` (`!regex_type {}`) -- not a Part 1 built-in at all (§5.5's table has no `regex` row;
- *   it is a `core.tn` name reachable only through a schema's own import), so `!regex` schemaless
- *   is `UNKNOWN_TYPE_REF` here exactly as an undeclared name anywhere else would be
- *   (`typeRefCheck.ts`). An explicitly schema-typed `regex` field still works once a schema is in
- *   scope -- that path doesn't go through this table at all.
+ * - `regex` (`!regex_type {}`) -- §5.5 lists `!regex` as a kernel row, and the reference's table
+ *   has no entry for it, so `!regex` schemaless is `UNKNOWN_TYPE_REF` here exactly as an
+ *   undeclared name anywhere else would be (`typeRefCheck.ts`). An explicitly schema-typed
+ *   `regex` field still works once a schema is in scope -- that path doesn't go through this
+ *   table at all.
  * - `unknown` (`!unknown_type {}`) -- "the universe of types, not a token shape" (§4.1's `data`
  *   kind's own doc); there is no atom contract that could accept-and-narrow every value, so no
  *   parser exists for it in either implementation.

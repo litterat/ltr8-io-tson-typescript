@@ -26,7 +26,6 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
-  ScopedValue,
   TokenValue,
 } from '../ast/value.js';
 import {
@@ -42,8 +41,6 @@ import {
   isBareTokenType,
   nested,
   parseError,
-  parseNamedDirective,
-  peekDirectiveName,
   peekSecond,
   peekToken,
   tokenFormOf,
@@ -209,13 +206,13 @@ export function* parseCoreValue(state: CursorState): Task<CoreValue> {
   }
 }
 
-/** `"[" ws [ scoped-value *( separator scoped-value ) ] ws "]"` (§2.7), with `[` already consumed. */
+/** `"[" ws [ data-value *( separator data-value ) ] ws "]"` (§2.7), with `[` already consumed. */
 function* parseArrayTail(state: CursorState): Task<ArrayValue> {
-  const elements: ScopedValue[] = [];
+  const elements: DataValue[] = [];
   if (!(yield* check(state, 'rbracket'))) {
-    elements.push(yield* parseScopedValue(state));
+    elements.push(yield* parseDataValue(state));
     while (yield* consumeSeparatorOrCloseCheck(state, 'rbracket')) {
-      elements.push(yield* parseScopedValue(state));
+      elements.push(yield* parseDataValue(state));
     }
   }
   yield* expect(state, 'rbracket', "an array's closing ']'");
@@ -246,7 +243,7 @@ function* parseBraceValue(state: CursorState): Task<RecordValue | MapValue | Emp
       const name = fieldNameText(t1, 'a record field name');
       yield* advance(state); // field-name token
       yield* advance(state); // ':'
-      const value = yield* parseScopedValue(state);
+      const value = yield* parseDataValue(state);
       return yield* parseRecordTail(state, [{ name, value }]);
     }
     if (t2.type === 'map-arrow-token') {
@@ -256,7 +253,7 @@ function* parseBraceValue(state: CursorState): Task<RecordValue | MapValue | Emp
         annotations: [],
         coreValue: { kind: 'token', text: t1.text, form: tokenFormOf(t1.type) },
       };
-      const value = yield* parseScopedValue(state);
+      const value = yield* parseDataValue(state);
       return yield* parseMapTail(state, key, [{ key, value }]);
     }
     throw parseError(
@@ -276,7 +273,7 @@ function* parseRecordTail(state: CursorState, fields: RecordField[]): Task<Recor
   while (yield* consumeSeparatorOrCloseCheck(state, 'rbrace')) {
     const name = yield* expectFieldNameToken(state, 'a record field name');
     yield* expect(state, 'colon', "a record field's ':'");
-    const value = yield* parseScopedValue(state);
+    const value = yield* parseDataValue(state);
     fields.push({ name: name.text, value });
   }
   yield* expect(state, 'rbrace', "a record's closing '}'");
@@ -292,35 +289,15 @@ function* parseMapTail(
   const entries = firstEntry ?? [];
   if (firstEntry === undefined) {
     yield* expect(state, 'map-arrow-token', "a map entry's '=>'");
-    const value = yield* parseScopedValue(state);
+    const value = yield* parseDataValue(state);
     entries.push({ key: firstKey, value });
   }
   while (yield* consumeSeparatorOrCloseCheck(state, 'rbrace')) {
     const key = yield* parseDataValue(state);
     yield* expect(state, 'map-arrow-token', "a map entry's '=>'");
-    const value = yield* parseScopedValue(state);
+    const value = yield* parseDataValue(state);
     entries.push({ key, value });
   }
   yield* expect(state, 'rbrace', "a map's closing '}'");
   return { kind: 'map', entries };
-}
-
-/** `[ schema-directive ws ] data-value` (§2.3): a record field value, map entry value, or array element. */
-export function* parseScopedValue(state: CursorState): Task<ScopedValue> {
-  let schemaRef: string | undefined;
-  if (yield* check(state, 'directive-token')) {
-    const bangbang = yield* peekToken(state);
-    const name = yield* peekDirectiveName(state);
-    if (name !== 'schema') {
-      const second = yield* peekSecond(state);
-      const label = name ?? describe(second);
-      throw parseError(
-        bangbang,
-        `directive '!!${label}' is not permitted here (only '!!schema' is)`,
-      );
-    }
-    schemaRef = yield* parseNamedDirective(state, 'schema');
-  }
-  const value = yield* parseDataValue(state);
-  return { ...(schemaRef !== undefined ? { schemaRef } : {}), value };
 }

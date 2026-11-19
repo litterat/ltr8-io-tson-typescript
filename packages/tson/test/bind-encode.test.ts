@@ -65,15 +65,11 @@ describe('toCoreValue -- record (§2.5)', () => {
       fields: [
         {
           name: 'x',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
         },
         {
           name: 'y',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '2', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: '2', form: 'unquoted' } },
         },
       ],
     });
@@ -86,9 +82,7 @@ describe('toCoreValue -- record (§2.5)', () => {
       fields: [
         {
           name: 'x',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
         },
       ],
     });
@@ -110,9 +104,7 @@ describe('toCoreValue -- record (§2.5)', () => {
       fields: [
         {
           name: 'x',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
         },
       ],
     });
@@ -126,12 +118,12 @@ describe('toCoreValue -- tuple (§5.3), as an array core-value', () => {
     expect(core.kind).toBe('array');
     if (core.kind === 'array') {
       expect(core.elements).toHaveLength(2);
-      expect(core.elements[0]?.value.coreValue).toEqual({
+      expect(core.elements[0]?.coreValue).toEqual({
         kind: 'token',
         text: '1',
         form: 'unquoted',
       });
-      expect(core.elements[1]?.value.coreValue).toEqual({
+      expect(core.elements[1]?.coreValue).toEqual({
         kind: 'token',
         text: 'one',
         form: 'unquoted',
@@ -151,9 +143,9 @@ describe('toCoreValue -- array (§2.7)', () => {
     expect(core).toEqual({
       kind: 'array',
       elements: [
-        { value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } } },
-        { value: { annotations: [], coreValue: { kind: 'token', text: '2', form: 'unquoted' } } },
-        { value: { annotations: [], coreValue: { kind: 'token', text: '3', form: 'unquoted' } } },
+        { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
+        { annotations: [], coreValue: { kind: 'token', text: '2', form: 'unquoted' } },
+        { annotations: [], coreValue: { kind: 'token', text: '3', form: 'unquoted' } },
       ],
     });
   });
@@ -174,9 +166,7 @@ describe('toCoreValue -- map (§2.6)', () => {
       entries: [
         {
           key: { annotations: [], coreValue: { kind: 'token', text: 'a', form: 'unquoted' } },
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: '1', form: 'unquoted' } },
         },
       ],
     });
@@ -256,7 +246,7 @@ describe("toDataValue -- variant attaches the chosen member's wireName as typeRe
     const core = toCoreValue(holderBinding, { shape: { kind: 'circle', radius: 1 } });
     expect(core.kind).toBe('record');
     if (core.kind === 'record') {
-      expect(core.fields[0]?.value.value.typeRef).toBe('circle');
+      expect(core.fields[0]?.value.typeRef).toBe('circle');
     }
   });
 });

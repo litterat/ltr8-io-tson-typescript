@@ -347,10 +347,8 @@ describe('a meta layer’s own constructor refining one of meta.tn’s ([TSON-SC
         kind: 'array',
         elements: [
           {
-            value: {
-              annotations: [],
-              coreValue: { kind: 'token', text: 'New York', form: 'single-line' },
-            },
+            annotations: [],
+            coreValue: { kind: 'token', text: 'New York', form: 'single-line' },
           },
         ],
       },

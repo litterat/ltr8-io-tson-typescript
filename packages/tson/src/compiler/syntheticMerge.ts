@@ -120,15 +120,14 @@ function closedName(
 function holdsApplication(value: CoreValue): boolean {
   switch (value.kind) {
     case 'record':
-      return (
-        isApplication(value) || value.fields.some((f) => holdsApplication(f.value.value.coreValue))
-      );
+      return isApplication(value) || value.fields.some((f) => holdsApplication(f.value.coreValue));
     case 'array':
-      return value.elements.some((e) => holdsApplication(e.value.coreValue));
+      return value.elements.some((e) => holdsApplication(e.coreValue));
     case 'map':
       // A record's `fields` is a map keyed by name (§5.2): each field's slot is a value here.
-      return value.entries.some((e) => holdsApplication(e.value.value.coreValue));
+      return value.entries.some((e) => holdsApplication(e.value.coreValue));
     case 'empty-brace':
+    case 'reference':
     case 'void':
     case 'token':
       return false;

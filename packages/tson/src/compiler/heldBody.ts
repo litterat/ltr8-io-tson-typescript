@@ -136,10 +136,10 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       if (value.form === 'unquoted') into.add(value.text);
       return;
     case 'array':
-      for (const element of value.elements) collectNames(element.value.coreValue, into);
+      for (const element of value.elements) collectNames(element.coreValue, into);
       return;
     case 'record':
-      for (const field of value.fields) collectNames(field.value.value.coreValue, into);
+      for (const field of value.fields) collectNames(field.value.coreValue, into);
       return;
     case 'map':
       // A parameter stands wherever a token stands, map keys and values alike --
@@ -148,7 +148,7 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       // declared-but-unused parameter (§5.10's own error, wrongly raised).
       for (const entry of value.entries) {
         collectNames(entry.key.coreValue, into);
-        collectNames(entry.value.value.coreValue, into);
+        collectNames(entry.value.coreValue, into);
       }
       return;
     case 'empty-brace':
@@ -164,17 +164,17 @@ function collectApplications(value: CoreValue, into: TypeRef[]): void {
         into.push(typeRefOf(value));
         return;
       }
-      for (const field of value.fields) collectApplications(field.value.value.coreValue, into);
+      for (const field of value.fields) collectApplications(field.value.coreValue, into);
       return;
     case 'array':
-      for (const element of value.elements) collectApplications(element.value.coreValue, into);
+      for (const element of value.elements) collectApplications(element.coreValue, into);
       return;
     case 'map':
       // A map is exactly as legitimate a container to find a nested application inside as an
       // array or a record field is -- both the key and value side of each entry are walked.
       for (const entry of value.entries) {
         collectApplications(entry.key.coreValue, into);
-        collectApplications(entry.value.value.coreValue, into);
+        collectApplications(entry.value.coreValue, into);
       }
       return;
     case 'token':

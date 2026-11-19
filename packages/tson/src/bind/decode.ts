@@ -312,9 +312,7 @@ export function fromCoreValue<T>(
               'positional form (§5.6) applies here',
           );
         }
-        fields = [
-          { name: positionalField, value: { value: { annotations: [], coreValue: value } } },
-        ];
+        fields = [{ name: positionalField, value: { annotations: [], coreValue: value } }];
       }
       const byName = new Map(fields.map((f) => [f.name, f] as const));
       const slots: unknown[] = new Array(resolved.fields.length);
@@ -323,7 +321,7 @@ export function fromCoreValue<T>(
         if (slot === undefined) {
           throw readError('UNRECOGNIZED_FIELD', `'${field.name}' is not a field of this record`);
         }
-        slots[slot.index] = fromDataValue(slot.binding, field.value.value, decodeAtom, fieldsFor);
+        slots[slot.index] = fromDataValue(slot.binding, field.value, decodeAtom, fieldsFor);
       }
       for (const slot of resolved.fields) {
         if (slot.unbound || byName.has(slot.wireName)) continue;
@@ -359,7 +357,7 @@ export function fromCoreValue<T>(
         if (element === undefined) {
           throw readError('WRONG_ARITY', `no element at index ${String(i)}`);
         }
-        return fromDataValue(slot.binding, element.value, decodeAtom, fieldsFor);
+        return fromDataValue(slot.binding, element, decodeAtom, fieldsFor);
       });
       return resolved.construct(values);
     }
@@ -380,7 +378,7 @@ export function fromCoreValue<T>(
         throw readError('TYPE_MISMATCH', `expected an array (or '{}'), found a ${value.kind}`);
       }
       const values = elements.map((el) =>
-        fromDataValue(resolved.element, el.value, decodeAtom, fieldsFor),
+        fromDataValue(resolved.element, el, decodeAtom, fieldsFor),
       );
       return resolved.construct(values);
     }
@@ -391,7 +389,7 @@ export function fromCoreValue<T>(
         (e) =>
           [
             fromDataValue(resolved.key, e.key, decodeAtom, fieldsFor),
-            fromDataValue(resolved.value, e.value.value, decodeAtom, fieldsFor),
+            fromDataValue(resolved.value, e.value, decodeAtom, fieldsFor),
           ] as const,
       );
       return resolved.construct(entries);

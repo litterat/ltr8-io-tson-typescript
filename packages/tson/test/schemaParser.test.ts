@@ -214,22 +214,16 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
           kind: 'array',
           elements: [
             {
-              value: {
-                annotations: [],
-                coreValue: { kind: 'token', text: 'OPEN', form: 'unquoted' },
-              },
+              annotations: [],
+              coreValue: { kind: 'token', text: 'OPEN', form: 'unquoted' },
             },
             {
-              value: {
-                annotations: [],
-                coreValue: { kind: 'token', text: 'ACTIVE', form: 'unquoted' },
-              },
+              annotations: [],
+              coreValue: { kind: 'token', text: 'ACTIVE', form: 'unquoted' },
             },
             {
-              value: {
-                annotations: [],
-                coreValue: { kind: 'token', text: 'DONE', form: 'unquoted' },
-              },
+              annotations: [],
+              coreValue: { kind: 'token', text: 'DONE', form: 'unquoted' },
             },
           ],
         },
@@ -252,25 +246,19 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
         {
           name: 'variants',
           value: {
-            value: {
-              annotations: [],
-              coreValue: {
-                kind: 'array',
-                elements: [
-                  {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
-                    },
-                  },
-                  {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'error', form: 'unquoted' },
-                    },
-                  },
-                ],
-              },
+            annotations: [],
+            coreValue: {
+              kind: 'array',
+              elements: [
+                {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                },
+                {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'error', form: 'unquoted' },
+                },
+              ],
             },
           },
         },

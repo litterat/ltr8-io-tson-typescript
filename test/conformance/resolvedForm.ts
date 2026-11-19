@@ -75,7 +75,7 @@ export function readResolved(
   const reader = createDefinitionMetaReader(lookup);
   const result = new Map<string, ResolvedEntry>();
   for (const entry of root.entries) {
-    const value = entry.value.value;
+    const value = entry.value;
     if (value.typeRef === undefined) {
       throw new Error(
         `resolved entry '${tokenTextOf(entry.key)}' must carry its constructor as a !type-ref`,

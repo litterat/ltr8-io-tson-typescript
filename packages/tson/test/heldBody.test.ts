@@ -70,9 +70,7 @@ describe('argumentOf', () => {
       fields: [
         {
           name: 'value',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '42', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: '42', form: 'unquoted' } },
         },
       ],
     };
@@ -86,10 +84,8 @@ describe('argumentOf', () => {
         {
           name: 'name',
           value: {
-            value: {
-              annotations: [],
-              coreValue: { kind: 'token', text: 'uuid', form: 'unquoted' },
-            },
+            annotations: [],
+            coreValue: { kind: 'token', text: 'uuid', form: 'unquoted' },
           },
         },
       ],
@@ -110,7 +106,7 @@ describe('heldEmptyRecord', () => {
       fields: [
         {
           name: 'fields',
-          value: { value: { annotations: [], coreValue: { kind: 'empty-brace' } } },
+          value: { annotations: [], coreValue: { kind: 'empty-brace' } },
         },
       ],
     });
@@ -153,25 +149,21 @@ describe('heldRecord', () => {
     expect(held.typeRef).toBe('record');
     if (held.coreValue.kind !== 'record') throw new Error('unreachable');
     const chainField = held.coreValue.fields.find((f) => f.name === 'chain');
-    expect(chainField?.value.value.coreValue).toEqual({
+    expect(chainField?.value.coreValue).toEqual({
       kind: 'record',
       fields: [
         {
           name: 'parents',
           value: {
-            value: {
-              annotations: [],
-              coreValue: {
-                kind: 'array',
-                elements: [
-                  {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'base', form: 'unquoted' },
-                    },
-                  },
-                ],
-              },
+            annotations: [],
+            coreValue: {
+              kind: 'array',
+              elements: [
+                {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'base', form: 'unquoted' },
+                },
+              ],
             },
           },
         },
@@ -179,14 +171,14 @@ describe('heldRecord', () => {
     });
     // `fields` is a map keyed by name (§5.2): each value a `record_field`, which has no name.
     const fieldsField = held.coreValue.fields.find((f) => f.name === 'fields');
-    if (fieldsField?.value.value.coreValue.kind !== 'map') throw new Error('unreachable');
-    const [plain, fixed] = fieldsField.value.value.coreValue.entries;
+    if (fieldsField?.value.coreValue.kind !== 'map') throw new Error('unreachable');
+    const [plain, fixed] = fieldsField.value.coreValue.entries;
     expect(plain?.key.coreValue).toMatchObject({ kind: 'token', text: 'plain' });
-    const plainRecord = plain?.value.value.coreValue;
+    const plainRecord = plain?.value.coreValue;
     if (plainRecord?.kind !== 'record') throw new Error('unreachable');
     // `optional`/`voidable`/`role`/`value` are omitted for a field at its nominal FREE default.
     expect(plainRecord.fields.map((f) => f.name)).toEqual(['type']);
-    const fixedRecord = fixed?.value.value.coreValue;
+    const fixedRecord = fixed?.value.coreValue;
     if (fixedRecord?.kind !== 'record') throw new Error('unreachable');
     expect(fixedRecord.fields.map((f) => f.name)).toEqual(['type', 'role', 'value']);
   });
@@ -215,29 +207,23 @@ describe('createHeldBody', () => {
           {
             name: 'variants',
             value: {
-              value: {
-                annotations: [],
-                coreValue: {
-                  kind: 'array' as const,
-                  elements: [
-                    {
-                      value: {
-                        annotations: [],
-                        coreValue: { kind: 'token' as const, text: 'T', form: 'unquoted' as const },
-                      },
+              annotations: [],
+              coreValue: {
+                kind: 'array' as const,
+                elements: [
+                  {
+                    annotations: [],
+                    coreValue: { kind: 'token' as const, text: 'T', form: 'unquoted' as const },
+                  },
+                  {
+                    annotations: [],
+                    coreValue: {
+                      kind: 'token' as const,
+                      text: 'literal text',
+                      form: 'single-line' as const,
                     },
-                    {
-                      value: {
-                        annotations: [],
-                        coreValue: {
-                          kind: 'token' as const,
-                          text: 'literal text',
-                          form: 'single-line' as const,
-                        },
-                      },
-                    },
-                  ],
-                },
+                  },
+                ],
               },
             },
           },
@@ -262,16 +248,12 @@ describe('createHeldBody', () => {
           {
             name: 'element_type',
             value: {
-              value: {
+              annotations: [],
+              coreValue: metaRefValue({
+                name: 'box',
+                arguments: [{ kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } }],
                 annotations: [],
-                coreValue: metaRefValue({
-                  name: 'box',
-                  arguments: [
-                    { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
-                  ],
-                  annotations: [],
-                }),
-              },
+              }),
             },
           },
         ],

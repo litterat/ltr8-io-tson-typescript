@@ -7,7 +7,7 @@
  * number/boolean they'd be if unquoted. Only an unquoted token attempts the boolean/number
  * checks.
  *
- * This applies **only in schemaless documents** — a document whose header carries no `!!schema`
+ * This applies **only in schemaless documents** — a document whose header carries no `!!import`
  * (§4.1) — and, within one, only to a token carrying no built-in type annotation. Callers must not
  * invoke it on a token annotated with a built-in-vocabulary type (§5) or governed by a schema
  * ([TSON-SCHEMA]); this module has no way to detect either from a bare token alone. Under a schema

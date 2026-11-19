@@ -15,7 +15,7 @@ function tokenField(
   text: string,
   form: 'unquoted' | 'single-line' = 'unquoted',
 ): RecordField {
-  return { name, value: { value: { annotations: [], coreValue: { kind: 'token', text, form } } } };
+  return { name, value: { annotations: [], coreValue: { kind: 'token', text, form } } };
 }
 
 function ref(name: string): TypeArgument {

@@ -19,7 +19,6 @@ import {
   isVerdict,
 } from '../../packages/tson/src/core/diagnostic.js';
 
-import { resolveBundledSchemaId } from './bundled-ids.js';
 import { newClass2Tson } from './class2Tson.js';
 import type { Category, ValidateSidecar } from './sidecar.js';
 import type { Class2Layer, Vector } from './vectors.js';
@@ -72,8 +71,14 @@ function categoryOf(vector: Vector<Class2Layer>, diagnostic: Diagnostic): Catego
   throw new Error(`${vector.name}: unclassified diagnostic code '${diagnostic.code}'`);
 }
 
-/** The root value's own declared type -- what a self-describing document names itself as. */
-function rootTypeOf(vector: Vector<Class2Layer>, subject: Uint8Array): string {
+/**
+ * The subject's own header and root: what it imports, and the type its root value names. A subject
+ * is a complete document (RUNNER.md), so nothing about either comes from its sidecar.
+ */
+function headerOf(
+  vector: Vector<Class2Layer>,
+  subject: Uint8Array,
+): { readonly imports: readonly string[]; readonly root: string } {
   const { document } = runSync(parseDocument(fromBytes(subject)));
   const typeRef = document.root.typeRef;
   if (typeRef === undefined) {
@@ -81,7 +86,7 @@ function rootTypeOf(vector: Vector<Class2Layer>, subject: Uint8Array): string {
       `${vector.name}: a class2/validate subject's root value must carry its own !type-ref`,
     );
   }
-  return typeRef;
+  return { imports: document.imports, root: typeRef };
 }
 
 export function checkValidateVector(
@@ -89,19 +94,20 @@ export function checkValidateVector(
   subject: Uint8Array,
   sidecar: ValidateSidecar,
 ): void {
-  if (sidecar.schema === undefined) {
-    throw new Error(`${vector.name}: a class2/validate vector must name its governing schema`);
-  }
   const tson = newClass2Tson(subject);
-  const schemaId = resolveBundledSchemaId(sidecar.schema);
-  const linked = tson.schemas.get(canonicalizeIdentity(schemaId));
-  if (linked === undefined) {
+  const { imports, root } = headerOf(vector, subject);
+  const [schemaId] = imports;
+  if (schemaId === undefined || imports.length > 1) {
     throw new Error(
-      `${vector.name}: '${sidecar.schema}' (${schemaId}) is not registered on this Tson instance`,
+      `${vector.name}: a class2/validate subject imports the schema it is read under, one per ` +
+        `vector today (this processor reads under a single import); found ${String(imports.length)}`,
     );
   }
+  const linked = tson.schemas.get(canonicalizeIdentity(schemaId));
+  if (linked === undefined) {
+    throw new Error(`${vector.name}: '${schemaId}' is not registered on this Tson instance`);
+  }
   const compiled = tson.compile(linked);
-  const root = rootTypeOf(vector, subject);
   const result = tson.validate(subject, { schema: compiled, root });
 
   switch (sidecar.outcome) {

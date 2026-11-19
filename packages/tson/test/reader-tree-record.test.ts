@@ -62,14 +62,7 @@ function reader(fields: NamedField[], groups: RecordBody['groups'] = []): TypeRe
     groups,
     extension: 'OPEN',
   };
-  return recordTreeReader(
-    'person',
-    'person',
-    body,
-    (f) => resolve(f.type.name),
-    LOCATION,
-    () => false,
-  );
+  return recordTreeReader('person', 'person', body, (f) => resolve(f.type.name), LOCATION);
 }
 
 describe('recordTreeReader -- shape (§5.2, §5.6)', () => {

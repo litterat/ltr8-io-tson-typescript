@@ -93,7 +93,7 @@ function fieldNames(value: CoreValue): string[] {
 
 /** One named field's core value out of a record core value, or `undefined` when the field is absent. */
 function namedField(value: CoreValue, name: string): CoreValue | undefined {
-  return recordFields(value).find((field) => field.name === name)?.value.value.coreValue;
+  return recordFields(value).find((field) => field.name === name)?.value.coreValue;
 }
 
 /** The value of the field map entry at `index` (`record.fields` is a map keyed by name, §5.2), or throws. */
@@ -101,7 +101,7 @@ function fieldAt(value: CoreValue, index: number): CoreValue {
   if (value.kind !== 'map') throw new Error(`expected a field map, got '${value.kind}'`);
   const entry = value.entries[index];
   if (entry === undefined) throw new Error(`no field at index ${String(index)}`);
-  return entry.value.value.coreValue;
+  return entry.value.coreValue;
 }
 
 /** The entries of a field map core value, or throws. */
@@ -115,7 +115,7 @@ function elementAt(value: CoreValue, index: number): CoreValue {
   const elements = arrayElements(value);
   const element = elements[index];
   if (element === undefined) throw new Error(`no element at index ${String(index)}`);
-  return element.value.coreValue;
+  return element.coreValue;
 }
 
 /** Reads a named field off an `!C { ... }` instance's record payload, or throws when it is absent. */
@@ -357,9 +357,7 @@ describe('identity and deduplication (§8.2)', () => {
     const fields: RecordField[] = [
       {
         name: 'element_type',
-        value: {
-          value: { annotations: [], coreValue: { kind: 'token', text: 'text', form: 'unquoted' } },
-        },
+        value: { annotations: [], coreValue: { kind: 'token', text: 'text', form: 'unquoted' } },
       },
     ];
     expect(internalName('array', fields)).toBe(internalName('array', fields));
@@ -429,7 +427,7 @@ describe("a template's bare record body (§5.2)", () => {
   /** The tokens of an array-of-names core value, as text. */
   function names(value: CoreValue | undefined): string[] {
     if (value === undefined) throw new Error('expected a list of names');
-    return arrayElements(value).map((element) => tokenText(element.value.coreValue));
+    return arrayElements(value).map((element) => tokenText(element.coreValue));
   }
 
   it('writes a group as its options, the members marked optional within them, and its own mark (§5.11)', () => {

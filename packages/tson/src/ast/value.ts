@@ -1,27 +1,27 @@
 import type { TokenForm } from '../lexer/token.js';
+import type { CoreReference } from './reference.js';
 
 /**
- * `document = [id-directive] ws data-doc`, `data-doc = [schema-directive ws] data-value ws`
- * (§2.2, §7.4).
+ * `document = [ id-directive ] ws *( import-directive ws ) data-value ws` (§2.2, §7.4).
  *
- * `id` and `schema` are the header directives' raw URI arguments, uninterpreted. `root` is the
- * document's single value — itself an ordinary data value that may carry its own annotations
- * and type reference, but never a directive (§2.2: "Header directives are properties of the
- * document, not of the body's root value").
+ * `id` and `imports` are the header directives' raw URI arguments, uninterpreted, the imports in
+ * header order. `root` is the document's single value -- itself an ordinary data value that may
+ * carry its own annotations and type reference, but never a directive (§2.2: "Header directives
+ * are properties of the document, not of the body's root value").
  *
- * Only data documents are representable here. A document whose header contains `!!meta` is a
+ * Only data documents are representable here. A document whose root is tagged `!schema` is a
  * *schema* document (§1.5, §2.2), which this type does not represent.
  */
 export interface Document {
   readonly id?: string;
-  readonly schema?: string;
+  readonly imports: readonly string[];
   readonly root: DataValue;
 }
 
 /**
  * `data-value = *annotation [type-ref] core-value` (§2.3, §7.4) — zero or more annotations, an
  * optional type reference, and a core value. Occurs everywhere a value does: as the document
- * root, as a map key, and as the payload of a {@link ScopedValue}.
+ * root, as a record field's value, a map key or entry value, and an array element.
  *
  * `typeRef` is preserved verbatim, uninterpreted: resolving it against the built-in type
  * vocabulary or a declared schema is a later layer's job. A Class 1 processor "MUST preserve
@@ -34,18 +34,19 @@ export interface DataValue {
 }
 
 /**
- * `core-value = record / map / array / empty-brace / absent / token` (§2.3, §7.4).
+ * `core-value = record / map / array / empty-brace / void / reference / token` (§2.3, §7.4).
  *
  * Structural only: no base type resolution (§4) happens at this layer, and none of the built-in
  * type vocabulary (§5) is interpreted — a {@link TokenValue} preserves a token's exact text and
  * form, deferring interpretation to a later layer (§1.2 principle 1: "Value interpretation is
  * deferred to base type resolution").
  *
- * The `kind` discriminant values (`record`, `map`, `array`, `empty-brace`, `absent`, `token`) are
+ * The `kind` discriminant values (`record`, `map`, `array`, `empty-brace`, `absent`, `token`, `reference`) are
  * the exact strings the conformance test suite's parser-layer vectors use for a core-value's own
  * `kind:` field.
  */
-export type CoreValue = RecordValue | MapValue | ArrayValue | EmptyBrace | VoidValue | TokenValue;
+export type CoreValue =
+  RecordValue | MapValue | ArrayValue | EmptyBrace | VoidValue | TokenValue | ReferenceValue;
 
 /**
  * `record = "{" ws field *( separator field ) ws "}"` (§2.5, §7.4).
@@ -60,10 +61,10 @@ export interface RecordValue {
   readonly fields: readonly RecordField[];
 }
 
-/** `field = field-name ws ":" ws scoped-value` (§2.5). `name` is the field-name token's decoded text. */
+/** `field = field-name ws ":" ws data-value` (§2.5). `name` is the field-name token's decoded text. */
 export interface RecordField {
   readonly name: string;
-  readonly value: ScopedValue;
+  readonly value: DataValue;
 }
 
 /**
@@ -78,21 +79,21 @@ export interface MapValue {
   readonly entries: readonly MapEntry[];
 }
 
-/** `map-entry = data-value ws "=>" ws scoped-value` (§2.6). The key is a full data value, not just a token. */
+/** `map-entry = data-value ws "=>" ws data-value` (§2.6). The key is a full data value, not just a token. */
 export interface MapEntry {
   readonly key: DataValue;
-  readonly value: ScopedValue;
+  readonly value: DataValue;
 }
 
 /**
- * `array = "[" ws [ scoped-value *( separator scoped-value ) ] ws "]"` (§2.7, §7.4).
+ * `array = "[" ws [ data-value *( separator data-value ) ] ws "]"` (§2.7, §7.4).
  *
  * Unlike `{}`, `[]` is unambiguously an empty array directly from the grammar (the whole element
  * sequence is optional) — no brace-disambiguation step is needed (§2.8 applies only to `{}`).
  */
 export interface ArrayValue {
   readonly kind: 'array';
-  readonly elements: readonly ScopedValue[];
+  readonly elements: readonly DataValue[];
 }
 
 /**
@@ -133,7 +134,8 @@ export interface TokenValue {
 }
 
 /**
- * `annotation = "@" unquoted-token [ ":" data-value ]` (§3.1, §7.4).
+ * `annotation = "@" qualified-name-token [ ":" data-value ]` (§3.1, §7.4). `name` is the qualified
+ * name as written, a dotted name kept whole.
  *
  * Preserved as ordered, uninterpreted metadata — a Class 1 processor "MUST preserve annotations
  * without validating them" (§3.1); interpretation is a schema-layer concern.
@@ -144,14 +146,13 @@ export interface Annotation {
 }
 
 /**
- * `scoped-value = [ schema-directive ws ] data-value` (§2.3, §7.4): an optional
- * `!!schema:"..."` directive followed by a data value. Occurs in exactly three positions —
- * record field values, map entry values, and array elements.
- *
- * `schemaRef` is the directive's URI argument, preserved uninterpreted — a Class 1 processor
- * "does not act on `schema` bindings — it preserves them for the consuming application" (§3.3).
+ * A `reference` core-value (§7.4) that is no bare name, as the stream assembled it: a qualified name
+ * with its argument list, `pair<uuid B>`, or a sibling reference, `kind!`. A qualified name without
+ * arguments is a {@link TokenValue}. Uninterpreted like a token: what the head and its arguments name
+ * is a reader's or the resolver's to judge, and `reference` holds each argument as the grammar
+ * classified it -- a qualified name a reference, any other token a value with its token form.
  */
-export interface ScopedValue {
-  readonly schemaRef?: string;
-  readonly value: DataValue;
+export interface ReferenceValue {
+  readonly kind: 'reference';
+  readonly reference: CoreReference;
 }

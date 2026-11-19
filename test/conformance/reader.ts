@@ -148,6 +148,31 @@ export function assertReaderValueMatches(
       }
       assertAtomMatches(expected.atom, actual.value, path);
       return;
+    case 'reference': {
+      if (actual.kind !== 'application-reference') {
+        throw new Error(`${path}: expected a reference, got kind '${actual.kind}'`);
+      }
+      if (
+        actual.segments.length !== expected.segments.length ||
+        actual.segments.some((segment, i) => segment !== expected.segments[i])
+      ) {
+        throw new Error(
+          `${path}: expected reference segments [${expected.segments.join(', ')}], got [${actual.segments.join(', ')}]`,
+        );
+      }
+      if (actual.arguments.length !== expected.arguments.length) {
+        throw new Error(
+          `${path}: expected ${String(expected.arguments.length)} argument(s), got ${String(actual.arguments.length)}`,
+        );
+      }
+      for (const [i, [expectedArgument, actualArgument]] of zipEqualLength(
+        expected.arguments,
+        actual.arguments,
+      ).entries()) {
+        assertReaderValueMatches(expectedArgument, actualArgument, `${path}<${String(i)}>`);
+      }
+      return;
+    }
     case 'record': {
       if (actual.kind !== 'record') {
         throw new Error(`${path}: expected a record, got kind '${actual.kind}'`);

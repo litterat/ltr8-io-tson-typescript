@@ -71,7 +71,7 @@ import {
   TsonRefusedError,
 } from '../core/errors.js';
 import { DEFAULT_MAX_SUPERTYPE_CHAIN, supertypeChainLimitRefusal } from '../core/limits.js';
-import type { DataValue, RecordValue, ScopedValue } from '../ast/value.js';
+import type { DataValue, RecordValue } from '../ast/value.js';
 import { asciiLowercase } from '../unicode/normalization.js';
 import type { Annotation as WrittenAnnotation } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
@@ -985,20 +985,20 @@ const ORDERED_BY_INHERITANCE: ReadonlySet<string> = new Set(['members', 'schemes
  * inherited ones; they are refused by the narrowing check, not reordered away. `schemes` compare
  * with ASCII case folded (§5.5), every other set by its text.
  */
-function inheritOrder<F extends { readonly name: string; readonly value: ScopedValue }>(
+function inheritOrder<F extends { readonly name: string; readonly value: DataValue }>(
   written: F,
   inherited: F | undefined,
 ): F {
   if (inherited === undefined || !ORDERED_BY_INHERITANCE.has(written.name)) return written;
-  const was = inherited.value.value.coreValue;
-  const now = written.value.value.coreValue;
+  const was = inherited.value.coreValue;
+  const now = written.value.coreValue;
   if (was.kind !== 'array' || now.kind !== 'array') return written;
-  const key = (element: ScopedValue): string | undefined => {
-    const core = element.value.coreValue;
+  const key = (element: DataValue): string | undefined => {
+    const core = element.coreValue;
     if (core.kind !== 'token') return undefined;
     return written.name === 'schemes' ? asciiLowercase(core.text) : core.text;
   };
-  const rank = (element: ScopedValue): number => {
+  const rank = (element: DataValue): number => {
     const wanted = key(element);
     const at = was.elements.findIndex((candidate) => key(candidate) === wanted);
     return at < 0 ? was.elements.length : at;
@@ -1009,10 +1009,7 @@ function inheritOrder<F extends { readonly name: string; readonly value: ScopedV
     .map((entry) => entry.element);
   return {
     ...written,
-    value: {
-      ...written.value,
-      value: { ...written.value.value, coreValue: { ...now, elements: ordered } },
-    },
+    value: { ...written.value, coreValue: { ...now, elements: ordered } },
   };
 }
 

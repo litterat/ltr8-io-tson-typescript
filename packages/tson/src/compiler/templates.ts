@@ -1155,7 +1155,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           ? field
           : {
               name: field.name,
-              value: rescope(field.value, closeApplications(field.value.value.coreValue)),
+              value: rescope(field.value, closeApplications(field.value.coreValue)),
             },
       ),
     };
@@ -1182,14 +1182,14 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           kind: 'record',
           fields: value.fields.map((field) => ({
             name: field.name,
-            value: rescope(field.value, closeApplications(field.value.value.coreValue)),
+            value: rescope(field.value, closeApplications(field.value.coreValue)),
           })),
         };
       case 'array':
         return {
           kind: 'array',
           elements: value.elements.map((element) =>
-            rescope(element, closeApplications(element.value.coreValue)),
+            rescope(element, closeApplications(element.coreValue)),
           ),
         };
       case 'map':
@@ -1198,10 +1198,11 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           kind: 'map',
           entries: value.entries.map((entry) => ({
             key: entry.key,
-            value: rescope(entry.value, closeApplications(entry.value.value.coreValue)),
+            value: rescope(entry.value, closeApplications(entry.value.coreValue)),
           })),
         };
       case 'empty-brace':
+      case 'reference':
       case 'void':
       case 'token':
         return value;

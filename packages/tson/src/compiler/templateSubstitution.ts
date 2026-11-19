@@ -12,14 +12,7 @@
  * the same one `wireForm.ts`'s own `heldRecord`/`isApplication`/`typeRefOf` agree on.
  */
 import { TsonNotImplementedError } from '../core/errors.js';
-import type {
-  ArrayValue,
-  CoreValue,
-  DataValue,
-  MapValue,
-  RecordValue,
-  ScopedValue,
-} from '../ast/value.js';
+import type { ArrayValue, CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
 import type { TypeArgument } from '../schema/meta/typedef.js';
 import { NAME, VALUE, refValue, rescope, tokenValue } from './wireForm.js';
 import { lexerFormOfMeta } from './tokenForms.js';
@@ -56,12 +49,12 @@ function argumentFor(
  * §8.1 tells a reference argument from a literal one by which member carries it.
  */
 function substituteField(
-  field: { readonly name: string; readonly value: ScopedValue },
+  field: { readonly name: string; readonly value: DataValue },
   head: string,
   parameters: readonly string[],
   bindings: ReadonlyMap<string, TypeArgument>,
-): { readonly name: string; readonly value: ScopedValue } {
-  const held = field.value.value.coreValue;
+): { readonly name: string; readonly value: DataValue } {
+  const held = field.value.coreValue;
   if (
     field.name === NAME &&
     held.kind === 'token' &&
@@ -107,7 +100,7 @@ export function substitute(
       const array: ArrayValue = {
         kind: 'array',
         elements: value.elements.map((element) =>
-          rescope(element, substitute(element.value.coreValue, head, parameters, bindings)),
+          rescope(element, substitute(element.coreValue, head, parameters, bindings)),
         ),
       };
       return array;
@@ -131,13 +124,14 @@ export function substitute(
           },
           value: rescope(
             entry.value,
-            substitute(entry.value.value.coreValue, head, parameters, bindings),
+            substitute(entry.value.coreValue, head, parameters, bindings),
           ),
         })),
       };
       return map;
     }
     case 'empty-brace':
+    case 'reference':
     case 'void':
       return value;
   }

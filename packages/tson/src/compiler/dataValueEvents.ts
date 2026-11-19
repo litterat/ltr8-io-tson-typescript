@@ -15,14 +15,7 @@
  * a diagnostic raised while reading a replayed value is attributed by its caller, which knows the
  * declaration it came from.
  */
-import type {
-  ArrayValue,
-  CoreValue,
-  DataValue,
-  MapValue,
-  RecordValue,
-  ScopedValue,
-} from '../ast/value.js';
+import type { ArrayValue, CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
 import { START, type Position } from '../core/position.js';
 import type { TsonEvent } from '../stream/event.js';
 
@@ -47,18 +40,11 @@ function emitDataValue(value: DataValue, events: TsonEvent[]): void {
   emitCoreValue(value.coreValue, events);
 }
 
-function emitScopedValue(scoped: ScopedValue, events: TsonEvent[]): void {
-  if (scoped.schemaRef !== undefined) {
-    events.push({ kind: 'schema-ref', uri: scoped.schemaRef, position: PLACEHOLDER });
-  }
-  emitDataValue(scoped.value, events);
-}
-
 function emitRecord(record: RecordValue, events: TsonEvent[]): void {
   events.push({ kind: 'record-start', position: PLACEHOLDER });
   for (const field of record.fields) {
     events.push({ kind: 'field-name', name: field.name, position: PLACEHOLDER });
-    emitScopedValue(field.value, events);
+    emitDataValue(field.value, events);
   }
   events.push({ kind: 'record-end', position: PLACEHOLDER });
 }
@@ -68,14 +54,14 @@ function emitMap(map: MapValue, events: TsonEvent[]): void {
   for (const entry of map.entries) {
     emitDataValue(entry.key, events);
     events.push({ kind: 'map-arrow', position: PLACEHOLDER });
-    emitScopedValue(entry.value, events);
+    emitDataValue(entry.value, events);
   }
   events.push({ kind: 'map-end', position: PLACEHOLDER });
 }
 
 function emitArray(array: ArrayValue, events: TsonEvent[]): void {
   events.push({ kind: 'array-start', position: PLACEHOLDER });
-  for (const element of array.elements) emitScopedValue(element, events);
+  for (const element of array.elements) emitDataValue(element, events);
   events.push({ kind: 'array-end', position: PLACEHOLDER });
 }
 
@@ -92,6 +78,9 @@ function emitCoreValue(core: CoreValue, events: TsonEvent[]): void {
       return;
     case 'empty-brace':
       events.push({ kind: 'empty-brace', position: PLACEHOLDER });
+      return;
+    case 'reference':
+      events.push({ kind: 'reference', reference: core.reference, position: PLACEHOLDER });
       return;
     case 'void':
       events.push({ kind: 'void', position: PLACEHOLDER });

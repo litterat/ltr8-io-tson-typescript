@@ -21,16 +21,15 @@ import type {
   Document,
   MapEntry,
   RecordValue,
-  ScopedValue,
 } from '../ast/value.js';
 import { TsonInternalError } from '../core/errors.js';
 import type { Emitter, TextSink } from './emitter.js';
 import { createEmitter, stringSink } from './emitter.js';
 
-/** `document = [id-directive] ws data-doc` (§2.2, §7.4), written into `out`. */
+/** `document = [id-directive] ws *(import-directive ws) data-value ws` (§2.2, §7.4), written into `out`. */
 export function writeDocumentTo(document: Document, out: Emitter): void {
   if (document.id !== undefined) out.documentId(document.id);
-  if (document.schema !== undefined) out.schemaRef(document.schema);
+  for (const uri of document.imports) out.importRef(uri);
   writeDataValueTo(document.root, out);
 }
 
@@ -46,7 +45,7 @@ export function writeDocumentToSink(document: Document, sink: TextSink): void {
   writeDocumentTo(document, createEmitter(sink));
 }
 
-/** `data-value = *annotation [type-ref] core-value` (§2.3, §7.4), annotations and type-ref first. */
+/** `data-value = *annotation [tag] core-value` (§2.3, §7.4), annotations and tag first. */
 export function writeDataValueTo(value: DataValue, out: Emitter): void {
   writeAnnotationsTo(value.annotations, out);
   if (value.typeRef !== undefined) out.typeRef(value.typeRef);
@@ -103,6 +102,9 @@ function writeCoreValueTo(value: CoreValue, out: Emitter): void {
     case 'array':
       writeArrayTo(value, out);
       break;
+    case 'reference':
+      out.reference(value.reference);
+      break;
     case 'void':
       out.voidValue();
       break;
@@ -121,7 +123,7 @@ function writeRecordTo(value: RecordValue, out: Emitter): void {
   out.beginRecord();
   for (const field of value.fields) {
     out.field(field.name);
-    writeScopedValueTo(field.value, out);
+    writeDataValueTo(field.value, out);
   }
   out.endRecord();
 }
@@ -130,20 +132,14 @@ function writeMapEntryTo(entry: MapEntry, out: Emitter): void {
   out.beforeMapEntry();
   writeDataValueTo(entry.key, out);
   out.mapArrow();
-  writeScopedValueTo(entry.value, out);
+  writeDataValueTo(entry.value, out);
 }
 
 function writeArrayTo(value: ArrayValue, out: Emitter): void {
   out.beginArray();
   for (const element of value.elements) {
     out.beforeArrayElement();
-    writeScopedValueTo(element, out);
+    writeDataValueTo(element, out);
   }
   out.endArray();
-}
-
-/** A scoped value keeps its `!!schema` reference, which is part of the source too. */
-function writeScopedValueTo(value: ScopedValue, out: Emitter): void {
-  if (value.schemaRef !== undefined) out.schemaRef(value.schemaRef);
-  writeDataValueTo(value.value, out);
 }

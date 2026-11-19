@@ -46,14 +46,7 @@
 import type { Annotations } from '../annotations/index.js';
 import { inferPositionalField } from '../bind/decode.js';
 import { EMPTY_ANNOTATIONS } from '../annotations/index.js';
-import type {
-  Annotation,
-  CoreValue,
-  DataValue,
-  MapEntry,
-  RecordField,
-  ScopedValue,
-} from '../ast/value.js';
+import type { Annotation, CoreValue, DataValue, MapEntry, RecordField } from '../ast/value.js';
 import type { AtomToken } from '../atom/contract.js';
 import type {
   AnnotatedBinding,
@@ -259,13 +252,6 @@ function* readFraming(ctx: ReadContext): Task<void> {
   yield* readTypeRef(ctx);
 }
 
-/** Discards `[schema-directive] data-value` (§2.3) -- a record field, map entry, or array/tuple element this reader has nowhere to put. */
-function* skipScopedValue(ctx: ReadContext): Task<void> {
-  const peeked = yield* ctx.peek();
-  if (peeked.kind === 'schema-ref') yield* ctx.next();
-  yield* skipDataValue(ctx);
-}
-
 /** Discards one whole `data-value`: framing, then one core-value. */
 function* skipDataValue(ctx: ReadContext): Task<void> {
   yield* skipAnnotationsAndTypeRef(ctx);
@@ -279,7 +265,7 @@ function* skipCoreValue(ctx: ReadContext): Task<void> {
     case 'record-start':
       while ((yield* ctx.peek()).kind !== 'record-end') {
         yield* ctx.next(); // field-name
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
       }
       yield* ctx.next(); // record-end
       return;
@@ -287,20 +273,21 @@ function* skipCoreValue(ctx: ReadContext): Task<void> {
       while ((yield* ctx.peek()).kind !== 'map-end') {
         yield* skipDataValue(ctx); // key
         yield* ctx.next(); // map-arrow
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
       }
       yield* ctx.next(); // map-end
       return;
     case 'array-start':
       while ((yield* ctx.peek()).kind !== 'array-end') {
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
       }
       yield* ctx.next(); // array-end
       return;
     case 'token':
+    case 'reference':
     case 'void':
     case 'empty-brace':
-      return; // leaf, already consumed
+      return; // leaf (a reference is one value), already consumed
     default:
       throw new TsonInternalError(`unexpected event while skipping a core-value: '${e.kind}'`);
   }
@@ -373,21 +360,6 @@ function* readStructuralDataValue(ctx: ReadContext, limit: number, depth = 0): T
   return { annotations, ...(typeRef !== undefined ? { typeRef } : {}), coreValue };
 }
 
-function* readStructuralScopedValue(
-  ctx: ReadContext,
-  limit: number,
-  depth: number,
-): Task<ScopedValue> {
-  const peeked = yield* ctx.peek();
-  let schemaRef: string | undefined;
-  if (peeked.kind === 'schema-ref') {
-    yield* ctx.next();
-    schemaRef = peeked.uri;
-  }
-  const value = yield* readStructuralDataValue(ctx, limit, depth);
-  return { ...(schemaRef !== undefined ? { schemaRef } : {}), value };
-}
-
 function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number): Task<CoreValue> {
   const e = yield* ctx.next();
   switch (e.kind) {
@@ -398,7 +370,7 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
         if (fieldName.kind !== 'field-name') {
           throw new TsonInternalError(`expected field-name, got '${fieldName.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
+        const value = yield* readStructuralDataValue(ctx, limit, depth + 1);
         fields.push({ name: fieldName.name, value });
       }
       yield* ctx.next(); // record-end
@@ -412,22 +384,24 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
         if (arrow.kind !== 'map-arrow') {
           throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(ctx, limit, depth + 1);
+        const value = yield* readStructuralDataValue(ctx, limit, depth + 1);
         entries.push({ key, value });
       }
       yield* ctx.next(); // map-end
       return { kind: 'map', entries };
     }
     case 'array-start': {
-      const elements: ScopedValue[] = [];
+      const elements: DataValue[] = [];
       while ((yield* ctx.peek()).kind !== 'array-end') {
-        elements.push(yield* readStructuralScopedValue(ctx, limit, depth + 1));
+        elements.push(yield* readStructuralDataValue(ctx, limit, depth + 1));
       }
       yield* ctx.next(); // array-end
       return { kind: 'array', elements };
     }
     case 'token':
       return { kind: 'token', text: e.text, form: e.form };
+    case 'reference':
+      return { kind: 'reference', reference: e.reference };
     case 'void':
       return { kind: 'void' };
     case 'empty-brace':
@@ -528,7 +502,7 @@ function* readRecord<T>(
             declared,
             fieldNameEvent.name,
           );
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
         continue;
       }
       if (seen[slot.index] === true) {
@@ -542,10 +516,6 @@ function* readRecord<T>(
           );
       }
       const fieldCtx = ctx.field(fieldNameEvent.name);
-      const beforeValue = yield* ctx.peek();
-      if (beforeValue.kind === 'schema-ref') {
-        yield* ctx.next();
-      }
       const valuePeek = yield* ctx.peek();
       if (valuePeek.kind === 'void') {
         yield* ctx.next();
@@ -689,9 +659,6 @@ function* readTuple<T>(binding: TupleBinding<T>, ctx: ReadContext, readAtom: Ato
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'array-end') break;
-    if (next.kind === 'schema-ref') {
-      yield* ctx.next();
-    }
     if (index >= arity) {
       if (!reportedExtra) {
         ctx.report(
@@ -744,9 +711,6 @@ function* readArray<T>(binding: ArrayBinding<T>, ctx: ReadContext, readAtom: Ato
     for (;;) {
       const next = yield* ctx.peek();
       if (next.kind === 'array-end') break;
-      if (next.kind === 'schema-ref') {
-        yield* ctx.next();
-      }
       values.push(yield* readBound(binding.element, ctx.index(index), readAtom));
       index++;
     }
@@ -803,7 +767,7 @@ function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomRea
           '_',
         );
         yield* ctx.next(); // map-arrow
-        yield* skipScopedValue(ctx);
+        yield* skipDataValue(ctx);
         continue;
       }
       const keySegment = keyPeek.kind === 'token' ? keyPeek.text : '?';
@@ -825,10 +789,6 @@ function* readMap<T>(binding: MapBinding<T>, ctx: ReadContext, readAtom: AtomRea
       const arrow = yield* ctx.next();
       if (arrow.kind !== 'map-arrow') {
         throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
-      }
-      const beforeValue = yield* ctx.peek();
-      if (beforeValue.kind === 'schema-ref') {
-        yield* ctx.next();
       }
       const value = yield* readBound(binding.value, keyCtx, readAtom);
       entries.push([key, value]);

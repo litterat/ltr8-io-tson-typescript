@@ -36,7 +36,7 @@ function readSchemaless(text: string): TsonDocument {
   const root = runSync(schemalessTreeReader().read(ctx));
   const end = runSync(ctx.next());
   if (end.kind !== 'document-end') throw new Error(`expected document-end, got ${end.kind}`);
-  return tsonDocument(root, start.id, start.schema);
+  return tsonDocument(root, start.id, start.imports);
 }
 
 describe('value-preserving round trip through the real schemaless reader', () => {
@@ -54,6 +54,8 @@ describe('value-preserving round trip through the real schemaless reader', () =>
     ['a boolean', 'true'],
     ['a string', '"hello"'],
     ['void', '_'],
+    ['an application reference, kept structured (§7.4)', '{ t: pair<box<text> 201 "a b"> }'],
+    ['a sibling reference (§7.4)', '{ value: kind! }'],
   ])('%s', (_label, text) => {
     const document = readSchemaless(text);
     const written = writeTree(document);
@@ -72,20 +74,22 @@ describe('§3.1 wire annotations are re-emitted, in order, repeats included', ()
 });
 
 describe('§2.2 header directives', () => {
-  it('!!id and !!schema round-trip, with the root keeping the type-ref the schema directive needs', () => {
+  it('!!id and each !!import round-trip, with the root keeping the type-ref an import needs', () => {
     const text =
-      '!!id:"https://example.com/doc.tn"\n!!schema:"https://example.com/s.tn"\n' +
+      '!!id:"https://example.com/doc.tn"\n!!import:"https://example.com/s.tn"\n' +
+      '!!import:"https://example.com/t.tn"\n' +
       '!uuid "01234567-89ab-cdef-0123-456789abcdef"';
     const document = readSchemaless(text);
     const written = writeTree(document);
     const reread = readSchemaless(written);
     expect(reread.id).toBe(document.id);
-    expect(reread.schema).toBe(document.schema);
+    expect(reread.imports).toEqual(document.imports);
+    expect(document.imports).toHaveLength(2);
     expect(reread.root).toEqual(document.root);
   });
 
-  it('refuses to write a !!schema document whose root carries no type-ref', () => {
-    const document = tsonDocument(atomNode(1n), undefined, 'https://example.com/s.tn');
+  it('refuses to write a document with an !!import whose root carries no type-ref', () => {
+    const document = tsonDocument(atomNode(1n), undefined, ['https://example.com/s.tn']);
     expect(() => writeTree(document)).toThrow(TsonWriteError);
   });
 });

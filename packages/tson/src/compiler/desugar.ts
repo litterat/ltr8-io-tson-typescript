@@ -81,7 +81,7 @@ import type {
   TypeDef,
 } from '../ast/schema/typedef.js';
 import type { ElementType, GenericRef, TypeArg, TypeRef } from '../ast/schema/typeref.js';
-import type { CoreValue, RecordField, RecordValue, ScopedValue } from '../ast/value.js';
+import type { CoreValue, DataValue, RecordField, RecordValue } from '../ast/value.js';
 import { canonicalBinding, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { groupMembers, lowerGroup } from './groupLowering.js';
@@ -691,7 +691,7 @@ function shownRef(ref: TypeRef): string {
  * type-ref, so each tuple position needs a record built for it rather than a name token.
  */
 function tupleBinding(positions: readonly TuplePosition[]): Binding {
-  const elements: ScopedValue[] = positions.map((position) => {
+  const elements: DataValue[] = positions.map((position) => {
     const members: RecordField[] = [
       { name: ELEMENT_TYPE, value: scoped(refValueOf(position.typeRef)) },
     ];
@@ -717,7 +717,7 @@ function tupleBinding(positions: readonly TuplePosition[]): Binding {
  * what the names *resolve* to, after reference flattening, which this phase has no answer to.
  */
 function choiceBinding(variants: readonly TypeRef[]): Binding {
-  const members: ScopedValue[] = variants.map((variant) => scoped(refValueOf(variant)));
+  const members: DataValue[] = variants.map((variant) => scoped(refValueOf(variant)));
   return {
     head: CHOICE,
     fields: [{ name: VARIANTS, value: scoped(arrayValue(members)) }],
@@ -735,8 +735,8 @@ function choiceBinding(variants: readonly TypeRef[]): Binding {
  * the same economy {@link arrayBinding} makes with an unmarked element's `voidable`.
  */
 function recordBinding(record: RecordDef): Binding {
-  const fields: (readonly [string, ScopedValue])[] = [];
-  const groups: ScopedValue[] = [];
+  const fields: (readonly [string, DataValue])[] = [];
+  const groups: DataValue[] = [];
   const discriminators: string[] = [];
   const seen = new Set<string>();
   for (const entry of record.entries) {
@@ -803,7 +803,7 @@ function requireFieldNameUnseen(name: string, seen: Set<string>, explanation: st
 
 /** {@link recordFieldValue}'s own result: the field's wire value, plus whether §5.2's `=?` marked it a selector (`recordBinding`'s own `discriminators` list, never carried on the field itself -- §8.1's `record_field` has no such member). */
 interface RecordFieldValue {
-  readonly value: ScopedValue;
+  readonly value: DataValue;
   readonly selector: boolean;
 }
 
@@ -889,7 +889,7 @@ function checkBounds(fields: readonly RecordField[]): void {
     if (field.name !== MIN_ITEMS && field.name !== MAX_ITEMS) {
       continue;
     }
-    const value = field.value.value.coreValue;
+    const value = field.value.coreValue;
     if (value.kind !== 'token') {
       continue;
     }
@@ -1028,7 +1028,7 @@ function inject(
 function parametersIn(binding: Binding, currentParameters: readonly string[]): string[] {
   const found: string[] = [];
   for (const parameter of currentParameters) {
-    if (binding.fields.some((field) => namesToken(field.value.value.coreValue, parameter))) {
+    if (binding.fields.some((field) => namesToken(field.value.coreValue, parameter))) {
       found.push(parameter);
     }
   }
@@ -1041,11 +1041,12 @@ function namesToken(value: CoreValue, text: string): boolean {
     case 'token':
       return value.text === text;
     case 'array':
-      return value.elements.some((element) => namesToken(element.value.coreValue, text));
+      return value.elements.some((element) => namesToken(element.coreValue, text));
     case 'record':
-      return value.fields.some((field) => namesToken(field.value.value.coreValue, text));
+      return value.fields.some((field) => namesToken(field.value.coreValue, text));
     case 'map':
     case 'empty-brace':
+    case 'reference':
     case 'void':
       return false;
   }
@@ -1070,7 +1071,7 @@ function positionalNames(binding: Binding, parameters: readonly string[]): strin
     const clash = names.some(
       (name) =>
         !parameters.includes(name) &&
-        binding.fields.some((field) => namesToken(field.value.value.coreValue, name)),
+        binding.fields.some((field) => namesToken(field.value.coreValue, name)),
     );
     if (!clash) {
       return names;
@@ -1127,11 +1128,8 @@ function renameRef(ref: TypeRef, substitution: ReadonlyMap<string, string>): Typ
   return { kind: 'genericRef', name: ref.name, args };
 }
 
-function renameScoped(scoped: ScopedValue, substitution: ReadonlyMap<string, string>): ScopedValue {
-  return {
-    ...scoped,
-    value: { ...scoped.value, coreValue: renameValue(scoped.value.coreValue, substitution) },
-  };
+function renameScoped(scoped: DataValue, substitution: ReadonlyMap<string, string>): DataValue {
+  return { ...scoped, coreValue: renameValue(scoped.coreValue, substitution) };
 }
 
 function renameValue(value: CoreValue, substitution: ReadonlyMap<string, string>): CoreValue {
@@ -1155,6 +1153,7 @@ function renameValue(value: CoreValue, substitution: ReadonlyMap<string, string>
       };
     case 'map':
     case 'empty-brace':
+    case 'reference':
     case 'void':
       return value;
   }
@@ -1192,7 +1191,7 @@ function recordValue(fields: readonly RecordField[]): RecordValue {
   return { kind: 'record', fields };
 }
 
-function arrayValue(elements: readonly ScopedValue[]): CoreValue {
+function arrayValue(elements: readonly DataValue[]): CoreValue {
   return { kind: 'array', elements };
 }
 
@@ -1245,7 +1244,7 @@ function refValueOf(ref: TypeRef): CoreValue {
  * which is the invariant the two `TypeArg.Ref` branches below rely on.
  */
 function refRecordOf(generic: GenericRef): RecordValue {
-  const args: ScopedValue[] = generic.args.map((argument) => {
+  const args: DataValue[] = generic.args.map((argument) => {
     if (argument.kind === 'value') {
       return scoped(recordValue([{ name: VALUE, value: scoped(argument.value) }]));
     }

@@ -77,10 +77,18 @@ import type {
   DataValue,
   MapEntry as AstMapEntry,
   RecordField,
-  ScopedValue,
 } from '../../ast/value.js';
 import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/nodes.js';
-import { voidNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
+import {
+  voidNode,
+  arrayNode,
+  atomNode,
+  mapNode,
+  recordNode,
+  applicationReferenceNode,
+  siblingReferenceNode,
+} from '../../tree/nodes.js';
+import { referenceText, type ApplicationReference } from '../../ast/reference.js';
 import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { isIdentifierText } from '../../unicode/identifier-profile.js';
@@ -111,7 +119,7 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
   /**
    * Keeps a type-ref naming no built-in type on the node without reporting it -- the caller's
    * explicit opt-out of [TSON-DATA] §3.2's resolver error, carrying the name all the way to the
-   * tree. For reading the wire form of a document whose own `!!schema` defines those names but is
+   * tree. For reading the wire form of a document whose own `!!import` defines those names but is
    * deliberately not in scope, or for round-tripping through a tree writer. Defaults to `false`:
    * a schemaless document's only type names are §5's vocabulary (`typeRefCheck.ts`).
    */
@@ -179,8 +187,8 @@ export function schemalessTreeReader(options: SchemalessTreeReaderOptions = {}):
 
 // ---------------------------------------------------------------------------------------------
 // Structural annotation/type-ref framing -- this module's own copy of `reader/bind.ts`'s
-// `readStructuralAnnotations`/`readStructuralDataValue`/`readStructuralCoreValue`/
-// `readStructuralScopedValue`, deliberately duplicated (see this file's own top note) and adapted
+// `readStructuralAnnotations`/`readStructuralDataValue`/`readStructuralCoreValue`,
+// deliberately duplicated (see this file's own top note) and adapted
 // to hand back an `Annotations` directly rather than a bare `readonly Annotation[]`.
 // ---------------------------------------------------------------------------------------------
 
@@ -247,23 +255,6 @@ function* readStructuralDataValue(
   };
 }
 
-function* readStructuralScopedValue(
-  ctx: ReadContext,
-  limit: number,
-  identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
-  depth: number,
-): Task<ScopedValue> {
-  const peeked = yield* ctx.peek();
-  let schemaRef: string | undefined;
-  if (peeked.kind === 'schema-ref') {
-    yield* ctx.next();
-    schemaRef = peeked.uri;
-  }
-  const value = yield* readStructuralDataValue(ctx, limit, identifierPolicy, tokenPolicy, depth);
-  return { ...(schemaRef !== undefined ? { schemaRef } : {}), value };
-}
-
 function* readStructuralCoreValue(
   ctx: ReadContext,
   limit: number,
@@ -280,7 +271,7 @@ function* readStructuralCoreValue(
         if (fieldName.kind !== 'field-name') {
           throw new TsonInternalError(`expected field-name, got '${fieldName.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(
+        const value = yield* readStructuralDataValue(
           ctx,
           limit,
           identifierPolicy,
@@ -306,7 +297,7 @@ function* readStructuralCoreValue(
         if (arrow.kind !== 'map-arrow') {
           throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
         }
-        const value = yield* readStructuralScopedValue(
+        const value = yield* readStructuralDataValue(
           ctx,
           limit,
           identifierPolicy,
@@ -319,10 +310,10 @@ function* readStructuralCoreValue(
       return { kind: 'map', entries };
     }
     case 'array-start': {
-      const elements: ScopedValue[] = [];
+      const elements: DataValue[] = [];
       while ((yield* ctx.peek()).kind !== 'array-end') {
         elements.push(
-          yield* readStructuralScopedValue(ctx, limit, identifierPolicy, tokenPolicy, depth + 1),
+          yield* readStructuralDataValue(ctx, limit, identifierPolicy, tokenPolicy, depth + 1),
         );
       }
       yield* ctx.next(); // array-end
@@ -331,6 +322,8 @@ function* readStructuralCoreValue(
     case 'token':
       checkTokenHygiene(ctx, e.text, tokenPolicy);
       return { kind: 'token', text: e.text, form: e.form };
+    case 'reference':
+      return { kind: 'reference', reference: e.reference };
     case 'void':
       return { kind: 'void' };
     case 'empty-brace':
@@ -556,6 +549,11 @@ function* readNode(
     case 'void':
       yield* ctx.next();
       return voidNode(typeRefName, annotations);
+    case 'reference':
+      yield* ctx.next();
+      return peeked.reference.kind === 'sibling'
+        ? siblingReferenceNode(peeked.reference.field, typeRefName, annotations)
+        : readReference(ctx, peeked.reference, tokenPolicy, typeRefName, annotations);
     case 'token':
       yield* ctx.next();
       checkTokenHygiene(ctx, peeked.text, tokenPolicy);
@@ -597,10 +595,6 @@ function* readRecord(
     const fieldNameEvent = yield* ctx.next();
     if (fieldNameEvent.kind !== 'field-name') {
       throw new TsonInternalError(`expected field-name, got '${fieldNameEvent.kind}'`);
-    }
-    const beforeValue = yield* ctx.peek();
-    if (beforeValue.kind === 'schema-ref') {
-      yield* ctx.next();
     }
     // §2.5 settles identity on the NFC form of the decoded name, so the two spellings of one
     // character are one field however each was written, and the map is keyed on that form.
@@ -752,9 +746,6 @@ function* readArray(
   for (;;) {
     const next = yield* ctx.peek();
     if (next.kind === 'array-end') break;
-    if (next.kind === 'schema-ref') {
-      yield* ctx.next();
-    }
     elements.push(
       yield* readNode(
         ctx.index(elements.length),
@@ -841,10 +832,6 @@ function* readMap(
       }
     }
     yield* ctx.next(); // map-arrow
-    const beforeValue = yield* ctx.peek();
-    if (beforeValue.kind === 'schema-ref') {
-      yield* ctx.next();
-    }
     const value = yield* readNode(
       ctx.field(keySegment(key)),
       preserve,
@@ -858,6 +845,41 @@ function* readMap(
   }
   yield* ctx.next(); // map-end
   return mapNode(entries, typeRefName, annotations);
+}
+
+/**
+ * A reference with arguments, kept as the structured value it is (§4): its segments, and each
+ * argument read by the schemaless rule a token is read by, a nested application a reference of its
+ * own. Nothing resolves. A value argument is a token like any other, so §8.2's token policy judges
+ * it as it judges one.
+ */
+function readReference(
+  ctx: ReadContext,
+  reference: ApplicationReference,
+  tokenPolicy: ScriptPolicy,
+  typeRefName: string | undefined,
+  annotations: Annotations,
+): Value {
+  const args: Value[] = [];
+  for (const argument of reference.arguments) {
+    if (argument.kind === 'reference' && argument.reference.kind === 'application') {
+      args.push(readReference(ctx, argument.reference, tokenPolicy, undefined, EMPTY_ANNOTATIONS));
+      continue;
+    }
+    const token =
+      argument.kind === 'reference'
+        ? { text: argument.reference.name, form: 'unquoted' as const }
+        : { text: argument.text, form: argument.form };
+    checkTokenHygiene(ctx, token.text, tokenPolicy);
+    args.push(atomNode(narrowBaseValue(resolveBaseType(token)), undefined, EMPTY_ANNOTATIONS));
+  }
+  return applicationReferenceNode(
+    reference.name.split('.'),
+    args,
+    referenceText(reference),
+    typeRefName,
+    annotations,
+  );
 }
 
 /**
@@ -1014,6 +1036,10 @@ function keyIdentity(node: Value): unknown {
     }
     case 'map':
       return node.entries.map((entry) => [keyIdentity(entry.key), keyIdentity(entry.value)]);
+    case 'application-reference':
+      return ['reference', node.segments.slice(), node.arguments.map(keyIdentity)];
+    case 'sibling-reference':
+      return ['sibling', node.field];
     case 'void':
       return VOID_KEY_IDENTITY;
     case 'tuple':

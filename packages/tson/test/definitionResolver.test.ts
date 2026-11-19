@@ -1170,7 +1170,7 @@ function fieldsOf(value: DataValue): ReadonlyMap<string, CoreValue> {
   if (value.coreValue.kind !== 'record') {
     throw new TsonReadError({ code: 'TYPE_MISMATCH', message: 'expected a braced record' });
   }
-  return new Map(value.coreValue.fields.map((f) => [f.name, f.value.value.coreValue]));
+  return new Map(value.coreValue.fields.map((f) => [f.name, f.value.coreValue]));
 }
 
 function readBigint(value: CoreValue | undefined): bigint | undefined {
@@ -1204,9 +1204,7 @@ function integerTypeReader(type: string, value: DataValue): Top {
       : (() => {
           if (sizeValue.kind !== 'record')
             throw new TsonReadError({ code: 'TYPE_MISMATCH', message: 'expected a record' });
-          const sizeFields = new Map(
-            sizeValue.fields.map((f) => [f.name, f.value.value.coreValue]),
-          );
+          const sizeFields = new Map(sizeValue.fields.map((f) => [f.name, f.value.coreValue]));
           const bits = readBigint(sizeFields.get('bits'));
           const signedValue = sizeFields.get('signed');
           if (bits === undefined || signedValue?.kind !== 'token') {
@@ -1352,26 +1350,22 @@ describe('atom refinement (§5.5, §5.7)', () => {
       fields.push({
         name: 'size',
         value: {
-          value: {
-            annotations: [],
-            coreValue: {
-              kind: 'record',
-              fields: [
-                {
-                  name: 'bits',
-                  value: { value: { annotations: [], coreValue: token(t.size.bits) } },
+          annotations: [],
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'bits',
+                value: { annotations: [], coreValue: token(t.size.bits) },
+              },
+              {
+                name: 'signed',
+                value: {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: String(t.size.signed), form: 'unquoted' },
                 },
-                {
-                  name: 'signed',
-                  value: {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: String(t.size.signed), form: 'unquoted' },
-                    },
-                  },
-                },
-              ],
-            },
+              },
+            ],
           },
         },
       });
@@ -1384,7 +1378,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
       ['multiple_of', t.multipleOf],
     ] as const) {
       if (value !== undefined) {
-        fields.push({ name: key, value: { value: { annotations: [], coreValue: token(value) } } });
+        fields.push({ name: key, value: { annotations: [], coreValue: token(value) } });
       }
     }
     return { kind: 'record', fields };

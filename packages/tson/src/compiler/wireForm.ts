@@ -38,7 +38,6 @@ import type {
   DataValue,
   RecordField,
   RecordValue,
-  ScopedValue,
   TokenValue,
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
@@ -97,22 +96,22 @@ export function tokenValue(text: string, form: TokenForm = 'unquoted'): TokenVal
 }
 
 /**
- * A bare value in a field or element position — no schema directive, no annotations, no type-ref
- * of its own — or, given one, the same value carrying the annotations written on the construct it
- * stands for. §6 puts a field's own annotations on the resolved record, and a held body reaches
- * that through the wire value, so they travel here rather than being re-attached after the fact.
+ * A bare value in a field or element position — no annotations and no type-ref of its own — or,
+ * given annotations, the same value carrying the annotations written on the construct it stands
+ * for. §6 puts a field's own annotations on the resolved record, and a held body reaches that
+ * through the wire value, so they travel here rather than being re-attached after the fact.
  */
-export function scoped(value: CoreValue, annotations: readonly Annotation[] = []): ScopedValue {
-  return { value: { annotations, coreValue: value } };
+export function scoped(value: CoreValue, annotations: readonly Annotation[] = []): DataValue {
+  return { annotations, coreValue: value };
 }
 
 export function nameField(name: string, text: string): RecordField {
   return { name, value: scoped(tokenValue(text)) };
 }
 
-/** The same scoped value carrying a rewritten core value — annotations and type-ref kept as written. */
-export function rescope(original: ScopedValue, rewritten: CoreValue): ScopedValue {
-  return { ...original, value: { ...original.value, coreValue: rewritten } };
+/** The same value carrying a rewritten core value — annotations and type-ref kept as written. */
+export function rescope(original: DataValue, rewritten: CoreValue): DataValue {
+  return { ...original, coreValue: rewritten };
 }
 
 // ── Writing: a resolved value as the wire form it was written in ───────────────────────────────
@@ -134,7 +133,7 @@ export function declaredName(name: string): DataValue {
  * A `field_map` value as the wire writes it: a map from each declared name to its field, in
  * declaration order, `{}` where there is none.
  */
-export function fieldsValue(fields: readonly (readonly [string, ScopedValue])[]): CoreValue {
+export function fieldsValue(fields: readonly (readonly [string, DataValue])[]): CoreValue {
   if (fields.length === 0) return { kind: 'empty-brace' };
   return {
     kind: 'map',
@@ -283,10 +282,7 @@ function namesValue(names: readonly string[]): CoreValue {
  * A `field_group` as a held body writes it (§5.11): `optional_members` only where it names a
  * member, and `optional` only where it is set.
  */
-export function groupValue(
-  group: FieldGroup,
-  annotations: readonly Annotation[] = [],
-): ScopedValue {
+export function groupValue(group: FieldGroup, annotations: readonly Annotation[] = []): DataValue {
   const members: RecordField[] = [
     {
       name: MEMBERS,
@@ -321,7 +317,7 @@ export function refValue(ref: TypeRef): CoreValue {
   if (ref.arguments.length === 0) {
     return tokenValue(ref.name);
   }
-  const args: ScopedValue[] = ref.arguments.map((argument) => {
+  const args: DataValue[] = ref.arguments.map((argument) => {
     const member: RecordField =
       argument.kind === 'ref'
         ? { name: NAME, value: scoped(refValue(argument.ref)) }
@@ -344,7 +340,7 @@ export function refValue(ref: TypeRef): CoreValue {
 
 /** One field of a wire `RecordValue`, by name — `undefined` when absent. */
 export function field(record: RecordValue, name: string): CoreValue | undefined {
-  return record.fields.find((f) => f.name === name)?.value.value.coreValue;
+  return record.fields.find((f) => f.name === name)?.value.coreValue;
 }
 
 /**
@@ -369,7 +365,7 @@ export function typeRefOf(record: RecordValue): TypeRef {
   const argumentsValue = field(record, ARGUMENTS);
   if (argumentsValue?.kind === 'array') {
     for (const element of argumentsValue.elements) {
-      args.push(argumentOf(element.value.coreValue as RecordValue));
+      args.push(argumentOf(element.coreValue as RecordValue));
     }
   }
   return { name: head, arguments: args, annotations: [] };

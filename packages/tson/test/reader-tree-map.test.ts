@@ -41,7 +41,7 @@ function reader(minItems?: bigint, maxItems?: bigint): TypeReader<Value> {
     ...(minItems !== undefined ? { minItems } : {}),
     ...(maxItems !== undefined ? { maxItems } : {}),
   };
-  return mapTreeReader('dictionary', 'dictionary', body, resolve, LOCATION, () => false);
+  return mapTreeReader('dictionary', 'dictionary', body, resolve, LOCATION);
 }
 
 describe('mapTreeReader -- shape and entries (§2.6, §2.8)', () => {
