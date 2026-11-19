@@ -72,7 +72,7 @@ set -e
 [ "$json_invalid" -eq 1 ] || fail ".json missing a required field exited $json_invalid, expected 1"
 [ "$json_unbound" -eq 2 ] || fail "a .json input with no --schema/--root exited $json_unbound, expected 2"
 
-echo "==> validate: standard input is TSON by default, --input forces the encoding (WP4E)"
+echo "==> validate: standard input is TSON by default, --input forces the encoding"
 stdin_default="$(printf '{ name: "Ada"  age: 36  active: true }\n' | "$TSON" validate --schema ./demo/person.tn --root person -)" \
   || fail "TSON piped to stdin with a binding given did not exit 0"
 case "$stdin_default" in *"valid"*) ;; *) fail "stdin default did not read as TSON: $stdin_default" ;; esac

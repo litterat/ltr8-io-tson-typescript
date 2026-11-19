@@ -55,14 +55,14 @@ interface ValidationResult {
 
 interface WriteOptions {
   readonly id?: string; // writes !!id
-  readonly schema?: string; // writes !!schema
+  readonly imports?: readonly string[]; // writes one !!import per schema, in order
 }
 
 type DocumentKind = 'data' | 'schema';
 interface DocumentClassification {
   readonly kind: DocumentKind;
   readonly id?: string; // !!id, uninterpreted — not canonicalised, not syntax-checked
-  readonly meta?: string; // !!meta — only for kind: 'schema'
+  readonly imports: readonly string[]; // every !!import, in header order; empty when there are none
 }
 ```
 
@@ -226,7 +226,7 @@ declared `?sha256=` pin, and rejects a document whose own `!!id` is not the iden
 ### The compile pipeline
 
 ```ts
-function bootstrapMetaKernel(bytes: Uint8Array): Schema; // §1.5 — meta-kernel's !!meta names itself
+function bootstrapKernel(bytes: Uint8Array): Schema; // the kernel (meta.tn) has nothing to resolve against
 function linkSchema(resolved: Schema, deps?: LinkDeps): LinkedSchema;
 
 interface LinkedSchema {

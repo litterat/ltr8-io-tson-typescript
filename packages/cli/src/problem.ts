@@ -100,7 +100,7 @@ export function classifyReadError(error: unknown): Problem {
 
 /**
  * Whether `error` is a verdict on a *schema document* rather than on this tool -- structurally
- * malformed (fails to lex/parse at all) or semantically invalid (`!!id` missing, `!!meta`/
+ * malformed (fails to lex/parse at all) or semantically invalid (`!!id` missing, an
  * `!!import` unregistered, a reference that does not resolve, composition/refinement/template
  * misuse, choice disjointness, ...). Shared by `commands/compile.ts` (where it means "invalid,
  * exit 1") and `commands/validate.ts`'s own `--schema` loading (where it means "usage error, exit

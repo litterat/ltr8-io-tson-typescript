@@ -15,18 +15,18 @@ npx @ltr8/tson-cli hash person.tn                                            # c
 `tson --help` lists the six commands; `tson <command> --help` prints that command's own page,
 including the shared policy-flag block below for `validate`/`compile`/`policy`.
 
-|                          |                                                                                                                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Commands                 | `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`                                                                                                |
-| `--schema <file-or-url>` | validate only; a local path or an `https://` URL. **Never** a data file's own `!!schema` — honouring that would fetch whatever untrusted content named.         |
-| `--root <name>`          | required whenever `--schema` is given; not auto-detected                                                                                                        |
-| `--format`               | `text` (default), `json`, `tson`, on every command but `strip`                                                                                                  |
-| `-`                      | reads one data document from stdin (validate, at most once) — TSON text by default, whatever binding is given; `--input json` forces JSON                       |
-| `--input tson\|json`     | validate only; forces every input's encoding, `-` included, overriding the by-extension/TSON-for-stdin default                                                  |
-| `.json` input            | validate only; a JSON encoding of TSON data ([TSON-JSON] §3.1), case-insensitive by extension, and it requires `--schema`/`--root` (a usage error without them) |
-| Exit codes               | see below, ranked `70 > 78 > 69 > 75 > 1` by who must act first                                                                                                 |
+|                          |                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commands                 | `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`                                                                                                                                                                                                                                                                         |
+| `--schema <file-or-url>` | validate only; a local path or an `https://` URL. **Never** a data file's own `!!import` — honouring that would fetch whatever untrusted content named. With no `--schema`, a data document is read under its own `!!import`s against the bundled library only, and a header naming anything else is `SCHEMA_NOT_PERMITTED` (exit `69`). |
+| `--root <name>`          | required whenever `--schema` is given; not auto-detected                                                                                                                                                                                                                                                                                 |
+| `--format`               | `text` (default), `json`, `tson`, on every command but `strip`                                                                                                                                                                                                                                                                           |
+| `-`                      | reads one data document from stdin (validate, at most once) — TSON text by default, whatever binding is given; `--input json` forces JSON                                                                                                                                                                                                |
+| `--input tson\|json`     | validate only; forces every input's encoding, `-` included, overriding the by-extension/TSON-for-stdin default                                                                                                                                                                                                                           |
+| `.json` input            | validate only; a JSON encoding of TSON data ([TSON-JSON] §3.1), case-insensitive by extension, and it requires `--schema`/`--root` (a usage error without them)                                                                                                                                                                          |
+| Exit codes               | see below, ranked `70 > 78 > 69 > 75 > 1` by who must act first                                                                                                                                                                                                                                                                          |
 
-`validate`/`compile`/`hash` register the bundled `meta-kernel`/`meta.tn`/`core.tn`/`net.tn`/`policy.tn`, so they work
+`validate`/`compile`/`hash` register the six bundled schemas (`meta.tn`, `numeric.tn`, `temporal.tn`, `net.tn`, `core.tn`, `policy.tn`), so they work
 offline with no `SchemaSource`. Data files are streamed, never buffered whole. Any argument
 beginning with `-` that is not a known flag is a usage error, never a file name.
 
@@ -43,7 +43,8 @@ beginning with `-` that is not a known flag is a usage error, never a file name.
 ### Policy flags
 
 `--identifier-policy <level>`, `--identifier-per-segment`, `--identifier-allow-look-alikes`
-(skeleton distinctness off), `--identifier-scripts <A+B>`, `--token-policy <level>`, `--token-scripts <A+B>` are shared by `validate`, `compile` and `policy`.
+(skeleton distinctness off), `--identifier-scripts <A+B>`, `--token-policy <level>`, `--token-scripts <A+B>`, `--max-depth <n>` (§9.1's nesting bound) and
+`--max-wait-depth <n>` ([TSON-SCHEMA] §11.5's wait bound; each a positive integer, default 64) are shared by `validate`, `compile` and `policy`.
 `<level>` is a UTS #39 §5.2 restriction level (`ascii-only` … `unrestricted`, or the
 `ASCII_ONLY`-style spelling `tson policy` prints, accepted back); `<A+B>` names UCD `Script`
 property long-form names joined by `+` (`Latin+Cyrillic` — never the ISO 15924 alias `Latn`).

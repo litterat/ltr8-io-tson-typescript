@@ -8,9 +8,10 @@
  *
  * **`--root` is required whenever `--schema` is given, and is not auto-detected from a data
  * file's own header.** The reference implementation's CLI is fully self-describing (each data
- * file's own `!!schema` directive picks its schema, no `--type` needed) -- this port does not
- * follow that design, deliberately: honouring a directive a *data file* declares would mean
- * fetching or opening whatever it names on the strength of untrusted content, exactly the
+ * file's own `!!import` header picks its schema, no `--type` needed) -- this port reads a data
+ * document under its own `!!import`s only against what this run already holds (the bundled library
+ * and a `--schema`), and never fetches one: honouring a header a *data file* declares by
+ * fetching or opening whatever it names would trust untrusted content, exactly the
  * SSRF/arbitrary-file-read shape `@ltr8/tson/source`'s own module doc warns a `SchemaSource`
  * implementation about ("the reference is attacker-controlled... a data document names its own
  * schema"). Requiring `--schema`/`--root` on the command line means the only schema a run ever
@@ -39,7 +40,7 @@
  * out-of-band or in-band, and this CLI -- for JSON as for text -- offers only the out-of-band one:
  * `--schema`/`--root` are the sole source of a JSON input's binding, never a `$schema`/`$type`
  * the document itself carries, for the identical attacker-controlled-reference reason this
- * module's own top note already states for `!!schema`. §3.4 also says there is no schemaless
+ * module's own top note already states for `!!import`. §3.4 also says there is no schemaless
  * reading for this encoding at all ("this encoding has none"), so a `.json` input with no binding
  * is a usage error, checked before any file is opened, rather than falling back to a Class-1-style
  * check the way an unbound `.tn` file does. **§9.4's token policy** (map keys and string values,
@@ -77,7 +78,12 @@ import { compileJsonSchema, validateJsonAsync, type JsonCompiledSchema } from '@
 import { UsageError } from '../exit.js';
 import { outcomeOfDiagnostics, outcomeOfFiles, type Outcome } from '../outcome.js';
 import { classifyReadError, isInvalidSchemaError } from '../problem.js';
-import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
+import {
+  configOf,
+  processorPolicyOf,
+  type PolicyOptions,
+  type ProcessorPolicy,
+} from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
 /** Which encoding an input is read as. */
@@ -107,7 +113,7 @@ export interface ValidateRun {
 
 const HTTP_URL = /^https?:\/\//u;
 
-/** Fetches or reads `location`'s schema bytes -- an `http(s)://` URL is fetched (no redirects, a bounded timeout), anything else is a local file path. Never consults a data file's own `!!schema`; see this module's own top note on why. */
+/** Fetches or reads `location`'s schema bytes -- an `http(s)://` URL is fetched (no redirects, a bounded timeout), anything else is a local file path. Never consults a data file's own `!!import`; see this module's own top note on why. */
 async function loadSchemaBytes(location: string): Promise<Uint8Array> {
   if (!HTTP_URL.test(location)) {
     return await readFile(location);
@@ -224,7 +230,7 @@ async function loadLinkedSchema(
   location: string,
   policy: PolicyOptions,
 ): Promise<{ readonly tson: Tson; readonly linked: LinkedSchema }> {
-  const tson = stdlibTson({ identifierPolicy: policy.identifierPolicy });
+  const tson = stdlibTson(configOf(policy));
   let bytes: Uint8Array;
   try {
     bytes = await loadSchemaBytes(location);
@@ -280,11 +286,27 @@ interface SchemaContext {
   readonly json?: JsonCompiledSchema;
 }
 
+/** The message the library gives a data document's `!!import` of a schema nothing registered. */
+const UNREGISTERED_IMPORT = 'is not registered';
+
+/**
+ * A data document's `!!import` of a schema this run holds no copy of arrives from the library as a
+ * schema error ("not registered"); for this CLI it is a schema nothing here would supply
+ * (`SCHEMA_NOT_PERMITTED`, exit 69), not a verdict on the document -- the same outcome a refused
+ * fetch has. Every other diagnostic passes through unchanged.
+ */
+function unsuppliedImport(diagnostic: Diagnostic): Diagnostic {
+  return diagnostic.code === 'SCHEMA_ERROR' && diagnostic.message.includes(UNREGISTERED_IMPORT)
+    ? { ...diagnostic, code: 'SCHEMA_NOT_PERMITTED' }
+    : diagnostic;
+}
+
 async function validateOne(
   file: string,
   kind: InputKind,
   context: SchemaContext | undefined,
   policy: PolicyOptions,
+  plain: Tson,
 ): Promise<ValidateFileResult> {
   const source = openSource(file);
   try {
@@ -307,20 +329,23 @@ async function validateOne(
         schema: context.json,
         root: context.root,
         identifierPolicy: policy.identifierPolicy,
+        maxNestingDepth: policy.maxNestingDepth,
       });
     } else if (context?.text !== undefined) {
-      result = await validate(source, { schema: context.text, root: context.root });
-    } else {
       result = await validate(source, {
-        identifierPolicy: policy.identifierPolicy,
-        tokenPolicy: policy.tokenPolicy,
+        schema: context.text,
+        root: context.root,
+        maxNestingDepth: policy.maxNestingDepth,
       });
+    } else {
+      // No schema was named: the document is read under its own `!!import`s ([TSON-DATA] §2.2), which
+      // resolve against the bundled library alone -- this run holds no schema source, so a header
+      // naming anything else is refused below, never fetched. A document with no `!!import` reads
+      // schemaless, on Class 1 terms.
+      result = await plain.validateDocument(source);
     }
-    return {
-      file,
-      outcome: outcomeOfDiagnostics(result.diagnostics),
-      diagnostics: result.diagnostics,
-    };
+    const diagnostics = result.diagnostics.map(unsuppliedImport);
+    return { file, outcome: outcomeOfDiagnostics(diagnostics), diagnostics };
   } catch (error) {
     const problem = classifyReadError(error);
     if (problem.kind === 'invalid') {
@@ -438,10 +463,11 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
     };
   }
 
+  const plain = stdlibTson(configOf(options.policy));
   const files: ValidateFileResult[] = [];
   for (const file of options.files) {
     const kind = kinds.get(file) ?? 'tson'; // every file was classified above; the fallback is unreachable
-    files.push(await validateOne(file, kind, context, options.policy));
+    files.push(await validateOne(file, kind, context, options.policy, plain));
   }
   return { outcome: outcomeOfFiles(files.map((f) => f.outcome)), policy, files };
 }
