@@ -57,6 +57,7 @@ const SCHEMA_SOURCE = `
   }
   sized  => [text; 2..3]
   unique => set<text>
+  label  => text
   stamps => set<datetime>
   pair   => [text, int32]
   bounded => {
@@ -105,6 +106,8 @@ const SCHEMA_SOURCE = `
   port_label  => !text ^ { members: ["80" "443"] }
   port_slot   => ( port_label | int32 )
   ported      => { p: port_slot }
+  loose_slot  => ( float64 | text )
+  loosened    => { f: loose_slot }
   answer      => !text ^ { members: ["true" "false"] }
   answer_slot => ( answer | boolean )
   answered    => { a: answer_slot }
@@ -129,6 +132,18 @@ const SCHEMA_SOURCE = `
   stock_id    => !net.uuid_type {}
   customer_id => !net.uuid_type {}
   ided        => { id: meta.ref<net.uuid_type> }
+  typed       => { t: meta.type_ref }
+  cell        => { kind: meta.type_ref  v?: kind! }
+  int_cell    => cell ^ { kind?: = int32 }
+  defaulted   => { kind?: meta.type_ref ~ int32  v?: kind! }
+  grouped     => { ( kind: meta.type_ref | name: text )  v?: kind! }
+  tmpl        => <T> { item: T }
+  order       => { id: text }
+  customer    => { name: text }
+  o1          => !order { id: A-1 }
+  c1          => !customer { name: Ada }
+  order_ref   => meta.ref<order>
+  order_pick  => { which: order_ref  also?: meta.ref<order> ~ o1 }
   a_host       => !net.host_type {}
   host_or_port => ( a_host | int32 )
   addressed    => { at: host_or_port }
@@ -758,6 +773,13 @@ describe('§8.5 scoped positions: the value names its own type', () => {
 
 // ── §5.2: an enum whose type is not an identifier family is string-class ─────────────────────
 
+describe('§5.4 a float admitting specials has no discrimination class', () => {
+  it('float64 admits NaN and the infinities, which straddle classes, so ( float64 | text ) needs the tag: an untagged value is refused in both', () => {
+    sameVerdict('loosened', '{ f: 1.5 }', '{"f": 1.5}');
+    sameVerdict('loosened', '{ f: "hi" }', '{"f": "hi"}');
+  });
+});
+
 describe('§5.2 a text enum is string-class whatever its members spell', () => {
   it('beside int32 and beside boolean the choice is disjoint, and each value goes to its own class', () => {
     bothAccept('ported', '{ p: "80" }', '{"p": "80"}');
@@ -904,7 +926,17 @@ describe('\u00a76.1.5 a record template under a sealed base', () => {
 
 // \u2500\u2500 Kind positions ([TSON-SCHEMA] \u00a74.2, [TSON-JSON] \u00a75.6): an atom whose values are names \u2500\u2500\u2500\u2500\u2500
 
-describe('\u00a75.6 a reference position over a constructor', () => {
+describe('§5.2 a boolean position matches on content, not on kind', () => {
+  it('the string spelling of a member reads in JSON exactly as the quoted token does in TSON text', () => {
+    bothAccept(
+      'kennel',
+      '{ p: { pet_type: cat  name: Tom  indoor: "true" } }',
+      '{"p": {"pet_type": "cat", "name": "Tom", "indoor": "true"}}',
+    );
+  });
+});
+
+describe('§5.6 a reference position over a constructor', () => {
   it('a member name at a kind is accepted by both', () => {
     bothAccept('ided', '{ id: stock_id }', '{"id": "stock_id"}');
   });
@@ -930,5 +962,97 @@ describe('\u00a75.6 a reference position over a constructor', () => {
       '{ id: "7d3e5f8a-1b2c-4d5e-8f90-a1b2c3d4e5f6" }',
       '{"id": "7d3e5f8a-1b2c-4d5e-8f90-a1b2c3d4e5f6"}',
     );
+  });
+});
+
+describe('§5.6 a reference position reads an application, a value by name and a sibling reference', () => {
+  /**
+   * An application may stand at a kind, judged through the entry the closure closed it to
+   * ([TSON-SCHEMA] §4.2, §7.4): `unique => set<text>` is a type. TSON writes the reference
+   * unquoted, as data grammar; JSON, having no unquoted form, writes the same text as a string.
+   */
+  it('an application at a kind is judged through its entry by both', () => {
+    bothAccept('typed', '{ t: set< text > }', '{"t": "set<text>"}');
+    sameVerdict('ided', '{ id: set<text> }', '{"id": "set<text>"}');
+  });
+
+  /** An argument is compared past its alias chain ([TSON-SCHEMA] §8.2): `set<label>` is `set<text>`. */
+  it('an aliased argument at a kind is judged through its entry by both', () => {
+    bothAccept('typed', '{ t: set<label> }', '{"t": "set<label>"}');
+  });
+
+  /**
+   * A reference over a type that is no constructor names a value of the governing schema, judged
+   * by what the name reaches ([TSON-SCHEMA] §4.2, §5.12): a name reaching nothing, a value of
+   * another type or a type is refused by both, on the same code at the same pointer, and a default
+   * written inline is the value both hold where the field is omitted.
+   */
+  it('a value by name is judged by what it reaches in both', () => {
+    bothAccept('order_pick', '{ which: o1 }', '{"which": "o1"}');
+    bothAccept('order_pick', '{ which: o1  also: o1 }', '{"which": "o1", "also": "o1"}');
+    for (const refused of ['nope', 'c1', 'order']) {
+      sameVerdict('order_pick', `{ which: ${refused} }`, `{"which": "${refused}"}`);
+      expect(verdictsOf(tson('order_pick', `{ which: ${refused} }`)), refused).toEqual([
+        { code: 'ATOM_CONSTRAINT_VIOLATION', path: '/which' },
+      ]);
+    }
+    sameVerdict('order_pick', '{ which: o1  also: c1 }', '{"which": "o1", "also": "c1"}');
+  });
+
+  it('an application nothing in the closure closed names no type the schema closes, and is refused by both', () => {
+    sameVerdict('typed', '{ t: set<int32> }', '{"t": "set<int32>"}');
+    expect(tson('typed', '{ t: set<int32> }').map((d) => d.code)).toEqual([
+      'ATOM_CONSTRAINT_VIOLATION',
+    ]);
+  });
+
+  /**
+   * A sibling reference is a reference value, read by the same production in both encodings. It
+   * stands only at a record field's type, so a field typed by a type reference refuses it, on the
+   * same code at the same pointer in both.
+   */
+  it('a sibling reference at a kind is refused by both', () => {
+    sameVerdict('typed', '{ t: kind! }', '{"t": "kind!"}');
+    expect(tson('typed', '{ t: kind! }').map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  });
+});
+
+/**
+ * [TSON-SCHEMA] §5.6's dependent field is read in both encodings against the type its sibling
+ * names in the same record. The rule is the dependent-member rule's, which is not ported yet:
+ * both stacks report `NOT_IMPLEMENTED` for the member today (`json/schema/dependent.ts`), so these
+ * cases are held until it lands, then run as stated.
+ */
+describe.skip('§5.6 a dependent field is read against its sibling (held for the dependent-member rule)', () => {
+  it('a dependent field is read against its sibling by both', () => {
+    bothAccept('cell', '{ kind: int32  v: 5 }', '{"kind": "int32", "v": 5}');
+    bothAccept('defaulted', '{ v: 7 }', '{"v": 7}');
+    bothAccept('int_cell', '{ v: 7  kind: int32 }', '{"v": 7, "kind": "int32"}');
+    sameVerdict('cell', '{ kind: point  v: 5 }', '{"kind": "point", "v": 5}');
+    sameVerdict('cell', '{ v: 5  kind: int32 }', '{"v": 5, "kind": "int32"}');
+    sameVerdict('defaulted', '{ v: 5  kind: int32 }', '{"v": 5, "kind": "int32"}');
+    sameVerdict('cell', '{ kind: tmpl  v: { item: 5 } }', '{"kind": "tmpl", "v": {"item": 5}}');
+    expect(verdictsOf(tson('cell', '{ v: 5  kind: int32 }'))).toEqual([
+      { code: 'VALIDATION_ERROR', path: '/v' },
+    ]);
+    expect(verdictsOf(tson('cell', '{ kind: tmpl  v: { item: 5 } }'))).toEqual([
+      { code: 'VALIDATION_ERROR', path: '/kind' },
+    ]);
+  });
+
+  it('a dependent field without its sibling is refused by both', () => {
+    bothAccept('grouped', '{ kind: int32  v: 5 }', '{"kind": "int32", "v": 5}');
+    bothAccept('grouped', '{ name: x }', '{"name": "x"}');
+    sameVerdict('grouped', '{ name: x  v: 5 }', '{"name": "x", "v": 5}');
+    sameVerdict('grouped', '{ v: 5  kind: int32 }', '{"v": 5, "kind": "int32"}');
+    sameVerdict('cell', '{ v: 5 }', '{"v": 5}');
+    expect(verdictsOf(json('grouped', '{"name": "x", "v": 5}'))).toEqual([
+      { code: 'VALIDATION_ERROR', path: '/v' },
+    ]);
+    expect(verdictsOf(json('cell', '{"v": 5}'))).toEqual([
+      { code: 'FIELD_REQUIRED', path: '/kind' },
+    ]);
+    const message = json('grouped', '{"name": "x", "v": 5}')[0]?.message ?? '';
+    expect(message).toContain("is written without 'kind'");
   });
 });

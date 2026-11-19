@@ -42,6 +42,7 @@ const SCHEMA_SOURCE = `
   tight  => ( strict | text )
 
   holder => { pick: scalar_or_list }
+  drawing => { s: shape }
 }
 `;
 
@@ -182,13 +183,13 @@ describe('§8.1: the tagged form, admitted at every choice position', () => {
     expect(problem.expected).toContain('circle');
   });
 
-  it('§8.5 admits $schema at a scoped position; a choice is the closed sum, so it is refused here', () => {
-    expect(
-      refusal(
-        'shape',
-        '{"$schema": "https://example.test/other.tn", "$type": "circle", "radius": 1.0}',
-      ).code,
-    ).toBe('SCOPE_NOT_ADMITTED');
+  it('§3.3: $import stands at the top of the document alone, so a choice position refuses it like every other', () => {
+    const found = refusal(
+      'drawing',
+      '{"s": {"$import": ["https://example.test/other.tn"], "$type": "circle", "radius": 1.0}}',
+    );
+    expect(found.code).toBe('SCOPE_NOT_ADMITTED');
+    expect(found.path).toBe('/s/$import');
   });
 });
 

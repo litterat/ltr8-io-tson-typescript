@@ -1,5 +1,5 @@
 /**
- * [TSON-JSON] §3.2's three annotation members -- `$schema`, `$type`, `$value` -- and the peek at an
+ * [TSON-JSON] §3.2's three annotation members -- `$import`, `$type`, `$value` -- and the peek at an
  * object's leading members that every dispatcher in this directory ({@link ./dispatchTag.js},
  * {@link ./dispatchMember.js}, {@link ./dispatchChoice.js}) decides from. Ported from the Java
  * reference's `TagMembers` (`tson-json/.../reader/TagMembers.java`); see that file's own doc for
@@ -17,21 +17,22 @@
  * thing already, and it has no JSON carrier at all (§4.3), so a module named for §3.3 would be the
  * one place "annotation" meant something else.
  *
- * **The selectors lead, so a bounded peek answers the question.** §3.3 puts `$schema` first where
+ * **The selectors lead, so a bounded peek answers the question.** §3.3 puts `$import` first where
  * present and `$type` after it; §6.1.5 puts a sealed position's discriminators next, in any order
- * among themselves. {@link lead} reads exactly that many members and rewinds
+ * among themselves. A leading `$import` stops the peek: it stands at the top of the document alone,
+ * so every value position that meets one refuses the object and needs nothing past it. {@link lead} reads exactly that many members and rewinds
  * (`json/readContext.ts`'s own {@link lookingAhead}), so what a reader holds before dispatch is a
  * count the schema fixes ([TSON-JSON] §10.1), never one the document chooses. A selector's value is
  * captured only when it is a scalar (string/number/boolean/null) — one that is not stops the peek,
  * matching the Java reference's own `isScalar` gate.
  *
  * **Every refusal this module reports is `UNKNOWN_TYPE_REF`, a resolver-category code.** §9.4's
- * table puts "a `$schema` or `$type` that does not lead its object, and a `$value` in an object not
+ * table puts "an `$import` or `$type` that does not lead its object, and a `$value` in an object not
  * led by `$type` (§3.3); wrapper-form objects with extra members (§3.3)" under the **resolver**
  * row, not the validation row where closure violations live. `UNKNOWN_TYPE_REF` is the closest of
  * this codebase's resolver-category codes (`core/diagnostic.ts`, whose own TSDoc on this code
  * states the second, narrower use directly): what denotes nothing admissible is the annotation
- * member's **name itself** at the position it was written — `$schema`/`$type` out of lead
+ * member's **name itself** at the position it was written — `$import`/`$type` out of lead
  * position, any member beside `$value` — never a question about whether a `$type`'s own *value*
  * resolves to a declared type. A misplaced `$type: "dog"` reports this way even where `dog` is a
  * perfectly good type name elsewhere in the schema: the violation is that `$type` was written in
@@ -51,10 +52,10 @@ import { skipNextValue } from './eventSkip.js';
 import type { JsonTypeReader } from './types.js';
 
 /** §3.2's closed set: the names this encoding gives a meaning, and there is no fourth. */
-export const SCHEMA = '$schema';
+export const IMPORT = '$import';
 export const TYPE = '$type';
 export const VALUE = '$value';
-export const TAG_MEMBERS: readonly string[] = [SCHEMA, TYPE, VALUE];
+export const TAG_MEMBERS: readonly string[] = [IMPORT, TYPE, VALUE];
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const EMPTY_MAP: ReadonlyMap<string, JsonEvent> = new Map();
@@ -62,9 +63,8 @@ const EMPTY_MAP: ReadonlyMap<string, JsonEvent> = new Map();
 /**
  * What an object's leading members say about it.
  *
- * @param schema whether `$schema` leads — admitted only at a scoped position holding EXTERN
- *   (§8.5, `json/schema/scoped.ts`); every other reader refuses it
- * @param schemaRef that member's string content, or `undefined` where it is missing or not a string
+ * @param imports whether `$import` leads — the document's binding (§3.4), which every value
+ *   position refuses
  * @param typed whether a `$type` member leads, whatever its value
  * @param type that member's string content, or `undefined` where it is missing or not a string
  * @param wrapper whether `$value` follows the annotation members — §3.3's wrapper form
@@ -73,8 +73,7 @@ const EMPTY_MAP: ReadonlyMap<string, JsonEvent> = new Map();
  *   them is missing here
  */
 export interface Lead {
-  readonly schema: boolean;
-  readonly schemaRef: string | undefined;
+  readonly imports: boolean;
   readonly typed: boolean;
   readonly type: string | undefined;
   readonly wrapper: boolean;
@@ -82,8 +81,7 @@ export interface Lead {
 }
 
 export const NO_LEAD: Lead = {
-  schema: false,
-  schemaRef: undefined,
+  imports: false,
   typed: false,
   type: undefined,
   wrapper: false,
@@ -92,7 +90,7 @@ export const NO_LEAD: Lead = {
 
 /** Whether `lead` opens a §3.3 reading at all — the recognition test itself (§3.3, §8.3.1). */
 export function leadPresent(lead: Lead): boolean {
-  return lead.schema || lead.typed || lead.wrapper;
+  return lead.imports || lead.typed || lead.wrapper;
 }
 
 /**
@@ -101,7 +99,7 @@ export function leadPresent(lead: Lead): boolean {
  * unrecognised members (§6.1.1).
  */
 export function isTagMember(name: string): boolean {
-  return name === SCHEMA || name === TYPE || name === VALUE;
+  return name === IMPORT || name === TYPE || name === VALUE;
 }
 
 function isScalarEvent(event: JsonEvent): boolean {
@@ -148,46 +146,24 @@ export function* lead(
     const opening = yield* ahead.next();
     if (opening.kind !== 'object-start') return NO_LEAD;
 
-    let schema = false;
-    let schemaRef: string | undefined;
+    let event = yield* ahead.next();
+    if (isMemberNamed(event, IMPORT)) {
+      return { ...NO_LEAD, imports: true };
+    }
     let typed = false;
     let type: string | undefined;
-    let event = yield* ahead.next();
 
-    if (isMemberNamed(event, SCHEMA)) {
-      schema = true;
-      const named = yield* ahead.peek();
-      schemaRef = named.kind === 'string' ? named.value : undefined;
-      if (!(yield* skipScalar(ahead))) {
-        return {
-          schema: true,
-          schemaRef: undefined,
-          typed: false,
-          type: undefined,
-          wrapper: false,
-          selectors: EMPTY_MAP,
-        };
-      }
-      event = yield* ahead.next();
-    }
     if (isMemberNamed(event, TYPE)) {
       typed = true;
       const peeked = yield* ahead.peek();
       type = peeked.kind === 'string' ? peeked.value : undefined;
       if (!(yield* skipScalar(ahead))) {
-        return {
-          schema,
-          schemaRef,
-          typed: true,
-          type: undefined,
-          wrapper: false,
-          selectors: EMPTY_MAP,
-        };
+        return { ...NO_LEAD, typed: true };
       }
       event = yield* ahead.next();
     }
     if (isMemberNamed(event, VALUE)) {
-      return { schema, schemaRef, typed, type, wrapper: true, selectors: EMPTY_MAP };
+      return { imports: false, typed, type, wrapper: true, selectors: EMPTY_MAP };
     }
 
     const selectors = new Map<string, JsonEvent>();
@@ -199,7 +175,7 @@ export function* lead(
       yield* ahead.next(); // the value just peeked
       event = yield* ahead.next(); // the next member-name, or whatever follows
     }
-    return { schema, schemaRef, typed, type, wrapper: false, selectors };
+    return { imports: false, typed, type, wrapper: false, selectors };
   });
 }
 
@@ -214,7 +190,7 @@ export function* lead(
  */
 export function* readWrapped(ctx: JsonReadContext, target: JsonTypeReader): Task<unknown> {
   yield* ctx.next(); // object-start
-  return yield* walkWrapper(ctx, target, SCHEMA, false, undefined);
+  return yield* walkWrapper(ctx, target, IMPORT, false, undefined);
 }
 
 /**
@@ -278,8 +254,8 @@ function* walkWrapper(
       continue;
     }
     const leading = !found && awaiting !== undefined && (name === awaiting || name === TYPE);
-    awaiting = leading && name === SCHEMA ? TYPE : undefined;
-    if (name === SCHEMA || name === TYPE) {
+    awaiting = leading && name === IMPORT ? TYPE : undefined;
+    if (name === IMPORT || name === TYPE) {
       if (!leading) refuseMisplaced(ctx, name);
     } else {
       // §9.4: "wrapper-form objects with extra members" is a resolver error, not the ordinary
@@ -290,7 +266,7 @@ function* walkWrapper(
         .report(
           'UNKNOWN_TYPE_REF',
           `'${name}' stands beside '$value' in an annotation object, which is apparatus and not ` +
-            "a record (§3.3) -- it admits '$schema', '$type' and '$value' and nothing else",
+            "a record (§3.3) -- it admits '$import', '$type' and '$value' and nothing else",
           TAG_MEMBERS.join(' | '),
           name,
         );
@@ -300,7 +276,7 @@ function* walkWrapper(
 }
 
 /**
- * Reports a `$schema` or `$type` that does not lead its object (§3.3, `UNKNOWN_TYPE_REF` — this
+ * Reports an `$import` or `$type` that does not lead its object (§3.3, `UNKNOWN_TYPE_REF` — this
  * module's own top note on the code): the selectors have a fixed place so that no decoder holds
  * more than the schema bounds before dispatch.
  */
@@ -309,7 +285,7 @@ export function refuseMisplaced(ctx: JsonReadContext, name: string): void {
     .field(name)
     .report(
       'UNKNOWN_TYPE_REF',
-      `'${name}' must lead its object -- '$schema' first where present, then '$type' (§3.3) -- ` +
+      `'${name}' must lead its object -- '$import' first where present, then '$type' (§3.3) -- ` +
         'and here it follows another member',
       `'${name}' as a leading member`,
       name,

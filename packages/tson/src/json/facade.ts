@@ -37,6 +37,7 @@ import { TsonInternalError, TsonLexError, TsonParseError, TsonReadError } from '
 import type { NestingLimitOptions } from '../core/limits.js';
 import { fromBytes, fromString, runOver, runSync, type ByteInput, type Task } from '../io/bytes.js';
 import type { IdentifierPolicy, ScriptPolicy } from '../unicode/policy.js';
+import { declinesInBandBinding } from './inBandBinding.js';
 import { createJsonReadContext } from './readContext.js';
 import type { JsonCompiledSchema, JsonTypeReader } from './schema/compile.js';
 import { createJsonStream } from './stream.js';
@@ -45,7 +46,12 @@ import type { JsonValue } from './tree.js';
 export type { JsonCompiledSchema, JsonTypeReader } from './schema/compile.js';
 export { compileJsonSchema } from './schema/compile.js';
 
-/** Options for a schema-directed JSON read — the out-of-band binding [TSON-JSON] §3.4 calls "the expected production route": the application supplies both `schema` and `root`, and the document is then a bare value read directly at that type. */
+/**
+ * Options for a schema-directed JSON read — the out-of-band binding [TSON-JSON] §3.4 calls "the
+ * expected production route": the application supplies both `schema` and `root`, and the document
+ * is then a bare value read directly at that type. The in-band route, a root annotation object led
+ * by `$import`, is declined as `NOT_IMPLEMENTED` (`json/inBandBinding.ts`).
+ */
 export interface ReadJsonOptions extends NestingLimitOptions {
   readonly schema: JsonCompiledSchema;
   readonly root: string;
@@ -124,6 +130,7 @@ function* readJsonDocumentValue(
   );
   const rootLocation = options.schema.rootDeclaration(options.root);
   const anchored = rootLocation === undefined ? ctx : ctx.underDeclaration(rootLocation);
+  if (yield* declinesInBandBinding(anchored)) return undefined;
   const value = yield* reader.read(anchored);
   const end = yield* ctx.next();
   if (end.kind !== 'end-of-document') {

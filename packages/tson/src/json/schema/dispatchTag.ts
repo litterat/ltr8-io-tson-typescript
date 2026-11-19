@@ -34,7 +34,8 @@ import { admitting, selfNames } from '../../link/aliasChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
-import { lead as leadOf, SCHEMA, TYPE, type Lead } from './tagMembers.js';
+import { lead as leadOf, TYPE, type Lead } from './tagMembers.js';
+import { RECORD, refusesScope } from './tags.js';
 import { hasReadExact, routeTo, type ExactReader, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 
@@ -111,21 +112,8 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
         ? yield* untagged.readExact(ctx, reader)
         : yield* untagged.read(ctx);
     }
-    if (lead.schema) {
-      // [TSON-SCHEMA] §7.8, [TSON-JSON] §8.5: `$schema` at a position whose own type is not
-      // scoped is `SCOPE_NOT_ADMITTED`, a resolver error.
-      ctx
-        .field(SCHEMA)
-        .report(
-          'SCOPE_NOT_ADMITTED',
-          `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
-            `position -- '${displayName}' is a record`,
-          'no $schema at this position',
-          SCHEMA,
-        );
-      yield* skipNextValue(ctx);
-      return undefined;
-    }
+    // §3.3: `$import` stands at the top of the document alone, so a family position refuses it.
+    if (yield* refusesScope(ctx, lead, displayName, RECORD)) return undefined;
     if (lead.type === undefined) {
       if (lead.wrapper) {
         // A bare `$value` with no leading `$type` (§9.4's table: resolver category, not this
