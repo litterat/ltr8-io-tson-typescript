@@ -244,7 +244,14 @@ export function heldRecord(
     if (valueParam !== undefined) {
       members.push({ name: VALUE, value: scoped(tokenValue(valueParam)) });
     } else if (f.value !== undefined) {
-      const form = lexerFormOfMeta(f.value.form);
+      // A literal spelled like one of the template's parameters is written quoted, so the held form's
+      // unquoted-token-as-parameter rule never reads it as the parameter (§5.10: the shadowing rule
+      // classifies what the template writes, and a literal a closed source contributed is not that).
+      const spelledAsParameter =
+        'parameters' in body &&
+        f.value.form === 'UNQUOTED' &&
+        body.parameters.some((parameter) => parameter.name === f.value?.text);
+      const form = spelledAsParameter ? 'single-line' : lexerFormOfMeta(f.value.form);
       members.push({ name: VALUE, value: scoped({ kind: 'token', text: f.value.text, form }) });
     }
     return [

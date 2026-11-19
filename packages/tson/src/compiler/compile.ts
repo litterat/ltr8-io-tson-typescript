@@ -53,6 +53,8 @@ import type {
 } from '../schema/meta/bodies.js';
 import type { Value } from '../tree/nodes.js';
 import { recordTreeReader } from '../reader/tree/record.js';
+import { dependentFieldReader } from '../reader/tree/dependent.js';
+import { siblingType } from '../link/dependentFields.js';
 import { mapTreeReader } from '../reader/tree/map.js';
 import { arrayTreeReader } from '../reader/tree/array.js';
 import { tupleTreeReader } from '../reader/tree/tuple.js';
@@ -227,10 +229,19 @@ function buildReader(
       name,
       name,
       body,
-      (field) =>
-        field.type.kind === 'sibling'
-          ? dependentFieldReader(name, field.type.field)
-          : resolve(field.type.name),
+      (field) => {
+        if (field.type.kind !== 'sibling') return resolve(field.type.name);
+        const lookup = (entry: string): Top | undefined => schema.entries.get(entry);
+        const sibling = body.fields.entries.get(field.type.field);
+        return dependentFieldReader(
+          name,
+          field.name,
+          field.type.field,
+          sibling === undefined ? undefined : siblingType(sibling, lookup),
+          lookup,
+          resolve,
+        );
+      },
       location(),
       fieldNames,
       policy,
@@ -300,22 +311,6 @@ function buildReader(
     `'${name}' (kind ${entryKind(definition)}) is not a data type -- it is a value of a meta ` +
       "layer's vocabulary, not a type, and has no compiled reader",
   );
-}
-
-/**
- * A dependent field's reader (§5.2): its type is the one each instance's sibling value names, which
- * this reader cannot know before the record has read the sibling. Reading one is not built yet, so a read
- * that reaches one reports that.
- */
-function dependentFieldReader(record: string, sibling: string): TypeReader<Value> {
-  return {
-    read: () => {
-      throw new TsonNotImplementedError(
-        `'${record}' has a dependent field typed by its sibling '${sibling}!' (§5.2), which a compiled ` +
-          'reader does not read yet',
-      );
-    },
-  };
 }
 
 /**

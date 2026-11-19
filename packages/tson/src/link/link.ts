@@ -37,7 +37,11 @@
  * local, which is why it takes `localNames` too.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
-import { TsonInternalError, TsonSchemaValidationError } from '../core/errors.js';
+import {
+  TsonInternalError,
+  TsonNotImplementedError,
+  TsonSchemaValidationError,
+} from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
@@ -45,6 +49,7 @@ import { isTemplateBody } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
+import { areOneSynthetic, unifiedFacts } from './importedSynthetics.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { computeKindMembers } from './kindMembers.js';
 import { checkFieldNameTypes, type FieldNameType } from './fieldNames.js';
@@ -150,7 +155,22 @@ export interface LinkDeps {
    * bootstrap route) has no such restriction and may take a caller's own policy.
    */
   readonly identifierPolicy?: IdentifierPolicy;
+  /**
+   * Judges the dependent values the schema's value entries hold as written (§5.2) against the type each
+   * one's sibling names, once the rest of the link is clean. A judgement is a read, which compiles the
+   * linked schema, so it is supplied by the caller that has the readers (`compiler/heldValues.ts`) and
+   * `link/` names none. Omitted means the held values are not judged, which is what a schema holding none
+   * needs.
+   */
+  readonly heldValues?: HeldValueJudge;
 }
+
+/** {@link LinkDeps.heldValues}: refusals and gaps are handed to `report` with the entry holding the value. */
+export type HeldValueJudge = (
+  linked: LinkedSchema,
+  localNames: ReadonlySet<string>,
+  report: (entry: string, error: TsonSchemaValidationError | TsonNotImplementedError) => void,
+) => void;
 
 /**
  * Links `schema` — merges every `!!import`'s whole, already-linked namespace (diamonds unified by
@@ -163,7 +183,18 @@ export interface LinkDeps {
  * of this schema checkable against something real).
  */
 export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
-  const { resolveImport, receiver } = deps;
+  const { resolveImport } = deps;
+  // Held values are judged only once everything else linked clean, so a refusal anywhere stops there.
+  const state = { refused: false };
+  const receiver: DiagnosticsReceiver | undefined =
+    deps.receiver === undefined
+      ? undefined
+      : {
+          report(diagnostic) {
+            state.refused = true;
+            deps.receiver?.report(diagnostic);
+          },
+        };
   const identifierPolicy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const origins = new Map<string, string>();
@@ -346,7 +377,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     structureFacts: facts,
   });
 
-  return {
+  const linked: LinkedSchema = {
     id: schema.id,
     imports: schema.imports,
     entries: merged,
@@ -357,6 +388,19 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     enumForms,
     nameTypes,
   };
+  if (deps.heldValues !== undefined && !state.refused) {
+    deps.heldValues(linked, localNames, (entry, error) => {
+      if (receiver === undefined) throw error;
+      receiver.report({
+        code: error instanceof TsonNotImplementedError ? 'NOT_IMPLEMENTED' : 'SCHEMA_ERROR',
+        message: error.message,
+        schemaId: schema.id,
+        schemaPointer: `/${entry}`,
+        ...schemaPositionOf(facts, entry),
+      });
+    });
+  }
+  return linked;
 }
 
 // ── Import merging (§2.2.3, diamonds included) ──────────────────────────────────────────────────
@@ -407,6 +451,30 @@ function mergeImports(
         continue;
       }
       if (incumbent !== undefined) {
+        const existing = merged.get(name);
+        const incumbentFacts = facts.get(name);
+        const arrivingFacts = imported.facts?.get(name);
+        if (
+          incumbent !== origin &&
+          existing !== undefined &&
+          areOneSynthetic(
+            name,
+            incumbentFacts,
+            existing,
+            incumbent,
+            arrivingFacts,
+            definition,
+            origin,
+          )
+        ) {
+          // One synthetic minted by two documents is one entry (§8.2): the first arrival is kept, and each
+          // route's view of its subtypes is credited.
+          merged.set(name, unifySubtypes(existing, definition));
+          if (incumbentFacts !== undefined && arrivingFacts !== undefined) {
+            facts.set(name, unifiedFacts(incumbentFacts, arrivingFacts));
+          }
+          continue;
+        }
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ` +
@@ -415,7 +483,6 @@ function mergeImports(
               `'${name}' is declared`,
           );
         }
-        const existing = merged.get(name);
         merged.set(name, existing === undefined ? definition : unifySubtypes(existing, definition));
         continue;
       }

@@ -62,6 +62,7 @@ import {
   withApplication,
   withChain,
 } from '../schema/meta/typedef.js';
+import { areOneSynthetic, unifiedFacts } from '../link/importedSynthetics.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_MAX_WAIT_DEPTH, waitDepthLimitRefusal } from '../core/limits.js';
 import { terminal } from '../link/aliasChain.js';
@@ -322,6 +323,28 @@ export function resolveSchema(
     }
   }
 
+  // The names the imports bring in, which a template's parameter may not be spelled like (§5.10).
+  const imported = new Set(namespace.keys());
+
+  /**
+   * §5.10: within a template's body a parameter's name is read before the schema's, so a parameter spelled
+   * like an entry the schema's namespace holds -- a type or a value entry, its own or an import's -- makes
+   * that entry unreachable there, and is a resolver error at the declaration rather than a silent capture.
+   * Judged by the name alone, before anything resolves, so no entry is waited on. A parameter list the
+   * desugarer wrote for a lifted form is its own renaming (`p0`, `p1`), and is not asked.
+   */
+  const refuseShadowingParameters = (name: string, parameters: readonly string[]): void => {
+    for (const parameter of parameters) {
+      if (declarations.has(parameter) || imported.has(parameter)) {
+        throw new TsonSchemaValidationError(
+          `'${name}': parameter '${parameter}' shadows the entry '${parameter}' this schema's ` +
+            `namespace holds -- inside a template a parameter's name is read before the schema's, so ` +
+            `the entry would be unreachable there (§5.10). Rename the parameter`,
+        );
+      }
+    }
+  };
+
   // Resolve on demand, following dependencies rather than source order (§3.4.1). `resolving`
   // catches a cycle through a composition/refinement/atom-refinement edge; ordinary recursion
   // through field references never enters it. `resolverBox` breaks the construction cycle
@@ -392,6 +415,7 @@ export function resolveSchema(
         );
       }
       const position = positionOf(declaration, positions);
+      if (!generated.has(name)) refuseShadowingParameters(name, typeParamsOf(declaration.typeDef));
       const resolved = resolver.resolve(declaration, position);
       refuseHeadAbstraction(name, resolved);
       measure(name);
@@ -645,7 +669,11 @@ export function resolveSchema(
     const head = materialiser.mintedFacts(name)?.head;
     const withHead = head === undefined || known.head !== undefined ? known : { ...known, head };
     const closed = closes.get(name);
-    return closed === undefined ? withHead : { ...withHead, closes: closed };
+    const closing = closed === undefined ? withHead : { ...withHead, closes: closed };
+    // A form no author named is synthetic (§8.2): an importer reaching it by two routes unifies it.
+    return generated.has(name) || mintedSynthetic.has(name)
+      ? { ...closing, synthetic: true }
+      : closing;
   };
   /** `annotations` with the application `name` closes recorded as its `@application` (§8.2). */
   const withAppliedKey = (name: string, annotations: Annotations): Annotations => {
@@ -848,6 +876,12 @@ function isReportable(e: unknown): e is ReportableSchemaError {
   );
 }
 
+function requiredEntry(entries: ReadonlyMap<string, Top>, name: string): Top {
+  const entry = entries.get(name);
+  if (entry === undefined) throw new TsonInternalError(`no entry '${name}' in the merged imports`);
+  return entry;
+}
+
 /**
  * Stage 1 of {@link resolveSchema} -- every `!!import`'s whole namespace, in declaration order,
  * merged as-is (never re-resolved against the importer). Mirrors the reference implementation's
@@ -885,6 +919,27 @@ function mergeImports(
         continue;
       }
       if (incumbent !== undefined) {
+        const incumbentFacts = facts.get(name);
+        const arrivingFacts = imported.facts?.get(name);
+        if (
+          incumbent !== origin &&
+          merged.get(name) !== undefined &&
+          areOneSynthetic(
+            name,
+            incumbentFacts,
+            requiredEntry(merged, name),
+            incumbent,
+            arrivingFacts,
+            definition,
+            origin,
+          )
+        ) {
+          // One synthetic minted by two documents is one entry (§8.2): the first arrival is kept.
+          if (incumbentFacts !== undefined && arrivingFacts !== undefined) {
+            facts.set(name, unifiedFacts(incumbentFacts, arrivingFacts));
+          }
+          continue;
+        }
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ('${incumbent}' and ` +

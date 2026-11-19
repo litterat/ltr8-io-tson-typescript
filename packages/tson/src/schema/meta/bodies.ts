@@ -461,10 +461,14 @@ export function unlabelled(template: RecordTemplateBody): RecordBody {
  * name takes it as its `type_param`, and one whose value is an unquoted parameter token as its
  * `value_param` (§5.10's shadowing rule over the source spelling). Sound because a parameter spelled like
  * an entry of the schema is refused where the template is declared. The inverse of {@link unlabelled}.
+ *
+ * A value token in `literals` is one a closed source contributed, which the shadowing rule never
+ * classifies: it stays a `value` whatever it is spelled (§5.10).
  */
 export function labelFields(
   body: RecordBody,
   parameters: readonly TemplateParam[],
+  literals?: { has(token: Token): boolean },
 ): RecordTemplateBody {
   const names = parameters.map((parameter) => parameter.name);
   const fields = [...body.fields.entries].map(([name, field]) => {
@@ -475,7 +479,9 @@ export function labelFields(
         ? field.type.name
         : undefined;
     const valueParam =
-      field.value?.form === 'UNQUOTED' && names.includes(field.value.text)
+      field.value?.form === 'UNQUOTED' &&
+      names.includes(field.value.text) &&
+      literals?.has(field.value) !== true
         ? field.value.text
         : undefined;
     const template: RecordTemplateField = {

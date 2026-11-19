@@ -1019,11 +1019,9 @@ describe('§5.6 a reference position reads an application, a value by name and a
 
 /**
  * [TSON-SCHEMA] §5.6's dependent field is read in both encodings against the type its sibling
- * names in the same record. The rule is the dependent-member rule's, which is not ported yet:
- * both stacks report `NOT_IMPLEMENTED` for the member today (`json/schema/dependent.ts`), so these
- * cases are held until it lands, then run as stated.
+ * names in the same record, by the one rule (`link/dependentFields.ts`).
  */
-describe.skip('§5.6 a dependent field is read against its sibling (held for the dependent-member rule)', () => {
+describe('§5.6 a dependent field is read against its sibling', () => {
   it('a dependent field is read against its sibling by both', () => {
     bothAccept('cell', '{ kind: int32  v: 5 }', '{"kind": "int32", "v": 5}');
     bothAccept('defaulted', '{ v: 7 }', '{"v": 7}');

@@ -401,6 +401,20 @@ function typeRefMentionsParameter(ref: TypeRef, parameters: readonly string[]): 
   );
 }
 
+/**
+ * The value tokens fields carry that a closed source contributed (§5.10): a template's shadowing rule
+ * classifies what the template writes and nothing it absorbs, so a literal spelled like one of its
+ * parameters stays a literal in every application. Keyed by the token, which a restating entry replaces.
+ */
+const ABSORBED_LITERALS = new WeakSet<Token>();
+
+/** `source`'s value tokens, recorded as literals this declaration absorbed ({@link ABSORBED_LITERALS}). */
+function absorbLiterals(source: RecordBody): void {
+  for (const field of namedFields(source)) {
+    if (field.value !== undefined) ABSORBED_LITERALS.add(field.value);
+  }
+}
+
 /** A parameter whose type is not yet derived: a type parameter until `parameterTypes.ts` says otherwise (§5.10). */
 function undecidedParameter(name: string): TemplateParam {
   return { name, type: { name: TYPE_KIND, arguments: [], annotations: [] } };
@@ -445,6 +459,7 @@ function recordValue(
             : {}),
       },
       parameters.map(undecidedParameter),
+      ABSORBED_LITERALS,
     );
   }
   // A template keeps its parents as written; a closed record keeps only its applied ones, until
@@ -519,20 +534,27 @@ function isRecordBody(body: Top | undefined): body is RecordBody {
 
 /**
  * §8.1: "`template` is resolver vocabulary: nothing is ever typed by it, and a source declaration
- * applying it directly is a resolver error" -- checked at the end of the head's own alias chain
- * (`resolveConstructorTarget` already walked it), since `template` composes with `top` directly and
- * would otherwise pass every other structural check `resolveInstance`/`resolveInstanceTemplate`
- * make of an ordinary constructor. The open spelling (`<U> !template { ... }`) is refused on the
- * same terms: a parameter list on the declaration does not make a hand-written held body a derived
- * one (§5.10's own `<...>` is the authored spelling of an open entry, not a licence to spell one by
- * hand).
+ * applying it directly is a resolver error", and `record_template` the same: each is the body of an open
+ * entry, which the resolver derives from a declaration's parameter list. Both IS-A `top`, since resolved
+ * output is typed by it, so each would be applied as a constructor is and would mint an open entry whose
+ * body was hand-written, skipping every check §5.10 makes of a template's declaration. Checked at the end
+ * of the head's own alias chain (`resolveConstructorTarget` already walked it), so an alias of either is
+ * refused as well, and the open spelling (`<U> !template { ... }`) on the same terms: a parameter list on
+ * the declaration does not make a hand-written body a derived one.
  */
-function refuseTemplateAppliedDirectly(name: string, terminalHead: string): void {
+function refuseTemplateAppliedDirectly(name: string, target: string, terminalHead: string): void {
   if (terminalHead === metaName('template')) {
     throw new TsonSchemaValidationError(
-      `'${name}': '!template' is resolver vocabulary -- an open entry's own body, derived from a ` +
-        "declaration's parameter list -- and a source declaration applying it directly is a " +
-        "resolver error (§8.1); '<...>' is the authored spelling of an open entry (§5.10)",
+      `'${name}': '!${target}' is resolver vocabulary -- the body of an open entry, which the resolver ` +
+        "derives from a declaration's parameter list, and a source declaration never applies it " +
+        `directly (§8.1). Name the parameters on the declaration instead: '${name} => <T> !C { ... }' (§5.10)`,
+    );
+  }
+  if (terminalHead === RECORD_TEMPLATE) {
+    throw new TsonSchemaValidationError(
+      `'${name}': '!${target}' is resolver vocabulary -- the body of a record template, which the ` +
+        'resolver derives from a record declared with type parameters, and a source declaration ' +
+        `never applies it directly (§8.1). Name the parameters on the declaration instead: '${name} => <T> { ... }' (§5.10)`,
     );
   }
 }
@@ -700,7 +722,7 @@ function requireTypeRef(value: DataValue, context: string): string {
 function resolveInstance(deps: DefinitionResolverDeps, name: string, instance: Instance): Resolved {
   const target = requireTypeRef(instance.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
-  refuseTemplateAppliedDirectly(name, head.name);
+  refuseTemplateAppliedDirectly(name, target, head.name);
   if (parametersOfHead(head.definition).length > 0) {
     throw new TsonSchemaValidationError(
       `'${name}': '${target}' is a template, and a template closes by application, not by construction -- ` +
@@ -855,7 +877,7 @@ function resolveInstanceTemplate(
 ): Resolved {
   const target = requireTypeRef(template.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
-  refuseTemplateAppliedDirectly(name, head.name);
+  refuseTemplateAppliedDirectly(name, target, head.name);
   if (mark !== undefined) {
     throw new TsonSchemaValidationError(
       `'${name}' writes the definition mark '${mark}' on a template -- only a record-bodied ` +
@@ -1523,6 +1545,7 @@ function resolveComposition(
     for (const ancestor of ofParent(deps, supertypeName))
       addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
     absorb(name, supertypeVocabulary, fields, groups, seenFieldNames, inheritedFieldIndex);
+    absorbLiterals(supertypeVocabulary);
     takeNameType(supertypeName, supertypeVocabulary.nameType);
   }
 
@@ -1787,6 +1810,7 @@ function resolveRefinement(
       written,
       [...operand.ancestors],
       operand.body,
+      false,
     );
   }
   if (refined.target.kind === 'nameRef') {
@@ -1835,6 +1859,7 @@ function resolveRefinement(
     sourceRef,
     transitiveSupertypes,
     sourceVocabulary,
+    true,
   );
 }
 
@@ -1864,8 +1889,10 @@ function refineOnto(
   written: TypeRef,
   transitiveSupertypes: readonly string[],
   sourceBody: RecordBody,
+  closedSource: boolean,
 ): Draft {
   const fields: NamedField[] = [...namedFields(sourceBody)];
+  if (closedSource) absorbLiterals(sourceBody);
   const groups: FieldGroup[] = [...sourceBody.groups];
   const inheritedFieldIndex = new Map<string, number>();
   fields.forEach((f, i) => inheritedFieldIndex.set(f.name, i));

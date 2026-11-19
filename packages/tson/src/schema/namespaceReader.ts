@@ -49,6 +49,7 @@ import {
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { createQualifiedNameParser } from '../atom/reference.js';
 import { terminal, type EntryLookup } from '../link/aliasChain.js';
+import { referenceIn, writtenWithoutItsSibling } from '../link/dependentFields.js';
 import { lexerFormOfMeta, metaFormOfLexer } from '../compiler/tokenForms.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import {
@@ -56,6 +57,7 @@ import {
   groupRefusals,
   isGroupMember,
   type ArrayBody,
+  type RecordField,
   type ChoiceBody,
   type MapBody,
   type RecordBody,
@@ -64,6 +66,7 @@ import {
 import type {
   Annotation,
   Annotations,
+  MetaHeldValue,
   MetaValue,
   Namespace,
   NameSlot,
@@ -210,6 +213,8 @@ export function metaDataValue(value: MetaValue): DataValue {
                 })),
               },
       };
+    case 'held':
+      return value.written as DataValue;
     case 'namespace':
       return { annotations: [], coreValue: namespaceMapValue(value.value) };
   }
@@ -611,11 +616,22 @@ class ValueBodyReader {
         continue;
       }
       // A dependent field's value is read against the type its sibling names in each instance, which the
-      // reading schema's closure alone holds: a schema document holds it as written (§5.2).
-      const read =
-        declaration.type.kind === 'sibling'
-          ? heldAsWritten(written, at_)
-          : this.value(written, this.named(declaration.type), at_);
+      // reading schema's closure alone holds: a schema document holds it as written (§5.2), and the link
+      // judges it.
+      let read: MetaValue;
+      if (declaration.type.kind === 'sibling') {
+        const sibling = declaration.type.field;
+        const siblingDeclared = body.fields.entries.get(sibling);
+        if (siblingDeclared === undefined) {
+          throw new TsonReadError({
+            code: 'UNRECOGNIZED_FIELD',
+            message: `${at(at_)}'${name}.${field.name}' is typed by the sibling '${sibling}!', and '${name}' declares no field '${sibling}'`,
+          });
+        }
+        read = heldAsWritten(written, field.name, sibling, siblingDeclared);
+      } else {
+        read = this.value(written, this.named(declaration.type), at_);
+      }
       if (
         declaration.role === 'FIXED' &&
         declaration.value !== undefined &&
@@ -628,6 +644,12 @@ class ValueBodyReader {
         });
       }
       fields.set(field.name, read);
+    }
+    // What each held value's sibling holds in this instance, now every field is read (§5.2): the sibling
+    // may be written after the dependent field here, a schema document's order insignificant.
+    for (const [fieldName, held] of [...fields]) {
+      if (held.form !== 'held') continue;
+      fields.set(fieldName, this.typed(name, body, fields, held));
     }
     for (const [fieldName, declaration] of body.fields.entries) {
       if (fields.has(fieldName)) continue;
@@ -645,6 +667,34 @@ class ValueBodyReader {
       }
     }
     return { form: 'record', ...(name === declared ? {} : { type: name }), fields };
+  }
+
+  /**
+   * The held dependent value `held` with what its sibling holds in this instance: the sibling's pin wherever
+   * it is written, the value this record writes, or its default. A sibling a field group's member leaves
+   * absent types nothing, and the value written without it is refused (§5.2, §5.11).
+   *
+   * @throws TsonReadError where the sibling is a group member the record does not write.
+   */
+  private typed(
+    name: string,
+    body: RecordBody,
+    fields: ReadonlyMap<string, MetaValue>,
+    held: MetaHeldValue,
+  ): MetaValue {
+    const { sibling, declared } = held;
+    const written = fields.get(sibling);
+    const omission = fieldOmission(declared, isGroupMember(body.groups, sibling));
+    if (written === undefined && omission === 'ABSENT') {
+      const refusal = writtenWithoutItsSibling(name, held.field, sibling);
+      throw new TsonReadError({ code: refusal.code, message: refusal.message });
+    }
+    let text: string | undefined;
+    if (declared.role === 'FIXED') text = declared.value?.text;
+    else if (written !== undefined) text = metaText(written);
+    else if (omission === 'INJECTED') text = declared.value?.text;
+    const named = referenceIn(text);
+    return named === undefined ? { ...held } : { ...held, named };
   }
 
   private list(
@@ -769,13 +819,57 @@ class ValueBodyReader {
   }
 }
 
-/** A dependent field's value as written (§5.2): a token, or a reference value, kept as it was spelled. */
-function heldAsWritten(value: DataValue, path: readonly string[]): MetaValue {
+/**
+ * A dependent field's value held as written (§5.2), whatever its form: a token, a reference, a record, a
+ * list, a map, an annotated or tagged value. `sibling` types it, `declared` being the sibling's declaration;
+ * what the sibling holds is settled once the record's fields are read ({@link ValueBodyReader.typed}).
+ */
+function heldAsWritten(
+  value: DataValue,
+  field: string,
+  sibling: string,
+  declared: RecordField,
+): MetaValue {
+  return { form: 'held', value: heldView(value), written: value, field, sibling, declared };
+}
+
+/** The generic tree a held value is, which a qualified name selects in. */
+function heldView(value: DataValue): MetaValue {
   const core = value.coreValue;
-  if (core.kind === 'token') return tokenOf(core);
-  if (core.kind === 'reference')
-    return { form: 'reference', reference: referenceFromAst(core.reference) };
-  throw mismatch(path, 'a token or a reference, the value of a dependent field', core);
+  switch (core.kind) {
+    case 'token':
+      return tokenOf(core);
+    case 'reference':
+      return { form: 'reference', reference: referenceFromAst(core.reference) };
+    case 'void':
+      return { form: 'void' };
+    case 'array':
+      return { form: 'list', elements: core.elements.map(heldView) };
+    case 'map':
+      return {
+        form: 'map',
+        entries: core.entries.map((entry) => [heldView(entry.key), heldView(entry.value)] as const),
+      };
+    case 'record':
+      return {
+        form: 'record',
+        ...(value.typeRef === undefined ? {} : { type: value.typeRef }),
+        fields: new Map(core.fields.map((field) => [field.name, heldView(field.value)] as const)),
+      };
+    case 'empty-brace':
+      return {
+        form: 'record',
+        ...(value.typeRef === undefined ? {} : { type: value.typeRef }),
+        fields: new Map(),
+      };
+  }
+}
+
+/** The text a name-or-reference value spells, `undefined` for any other form. */
+function metaText(value: MetaValue): string | undefined {
+  if (value.form === 'token') return value.token.text;
+  if (value.form === 'reference') return referenceText(value.reference);
+  return undefined;
 }
 
 /** A token at a slot whose atom takes any token, kept as written. */

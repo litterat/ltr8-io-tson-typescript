@@ -514,6 +514,7 @@ function walkRecord(
       constructor === RECORD_FIELD &&
       written.name === VALUE &&
       value.kind === 'token' &&
+      value.form === 'unquoted' &&
       declares(ctx.occurrences, value.text)
     ) {
       walkRouted(value.text, wire, ctx);
@@ -546,7 +547,11 @@ function walkRouted(parameter: string, fieldRecord: RecordValue, ctx: WalkContex
 /** One written value at `slot` (`constructor.field`), against the type the slot declares. */
 function walkValue(written: CoreValue, declared: TypeRef, slot: string, ctx: WalkContext): void {
   const type = resolveSlot(declared.name, ctx.meta);
-  if (written.kind === 'token' && declares(ctx.occurrences, written.text)) {
+  if (
+    written.kind === 'token' &&
+    written.form === 'unquoted' &&
+    declares(ctx.occurrences, written.text)
+  ) {
     walkToken(written.text, declared, type, slot, ctx);
     return;
   }

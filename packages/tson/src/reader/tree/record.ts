@@ -22,6 +22,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import {
   fieldOmission,
+  type FieldOmission,
   groupRefusals,
   isGroupMember,
   namedFields,
@@ -42,6 +43,9 @@ import { valuesEqual } from './equality.js';
 import { abandonedValue, readSchemaLiteral, renderValue } from './support.js';
 import { FIELD_NAME_RULE, judgeFieldName, matchKey, type FieldNameRule } from './fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../../unicode/policy.js';
+import type { Reference } from '../../schema/meta/typedef.js';
+import { writtenBeforeItsSibling, writtenWithoutItsSibling } from '../../link/dependentFields.js';
+import { isDependentReader, referenceOfValue, type DependentReader } from './dependent.js';
 
 interface CompiledField {
   readonly schema: NamedField;
@@ -128,6 +132,33 @@ export function recordTreeReader(
   });
 
   const positionalFieldIndex = bareRequiredCount === 1 ? solePositionalField : -1;
+
+  // §5.2: each field's sibling index where the field is a dependent one read through a
+  // {@link DependentReader}, and -1 elsewhere; and whether each field is the sibling of some dependent
+  // field. Only a record with a dependent field keeps any per-read state for it.
+  const siblingOf = fields.map((field) => {
+    const reader = field.parser;
+    if (!isDependentReader(reader)) return -1;
+    const index = fields.findIndex((other) => other.schema.name === reader.sibling);
+    if (index < 0) {
+      throw new Error(
+        `'${displayName}': dependent field '${field.schema.name}' names no field ` +
+          `'${reader.sibling}'; the linker refuses one`,
+      );
+    }
+    return index;
+  });
+  const typesADependent = fields.map((_, i) => siblingOf.includes(i));
+  const hasDependents = siblingOf.some((sibling) => sibling >= 0);
+  /** What omitting field `i` yields: its own §5.2 derivation, a group member's being the group's. */
+  const omissionOf = (i: number): FieldOmission =>
+    fieldOmission(at(fields, i, 'field').schema, at(memberOfGroup, i, 'memberOfGroup'));
+  // A field group's member, absent where another option is chosen, has nothing to stand for it, so a
+  // read keeps where each dependent field was written to refuse it once the record closes.
+  const siblingMayBeAbsent = siblingOf.some(
+    (sibling) => sibling >= 0 && omissionOf(sibling) === 'ABSENT',
+  );
+
   const declaredFields = fields.map((field) => field.schema.name).join(' | ');
 
   /**
@@ -279,6 +310,127 @@ export function recordTreeReader(
     sink(schemaIndex, fixedValue);
   }
 
+  /** What one read of a record with a dependent field keeps: each sibling's value as this instance wrote it, and each dependent field reached before its sibling was written. */
+  interface Dependents {
+    readonly named: (Reference | undefined)[];
+    readonly readBefore: (string | undefined)[];
+    readonly readBeforeAt: (ReadContext | undefined)[];
+  }
+
+  function newDependents(): Dependents {
+    return {
+      named: new Array<Reference | undefined>(fields.length).fill(undefined),
+      readBefore: new Array<string | undefined>(fields.length).fill(undefined),
+      readBeforeAt: new Array<ReadContext | undefined>(fields.length).fill(undefined),
+    };
+  }
+
+  /**
+   * Sibling `sibling` is written: a free one written after a dependent field reached before it is the order
+   * rule broken (§2.5, §5.2), reported at that field. A pinned sibling orders nothing, its pin typing the
+   * field.
+   */
+  function siblingArrives(dependents: Dependents, sibling: number): void {
+    if (fixedCheck[sibling] !== undefined) return;
+    for (let d = 0; d < fields.length; d += 1) {
+      const written = dependents.readBefore[d];
+      if (written !== undefined && siblingOf[d] === sibling) {
+        const refusal = writtenBeforeItsSibling(
+          displayName,
+          written,
+          at(fields, sibling, 'field').schema.name,
+        );
+        dependents.readBeforeAt[d]?.report(
+          refusal.code,
+          refusal.message,
+          refusal.expected,
+          refusal.found,
+        );
+        dependents.readBefore[d] = undefined;
+      }
+    }
+  }
+
+  /**
+   * Dependent field `index`, written as `written`, read against the type its sibling names in this
+   * instance (§5.2): a pinned sibling's is the pin, whatever the document's order; a free sibling's is the
+   * value this instance wrote, which is therefore written first, or its default where it is not written.
+   * A sibling written after the dependent field is the order rule broken, found when the sibling arrives:
+   * a value a default could type is read against it, and one with no type yet is skipped unjudged.
+   */
+  function* readDependent(
+    ctx: ReadContext,
+    index: number,
+    written: string,
+    seen: readonly boolean[],
+    dependents: Dependents | undefined,
+  ): Task<Value | undefined> {
+    const field = at(fields, index, 'field');
+    const reader = field.parser as DependentReader;
+    const sibling = at(siblingOf, index, 'siblingOf');
+    const siblingField = at(fields, sibling, 'field');
+    const fieldCtx = ctx.schemaField(written);
+    const siblingCtx = ctx.schemaField(siblingField.schema.name);
+    let named: Reference | undefined;
+    if (fixedCheck[sibling] !== undefined) {
+      named = referenceOfValue(precomputedValue[sibling]);
+    } else if (seen[sibling] === true) {
+      named = dependents?.named[sibling];
+    } else if (omissionOf(sibling) === 'INJECTED') {
+      named = referenceOfValue(precomputedValue[sibling]);
+      if (dependents !== undefined) {
+        dependents.readBefore[index] = written;
+        dependents.readBeforeAt[index] = fieldCtx.withPosition(fieldCtx.position());
+      }
+    } else if (dependents === undefined) {
+      throw new Error(
+        `'${displayName}': positional field '${field.schema.name}' has a sibling ` +
+          `'${siblingField.schema.name}' that is neither pinned nor defaulted; the linker refuses one`,
+      );
+    } else {
+      // The sibling is yet to come, the order rule broken, or is absent: only what follows says which.
+      dependents.readBefore[index] = written;
+      dependents.readBeforeAt[index] = fieldCtx.withPosition(fieldCtx.position());
+      yield* skipDataValue(ctx);
+      return undefined;
+    }
+    return yield* reader.readAgainst(fieldCtx, named, siblingCtx);
+  }
+
+  /**
+   * Each dependent field `seen` holds whose sibling, a field group's member, it does not: nothing typed the
+   * value, so it is refused where it was written (§5.2, §5.11). A sibling with nothing to stand for it is
+   * known to be absent only here, at the record's close, a dependent field written first being a sibling
+   * that may yet arrive; a required one is the missing-field error instead.
+   */
+  function refuseAbsentSiblings(
+    ctx: ReadContext,
+    seen: readonly boolean[],
+    writtenAt: readonly ({ name: string; position: Position } | undefined)[],
+  ): void {
+    for (let i = 0; i < fields.length; i += 1) {
+      const sibling = at(siblingOf, i, 'siblingOf');
+      const stated = writtenAt[i];
+      if (
+        seen[i] === true &&
+        stated !== undefined &&
+        sibling >= 0 &&
+        seen[sibling] !== true &&
+        omissionOf(sibling) === 'ABSENT'
+      ) {
+        const refusal = writtenWithoutItsSibling(
+          displayName,
+          stated.name,
+          at(fields, sibling, 'field').schema.name,
+        );
+        ctx
+          .schemaField(stated.name)
+          .withPosition(stated.position)
+          .report(refusal.code, refusal.message, refusal.expected, refusal.found);
+      }
+    }
+  }
+
   /** Loops `field-name` events forward until `record-end` -- the port of `RecordAbstractReader.readFields`. */
   function* readFields(
     ctx: ReadContext,
@@ -291,6 +443,10 @@ export function recordTreeReader(
     // fields": `seen` (below) already gives declared fields this; an undeclared name needs its
     // own set since it has no `schemaIndex` to key `seen` by.
     const seenUnmatched = new Set<string>();
+    const dependents = hasDependents ? newDependents() : undefined;
+    const writtenAt = siblingMayBeAbsent
+      ? new Array<{ name: string; position: Position } | undefined>(fields.length).fill(undefined)
+      : undefined;
     for (;;) {
       const peeked = yield* ctx.peek();
       if (peeked.kind === 'record-end') break;
@@ -354,6 +510,12 @@ export function recordTreeReader(
             `'${fieldNameEvent.name}' stated again`,
           );
       }
+      if (writtenAt !== undefined) {
+        writtenAt[schemaIndex] = { name: fieldNameEvent.name, position: fieldNameEvent.position };
+      }
+      if (dependents !== undefined && typesADependent[schemaIndex] === true) {
+        siblingArrives(dependents, schemaIndex);
+      }
       if (fixedCheck[schemaIndex] !== undefined) {
         yield* verifyFixed(ctx, schemaIndex, fieldNameEvent.name, sink);
         seen[schemaIndex] = true;
@@ -366,12 +528,20 @@ export function recordTreeReader(
       if (valuePeek.kind === 'void') {
         yield* ctx.next();
         decoded = valueForStatedVoidField(ctx, schemaIndex);
+      } else if (at(siblingOf, schemaIndex, 'siblingOf') >= 0) {
+        decoded = yield* readDependent(ctx, schemaIndex, fieldNameEvent.name, seen, dependents);
       } else {
+        const before = ctx.reported();
         decoded = yield* field.parser.read(fieldCtx);
+        if (dependents !== undefined && typesADependent[schemaIndex] === true) {
+          dependents.named[schemaIndex] =
+            ctx.reported() > before ? undefined : referenceOfValue(decoded);
+        }
       }
       sink(schemaIndex, decoded);
       seen[schemaIndex] = true;
     }
+    if (writtenAt !== undefined) refuseAbsentSiblings(ctx, seen, writtenAt);
     yield* ctx.next(); // record-end
     return seen;
   }
@@ -384,7 +554,10 @@ export function recordTreeReader(
     const seen: boolean[] = new Array(fields.length).fill(false) as boolean[];
     const index = positionalFieldIndex;
     const field = at(fields, index, 'field');
-    const decoded = yield* field.parser.read(ctx.schemaField(field.schema.name));
+    const decoded =
+      at(siblingOf, index, 'siblingOf') >= 0
+        ? yield* readDependent(ctx, index, field.schema.name, seen, undefined)
+        : yield* field.parser.read(ctx.schemaField(field.schema.name));
     sink(index, decoded);
     seen[index] = true;
     return seen;

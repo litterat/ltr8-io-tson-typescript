@@ -27,6 +27,7 @@
 import type { SourcePosition } from './position.js';
 import type {
   EnumBody,
+  RecordField,
   RecordTemplateBody,
   ReferenceBody,
   TemplateBody,
@@ -394,8 +395,29 @@ export type MetaValue =
       readonly entries: readonly (readonly [MetaValue, MetaValue])[];
     }
   | MetaRecordValue
+  | MetaHeldValue
   | { readonly form: 'namespace'; readonly value: Namespace<MetaValue> }
   | { readonly form: 'schema_map'; readonly members: Namespace<Top> };
+
+/**
+ * A dependent field's value held as written (§5.2): the type its sibling names is one of the namespace the
+ * value entry sits in, which the reader of the declaring layer does not hold, so the value is judged when
+ * the schema links. `value` is the value as a generic tree, which a qualified name selects in
+ * (`web.value.port`); `written` is the data value as it was written, annotations and tags included, which
+ * the link reads against the type the sibling names and resolved output writes back, kept opaque here
+ * because this model names no compiler type. `field` is the dependent field and `sibling` the field typing
+ * it, `declared` the sibling's declaration, and `named` what the sibling holds in this instance: its pin
+ * wherever it is written, the value written, or its default -- absent where the sibling holds none.
+ */
+export interface MetaHeldValue {
+  readonly form: 'held';
+  readonly value: MetaValue;
+  readonly written: object;
+  readonly field: string;
+  readonly sibling: string;
+  readonly declared: RecordField;
+  readonly named?: Reference;
+}
 
 /**
  * The slot a name was read at, as its declaration typed it (§4.2, §5.12): a `meta.ref<T>` slot over a

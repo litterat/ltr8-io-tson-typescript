@@ -33,17 +33,19 @@
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import {
   TsonAtomParseError,
+  TsonInternalError,
   TsonNotImplementedError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import { createQualifiedNameParser } from '../atom/reference.js';
-import type { EntryFacts, MetaValue, NameSlot, Top } from '../schema/meta/typedef.js';
-import { typeNameOf } from '../schema/meta/bodies.js';
+import type { EntryFacts, MetaValue, NameSlot, Reference, Top } from '../schema/meta/typedef.js';
+import { typeNameOf, type RecordBody, type RecordField } from '../schema/meta/bodies.js';
 import {
   constructorOf,
   isConstructor,
   isOpen,
   isTemplateBody,
+  referenceText,
   supertypesOf,
   typeParameters,
 } from '../schema/meta/typedef.js';
@@ -52,7 +54,8 @@ import { isNestedMap } from '../schema/meta/schemaPaths.js';
 import { isValueEntry } from '../schema/meta/typedef.js';
 import { schemaPositionOf, spellingOf } from './facts.js';
 import { isKindMember, namesTypes } from './kindMembers.js';
-import { terminal, type EntryLookup } from './aliasChain.js';
+import { terminal, terminalDefinition, type EntryLookup } from './aliasChain.js';
+import { referenceIn, siblingType, typeNamed, type TypeNamed } from './dependentFields.js';
 
 /** Dependencies {@link checkValuesByName} needs beyond the merged namespace. */
 export interface ValuesByNameOptions {
@@ -133,6 +136,10 @@ function namesIn(entry: Top): readonly HeldName[] {
         return;
       case 'schema_map':
       case 'void':
+        return;
+      case 'held':
+        // A dependent field's value is judged against the type its sibling names (`HeldValues`), whose
+        // reader judges every name it holds.
         return;
       case 'list':
         meta.elements.forEach((element, index) => {
@@ -330,6 +337,8 @@ export class ValuesByName {
     let absent: string | undefined;
     let reached = segments[0] ?? name;
     for (const segment of segments.slice(1)) {
+      // A dependent field's value is held as written; a segment selects in the tree it is.
+      value = value?.form === 'held' ? value.value : value;
       const atName = terminal(at, this.structure);
       const body = this.structure(atName);
       const namespaceType = body !== undefined && isNamespaceType(body) ? body : undefined;
@@ -354,6 +363,7 @@ export class ValuesByName {
             `${where} names '${name}', and '${reached}' is ${a(at)}, which has no field '${segment}' -- it declares ${[...body.fields.entries.keys()].join(', ') || 'none'}`,
           );
         }
+        const holder = value;
         if (value !== undefined) {
           const held: MetaValue | undefined =
             value.form === 'record' ? value.fields.get(segment) : undefined;
@@ -362,7 +372,18 @@ export class ValuesByName {
           }
           value = held;
         }
-        at = typeNameOf(field);
+        if (field.type.kind === 'sibling') {
+          const naming =
+            `${where} names '${name}', and '${reached}.${segment}' is a dependent field, typed by ` +
+            `its sibling '${field.type.field}'`;
+          const unreached =
+            absent === undefined
+              ? undefined
+              : `${where} names '${name}', and ${absent}, so the name reaches no value`;
+          at = this.dependentType(naming, body, field.type.field, holder, unreached);
+        } else {
+          at = typeNameOf(field);
+        }
       } else if (body !== undefined && !isTemplateBody(body) && body.kind === 'map') {
         throw new TsonSchemaValidationError(
           `${where} names '${name}', and '${reached}' is ${a(at)}, a map that is no namespace, so it is not entered by name -- a segment selects a key of a namespace value or a field of a record value (§5.12)`,
@@ -389,6 +410,53 @@ export class ValuesByName {
       );
     }
     return value;
+  }
+
+  /**
+   * The type a dependent field of `record` has in the value `holder`: the one its sibling `sibling` names
+   * there (§5.2), by the read path's rules. The sibling's value is its pin wherever it is written, and
+   * otherwise the value `holder` holds, or its default where it holds none. Refused, opening with `naming`,
+   * where the sibling holds nothing or names no type a value can be read against; `holder` is `undefined`
+   * where an earlier segment reached no value, and a sibling with no pin or default then has no type to go
+   * on with, so the name is refused as reaching no value, in `unreached`'s words.
+   */
+  private dependentType(
+    naming: string,
+    record: RecordBody,
+    sibling: string,
+    holder: MetaValue | undefined,
+    unreached: string | undefined,
+  ): string {
+    const declared = record.fields.entries.get(sibling);
+    if (declared === undefined) {
+      throw new TsonInternalError(
+        `${naming}, which the record does not declare; the linker refuses one`,
+      );
+    }
+    let held: string | undefined;
+    if (declared.role === 'FIXED') {
+      held = declared.value?.text;
+    } else if (holder?.form === 'record') {
+      const written = holder.fields.get(sibling);
+      held = written === undefined ? undefined : metaText(written);
+    }
+    if (held === undefined && declared.role === 'DEFAULT') held = declared.value?.text;
+    if (held === undefined && holder === undefined) {
+      throw new TsonSchemaValidationError(unreached ?? naming);
+    }
+    const named = referenceIn(held);
+    if (named === undefined) {
+      throw new TsonSchemaValidationError(
+        `${naming}, which the value does not hold, so the name has no type to go on through`,
+      );
+    }
+    const typed = typeNamedIn(named, declared, this.merged);
+    if (typed.kind === 'none') {
+      throw new TsonSchemaValidationError(
+        `${naming}, which holds ${typed.held} -- so the name has no type to go on through`,
+      );
+    }
+    return typed.name;
   }
 
   /** A `type_ref` slot of a value body: a name that resolves, with as many arguments as the entry declares parameters, and never a value (§4.1). */
@@ -443,8 +511,37 @@ export class ValuesByName {
   }
 }
 
+/**
+ * What a sibling declared `sibling` and holding `named` types its dependent field by in the namespace
+ * `merged`: the read path's rule (`typeNamed`), the sibling's reference resolving an application, and a
+ * value entry naming no type either.
+ */
+export function typeNamedIn(
+  named: Reference,
+  sibling: RecordField,
+  merged: ReadonlyMap<string, Top>,
+): TypeNamed {
+  const lookup: EntryLookup = (name) => merged.get(name);
+  const typed = typeNamed(named, siblingType(sibling, lookup), lookup);
+  if (typed.kind === 'entry') {
+    const body = terminalDefinition(typed.name, lookup);
+    if (body !== undefined && isValueEntry(body)) {
+      return { kind: 'none', held: `'${referenceText(named)}', ${aValueNoType(body)}` };
+    }
+  }
+  return typed;
+}
+
+/** The text a name-or-reference value spells, `undefined` for any other form. */
+function metaText(value: MetaValue): string | undefined {
+  if (value.form === 'token') return value.token.text;
+  if (value.form === 'reference') return referenceText(value.reference);
+  return undefined;
+}
+
 /** The map a value of a namespace type holds, by key. */
 function entriesOf(value: MetaValue): ReadonlyMap<string, MetaValue> | undefined {
+  if (value.form === 'held') return entriesOf(value.value);
   if (value.form === 'namespace') return value.value.entries;
   if (value.form === 'map') {
     const entries = new Map<string, MetaValue>();

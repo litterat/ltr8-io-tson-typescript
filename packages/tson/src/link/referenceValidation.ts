@@ -35,6 +35,7 @@ import {
 } from '../core/errors.js';
 import type { NonHeldTop } from './bodyKind.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
+import { checkDependentFields } from './dependentFields.js';
 import { checkRestatedFieldTypes } from './restatedFields.js';
 import { namesTypes } from './kindMembers.js';
 import { ValuesByName } from './valuesByName.js';
@@ -52,13 +53,16 @@ import type {
   TupleBody,
 } from '../schema/meta/bodies.js';
 import { isNestedMap } from '../schema/meta/schemaPaths.js';
-import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
+import { namedFields, parameterIn, typeNameOf } from '../schema/meta/bodies.js';
+import { kindOf } from '../compiler/parameterTypes.js';
 import type { Token, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
 import {
   isFamilyBase,
   isValueEntry,
   isTemplateBody,
+  parametersOf,
   parentsOf,
+  referenceText,
   subtypesOf,
   supertypesOf,
   typeParameters,
@@ -269,11 +273,11 @@ function validateBody(
     }
     case 'record': {
       const r: RecordBody = body;
+      // The chain is checked by validateEntry. A dependent field names a sibling, judged with its sibling
+      // by §5.2's rules, and carries no value.
+      checkDependentFields(entryName, r, namespace);
       for (const field of namedFields(r)) {
-        if (field.type.kind === 'sibling') {
-          checkSibling(entryName, field.name, field.type.field, r);
-          continue;
-        }
+        if (field.type.kind === 'sibling') continue;
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
         checkFieldValue(entryName, field, namespace, ownParameters, enumForms, byName);
       }
@@ -524,16 +528,6 @@ function asWritten(token: Token): string {
 
 // ── Type references ──────────────────────────────────────────────────────────────────────────
 
-/** §5.2: a dependent field's `kind!` names a sibling field the same record declares. */
-function checkSibling(entryName: string, field: string, sibling: string, record: RecordBody): void {
-  if (!record.fields.entries.has(sibling)) {
-    throw new TsonSchemaValidationError(
-      `'${entryName}' field '${field}' is typed by the sibling reference '${sibling}!', and the ` +
-        `record declares no field '${sibling}' (§5.2)`,
-    );
-  }
-}
-
 function validateTypeRef(
   ref: TypeRef,
   namespace: ReadonlyMap<string, Top>,
@@ -555,6 +549,7 @@ function validateTypeRef(
     throw new TsonSchemaValidationError(`${context} has an unresolved reference '${ref.name}'`);
   }
   checkArity(ref, namespace, ownParameters, context);
+  checkOpenLiterals(ref, namespace, ownParameters, context);
   for (const arg of ref.arguments) {
     if (arg.kind === 'ref') {
       validateTypeRef(arg.ref, namespace, ownParameters, subject, trail);
@@ -579,12 +574,61 @@ function checkHeldArity(
 ): void {
   for (const application of applications) {
     checkArity(application, namespace, ownParameters, `'${entryName}'`);
+    checkOpenLiterals(application, namespace, ownParameters, `'${entryName}'`);
     for (const argument of application.arguments) {
       if (argument.kind === 'ref') {
         checkArity(argument.ref, namespace, ownParameters, `'${entryName}'`);
+        checkOpenLiterals(argument.ref, namespace, ownParameters, `'${entryName}'`);
       }
     }
   }
+}
+
+/**
+ * A literal needs a closed type (§5.10), and an open entry's application can give it one that is not:
+ * `pin2 => <T, P> { a?: T = P }` reads `P`'s argument as a value of `T`'s, so in `<X> { f: pin2<X, 3> }` the
+ * literal `3` is a value of `X`, a type no application has fixed yet. Refused at the declaration that wrote
+ * the application, naming the argument -- the verdict an operand applied the same way gets.
+ */
+function checkOpenLiterals(
+  application: TypeRef,
+  namespace: ReadonlyMap<string, Top>,
+  ownParameters: readonly string[],
+  context: string,
+): void {
+  if (ownParameters.length === 0 || application.arguments.length === 0) return;
+  const head = namespace.get(terminal(application.name, (name) => namespace.get(name)));
+  const parameters = parametersOf(head);
+  if (parameters.length !== application.arguments.length) return; // arity is checkArity's
+  const names = parameters.map((parameter) => parameter.name);
+  parameters.forEach((parameter, i) => {
+    const typedBy = names.indexOf(parameter.type.name);
+    if (kindOf(parameter.type) === 'TYPE' || typedBy < 0) return;
+    const typing = application.arguments[typedBy];
+    const written = application.arguments[i];
+    if (typing === undefined || written === undefined) return;
+    const open =
+      typing.kind === 'ref'
+        ? parameterIn(typing.ref, ownParameters)
+        : ownParameters.includes(typing.value.text)
+          ? typing.value.text
+          : undefined;
+    const literal =
+      written.kind === 'ref'
+        ? written.ref.arguments.length === 0 && !ownParameters.includes(written.ref.name)
+          ? written.ref.name
+          : undefined
+        : written.value.form === 'UNQUOTED' && ownParameters.includes(written.value.text)
+          ? undefined
+          : written.value.text;
+    if (open !== undefined && literal !== undefined) {
+      throw new TsonSchemaValidationError(
+        `${context}: '${referenceText(application)}' binds '${parameter.name}' to the literal ` +
+          `'${literal}', whose type is '${open}', still open here -- a literal needs a closed type: ` +
+          `pass a parameter for '${parameter.name}' too, or close '${open}' (§5.10)`,
+      );
+    }
+  });
 }
 
 /**

@@ -85,6 +85,7 @@ import type { DefinitionGetter } from './compiler/resolverTypes.js';
 import { parseSchemaDocument } from './compiler/schemaParser.js';
 import { createDataStream } from './stream/dataStream.js';
 import { compile as compileCore, type CompiledSchema } from './compiler/compile.js';
+import { anyHeldValue, judgeHeldValues } from './compiler/heldValues.js';
 import { createDefinitionMetaReader } from './schema/metaReader.js';
 import { createDefinitionValueReader } from './schema/namespaceReader.js';
 import { createAnnotationValueReader } from './schema/annotationReader.js';
@@ -530,6 +531,11 @@ function resolveAgainstRegistry(
   return linkSchema(resolved, {
     resolveImport,
     ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
+    heldValues: (linked, localNames, report) => {
+      if (anyHeldValue(linked, localNames)) {
+        judgeHeldValues(linked, localNames, report, identifierPolicy);
+      }
+    },
   });
 }
 

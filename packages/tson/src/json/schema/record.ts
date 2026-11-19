@@ -88,7 +88,12 @@ import {
   type AtomForm,
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
-import { buildDependentReader, isDependentReader, referenceIn } from './dependent.js';
+import { buildDependentReader, isDependentReader } from './dependent.js';
+import {
+  referenceIn,
+  writtenBeforeItsSibling,
+  writtenWithoutItsSibling,
+} from '../../link/dependentFields.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { memberNameRefuses, nameHygieneRefuses } from './nameHygiene.js';
 import {
@@ -489,6 +494,11 @@ export function buildRecordReader(
       const named: (Reference | undefined)[] | undefined = plan.hasDependents
         ? new Array<Reference | undefined>(plan.names.length).fill(undefined)
         : undefined;
+      // Each dependent member reached before its sibling was written, by the name written and where it stands.
+      const waiting: Waiting = {
+        member: new Array<string | undefined>(plan.names.length).fill(undefined),
+        at: new Array<JsonReadContext | undefined>(plan.names.length).fill(undefined),
+      };
 
       for (;;) {
         const event = yield* outer.next();
@@ -537,9 +547,10 @@ export function buildRecordReader(
         slots[at] =
           named === undefined
             ? yield* readField(outer, plan, at, memberName)
-            : yield* readTracked(outer, plan, at, memberName, slots, named);
+            : yield* readTracked(outer, plan, at, memberName, slots, named, waiting);
       }
 
+      if (plan.hasDependents) refuseAbsentSiblings(plan, slots, waiting);
       if (plan.groups.length > 0) {
         validateGroups(outer, plan, slots);
       }
@@ -657,8 +668,10 @@ function* readTracked(
   memberName: string,
   slots: readonly Slot[],
   named: (Reference | undefined)[],
+  waiting: Waiting,
 ): Task<Slot> {
   if (plan.typesADependent[at] === true) {
+    siblingArrives(plan, at, waiting);
     const peeked = yield* ctx.peek();
     const text = peeked.kind === 'string' ? peeked.value : undefined;
     const before = ctx.reported();
@@ -667,7 +680,7 @@ function* readTracked(
     return slot;
   }
   if ((plan.siblingOf[at] ?? -1) >= 0 && (yield* ctx.peek()).kind !== 'null') {
-    return yield* readDependent(ctx, plan, at, memberName, slots, named);
+    return yield* readDependent(ctx, plan, at, memberName, slots, named, waiting);
   }
   return yield* readField(ctx, plan, at, memberName);
 }
@@ -686,6 +699,7 @@ function* readDependent(
   memberName: string,
   slots: readonly Slot[],
   named: readonly (Reference | undefined)[],
+  waiting: Waiting,
 ): Task<Slot> {
   const sibling = plan.siblingOf[at];
   const reader = plan.schemaReaders[at];
@@ -701,12 +715,22 @@ function* readDependent(
     return typeof hostValue === 'string' ? hostValue : undefined;
   };
   let reference: Reference | undefined;
+  const fieldCtx = fieldContext(ctx, plan, at, memberName);
   if (siblingField.role === 'FIXED' && plan.stated[sibling] !== undefined) {
     reference = referenceIn(statedText());
   } else if (slots[sibling] !== undefined) {
     reference = named[sibling];
   } else if (plan.omitted[sibling] === 'INJECTED' && plan.stated[sibling] !== undefined) {
     reference = referenceIn(statedText());
+    waiting.member[at] = memberName;
+    waiting.at[at] = fieldCtx;
+  } else {
+    // Not yet typed: skipped unjudged, and refused when the sibling arrives (the order rule) or when
+    // the object closes without it.
+    waiting.member[at] = memberName;
+    waiting.at[at] = fieldCtx;
+    yield* skipNextValue(fieldCtx);
+    return REFUSED;
   }
   const siblingCtx = fieldContext(ctx, plan, sibling, plan.names[sibling] ?? siblingField.name);
   const value = yield* reader.readAgainst(
@@ -715,6 +739,58 @@ function* readDependent(
     siblingCtx,
   );
   return value === undefined ? REFUSED : (value as JsonValue);
+}
+
+/** Each dependent member reached before its sibling was written ([TSON-JSON] §6.1.6): the name written and where it stands. */
+interface Waiting {
+  readonly member: (string | undefined)[];
+  readonly at: (JsonReadContext | undefined)[];
+}
+
+/**
+ * Sibling `sibling` is written: a free one after a dependent member reached before it is the order
+ * rule broken, reported at that member. A pinned sibling orders nothing, its pin typing the member.
+ */
+function siblingArrives(plan: RecordPlan, sibling: number, waiting: Waiting): void {
+  if (plan.fields[sibling]?.role === 'FIXED') return;
+  for (let d = 0; d < waiting.member.length; d += 1) {
+    const written = waiting.member[d];
+    if (written !== undefined && plan.siblingOf[d] === sibling) {
+      const refusal = writtenBeforeItsSibling(
+        plan.displayName,
+        written,
+        plan.fields[sibling]?.name ?? '',
+      );
+      waiting.at[d]?.report(refusal.code, refusal.message, refusal.expected, refusal.found);
+      waiting.member[d] = undefined;
+    }
+  }
+}
+
+/**
+ * The object has closed: each dependent member still waiting on a sibling that never arrived, a field
+ * group's member, is refused where it was written, nothing having typed it. A sibling with a default
+ * typed the member, and a required one is the missing-field error.
+ */
+function refuseAbsentSiblings(plan: RecordPlan, slots: readonly Slot[], waiting: Waiting): void {
+  for (let d = 0; d < waiting.member.length; d += 1) {
+    const written = waiting.member[d];
+    const sibling = plan.siblingOf[d];
+    if (
+      written !== undefined &&
+      sibling !== undefined &&
+      sibling >= 0 &&
+      slots[sibling] === undefined &&
+      plan.omitted[sibling] === 'ABSENT'
+    ) {
+      const refusal = writtenWithoutItsSibling(
+        plan.displayName,
+        written,
+        plan.fields[sibling]?.name ?? '',
+      );
+      waiting.at[d]?.report(refusal.code, refusal.message, refusal.expected, refusal.found);
+    }
+  }
 }
 
 function* readField(

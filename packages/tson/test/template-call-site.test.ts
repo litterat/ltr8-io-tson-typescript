@@ -201,8 +201,9 @@ describe('§5.10: where a record template’s parameter stands (change log #16, 
   it('a parameter is never an operand of & or ^, a parameter shadowing an entry of its name', () => {
     expect(loadError('x => <T> T & { a: int32 }')).toMatch(/is a parameter of this declaration/);
     expect(loadError('x => <T> T ^ { a: int32 }')).toMatch(/never an operand of '\^'/);
+    // §5.10: a parameter spelled like an entry of the namespace is refused at the declaration.
     expect(loadError('pt => { a: int32 }\nx => <pt> pt & { b: int32 }')).toMatch(
-      /is a parameter of this declaration/,
+      /parameter 'pt' shadows the entry 'pt'/,
     );
   });
 

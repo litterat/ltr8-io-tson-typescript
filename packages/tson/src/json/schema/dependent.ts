@@ -1,35 +1,26 @@
 /**
- * A dependent field's reader, `v?: kind!` ([TSON-SCHEMA] §5.6, [TSON-JSON] §6.1.6): the member is
- * read against the type its sibling's value names in the same object. Ported from the Java
- * reference's `DependentReader`.
+ * A dependent field's reader, `v?: kind!` ([TSON-SCHEMA] §5.2, [TSON-JSON] §6.1.6): the member is
+ * read against the type its sibling's value names in the same object.
  *
  * **Read through its record** (`json/schema/record.ts`), never on its own: only the record knows
  * the sibling's value -- the member written before it, the sibling's default where it is not
  * written, or its pin -- so {@link DependentReader.read} is a fault and {@link
  * DependentReader.readAgainst} is the one entry point. The record hands it the reference the
- * sibling named, as the reference grammar reads it ({@link referenceIn}), and the reader of the
- * member's value is the named entry's.
- *
- * **The dependent read itself is not built yet.** {@link DependentReader.readAgainst} reports
- * `NOT_IMPLEMENTED` and consumes the member, so the record's other members read on and the event
- * stream stays where a reader that understood the position would have left it. What remains to
- * land here is the rule the text encoding's reader states once: the sibling's reference naming no
- * type a value can be read against (a sibling reference, a template, an application the closure
- * does not hold) is refused at the sibling and the member skipped unjudged; every other reference
- * is read through `ctx.resolve` of the entry it denotes past its alias hops (`link/aliasChain.ts`),
- * an application resolved through the sibling type's reference index
- * (`schema/meta/referenceIndex.ts`'s `referenceEntryOf`); and §6.1.6's order exception, a free
- * sibling written after the member it types.
+ * sibling named, as the reference grammar reads it (`link/dependentFields.ts`'s `referenceIn`),
+ * and the reader of the member's value is the named entry's. The rule for what a sibling's value
+ * types the member by is `link/dependentFields.ts`'s `typeNamed`, the one the text encoding's
+ * reader and a value entry's link judgement apply too: a sibling reference, a template or an
+ * application the closure does not hold names no type a value can be read against, is refused at
+ * the sibling, and the member is skipped unjudged.
  */
-import { TsonAtomParseError, TsonInternalError } from '../../core/errors.js';
+import { TsonInternalError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
-import { parseReference } from '../../atom/referenceGrammar.js';
+import { siblingNamesNoType, typeNamed } from '../../link/dependentFields.js';
 import type { ReferenceBody } from '../../schema/meta/bodies.js';
-import type { Reference } from '../../schema/meta/typedef.js';
-import { referenceFromAst } from '../../schema/referenceAtoms.js';
+import { referenceText, type Reference, type Top } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { CompileContext } from './compile.js';
-import { notImplementedReader } from './notImplemented.js';
+import { skipNextValue } from './eventSkip.js';
 import type { JsonTypeReader } from './types.js';
 
 /** A dependent field's reader: read through its record, which knows the value of its sibling. */
@@ -64,10 +55,10 @@ export function buildDependentReader(
   displayName: string,
   field: string,
   sibling: string,
-  _ctx: CompileContext,
-  _siblingType: ReferenceBody | undefined,
+  ctx: CompileContext,
+  siblingType: ReferenceBody | undefined,
 ): DependentReader {
-  const gap = notImplementedReader(`${displayName}.${field}`, 'a dependent field');
+  const entries = (name: string): Top | undefined => ctx.linkedSchema.entries.get(name);
   return {
     field,
     sibling,
@@ -77,19 +68,29 @@ export function buildDependentReader(
           `its sibling '${sibling}'`,
       );
     },
-    *readAgainst(ctx: JsonReadContext): Task<unknown> {
-      return yield* gap.read(ctx);
+    *readAgainst(
+      at: JsonReadContext,
+      named: Reference | undefined,
+      siblingCtx: JsonReadContext,
+    ): Task<unknown> {
+      if (named === undefined) {
+        yield* skipNextValue(at);
+        return undefined;
+      }
+      const typed = typeNamed(named, siblingType, entries);
+      if (typed.kind === 'none') {
+        const refusal = siblingNamesNoType(
+          displayName,
+          sibling,
+          field,
+          typed.held,
+          referenceText(named),
+        );
+        siblingCtx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
+        yield* skipNextValue(at);
+        return undefined;
+      }
+      return yield* ctx.resolve(typed.name).read(at);
     },
   };
-}
-
-/** A sibling's value as JSON holds it, a string spelling the reference, or `undefined` where it spells none. */
-export function referenceIn(text: string | undefined): Reference | undefined {
-  if (text === undefined) return undefined;
-  try {
-    return referenceFromAst(parseReference(text));
-  } catch (error) {
-    if (error instanceof TsonAtomParseError) return undefined;
-    throw error;
-  }
 }

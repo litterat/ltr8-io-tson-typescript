@@ -15,6 +15,7 @@ import { typeNameOf } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody, supertypesOf } from '../schema/meta/typedef.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
+import { restatesDependent } from './dependentFields.js';
 
 /**
  * §7.2's IS-A between two names of `namespace`: past their alias hops they are one entry, or the first's
@@ -33,6 +34,7 @@ export function isA(sub: string, sup: string, namespace: EntryLookup): boolean {
 
 /** Whether `restated`'s type narrows `inherited`'s: the same entry or one IS-A it, or `void` at a voidable position. */
 function narrows(inherited: RecordField, restated: RecordField, namespace: EntryLookup): boolean {
+  // A dependent field is restated only as itself, which `restatesDependent` judges before this is asked.
   if (inherited.type.kind === 'sibling' || restated.type.kind === 'sibling') return true;
   const from = inherited.type;
   const to = restated.type;
@@ -79,7 +81,10 @@ export function checkRestatedFieldTypes(
     for (const [fieldName, inherited] of source.fields.entries) {
       const restated = record.fields.entries.get(fieldName);
       if (restated === undefined) continue;
-      if (!narrows(inherited, restated, lookup)) {
+      const dependent = restatesDependent(fieldName, inherited, restated);
+      if (dependent !== undefined) {
+        violations.push(dependent);
+      } else if (!narrows(inherited, restated, lookup)) {
         violations.push(
           `field '${fieldName}' is typed '${shown(typeNameOf(restated))}', which is not ` +
             `'${shown(typeNameOf(inherited))}' or IS-A it`,
