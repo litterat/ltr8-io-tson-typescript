@@ -495,6 +495,26 @@ Vectors: everything still red after WP2B, by name.
 
 **Gate:** 944/944.
 
+### WP2C outcome
+
+The gate is met at `250a01c`. Conformance passes 944 of 944: Class 1 316/316 and Class 2 628/628.
+The unit tests pass 4224 of 4224 with nothing skipped.
+
+What landed:
+
+- **Dependent fields.**
+  - The rule is in `link/dependentFields.ts`.
+  - Held values in schema documents are judged at link time through an injected `LinkDeps.heldValues`
+    hook, so `link/` imports no reader.
+  - Both the tree reader and the JSON reader read dependent fields, each with §6.1.6's order
+    exception.
+- **Templates and literals.**
+  - The rules on record templates and on literal arguments are in.
+  - One synthetic type minted by two documents is now one entry.
+
+#1, #20 and #23 already matched the reference's behaviour, so nothing changed for them. The gaps
+that remain are listed in `STATUS.md`'s Known gaps.
+
 ## Stage 3: Part 3, the JSON encoding (change log §3.4, §7.1)
 
 Runs in its own worktree once WP2B is merged, concurrently with WP2C. Part 3 defines no type-system
@@ -602,3 +622,9 @@ a corpus item names the file.
   naming a code. The reference reports `SCOPE_NOT_ADMITTED`, and so does this port.
 - **`strip` and `policy.tn`.** The reference shortens `meta`, `numeric`, `temporal`, `net` and
   `core`, but not `policy`, although `policy.tn` is bundled. Part 2 could state which.
+- **Part 2 §5.2, a missing group-member sibling.** The refusal is reported at the dependent field,
+  not at the sibling, as the reference and the vectors do.
+- **Part 2 §5.10, a literal argument whose type is still open.** It is refused at the declaration
+  that writes the application, for both field types and operands. The shadowing rule says only that
+  what a template writes is classified, so "a closed type is needed" is this port's reading, applied
+  at link time.

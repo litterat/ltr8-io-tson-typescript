@@ -434,6 +434,16 @@ ok<text>` over `ok => <T> result<T> & { note: text }` is IS-A `result` as well a
     `template_param.type`/`bound` against the held body, the family checks, §5.11's group rules and
     each kind-typed slot's name against its kind.
 
+- **The bind readers have no dependent field (§5.11).** A dependent field reads through the tree
+  readers in both encodings. The class-binding readers have no notion of a field whose type a
+  sibling names, so a bound record with one is not read.
+- **Parameter-type inference refuses `<X, Q> pin2<X, Q> & { … }` (§5.10).** It reads `Q` as both `X`
+  and `T`. No vector writes this form, so the case is open against the reference's current
+  `ParameterTypes`.
+- **A JSON dependent member's order-exception refusal (§6.1.6) is positioned at the cursor**, not at
+  the member, because the JSON read context carries no position override. No vector asserts a
+  position.
+
 - **An entry holding a namespace value has no JSON read path**: the JSON compiler reports
   `NOT_IMPLEMENTED` for it, as the reference's `ErrorReader` does. A namespace-typed _slot_ reads
   as its map in both encodings.
