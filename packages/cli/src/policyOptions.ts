@@ -30,7 +30,14 @@
  * `Latn`) -- `scriptNamed`'s own doc explains why the four-letter alias form has no
  * host-accessible source to resolve from.
  */
-import { createTson, scriptNamed, type Config, type ScriptId, type Tson } from '@ltr8/tson';
+import {
+  createTson,
+  DEFAULT_LIMITS,
+  scriptNamed,
+  type Config,
+  type ScriptId,
+  type Tson,
+} from '@ltr8/tson';
 import { UsageError } from './exit.js';
 
 export type IdentifierPolicy = NonNullable<Config['identifierPolicy']>;
@@ -176,16 +183,47 @@ function assembleLevel(
   return level;
 }
 
-/** [TSON-DATA] §8.2's policy for one run, always concrete -- what a run configures by giving no flags at all is `identifierPolicy`/`tokenPolicy` at their own §8.2 defaults, not an absent value. */
+/** [TSON-DATA] §8.2's policy and §9.1/[TSON-SCHEMA] §11.5's two depth bounds for one run, always concrete -- what a run configures by giving no flags at all is `identifierPolicy`/`tokenPolicy` at their own §8.2 defaults, not an absent value. */
 export interface PolicyOptions {
   readonly identifierPolicy: IdentifierPolicy;
   readonly tokenPolicy: ScriptPolicy;
+  /** [TSON-DATA] §9.1's nesting-depth bound, `--max-depth`; the default when no flag states one. */
+  readonly maxNestingDepth: number;
+  /** [TSON-SCHEMA] §11.5's wait-depth bound, `--max-wait-depth`; the default when no flag states one. */
+  readonly maxWaitDepth: number;
 }
 
 export interface ConsumedPolicyOptions {
   readonly policy: PolicyOptions;
   /** `args` with every recognized policy flag removed, in order, for the command's own loop. */
   readonly rest: readonly string[];
+}
+
+/**
+ * A depth bound -- [TSON-DATA] §9.1's nesting depth or [TSON-SCHEMA] §11.5's wait depth -- as a
+ * positive integer, `flag` naming which.
+ *
+ * Refused where it is not one, rather than clamped: a caller who wrote `--max-depth 0` meant
+ * something, and reading a document under a bound they did not ask for is the one outcome that
+ * leaves them unable to explain the result. The library refuses the same value for the same reason.
+ *
+ * @throws {UsageError} a value that is not a whole number, or is below 1.
+ */
+function parseDepth(raw: string, flag: string): number {
+  const text = raw.trim();
+  if (!/^[+-]?\d+$/u.test(text)) {
+    throw new UsageError(`${flag} needs a whole number, not '${raw}'`);
+  }
+  const depth = Number(text);
+  if (!Number.isSafeInteger(depth)) {
+    throw new UsageError(`${flag} needs a whole number, not '${raw}'`);
+  }
+  if (depth < 1) {
+    throw new UsageError(
+      `${flag} must be at least 1, not ${String(depth)} -- a limit of 0 admits no document at all`,
+    );
+  }
+  return depth;
 }
 
 /**
@@ -209,6 +247,8 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
   let tokenLevel: RestrictionLevel | undefined;
   let identifierPerSegment = false;
   let allowLookAlikes = false;
+  let maxNestingDepth: number = DEFAULT_LIMITS.maxNestingDepth;
+  let maxWaitDepth: number = DEFAULT_LIMITS.maxWaitDepth;
   const identifierScripts: (readonly ScriptId[])[] = [];
   const tokenScripts: (readonly ScriptId[])[] = [];
   const rest: string[] = [];
@@ -245,6 +285,12 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
           parseScriptCombination(requireValue(args, ++i, '--token-scripts'), '--token-scripts'),
         );
         break;
+      case '--max-depth':
+        maxNestingDepth = parseDepth(requireValue(args, ++i, '--max-depth'), '--max-depth');
+        break;
+      case '--max-wait-depth':
+        maxWaitDepth = parseDepth(requireValue(args, ++i, '--max-wait-depth'), '--max-wait-depth');
+        break;
       default:
         rest.push(arg);
     }
@@ -276,6 +322,8 @@ export function consumePolicyOptions(args: readonly string[]): ConsumedPolicyOpt
         permittedScripts: identifierScripts,
       },
       tokenPolicy: { restrictionLevel: resolvedTokenLevel, permittedScripts: tokenScripts },
+      maxNestingDepth,
+      maxWaitDepth,
     },
     rest,
   };
@@ -293,8 +341,15 @@ export type ProcessorPolicy = Tson['processorPolicy'];
  * of `Config.identifierPolicy`/`Config.tokenPolicy`, unaffected by what is registered.
  */
 export function processorPolicyOf(options: PolicyOptions): ProcessorPolicy {
-  return createTson({
+  return createTson(configOf(options)).processorPolicy;
+}
+
+/** The {@link Config} that judges a run under `options`: both name policies and both depth bounds. */
+export function configOf(options: PolicyOptions): Config {
+  return {
     identifierPolicy: options.identifierPolicy,
     tokenPolicy: options.tokenPolicy,
-  }).processorPolicy;
+    maxNestingDepth: options.maxNestingDepth,
+    limits: { maxWaitDepth: options.maxWaitDepth },
+  };
 }

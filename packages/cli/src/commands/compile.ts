@@ -1,6 +1,6 @@
 /**
  * `tson compile [<policy options>] <schema>...` -- checks that each schema document resolves and
- * links against the bundled standard library (meta-kernel, meta.tn, core.tn, net.tn, policy.tn; see `../stdlib.ts`),
+ * links against the bundled standard library (meta, numeric, temporal, net, core and policy; see `../stdlib.ts`),
  * under `identifierPolicy` ([TSON-SCHEMA] §11.4's schema-layer name hygiene).
  *
  * **Deliberately does not force every entry's compiled reader.** `@ltr8/tson`'s `compile()` is
@@ -18,10 +18,20 @@
  * question about a root, not about the schema as a whole.
  */
 import { readFile } from 'node:fs/promises';
-import { TsonNameHygieneRefusedError, type LinkedSchema, type Tson } from '@ltr8/tson';
+import {
+  TsonLimitRefusedError,
+  TsonNameHygieneRefusedError,
+  type LinkedSchema,
+  type Tson,
+} from '@ltr8/tson';
 import { outcomeOfFiles, type Outcome } from '../outcome.js';
 import { isInvalidSchemaError } from '../problem.js';
-import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
+import {
+  configOf,
+  processorPolicyOf,
+  type PolicyOptions,
+  type ProcessorPolicy,
+} from '../policyOptions.js';
 import { stdlibTson } from '../stdlib.js';
 
 export interface CompileFileResult {
@@ -43,7 +53,9 @@ async function compileOne(tson: Tson, file: string): Promise<CompileFileResult> 
     }
     // §8.1's refused outcome: this processor's policy declined the schema, which says nothing
     // about whether it is valid -- a rejection here all the same, and (like any rejection) exit 1.
-    if (error instanceof TsonNameHygieneRefusedError) {
+    // A §11.5 limit refusal is the same kind: this processor's own bound declined the schema, so a
+    // rejection here that the author can fix by lowering the schema's depth or raising the limit.
+    if (error instanceof TsonNameHygieneRefusedError || error instanceof TsonLimitRefusedError) {
       return { file, outcome: 'REJECTED', message: error.message };
     }
     throw error;
@@ -63,7 +75,7 @@ export async function runCompile(
   files: readonly string[],
   policy: PolicyOptions,
 ): Promise<CompileRun> {
-  const tson = stdlibTson({ identifierPolicy: policy.identifierPolicy });
+  const tson = stdlibTson(configOf(policy));
   const results: CompileFileResult[] = [];
   for (const file of files) {
     results.push(await compileOne(tson, file));

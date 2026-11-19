@@ -192,14 +192,22 @@ function changedLimits(policy: ProcessorPolicy): readonly string[] {
   ).map(([member, field]) => `${member.replaceAll('_', ' ')} ${String(policy.limits[field])}`);
 }
 
-/** One line per surface, then the data version and depth limit (and any other limit changed from its default): what differs between two deployments that disagree about one name -- `tson policy`'s own `--format text`. */
+/** The widest label {@link policyText} prints, with its colon and one space. */
+const LABEL_WIDTH = 'max numeric literal length: '.length;
+
+function labelled(label: string, value: string): string {
+  return `${label}:${' '.repeat(LABEL_WIDTH - label.length - 1)}${value}`;
+}
+
+/** One line per surface, the data version, and then every limit in `policy.limits`' order, each value aligned: what differs between two deployments that disagree about one name -- `tson policy`'s own `--format text`. */
 export function policyText(policy: ProcessorPolicy): string {
   return [
-    `identifier policy: ${identifierSummary(policy)}`,
-    `token policy:      ${tokenSummary(policy)}`,
-    `unicode data:      ${policy.unicodeDataVersion}`,
-    `max depth:         ${String(policy.limits.maxNestingDepth)}`,
-    ...changedLimits(policy).map((limit) => `limit:             ${limit}`),
+    labelled('identifier policy', identifierSummary(policy)),
+    labelled('token policy', tokenSummary(policy)),
+    labelled('unicode data', policy.unicodeDataVersion),
+    ...LIMIT_MEMBERS.map(([member, field]) =>
+      labelled(member.replaceAll('_', ' '), String(policy.limits[field])),
+    ),
   ].join('\n');
 }
 

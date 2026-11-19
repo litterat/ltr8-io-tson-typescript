@@ -173,6 +173,45 @@ describe('consumePolicyOptions: --identifier-scripts / --token-scripts', () => {
   });
 });
 
+describe('consumePolicyOptions: --max-depth / --max-wait-depth ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5)', () => {
+  it('defaults both to the spec default and states what it was given', () => {
+    const defaults = consumePolicyOptions([]).policy;
+    expect([defaults.maxNestingDepth, defaults.maxWaitDepth]).toEqual([64, 64]);
+    const { policy, rest } = consumePolicyOptions([
+      '--max-depth',
+      '12',
+      'a.tn',
+      '--max-wait-depth',
+      '3',
+    ]);
+    expect([policy.maxNestingDepth, policy.maxWaitDepth]).toEqual([12, 3]);
+    expect(rest).toEqual(['a.tn']);
+  });
+
+  it('reads back through a real Tson as the instance limits', () => {
+    const processorPolicy = processorPolicyOf(
+      consumePolicyOptions(['--max-depth', '12', '--max-wait-depth', '3']).policy,
+    );
+    expect(processorPolicy.limits.maxNestingDepth).toBe(12);
+    expect(processorPolicy.limits.maxWaitDepth).toBe(3);
+  });
+
+  it.each([
+    ['--max-depth', '0', /--max-depth must be at least 1/],
+    ['--max-wait-depth', '0', /--max-wait-depth must be at least 1/],
+    ['--max-depth', '-4', /--max-depth must be at least 1/],
+    ['--max-depth', 'many', /--max-depth needs a whole number, not 'many'/],
+    ['--max-wait-depth', '1.5', /--max-wait-depth needs a whole number, not '1.5'/],
+  ])('%s %s is a usage error, refused rather than clamped', (flag, value, message) => {
+    expect(() => consumePolicyOptions([flag, value])).toThrow(UsageError);
+    expect(() => consumePolicyOptions([flag, value])).toThrow(message);
+  });
+
+  it('a flag with no value is a usage error', () => {
+    expect(() => consumePolicyOptions(['--max-wait-depth'])).toThrow(/requires a value/);
+  });
+});
+
 describe('processorPolicyOf', () => {
   it('reads the policy back through a real Tson, matching what was assembled', () => {
     const { policy } = consumePolicyOptions(['--identifier-policy', 'ascii-only']);

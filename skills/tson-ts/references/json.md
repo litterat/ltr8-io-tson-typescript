@@ -6,7 +6,7 @@ Part 3, [TSON-JSON]: schema-directed reading of plain JSON into the same value m
 plain JSON into the same value model TSON text decodes to. It is a separate stack — its own lexer,
 event stream and `JsonValue` tree, no dependency on `@ltr8/tson`'s own lexer/parser/compiler — so
 importing it never pulls in the text encoding and vice versa. A JSON document names no schema of
-its own (there is no `!!schema` equivalent), so every schema-directed read takes `{ schema, root }`
+its own (no `!!import` header), so every schema-directed read takes `{ schema, root }`
 the same way `readTree`/`validate` do:
 
 ```ts
