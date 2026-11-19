@@ -58,13 +58,16 @@ import {
   TsonSchemaValidationError,
 } from './core/errors.js';
 import {
-  DEFAULT_MAX_IMPORT_CLOSURE,
-  DEFAULT_MAX_SCHEMA_ENTRIES,
   importClosureLimitRefusal,
   limitsPolicyOf,
   schemaEntriesLimitRefusal,
 } from './core/limits.js';
-import type { NestingLimitOptions } from './core/limits.js';
+import type {
+  LimitOptions,
+  LimitOverrides,
+  LimitsPolicy,
+  NestingLimitOptions,
+} from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
 import type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
@@ -203,7 +206,7 @@ function errorMessage(e: unknown): string {
 }
 
 /** Configures a {@link Tson}. Every field is optional; an empty `{}` builds an instance with no schema source and an empty registry. */
-export interface Config extends NestingLimitOptions {
+export interface Config extends LimitOptions {
   /**
    * Fetches a schema document beyond what this instance already has registered -- consulted only
    * by {@link Tson.preload}/{@link Tson.fetch}, never automatically during {@link
@@ -260,6 +263,15 @@ export function withIdentifierPolicy<C extends Config>(
   identifierPolicy: IdentifierPolicy,
 ): C {
   return { ...config, identifierPolicy };
+}
+
+/**
+ * `config` with its limits beyond nesting depth ([TSON-DATA] §9.1, [TSON-SCHEMA] §11.5) replaced
+ * by `limits`; see {@link withIdentifierPolicy}. A limit is a code decision, never read from the
+ * environment, and a limit not stated here keeps its spec default.
+ */
+export function withLimits<C extends Config>(config: C, limits: LimitOverrides): C {
+  return { ...config, limits };
 }
 
 /** `config` with its token policy (§8.2 "Values") replaced; see {@link withIdentifierPolicy}. */
@@ -465,6 +477,7 @@ function resolveAgainstRegistry(
   contentHashes: ReadonlyMap<string, string>,
   bytes: Uint8Array,
   limit: NestingLimitOptions,
+  limits: LimitsPolicy,
   identifierPolicy: IdentifierPolicy | undefined,
 ): LinkedSchema {
   const document = runSync(parseSchemaDocument(fromBytes(bytes), limit));
@@ -475,8 +488,8 @@ function resolveAgainstRegistry(
     );
   }
   const closureSize = importClosureSize(schemas, document.meta, document.imports);
-  if (closureSize > DEFAULT_MAX_IMPORT_CLOSURE) {
-    throw importClosureLimitRefusal(DEFAULT_MAX_IMPORT_CLOSURE, id);
+  if (closureSize > limits.maxImportClosure) {
+    throw importClosureLimitRefusal(limits.maxImportClosure, id);
   }
   const governingMeta = requireRegistered(schemas, contentHashes, document.meta, id);
   const metaDefinitions: DefinitionGetter = (name) => governingMeta.entries.get(name);
@@ -500,8 +513,8 @@ function resolveAgainstRegistry(
   // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
   // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
   // doc), which is exactly what §11.5 names ("declarations in *one* schema map").
-  if (resolved.entries.size > DEFAULT_MAX_SCHEMA_ENTRIES) {
-    throw schemaEntriesLimitRefusal(DEFAULT_MAX_SCHEMA_ENTRIES, id);
+  if (resolved.entries.size > limits.maxSchemaEntries) {
+    throw schemaEntriesLimitRefusal(limits.maxSchemaEntries, id);
   }
   return linkSchema(resolved, {
     structureNamespace: governingMeta.entries,
@@ -644,6 +657,7 @@ export function createTson(config: Config = {}): Tson {
   // `preload` below are what populate it, both via `recordContentHash`.
   const contentHashes = new Map<string, string>();
   const limit = limitOf(config);
+  const limits = limitsPolicyOf(config);
   const policyOptions = policyOptionsOf(config);
 
   function register(schema: LinkedSchema): void {
@@ -680,6 +694,7 @@ export function createTson(config: Config = {}): Tson {
       contentHashes,
       bytes,
       limit,
+      limits,
       config.identifierPolicy,
     );
     // A schema registered in-process is pin-checked like a fetched one ([TSON-SCHEMA] §10.2):
@@ -734,6 +749,7 @@ export function createTson(config: Config = {}): Tson {
         contentHashes,
         bytes,
         limit,
+        limits,
         config.identifierPolicy,
       );
       const declared = canonicalizeIdentity(linked.id);
@@ -755,11 +771,7 @@ export function createTson(config: Config = {}): Tson {
     compile: compileMethod,
     fetch: fetchReference,
     preload,
-    processorPolicy: processorPolicy(
-      config.identifierPolicy,
-      config.tokenPolicy,
-      limitsPolicyOf(limit),
-    ),
+    processorPolicy: processorPolicy(config.identifierPolicy, config.tokenPolicy, limits),
     // Bound to this instance's limit (and, for a schemaless tree read, its two Unicode policies) rather
     // than passed through bare, so `tson.parse(bytes)`/`tson.readTree(bytes)`/`tson.validate(bytes)`
     // obey the policy the instance was configured with. A caller's own per-call options still

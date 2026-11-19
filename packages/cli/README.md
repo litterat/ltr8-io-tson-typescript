@@ -35,9 +35,10 @@ released in lockstep at the same version.
 `--identifier-allow-look-alikes`, which turns skeleton distinctness off (two names in one scope that
 read alike are no longer refused). It is a flag, never an environment variable: a relaxation is
 written down at the call site. `tson policy` prints what a run would apply, in the shape of
-`policy.tn`'s `policy` type: `identifier_policy` (`level`, `per_segment`, `skeleton_distinctness`,
-`permitting`), `token_policy` (`level`, `permitting`), `unicode_data_version` and `limits`
-(`max_depth`). Scripts are named by their UAX #24 value alias (`Latin`, `Old_Italic`).
+`policy.tn`'s `policy.processor` type: `identifier_policy` (`level`, `per_segment`,
+`skeleton_distinctness`, `permitting`), `token_policy` (`level`, `permitting`),
+`unicode_data_version` and `limits`, every limit of §9.1 and [TSON-SCHEMA] §11.5 (`max_depth` through
+`max_wait_depth`). Scripts are named by their UAX #24 value alias (`Latin`, `Old_Italic`).
 
 `--format text|json|tson` selects the output form; `tson` output is produced by the implementation's
 own writer, never by string concatenation.

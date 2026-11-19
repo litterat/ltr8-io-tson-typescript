@@ -110,10 +110,10 @@ describe('isDefaultPolicy: permittedScripts', () => {
   });
 });
 
-// ── The report is `policy.tn`'s `policy` type (spec/m/policy.tn) ─────────────────────────────────
+// ── The report is `policy.tn`'s `policy.processor` type (spec/m/policy.tn) ─────────────────────────────────
 
 describe('policy report shape', () => {
-  it('json: identifier_policy has four members, token_policy two, and limits is max_depth alone', () => {
+  it('json: identifier_policy has four members, token_policy two, and limits is the whole of policy.limits', () => {
     const json = policyJson(policyFor([]));
     expect(Object.keys(json.identifier_policy)).toEqual([
       'level',
@@ -122,7 +122,25 @@ describe('policy report shape', () => {
       'permitting',
     ]);
     expect(Object.keys(json.token_policy)).toEqual(['level', 'permitting']);
-    expect(json.limits).toEqual({ max_depth: 64 });
+    expect(json.limits).toEqual({
+      max_depth: 64,
+      max_token_length: 1048576,
+      max_text_length: 1048576,
+      max_numeric_literal_length: 4096,
+      max_binary_size: 16777216,
+      max_document_size: 16777216,
+      max_elements: 1048576,
+      max_entries: 1048576,
+      max_fields: 65536,
+      max_annotations: 64,
+      max_values: 16777216,
+      max_import_closure: 64,
+      max_schema_entries: 65536,
+      max_alias_chain: 64,
+      max_supertype_chain: 64,
+      max_materialisation_depth: 64,
+      max_wait_depth: 64,
+    });
     expect(json).not.toHaveProperty('limits_policy');
   });
 
@@ -160,7 +178,7 @@ describe('policy report shape', () => {
         'Latin+Cyrillic',
       ],
     ],
-  ])('a rendered report is valid data under policy.tn: %s', (_name, flags) => {
+  ])('a rendered report is a policy.processor under policy.tn: %s', (_name, flags) => {
     const tson = stdlibTson();
     const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
     if (linked === undefined)
@@ -183,7 +201,7 @@ describe('policy report shape', () => {
       }
       const result = tson.validate(new TextEncoder().encode(rendered), {
         schema: compiled,
-        root: 'policy',
+        root: 'policy.processor',
       });
       expect(result.diagnostics).toEqual([]);
     }
@@ -198,7 +216,7 @@ describe('policy report shape', () => {
     const rendered = `${full.slice(0, full.indexOf('limits'))}}`;
     const result = tson.validate(new TextEncoder().encode(rendered), {
       schema: tson.compile(linked),
-      root: 'policy',
+      root: 'policy.processor',
     });
     expect(result.diagnostics.length).toBeGreaterThan(0);
   });

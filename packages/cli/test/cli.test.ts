@@ -391,9 +391,14 @@ describe('policy command', () => {
     expect(code).toBe(EXIT.OK);
     const parsed = JSON.parse(io.stdout()) as {
       identifier_policy: { skeleton_distinctness: boolean };
-      limits: { max_depth: number };
+      limits: Record<string, number>;
     };
-    expect(parsed.limits).toEqual({ max_depth: 64 });
+    // The whole of `policy.limits` (§9.1, [TSON-SCHEMA] §11.5), every member at its default.
+    expect(Object.keys(parsed.limits)).toHaveLength(17);
+    expect(parsed.limits.max_depth).toBe(64);
+    expect(parsed.limits.max_wait_depth).toBe(64);
+    expect(parsed.limits.max_alias_chain).toBe(64);
+    expect(parsed.limits).not.toHaveProperty('max_reference_chain');
     expect(parsed.identifier_policy.skeleton_distinctness).toBe(true);
     expect(parsed).not.toHaveProperty('limits_policy');
   });

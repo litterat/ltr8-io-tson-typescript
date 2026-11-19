@@ -126,7 +126,7 @@ describe('§11.5\'s "reference chain" limit', () => {
       throw new Error('expected to throw');
     })();
     expect(error).toBeInstanceOf(TsonLimitRefusedError);
-    expect((error as TsonLimitRefusedError).limit).toBe('reference-chain');
+    expect((error as TsonLimitRefusedError).limit).toBe('alias-chain');
     expect((error as TsonLimitRefusedError).configuredThreshold).toBe(64);
   });
 
