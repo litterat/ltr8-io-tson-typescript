@@ -23,7 +23,7 @@
  * spelling ("the resolver validates that each variant resolves to a distinct type"); §8.3 states
  * the general principle a variant reference shares with every other one -- "a reference is a hop,
  * not a rewrite... the same type under another name" -- so an alias of a variant names the variant
- * it points to, the same identity question `link/referenceChain.ts`'s own `admitting` already
+ * it points to, the same identity question `link/aliasChain.ts`'s own `admitting` already
  * answers for record subsumption and this reader now shares it for (`ctx.linkedSchema.entries`
  * flattens the written variant names the same way `dispatchTag.ts` flattens a family's declared
  * subtypes). The reference implementation's own `DispatchChoiceReader` agrees: `context.admitting`
@@ -62,7 +62,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import { choiceDisjoint, type Top } from '../../schema/meta/typedef.js';
 import { discriminationClassOf, type DiscriminationClass } from '../../link/disjointness.js';
-import { admitting, terminal } from '../../link/referenceChain.js';
+import { admitting, terminal } from '../../link/aliasChain.js';
 import type { ChoiceBody } from '../../schema/meta/bodies.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -127,7 +127,7 @@ export function buildChoiceReader(
     .sort()
     .join(', ');
 
-  // Alias-flattened (this module's own top note): every name whose reference chain terminates at
+  // Alias-flattened (this module's own top note): every name whose alias chain terminates at
   // a variant is admitted, routed to the variant itself -- never to a subtype, which this reader
   // does not flatten in. A written variant name is flattened to *its own* terminal first
   // (`terminal`), then `admitting` collects every name (including the variant's own

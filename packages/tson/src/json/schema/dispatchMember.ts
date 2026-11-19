@@ -35,7 +35,7 @@ import { directMembers, type Member } from '../../link/recordExtension.js';
 import type { RecordField } from '../../schema/meta/bodies.js';
 import { typeNameOf } from '../../schema/meta/bodies.js';
 import { subtypesOf, type Namespace, type Top } from '../../schema/meta/typedef.js';
-import { admitting, selfNames } from '../../link/referenceChain.js';
+import { admitting, selfNames } from '../../link/aliasChain.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { lookingAhead, type JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';

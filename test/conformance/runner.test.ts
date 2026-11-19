@@ -144,7 +144,7 @@ function bestEffortSidecarSummary(vector: Vector<string>): SidecarSummary | unde
 /** One `it` per vector in `vectors`, registered under whatever `describe` block is currently open. */
 function registerVectors<L extends string>(
   vectors: readonly Vector<L>[],
-  check: (vector: Vector<L>, subject: Uint8Array, sidecarRaw: Uint8Array) => void,
+  check: (vector: Vector<L>, subject: Uint8Array, sidecarRaw: Uint8Array) => void | Promise<void>,
 ): void {
   for (const vector of vectors) {
     // Rule 5, skip ground 1: skip, don't fail, an `encoding: utf-16`/`utf-32` vector -- an
@@ -173,33 +173,37 @@ function registerVectors<L extends string>(
       ? `${vector.name} (skipped: computed against UTS #39 data for Unicode ` +
         `${summary.refusedUnicode}; this implementation carries ${UTS39_VERSION})`
       : vector.name;
-    register(name, () => {
+    register(name, async () => {
       // Rule 1: feed the subject's raw bytes, never a decoded-then-re-encoded string -- several
       // vectors (malformed UTF-8 among them) only exist as raw bytes.
       const subjectBytes = readFileSync(vector.subjectPath);
       const sidecarRaw = readFileSync(vector.sidecarPath);
       // Every subject is a complete document (RUNNER.md): it is handed over exactly as on disk, its
       // own header naming whatever it imports.
-      check(vector, subjectBytes, sidecarRaw);
+      await check(vector, subjectBytes, sidecarRaw);
     });
   }
 }
 
 /** Dispatches to the Class 2 layer-specific parse-sidecar + check pair. */
-function checkClass2Vector(
+async function checkClass2Vector(
   vector: Vector<Class2Layer>,
   subject: Uint8Array,
   sidecarRaw: Uint8Array,
-): void {
+): Promise<void> {
   switch (vector.layer) {
     case 'schema':
-      checkSchemaVector(vector, subject, parseSchemaSidecar(sidecarRaw) satisfies SchemaSidecar);
+      await checkSchemaVector(
+        vector,
+        subject,
+        parseSchemaSidecar(sidecarRaw) satisfies SchemaSidecar,
+      );
       return;
     case 'link':
-      checkLinkVector(vector, subject, parseLinkSidecar(sidecarRaw) satisfies LinkSidecar);
+      await checkLinkVector(vector, subject, parseLinkSidecar(sidecarRaw) satisfies LinkSidecar);
       return;
     case 'validate':
-      checkValidateVector(
+      await checkValidateVector(
         vector,
         subject,
         parseValidateSidecar(sidecarRaw) satisfies ValidateSidecar,

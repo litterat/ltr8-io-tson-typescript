@@ -71,7 +71,7 @@ import type { SourcePosition } from '../schema/meta/position.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
 import type { FactsTable } from './facts.js';
-import { terminalDefinition } from './referenceChain.js';
+import { terminalDefinition } from './aliasChain.js';
 
 /** Dependencies {@link checkNameHygiene} needs beyond the merged namespace itself. */
 export interface CheckNameHygieneOptions {

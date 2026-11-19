@@ -804,13 +804,35 @@ export interface NamespaceBody extends TypeBase {
 export interface ReferenceIndex {
   readonly namesTypes: boolean;
   readonly members: readonly string[];
-  /** The entry each application the closure closed denotes, keyed by the application's canonical text. */
+  /** The entry each application the closure closed denotes, keyed by the application's canonical text (`referenceText`). */
   readonly applications: ReadonlyMap<string, string>;
   /** Each alias entry of the closure, to the entry at the end of its chain. */
   readonly aliases: ReadonlyMap<string, string>;
-  readonly entries: ReadonlyMap<string, unknown>;
+  /** The closure's entries, as the link that derived this index finally assembled them. */
+  readonly entries: EntryAccess;
   readonly shown: readonly string[];
+  /**
+   * For a reference that names values: what a qualified name reaches in the closure of the schema that
+   * linked it (§4.2, §5.12) -- the same walk a value body's names take, so a name a data document writes
+   * is judged by the rule a schema's own is. Absent for a reference that names types and where linking has
+   * produced nothing to reach.
+   */
+  readonly values?: ReferenceValues;
 }
+
+/** The closure's entries as a link left them: a lookup, since the link assembles them after the reference it indexes. */
+export interface EntryAccess {
+  get(name: string): unknown;
+  has(name: string): boolean;
+}
+
+/**
+ * What a name read under a reference that names values reaches (§4.2, §5.12): the value the name reaches.
+ *
+ * @throws TsonSchemaValidationError where the name reaches no value of the reference's `of`, its message
+ *   saying which step failed and opening with `where`.
+ */
+export type ReferenceValues = (where: string, name: string) => unknown;
 
 /**
  * The kernel's `meta.reference_type` constructor's own vocabulary, resolved (§4.2, §5.12, §8.1): the one

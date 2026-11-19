@@ -17,7 +17,7 @@
  * only whether the leading members it meets are placed and spelled correctly.
  *
  * - **`$type` at the object's first member** MAY restate this record's own type (itself, or an
- *   alias whose reference chain terminates at it, `link/referenceChain.ts`'s `selfNames`) — never
+ *   alias whose alias chain terminates at it, `link/aliasChain.ts`'s `selfNames`) — never
  *   anything else, since a value reaching this reader has already been placed at exactly this
  *   type by whichever dispatcher (if any) sits in front of it. Admitted, the read continues to
  *   this record's own fields (the inline form) or, immediately following, to a lone `$value` (the
@@ -54,7 +54,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Position } from '../../core/position.js';
 import type { Task } from '../../io/bytes.js';
 import { fieldNameRule, matchKey, type FieldNameRule } from '../../link/fieldNameRule.js';
-import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
+import { selfNames, terminalDefinition } from '../../link/aliasChain.js';
 import {
   fieldOmission,
   groupRefusals,
@@ -145,7 +145,7 @@ function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): 
 }
 
 /**
- * `fieldTypeName`'s reference chain walked to the atom body it terminates at (§8.3) — the one step
+ * `fieldTypeName`'s alias chain walked to the atom body it terminates at (§8.3) — the one step
  * {@link fieldValueOf} and {@link fixedFieldReader} share. Exported for
  * `json/schema/dispatchMember.ts`'s own use: a sealed family's discriminator fields are read at
  * the BASE's own declared type ([TSON-JSON] §6.1.5, "the one set of types known before dispatch"),
@@ -164,15 +164,13 @@ export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): At
     throw new Error(`'${fieldTypeName}' is an open template, and carries no atom parser`);
   }
   if (body.kind === 'alias') {
-    throw new Error(
-      `'${fieldTypeName}'s reference chain did not collapse -- this is a library bug`,
-    );
+    throw new Error(`'${fieldTypeName}'s alias chain did not collapse -- this is a library bug`);
   }
   return body as Atom;
 }
 
 /**
- * `fieldTypeName`'s reference chain walked to an atom (§8.3), and its stated `token` resolved
+ * `fieldTypeName`'s alias chain walked to an atom (§8.3), and its stated `token` resolved
  * against it — the port of the Java reference's `FieldValue.of`. Exported for
  * `json/schema/dispatchMember.ts`'s own use: a sealed member's own pin for a discriminator field is
  * exactly this, applied to that field's stated `~`/`=` token at the base's own declared type.
@@ -227,7 +225,7 @@ function fixedFieldReader(
 
 interface RecordPlan {
   readonly displayName: string;
-  /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose reference chain terminates at it (`link/referenceChain.ts`'s `selfNames`). */
+  /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose alias chain terminates at it (`link/aliasChain.ts`'s `selfNames`). */
   readonly own: ReadonlySet<string>;
   /** The whole linked schema's namespace, for {@link admissibleTag}'s own two-step resolution question ("does the name resolve at all"). */
   readonly entries: ReadonlyMap<string, Top>;

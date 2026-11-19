@@ -110,6 +110,46 @@ describe('§5.6 integer atoms -- range validation', () => {
   });
 });
 
+describe('§5.6, §9 integer atoms -- a width is judged by bit length, never by a built range', () => {
+  it('a width off the standard ladder is exact at both ends of its range', () => {
+    const int24 = createIntegerParser('int24', {
+      kind: 'integer_type',
+      size: { bits: 24n, signed: true },
+    });
+    expect(int24.read(token('8388607'))).toBe(8388607);
+    expect(int24.read(token('-8388608'))).toBe(-8388608);
+    expect(() => int24.read(token('8388608'))).toThrow(TsonAtomValidationError);
+    expect(() => int24.read(token('-8388609'))).toThrow(TsonAtomValidationError);
+    const uint1 = createIntegerParser('uint1', {
+      kind: 'integer_type',
+      size: { bits: 1n, signed: false },
+    });
+    expect(uint1.read(token('1'))).toBe(1);
+    expect(() => uint1.read(token('2'))).toThrow(TsonAtomValidationError);
+  });
+
+  it('a width of three billion bits reads a value, refuses one of the wrong sign, and names its range by its power of two', () => {
+    const bits = 3_000_000_000n;
+    const wide = createIntegerParser('wide', {
+      kind: 'integer_type',
+      size: { bits, signed: true },
+    });
+    expect(wide.read(token('-99999999999999999999999'))).toBe(-99999999999999999999999n);
+    expect(wide.read(token(`1${'0'.repeat(40)}`))).toBe(10n ** 40n);
+    const unsigned = createIntegerParser('wide_unsigned', {
+      kind: 'integer_type',
+      size: { bits, signed: false },
+    });
+    try {
+      unsigned.read(token('-1'));
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(TsonAtomValidationError);
+      expect((error as TsonAtomValidationError).expected).toBe('>= 0 and <= 2^3000000000 - 1');
+    }
+  });
+});
+
 describe('§5.6 integer atoms -- refinement constraints', () => {
   it('positive_integer => !integer ^ { min: 1 }', () => {
     const positive: IntegerType = { kind: 'integer_type', min: 1n };

@@ -92,5 +92,7 @@ export const FIELD_NAME = metaName('field_name');
 export const APPLICATION_ANNOTATION = metaName('application');
 /** The kernel's `synthetic` annotation: the key of a form no author named (§8.2). */
 export const SYNTHETIC_ANNOTATION = metaName('synthetic');
+/** The kernel's `disjoint` annotation, the author's assertion that a choice's variants are disjoint (§5.4). */
+export const DISJOINT_ANNOTATION = metaName('disjoint');
 /** The tag of a schema document's root and of a schema map nested as an entry: an alias of {@link SCHEMA} (§2.1). */
 export const SCHEMA_TAG = 'schema';

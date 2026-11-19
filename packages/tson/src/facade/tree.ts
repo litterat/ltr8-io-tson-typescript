@@ -32,16 +32,21 @@
 import type { ByteInput, Task } from '../io/bytes.js';
 import {
   collector,
+  diagnosticCodeForFetch,
   throwing,
   type Diagnostic,
   type DiagnosticsReceiver,
 } from '../core/diagnostic.js';
 import {
+  TsonBindMismatchError,
+  TsonContentHashMismatchError,
   TsonInternalError,
   TsonLexError,
   TsonNotImplementedError,
   TsonParseError,
   TsonReadError,
+  TsonSchemaFetchError,
+  TsonSchemaValidationError,
   TsonUnsupportedDocumentError,
 } from '../core/errors.js';
 import { createDataStream, requireDataDocument } from '../stream/dataStream.js';
@@ -55,6 +60,7 @@ import type { NestingLimitOptions } from '../core/limits.js';
 import type { CompiledSchema, ValidationResult } from '../compiler/compile.js';
 import type { Value } from '../tree/nodes.js';
 import { abandonedValue } from '../reader/tree/support.js';
+import { skipDataValue, typeRefAhead } from '../reader/tree/grammar.js';
 import {
   runOverAsyncSource,
   runOverBytes,
@@ -75,7 +81,19 @@ export interface SchemalessReadOptions extends SchemalessTreeReaderOptions {
   readonly schema?: undefined;
 }
 
-export type ReadTreeOptions = SchemaGovernedReadOptions | SchemalessReadOptions;
+/**
+ * A read governed by the schema a document's own `!!import`s merge into ([TSON-DATA] §2.2, [TSON-SCHEMA]
+ * §2.2.3): one namespace over their closures, the root type the one the document's root `!type-ref` names. A
+ * document with no `!!import` has no schema to read under and reads schemaless. `governedBy` obtains the
+ * compiled schema for the header's imports and throws what a schema that cannot be obtained throws; the read
+ * reports that as a diagnostic, as every other problem is reported.
+ */
+export interface ImportGovernedReadOptions extends SchemalessReadOptions {
+  readonly governedBy: (imports: readonly string[]) => CompiledSchema;
+}
+
+export type ReadTreeOptions =
+  SchemaGovernedReadOptions | SchemalessReadOptions | ImportGovernedReadOptions;
 
 /**
  * The reader for one document. A schemaless read of a document that names a schema holds its
@@ -153,7 +171,14 @@ function* readDocumentValue(
   // A schemaless read is Class 1, which refuses a schema document (§1.5); a read naming its root
   // type against a compiled schema is how a resolved form, a data document rooted `!schema`, reads.
   if (options?.schema === undefined) yield* requireDataDocument(events, start.position);
-  const value = yield* pickReader(options, start.imports.length > 0).read(ctx);
+  const governedBy =
+    options !== undefined && 'governedBy' in options && start.imports.length > 0
+      ? options.governedBy
+      : undefined;
+  const value =
+    governedBy === undefined
+      ? yield* pickReader(options, start.imports.length > 0).read(ctx)
+      : yield* readUnderImports(ctx, governedBy, start.imports);
   const end = yield* ctx.next();
   if (end.kind !== 'document-end') {
     ctx.report(
@@ -164,6 +189,87 @@ function* readDocumentValue(
     );
   }
   return value;
+}
+
+/**
+ * What a read reports when it cannot obtain a compiled schema for the document it is reading: the
+ * code and the `expected`, chosen by what actually failed. Not obtaining a schema is no verdict on the
+ * document or on the schema (a source that would not supply it, a reading application whose classes
+ * disagree), where a schema that arrived and is wrong is (`SCHEMA_ERROR`). Anything none of these claims is
+ * a fault in this library and propagates as itself.
+ */
+function schemaFailureOf(
+  error: unknown,
+): { readonly code: Diagnostic['code']; readonly expected: string } | undefined {
+  if (error instanceof TsonBindMismatchError) {
+    return { code: 'BIND_MISMATCH', expected: 'a schema whose types the bound classes match' };
+  }
+  if (error instanceof TsonSchemaFetchError) {
+    return {
+      code: diagnosticCodeForFetch(error.reason),
+      expected: 'a schema that can be obtained',
+    };
+  }
+  if (error instanceof TsonSchemaValidationError) {
+    return { code: 'SCHEMA_ERROR', expected: 'a resolvable schema' };
+  }
+  if (error instanceof TsonContentHashMismatchError) {
+    return { code: 'SCHEMA_ERROR', expected: 'a schema matching its ?sha256= pin' };
+  }
+  return undefined;
+}
+
+/**
+ * Reads the root value against the type the document's own root `!type-ref` names, in the namespace its
+ * imports merge into ([TSON-DATA] §2.2). A problem reaching the schema is reported like any other, and the
+ * document's own value is then skipped -- parsed, so a syntax error still reports, and judged by no other
+ * rule, since no schema is judging it -- so the stream still lands on `document-end`.
+ */
+function* readUnderImports(
+  ctx: ReadContext,
+  governedBy: (imports: readonly string[]) => CompiledSchema,
+  imports: readonly string[],
+): Task<Value> {
+  function* abandon(): Task<Value> {
+    yield* skipDataValue(ctx);
+    return abandonedValue();
+  }
+  let compiled: CompiledSchema;
+  try {
+    compiled = governedBy(imports);
+  } catch (error) {
+    const failure = schemaFailureOf(error);
+    if (failure === undefined) throw error;
+    ctx.report(
+      failure.code,
+      error instanceof Error ? error.message : String(error),
+      failure.expected,
+      imports.join(' '),
+    );
+    return yield* abandon();
+  }
+  // Past any leading annotations, which are part of the root value rather than something before it.
+  const name = yield* typeRefAhead(ctx);
+  if (name === undefined) {
+    ctx.report(
+      'VALIDATION_ERROR',
+      'data imports a schema but has no root type-ref (e.g. `!person`) to select a type',
+      'a root type-ref',
+      '(none)',
+    );
+    return yield* abandon();
+  }
+  if (!compiled.linked.entries.has(name)) {
+    // The root-position analogue of an unrecognized field: the name denotes no type of the closure.
+    ctx.report(
+      'UNKNOWN_TYPE',
+      `'${name}' is not a type this document's imports declare`,
+      'a type declared by the governing schema',
+      name,
+    );
+    return yield* abandon();
+  }
+  return yield* compiled.reader(name).read(ctx);
 }
 
 /**

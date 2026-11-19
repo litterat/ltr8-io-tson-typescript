@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { terminal, terminalDefinition } from '../src/link/referenceChain.js';
+import { terminal, terminalDefinition } from '../src/link/aliasChain.js';
 import { TsonLimitRefusedError } from '../src/core/errors.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
 import type { Alias, Top, TypeRef } from '../src/schema/meta/typedef.js';
@@ -98,7 +98,7 @@ describe('the reference-chain walk (§8.3)', () => {
   });
 });
 
-// ── [TSON-SCHEMA] §11.5's "reference chain" limit ───────────────────────────────────────────────
+// ── [TSON-SCHEMA] §11.5's "alias chain" limit ───────────────────────────────────────────────
 
 /** A straight-line alias chain `a0 -> a1 -> ... -> aN -> text`, N hops long. */
 function chainOf(hops: number): Map<string, Top> {
@@ -109,7 +109,7 @@ function chainOf(hops: number): Map<string, Top> {
   return namespace;
 }
 
-describe('§11.5\'s "reference chain" limit', () => {
+describe('§11.5\'s "alias chain" limit', () => {
   it('a chain exactly at the default (64 hops) resolves cleanly', () => {
     const namespace = chainOf(64);
     expect(terminal('a0', lookup(namespace))).toBe('text');

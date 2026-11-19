@@ -6,7 +6,7 @@
  * `@meta.synthetic` and `@meta.application` key markers (§8.2). A type position naming an `alias` entry is
  * left exactly as the author wrote it (§8.3) -- nothing here walks or rewrites a use site past one; a
  * consumer that needs the type at the end of a chain does its own ephemeral walk
- * (`link/referenceChain.ts`'s shared function).
+ * (`link/aliasChain.ts`'s shared function).
  *
  * **One namespace per schema (§3.3).** Every name -- a construction head, a refinement source, a type
  * position, an annotation -- resolves in the document's own entries and its import closure's, from the
@@ -42,6 +42,7 @@ import { diagnosticCodeForFetch, diagnosticCodeForMechanism } from '../core/diag
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
+import type { DataValue } from '../ast/value.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { FieldNameType } from '../link/fieldNames.js';
 import type { TemplateParam } from '../schema/meta/bodies.js';
@@ -52,6 +53,7 @@ import {
   SYNTHETIC_ANNOTATION,
   applicationOf,
   chainOf,
+  isConstructor,
   isOpen,
   isType,
   supertypesOf,
@@ -61,6 +63,8 @@ import {
   withChain,
 } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
+import { DEFAULT_MAX_WAIT_DEPTH, waitDepthLimitRefusal } from '../core/limits.js';
+import { terminal } from '../link/aliasChain.js';
 import { canonicalApplication } from './derivedName.js';
 import {
   createDefinitionResolver,
@@ -168,6 +172,12 @@ export interface SchemaResolverDeps {
   readonly encodeSourceBody?: SourceBodyEncoder;
   /** Resolves an `!!import` URI's namespace. Omitted means "no loader": a document with no `!!import` is unaffected; one that writes any reports {@link TsonNotImplementedError}. */
   readonly resolveImport?: ImportResolver;
+  /**
+   * `max_wait_depth` ([TSON-SCHEMA] §11.5): the longest chain of waits resolving one schema may run, each entry
+   * waiting on the next being ready. A chain past it refuses the entry at its head, whichever order it was
+   * reached in. Defaults to {@link DEFAULT_MAX_WAIT_DEPTH}.
+   */
+  readonly maxWaitDepth?: number;
 }
 
 /** Options for {@link resolveSchema}. */
@@ -319,10 +329,35 @@ export function resolveSchema(
   const resolving = new Set<string>();
   const failed = new Set<string>();
   const resolverBox: { current?: DefinitionResolver } = {};
+  const maxWaitDepth = deps.maxWaitDepth ?? DEFAULT_MAX_WAIT_DEPTH;
+  // For each entry being made ready, the declarations of this document it has waited on so far, and each ready
+  // declaration's wait depth: none for an entry that waits on nothing of this document, one more than the
+  // deepest entry it waits on otherwise. An import is ready before the resolution starts, so a wait ends at one.
+  const waits = new Map<string, Set<string>>();
+  const depths = new Map<string, number>();
+
+  /** Records that the entry being made ready waits on `name`, one of this document's declarations. */
+  const waited = (name: string): void => {
+    const waiting = [...resolving].at(-1);
+    if (waiting !== undefined && waiting !== name && declarations.has(name)) {
+      waits.get(waiting)?.add(name);
+    }
+  };
+
+  /** `name`'s wait depth, from the depths of the entries it waited on, refused past the limit. */
+  const measure = (name: string): void => {
+    let depth = 0;
+    for (const on of waits.get(name) ?? []) {
+      depth = Math.max(depth, (depths.get(on) ?? 0) + 1);
+    }
+    if (depth > maxWaitDepth) throw waitDepthLimitRefusal(maxWaitDepth, name);
+    depths.set(name, depth);
+  };
 
   const namespaceGetter: DefinitionGetter = (name) => {
     const already = namespace.get(name);
     if (already !== undefined) {
+      waited(name);
       return already;
     }
     const declaration = declarations.get(name);
@@ -330,12 +365,25 @@ export function resolveSchema(
       return undefined; // not a local entry -- an as-yet-unverified reference a later phase validates
     }
     if (resolving.has(name)) {
+      // An entry reached again while it is being made ready waits on itself: the cycle, from its first wait.
+      const chain = [...resolving];
+      const cycle = [...chain.slice(chain.indexOf(name)), name];
       throw new TsonSchemaValidationError(
-        `'${name}' is part of a circular composition/refinement chain (${[...resolving].join(' -> ')} -> ${name}) ` +
-          '-- a supertype or refinement source cannot depend, directly or transitively, on the type it helps define',
+        `${cycle.map((entry) => `'${entry}'`).join(' waits on ')}: entries waiting on each other are never ` +
+          "ready -- an entry's declaration is read against its head, the types of its annotations, its " +
+          "refinement source and its '&' operands, and every type a part of it is read against, each of " +
+          'which must be ready first ([TSON-SCHEMA] §3.4.1). A name at a type position orders nothing: ' +
+          'type a field by the entry instead of reading a value against it',
       );
     }
+    waited(name);
+    if (resolving.size > maxWaitDepth) {
+      // The entries being made ready are a chain of waits, and this one lengthens it past the limit: refused at
+      // its head, which no order can make shallower, before the recursion runs any deeper.
+      throw waitDepthLimitRefusal(maxWaitDepth, [...resolving][0] ?? name);
+    }
     resolving.add(name);
+    waits.set(name, new Set());
     try {
       const resolver = resolverBox.current;
       if (resolver === undefined) {
@@ -346,6 +394,7 @@ export function resolveSchema(
       const position = positionOf(declaration, positions);
       const resolved = resolver.resolve(declaration, position);
       refuseHeadAbstraction(name, resolved);
+      measure(name);
       namespace.set(name, resolved);
       return resolved;
     } catch (e: unknown) {
@@ -361,9 +410,11 @@ export function resolveSchema(
       const placeholder = unresolvedPlaceholder(typeParamsOf(declaration.typeDef));
       if (position !== undefined) facts.set(name, { position });
       namespace.set(name, placeholder);
+      depths.set(name, 0);
       return placeholder;
     } finally {
       resolving.delete(name);
+      waits.delete(name);
     }
   };
 
@@ -387,10 +438,25 @@ export function resolveSchema(
       ? readers.annotation(type, value)
       : looseAnnotationValue(value);
   };
+  // A held body closes to whatever its head builds: a type where the head is a constructor, and a value entry
+  // where it is an ordinary type (`fetch => <T> !operations { ... }`, then `get_order => fetch<order>`). An
+  // alias of a constructor is applied as its target is (§3.3.1).
+  const closingReader: DefinitionMetaReader = (written, value) => {
+    const type = terminal(written, heads);
+    const head = heads(type);
+    if (head === undefined || isConstructor(head, type) || readers.value === undefined) {
+      return readers.meta(written, value);
+    }
+    return {
+      kind: 'value_entry',
+      type,
+      value: readers.value(type, retagged(value, written, type)),
+    };
+  };
   const materialiser = createTemplateMaterialiser({
     namespaceDefinitions: namespaceGetter,
     publish: (name, definition) => namespace.set(name, definition),
-    definitionMetaReader: readers.meta,
+    definitionMetaReader: closingReader,
     generatedNames: generated,
     metaTypes: heads,
     resolving: () => [...resolving].at(-1),
@@ -563,11 +629,23 @@ export function resolveSchema(
   const entries = new Map<string, Top>();
   const keyAnnotations = new Map<string, Annotations>();
   const localFacts = new Map<string, EntryFacts>();
+  // Every application this schema closed, recorded on the entry it denotes (§4.2, §8.2): an entry's own
+  // application, and an expansion's, which carries no `@meta.application`. A reference read in data is resolved
+  // against these by structural identity, and they travel with the facts to every importer.
+  const closes = new Map<string, TypeRef[]>();
+  for (const { entry, application } of materialiser.closedApplications()) {
+    const name = merged.get(entry) ?? entry;
+    const held = closes.get(name);
+    if (held === undefined) closes.set(name, [application]);
+    else held.push(application);
+  }
   /** `name`'s facts as resolution recorded them, with the head the materialiser knows where it closed the entry. */
   const factsFor = (name: string): EntryFacts => {
     const known = facts.get(name) ?? {};
     const head = materialiser.mintedFacts(name)?.head;
-    return head === undefined || known.head !== undefined ? known : { ...known, head };
+    const withHead = head === undefined || known.head !== undefined ? known : { ...known, head };
+    const closed = closes.get(name);
+    return closed === undefined ? withHead : { ...withHead, closes: closed };
   };
   /** `annotations` with the application `name` closes recorded as its `@application` (§8.2). */
   const withAppliedKey = (name: string, annotations: Annotations): Annotations => {
@@ -998,4 +1076,9 @@ function requiredGet<K, V>(map: ReadonlyMap<K, V>, key: K, context: string): V {
     throw new TsonInternalError(`${context}: missing expected key '${String(key)}'`);
   }
   return value;
+}
+
+/** `value` tagged with `type` where it was written under the alias `written` of it. */
+function retagged(value: DataValue, written: string, type: string): DataValue {
+  return type !== written && value.typeRef === written ? { ...value, typeRef: type } : value;
 }

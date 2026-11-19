@@ -19,7 +19,7 @@
  * **Every name it admits was resolved when the schema compiled** (`json/schema/route.ts`'s own
  * `routeTo`): a base's `subtypes` is its whole family, transitively (the chain's `subtypes`),
  * so a tag naming a type any number of levels down reaches that type's reader in one step, and
- * every alias meaning one of them (`link/referenceChain.ts`'s own `admitting`) reaches the same
+ * every alias meaning one of them (`link/aliasChain.ts`'s own `admitting`) reaches the same
  * reader.
  *
  * **It decides from the leading members and reads no further** (`tagMembers.ts`'s own
@@ -30,7 +30,7 @@
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import { isOpen, isTemplateBody, type Top } from '../../schema/meta/typedef.js';
-import { admitting, selfNames } from '../../link/referenceChain.js';
+import { admitting, selfNames } from '../../link/aliasChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';

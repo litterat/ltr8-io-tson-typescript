@@ -57,6 +57,9 @@ function stubMaterialiser(
     expansionsByApplication() {
       return new Map();
     },
+    closedApplications() {
+      return [];
+    },
     setParameterKinds(): void {
       // not exercised by this test
     },

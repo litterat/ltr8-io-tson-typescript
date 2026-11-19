@@ -334,12 +334,3 @@ export function waitDepthLimitRefusal(limit: number, entry: string): TsonLimitRe
     { limit: WAIT_DEPTH_LIMIT, configuredThreshold: limit },
   );
 }
-
-/**
- * {@link aliasChainLimitRefusal}, under the name `link/referenceChain.ts` still calls it by.
- * Stage 2 retires this when that module takes `maxAliasChain` from the processor's policy.
- */
-export const referenceChainLimitRefusal = aliasChainLimitRefusal;
-
-/** {@link DEFAULT_MAX_ALIAS_CHAIN}, under the name `link/referenceChain.ts` still reads it by. */
-export const DEFAULT_MAX_REFERENCE_CHAIN = DEFAULT_MAX_ALIAS_CHAIN;

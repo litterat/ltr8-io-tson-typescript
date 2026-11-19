@@ -404,7 +404,7 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     expect(result.has('vec')).toBe(false);
   });
 
-  it('a bound naming a constructor of the governing meta is refused: a bound names a type (§3.3.1)', () => {
+  it('a bound naming a constructor is refused: a bound names a type, which IS-A no constructor (§4.1, §5.10)', () => {
     const entries = new Map([
       ['box', template(['T'], 'meta.array', record({ element_type: token('T') }))],
     ]);
@@ -412,14 +412,14 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     const reported: string[] = [];
     infer(entries, {
       written,
-      extra,
+      extra: new Map([...extra, ['meta.array', arrayVocab('meta.type_ref')]]),
       reporter: {
         report(_name, error): void {
           reported.push(error.message);
         },
       },
     });
-    expect(reported[0]).toContain('structure vocabulary, not a type');
+    expect(reported[0]).toContain('is a constructor, not a type');
   });
 
   it('a parameter inherits the bound of the template it is passed to, and a written bound may not be wider', () => {

@@ -3,7 +3,7 @@
  * declaration's chain is built by at its declaration, and a record template's application's when
  * materialisation closes it (`templates.ts`).
  *
- * **A closed parent** contributes itself, the end of its reference chain (§8.3: the terminal is
+ * **A closed parent** contributes itself, the end of its alias chain (§8.3: the terminal is
  * the same type under another name, so IS-A reaches it) and that entry's own chain. **An
  * application** denotes no entry at the position that writes it -- its fields are absorbed by
  * value -- so it contributes its template's ancestors, and nothing for the template, which §5.10
@@ -18,12 +18,12 @@
  */
 import type { Top, TypeChain, TypeRef } from '../schema/meta/typedef.js';
 import { isOpen, supertypesOf, typeChain } from '../schema/meta/typedef.js';
-import { terminal } from '../link/referenceChain.js';
+import { terminal } from '../link/aliasChain.js';
 
 /** A name's entry, or `undefined` where nothing is declared under it. */
 export type AncestryLookup = (name: string) => Top | undefined;
 
-/** A closed parent's contribution: itself, the end of its reference chain, and that entry's chain. */
+/** A closed parent's contribution: itself, the end of its alias chain, and that entry's chain. */
 export function ofParent(parent: string, lookup: AncestryLookup): string[] {
   const names = [parent];
   const end = terminal(parent, lookup);

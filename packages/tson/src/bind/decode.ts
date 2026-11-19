@@ -331,12 +331,14 @@ export function fromCoreValue<T>(
       }
       for (const slot of resolved.fields) {
         if (slot.unbound || byName.has(slot.wireName)) continue;
-        if (!slot.required) continue; // OPTIONAL: leave the slot undefined
+        // A field the schema gives a `DEFAULT` or `FIXED` value yields it when omitted (§5.2), whether the host
+        // slot is required or optional: a constructor pinning an optional facet (`max_length?: = 4`) states it.
         const fallback = policy?.defaultFor(slot.wireName);
         if (fallback !== undefined) {
           slots[slot.index] = fromDataValue(slot.binding, fallback, decodeAtom, fieldsFor);
           continue;
         }
+        if (!slot.required) continue; // OPTIONAL: leave the slot undefined
         const slotBinding = resolveRef(slot.binding);
         if (slotBinding.kind === 'array' || slotBinding.kind === 'map') {
           slots[slot.index] = slotBinding.construct([]);

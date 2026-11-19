@@ -29,7 +29,7 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { resolvesToConstructor } from './referenceChain.js';
+import { resolvesToConstructor } from './aliasChain.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
 import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
@@ -182,6 +182,11 @@ function isInhabited(
         (refInhabited(body.keyType, namespace, inhabited) &&
           refInhabited(body.valueType, namespace, inhabited))
       );
+    // A reference that names types admits the names of its members, whatever the types they name admit, so it is
+    // inhabited exactly when linking found a member. One that names values admits a name whose referent only
+    // the linker judges.
+    case 'reference_type':
+      return body.index?.namesTypes === false || (body.index?.members.length ?? 0) > 0;
     default:
       return true; // an atom's own satisfiability is its family's question, not this one
   }
@@ -213,7 +218,7 @@ function recordInhabited(
     // §5.10.1, §5.2: `a: void` — a field the document MUST write and MUST NOT write `_` at — is
     // the one declaration this rule refuses on its own, the record having no member at all: `_`
     // is the only value `void` admits, and this field admits neither a value nor `_`. Followed
-    // through the reference chain (§8.3) rather than checked by bare name, since a rename
+    // through the alias chain (§8.3) rather than checked by bare name, since a rename
     // (`nothing => void`) is the same type under another name and `a: nothing` empties the
     // record exactly as `a: void` would.
     if (refIsVoid(field.type, namespace)) {
@@ -329,7 +334,7 @@ function refInhabited(
 }
 
 /**
- * Whether `ref`, followed through its reference chain (§8.3), terminates at the kernel's own
+ * Whether `ref`, followed through its alias chain (§8.3), terminates at the kernel's own
  * `void` -- what a required, non-voidable field's own `a: void` refusal (§5.10.1, §5.2) must ask
  * rather than comparing `ref.name` by spelling, since a rename (`nothing => void`) is the same
  * type under another name and `void` itself is otherwise an ordinary, trivially satisfiable

@@ -37,7 +37,7 @@
  * local, which is why it takes `localNames` too.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
-import { TsonSchemaValidationError } from '../core/errors.js';
+import { TsonInternalError, TsonSchemaValidationError } from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
@@ -62,7 +62,7 @@ import { checkEveryEntryIsInhabited } from './typeInhabitance.js';
 import { checkFieldGroups } from './fieldGroups.js';
 import { checkRecordExtension } from './recordExtension.js';
 import { checkKindsReferencesAndNamespaceTypes } from './namespaceTypes.js';
-import { checkValuesByName } from './valuesByName.js';
+import { checkValuesByName, ValuesByName } from './valuesByName.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -207,7 +207,25 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   // Each nested map holds the union of the members its closure declares (§2.2.3).
   merged = new Map(syncedEntries({ entries: merged, keyAnnotations: new Map() }).entries);
   merged = computeSubtypes(merged, localNames);
-  merged = computeKindMembers(merged, (name) => facts.get(name));
+  // A reference read in data names an entry of the final namespace, assembled below, and a name read under a
+  // reference that names values reaches a value of it: both are lookups the index holds until the link ends.
+  const closure: { current: ReadonlyMap<string, Top> } = { current: new Map() };
+  const reached: { current?: ValuesByName } = {};
+  merged = computeKindMembers(merged, {
+    facts: (name) => facts.get(name),
+    entries: {
+      get: (name) => closure.current.get(name),
+      has: (name) => closure.current.has(name),
+    },
+    values: (of) => (where, name) => {
+      if (reached.current === undefined) {
+        throw new TsonInternalError(
+          `'${name}' is read under 'meta.ref<${of}>' before the schema linking it has assembled its namespace`,
+        );
+      }
+      return reached.current.reach(where, name, of);
+    },
+  });
 
   // Before disjointness: an enum whose members are texts is string-class, and only here can its
   // `name_type` be followed into the governing meta, where a constructor's pinned one was written.
@@ -318,6 +336,14 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     // this check could not see would be a marker nothing ever contradicts.
     keyAnnotations: schema.keyAnnotations,
     ...(receiver === undefined ? {} : { receiver }),
+  });
+
+  closure.current = merged;
+  reached.current = new ValuesByName(merged, {
+    schemaId: schema.id,
+    facts,
+    structureNamespace: merged,
+    structureFacts: facts,
   });
 
   return {

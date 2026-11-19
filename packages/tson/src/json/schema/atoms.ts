@@ -29,7 +29,7 @@
  *
  * **A kind is a string naming a member** ([TSON-JSON] §5.6, [TSON-SCHEMA] §4.2): its content is
  * read as the kernel's `type_name` reads it and judged a member of the kind's linked `members`
- * (`atom/reference.ts`'s `createKindParser`), so `kind<uuid_type>` takes `"stock_id"` and refuses
+ * (`atom/reference.ts`'s `createReferenceParser`), so `kind<uuid_type>` takes `"stock_id"` and refuses
  * a uuid, which is a value of a member and no type name. It is an atom like any other here, never
  * a discrimination case over its members. `hostname`, `host` and `media_type` are string content
  * read by the network parsers `atomParserFor` routes them to, as every other string family is.
@@ -55,7 +55,7 @@
 import type { AtomToken } from '../../atom/contract.js';
 import { atomParserFor, type ScalarParser } from '../../atom/forType.js';
 import { createEnumParser } from '../../atom/enum.js';
-import { createKindParser } from '../../atom/reference.js';
+import { createReferenceParser } from '../../atom/reference.js';
 import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import { toExactDecimal, toExactInteger } from '../../base/numberNarrowing.js';
@@ -67,7 +67,7 @@ import type { Atom, Top } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import type { LinkedSchema } from '../../link/link.js';
-import { selfNames, terminal } from '../../link/referenceChain.js';
+import { selfNames, terminal } from '../../link/aliasChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonEvent } from '../stream.js';
@@ -354,7 +354,7 @@ export function atomReader(
   const form = atomFormOf(body);
   const parser: ScalarParser | undefined =
     body.kind === 'reference_type'
-      ? createKindParser(displayName, body, options.judgesKindMembers ?? false)
+      ? createReferenceParser(displayName, body, options.judgesKindMembers ?? false)
       : atomParserFor(displayName, body);
   const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;
   return makeAtomReader(

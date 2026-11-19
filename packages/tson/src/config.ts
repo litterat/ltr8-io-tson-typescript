@@ -75,6 +75,7 @@ import type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/
 import { canonicalizeIdentity } from './link/identity.js';
 import { declaredSha256, isAddressable, sha256HexSync, UNADDRESSABLE } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
+import { closureIdentity, importIdentities, linkImportClosure } from './link/importClosure.js';
 import {
   resolveSchema as resolveSchemaCore,
   type ImportResolver,
@@ -82,6 +83,7 @@ import {
 } from './compiler/schemaResolver.js';
 import type { DefinitionGetter } from './compiler/resolverTypes.js';
 import { parseSchemaDocument } from './compiler/schemaParser.js';
+import { createDataStream } from './stream/dataStream.js';
 import { compile as compileCore, type CompiledSchema } from './compiler/compile.js';
 import { createDefinitionMetaReader } from './schema/metaReader.js';
 import { createDefinitionValueReader } from './schema/namespaceReader.js';
@@ -478,6 +480,16 @@ function importClosureSize(
   return seen.size;
 }
 
+/** The `!!import`s `bytes`' header names, or none where it does not parse (resolving the document reports why). */
+function headerImports(bytes: Uint8Array): readonly string[] {
+  try {
+    const start = runSync(createDataStream(fromBytes(bytes)).next());
+    return start.kind === 'document-start' ? start.imports : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
@@ -507,6 +519,7 @@ function resolveAgainstRegistry(
     }),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
+    maxWaitDepth: limits.maxWaitDepth,
   });
   // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
   // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
@@ -581,7 +594,9 @@ export interface Tson {
   /**
    * Fetches, resolves, links, and registers each of `references`, **in order** -- so a reference
    * depending on an earlier one in this same call (or on anything already registered) finds it
-   * in place by the time its own turn comes. A `?sha256=` pin declared on a reference is verified
+   * in place by the time its own turn comes. A fetched schema is obtained with what it names: its own
+   * `!!import`s are fetched, resolved and registered before it is, so a reference need only name the
+   * schema it wants. A document that is no schema document (§2.2) is refused as an import. A `?sha256=` pin declared on a reference is verified
    * against what was fetched, this identity's own content hash is recorded either way so a later
    * pinned `!!import` reference to it is verified too (`config.ts`'s own
    * `recordContentHash`, [TSON-SCHEMA] §10.2's MUST), and the fetched document's own `!!id` is
@@ -615,6 +630,22 @@ export interface Tson {
   readTree(source: AsyncByteSource, options?: ReadTreeOptions): Promise<Value>;
   validate(source: Uint8Array, options?: ReadTreeOptions): ValidationResult;
   validate(source: AsyncByteSource, options?: ReadTreeOptions): Promise<ValidationResult>;
+  /**
+   * Reads `source`, a data document, under the one namespace its own `!!import`s merge into ([TSON-DATA]
+   * §2.2, [TSON-SCHEMA] §2.2.3), throwing {@link TsonReadError} at the first problem. The root type is the one the
+   * document's root `!type-ref` names; every `!!import` must already be registered ({@link preload}). A
+   * document importing several schemas reads under a schema of no entries of its own importing each, with the
+   * collision rule a schema's imports are judged by -- a name two of them declare differently refuses the whole
+   * namespace. A document with no `!!import` has no schema and reads schemaless.
+   */
+  readDocument(source: Uint8Array, options?: NestingLimitOptions): Value;
+  readDocument(source: AsyncByteSource, options?: NestingLimitOptions): Promise<Value>;
+  /** {@link readDocument}, collecting every problem rather than stopping at the first; see {@link validate}. */
+  validateDocument(source: Uint8Array, options?: NestingLimitOptions): ValidationResult;
+  validateDocument(
+    source: AsyncByteSource,
+    options?: NestingLimitOptions,
+  ): Promise<ValidationResult>;
   write(value: Value, options?: WriteOptions): string;
 }
 
@@ -641,6 +672,44 @@ export function createTson(config: Config = {}): Tson {
         ? {}
         : { identifierPolicy: config.identifierPolicy }),
     });
+  }
+
+  // The compiled schema each data document's imports are read under, by the linked schema compiled (one
+  // import) or by the identity of the closure linked (several).
+  const compiledImports = new WeakMap<LinkedSchema, CompiledSchema>();
+  const compiledClosures = new Map<string, CompiledSchema>();
+
+  /**
+   * The compiled schema a data document importing `imports` is read under ([TSON-DATA] §2.2): that schema's
+   * own compilation for one import in any number of spellings, and otherwise a schema of no entries of its
+   * own importing each of them, linked under an identity derived from theirs that is never registered.
+   */
+  function governingSchema(imports: readonly string[]): CompiledSchema {
+    const identities = importIdentities(imports);
+    const resolveImport: ImportResolver = (uri) =>
+      importedFrom(
+        requireRegistered(schemas, contentHashes, uri, '(a data document)'),
+        config.identifierPolicy,
+      );
+    // Each resolved on its own first: its pin verified, and every problem reported as for one import.
+    const registered = imports.map((uri) =>
+      requireRegistered(schemas, contentHashes, uri, '(a data document)'),
+    );
+    const only = registered[0];
+    if (identities.length === 1 && only !== undefined) {
+      const known = compiledImports.get(only);
+      if (known !== undefined) return known;
+      const built = compileMethod(only);
+      compiledImports.set(only, built);
+      return built;
+    }
+    const id = closureIdentity(identities);
+    const cached = compiledClosures.get(id);
+    if (cached !== undefined) return cached;
+    const linked = linkImportClosure(imports, resolveImport, config.identifierPolicy);
+    const built = compileMethod(linked);
+    compiledClosures.set(id, built);
+    return built;
   }
 
   function resolveSchemaMethod(source: string | Uint8Array): LinkedSchema {
@@ -689,34 +758,49 @@ export function createTson(config: Config = {}): Tson {
     return bytes;
   }
 
+  /** The identities being fetched now, so a document reached again through its own imports is not fetched twice. */
+  const preloading = new Set<string>();
+
   async function preload(references: readonly string[]): Promise<void> {
     for (const reference of references) {
       const canonical = canonicalizeIdentity(reference);
-      if (schemas.has(canonical)) {
+      if (schemas.has(canonical) || preloading.has(canonical)) {
         continue; // idempotent -- already registered, from an earlier call or an earlier entry
       }
-      const bytes = await fetchReference(reference);
-      // Verifies `reference`'s own declared pin (if any) against these fetched bytes, and records
-      // this identity's own content hash either way ([TSON-SCHEMA] §10.2) -- before the bytes are
-      // parsed/resolved, so tampered content is refused without spending that work on it.
-      recordContentHash(contentHashes, bytes, reference, canonical);
-      const linked = resolveAgainstRegistry(
-        schemas,
-        contentHashes,
-        bytes,
-        limit,
-        limits,
-        config.identifierPolicy,
-      );
-      const declared = canonicalizeIdentity(linked.id);
-      if (declared !== canonical) {
-        throw new TsonSchemaValidationError(
-          `fetched '${reference}' but it declares !!id "${linked.id}" (identity '${declared}'), ` +
-            `a different identity -- a mirror or file behind this reference is serving the wrong document`,
-        );
+      preloading.add(canonical);
+      try {
+        await preloadOne(reference, canonical);
+      } finally {
+        preloading.delete(canonical);
       }
-      schemas.set(canonical, linked);
     }
+  }
+
+  async function preloadOne(reference: string, canonical: string): Promise<void> {
+    const bytes = await fetchReference(reference);
+    // Verifies `reference`'s own declared pin (if any) against these fetched bytes, and records
+    // this identity's own content hash either way ([TSON-SCHEMA] §10.2) -- before the bytes are
+    // parsed/resolved, so tampered content is refused without spending that work on it.
+    recordContentHash(contentHashes, bytes, reference, canonical);
+    // Its own imports first, so each is in place when this one resolves: a schema is obtained with what it
+    // names. A header that does not parse names nothing here, and resolving it reports why.
+    await preload(headerImports(bytes));
+    const linked = resolveAgainstRegistry(
+      schemas,
+      contentHashes,
+      bytes,
+      limit,
+      limits,
+      config.identifierPolicy,
+    );
+    const declared = canonicalizeIdentity(linked.id);
+    if (declared !== canonical) {
+      throw new TsonSchemaValidationError(
+        `fetched '${reference}' but it declares !!id "${linked.id}" (identity '${declared}'), ` +
+          `a different identity -- a mirror or file behind this reference is serving the wrong document`,
+      );
+    }
+    schemas.set(canonical, linked);
   }
 
   return {
@@ -742,6 +826,20 @@ export function createTson(config: Config = {}): Tson {
       readTree(source, { ...limit, ...policyOptions, ...options })) as Tson['readTree'],
     validate: ((source: never, options?: ReadTreeOptions) =>
       validate(source, { ...limit, ...policyOptions, ...options })) as Tson['validate'],
+    readDocument: ((source: never, options?: NestingLimitOptions) =>
+      readTree(source, {
+        ...limit,
+        ...policyOptions,
+        ...options,
+        governedBy: governingSchema,
+      })) as Tson['readDocument'],
+    validateDocument: ((source: never, options?: NestingLimitOptions) =>
+      validate(source, {
+        ...limit,
+        ...policyOptions,
+        ...options,
+        governedBy: governingSchema,
+      })) as Tson['validateDocument'],
     write,
   };
 }

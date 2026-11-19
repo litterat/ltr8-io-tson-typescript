@@ -32,7 +32,7 @@ import {
   nameTypeFormRefusal,
   recordNameType,
 } from './nameType.js';
-import type { EntryLookup } from './referenceChain.js';
+import type { EntryLookup } from './aliasChain.js';
 
 /** One field name its record's name type does not admit, and the entry declaring it. */
 export interface FieldNameViolation {

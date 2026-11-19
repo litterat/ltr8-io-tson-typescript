@@ -402,7 +402,8 @@ export type MetaValue =
  * constructor holds a type's name (`TYPE_NAME`), and over any other type a value's qualified name
  * (`VALUE_NAME`). `of` is the slot's reference `of`, and `type` the slot's declared type as a message
  * names it, `meta.ref<method>`. A name carries its slot's type from the read, so judging it never walks
- * back through the declarations.
+ * back through the declarations. `role` is how the read took the name: the link judges by what `of` names
+ * over the final namespace, whichever the read guessed.
  */
 export interface NameSlot {
   readonly role: 'TYPE_NAME' | 'VALUE_NAME';

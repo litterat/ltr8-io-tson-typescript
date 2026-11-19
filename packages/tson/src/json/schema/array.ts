@@ -21,7 +21,7 @@ import { reportConfusablePair } from './nameHygiene.js';
 import { declareOrder } from '../../value/orderedness.js';
 import { identityOfNode, isIdentified } from './valueIdentity.js';
 import { createConfusableScope } from '../../unicode/skeleton.js';
-import { terminalDefinition } from '../../link/referenceChain.js';
+import { terminalDefinition } from '../../link/aliasChain.js';
 
 const VOID = Symbol('json.array.void');
 const REFUSED = Symbol('json.array.refused');

@@ -229,7 +229,7 @@ describe('a use-site record application is its expansion (§8.2)', () => {
     expect(materialiser.expansionsByApplication().size).toBe(2);
   });
 
-  it('an argument that is an alias follows its reference chain to its terminal entry, so `box<user_id>` over `user_id => uuid` mints the same entry as `box<uuid>` (§8.2)', () => {
+  it('an argument that is an alias follows its alias chain to its terminal entry, so `box<user_id>` over `user_id => uuid` mints the same entry as `box<uuid>` (§8.2)', () => {
     const { namespace, materialiser } = harness();
     namespace.set(
       'uuid',

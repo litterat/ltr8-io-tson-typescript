@@ -181,7 +181,7 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
     }).toThrow(/'sealed_off' can never be satisfied/u);
   });
 
-  it('rejects a required, non-voidable field typed by an ALIAS of void, followed through the reference chain (§5.10.1, §5.2, §8.3)', () => {
+  it('rejects a required, non-voidable field typed by an ALIAS of void, followed through the alias chain (§5.10.1, §5.2, §8.3)', () => {
     const merged = new Map<string, Top>([
       ['void', def({ kind: 'void_type' })],
       ['nothing', def({ kind: 'alias', target: ref('void') })],

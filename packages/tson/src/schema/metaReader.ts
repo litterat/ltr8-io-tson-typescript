@@ -94,6 +94,9 @@ import { inheritedBindingName } from './inheritedBinding.js';
 // The atom decoder for the closed meta-kernel/meta vocabulary
 // -------------------------------------------------------------------------------------------
 
+/** The largest `numeric.count` (§5.5): 2^63 - 1, so every implementation holds a count in a native type. */
+const COUNT_MAX = (1n << 63n) - 1n;
+
 /**
  * Decodes an atom leaf of the *meta-kernel's own* closed vocabulary (`identifier`, `token`,
  * `text`, `boolean`, `integer`, `value`, `date`, `time`, `datetime`, `scope_kind`, and the other
@@ -145,6 +148,21 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
         throw readError(`expected an integer literal, found '${wire.text}'`);
       }
       return toExactInteger(form);
+    }
+
+    // `numeric.count` (§5.5): a non-negative integer no larger than the signed 64-bit maximum.
+    case 'count': {
+      const form = tryParseNumber(wire.text);
+      if (form === undefined || (form.kind !== 'integer' && form.kind !== 'based-integer')) {
+        throw readError(`expected an integer literal, found '${wire.text}'`);
+      }
+      const count = toExactInteger(form);
+      if (count < 0n || count > COUNT_MAX) {
+        throw readError(
+          `'${wire.text}' is no count: a count is an integer from 0 to ${String(COUNT_MAX)}, the signed 64-bit range (§5.5)`,
+        );
+      }
+      return count;
     }
 
     case 'value':

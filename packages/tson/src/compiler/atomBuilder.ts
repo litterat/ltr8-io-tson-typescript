@@ -43,8 +43,9 @@ import { createBinaryParser } from '../atom/numeric/binary.js';
 import { createMembershipCheck, createPatternCheck, createTextParser } from '../atom/text/text.js';
 import { createIdentifierParser } from '../atom/text/identifier.js';
 import { createEnumParser } from '../atom/enum.js';
-import { createKindParser, TYPE_NAME_GRAMMAR } from '../atom/reference.js';
+import { createReferenceParser, TYPE_NAME_GRAMMAR } from '../atom/reference.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
+import { parseReference, referenceNames } from '../atom/referenceGrammar.js';
 import { DEFAULT_IDENTIFIER_POLICY, judgeName, type IdentifierPolicy } from '../unicode/policy.js';
 import { reportNameViolations } from '../reader/tree/refusal.js';
 import { createUuidParser } from '../atom/network/uuid.js';
@@ -234,14 +235,20 @@ export function buildAtomReader(
       const policy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
       return atomTreeReader(
         atomTypeReader(
-          createKindParser(name, atom, options.judgesKindMembers ?? false),
+          createReferenceParser(name, atom, options.judgesKindMembers ?? false),
           name,
           (ctx, value) => {
-            const violations = judgeName(value, profile, policy);
-            if (violations.length === 0) return false;
-            reportNameViolations(ctx, value, violations);
-            return true;
+            // Name hygiene judges each name an application writes, as it judges a bare name (§8.2).
+            let refused = false;
+            for (const written of namesWritten(value)) {
+              const violations = judgeName(written, profile, policy);
+              if (violations.length === 0) continue;
+              reportNameViolations(ctx, written, violations);
+              refused = true;
+            }
+            return refused;
           },
+          true,
         ),
         name,
       );
@@ -252,5 +259,15 @@ export function buildAtomReader(
       return wrap(createHostParser(name), name);
     case 'media_type_type':
       return wrap(createMediaTypeParser(name, atom), name);
+  }
+}
+
+/** The names a reference's canonical text writes: its head and every reference among its arguments. A sibling reference writes a field, no name. */
+function namesWritten(text: string): readonly string[] {
+  try {
+    const reference = parseReference(text);
+    return reference.kind === 'sibling' ? [] : referenceNames(reference);
+  } catch {
+    return [text];
   }
 }

@@ -45,7 +45,7 @@ import type { NonHeldTop } from '../../link/bodyKind.js';
 import type { LinkedSchema } from '../../link/link.js';
 import type { RecordField } from '../../schema/meta/bodies.js';
 import type { Namespace } from '../../schema/meta/typedef.js';
-import { namespaceMapOf } from '../../schema/meta/namespaces.js';
+import { namespaceAsMap } from '../../schema/meta/namespaces.js';
 import { isFamilyBase, isTemplateBody, subtypesOf, type Top } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import {
@@ -236,19 +236,7 @@ export function compileJsonSchema(
       return notImplementedReader(name, "a value of a meta layer's vocabulary and no type");
     }
     if (body.kind === 'namespace') {
-      const map = namespaceMapOf(body);
-      return buildMapReader(
-        name,
-        {
-          kind: 'map',
-          keyType: body.keyType,
-          valueType: body.valueType,
-          voidable: false,
-          ordered: map.ordered,
-        },
-        location,
-        context,
-      );
+      return buildMapReader(name, namespaceAsMap(body), location, context);
     }
     if (body.kind === 'declared_type') {
       return notImplementedReader(name, 'a declared position');

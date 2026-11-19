@@ -43,7 +43,7 @@ import type { LinkedSchema } from '../link/link.js';
 import type { Alias, Top } from '../schema/meta/typedef.js';
 import type { DeclaredType } from '../schema/meta/algebra.js';
 import { choiceDisjoint, entryKind, isFamilyBase, isTemplateBody } from '../schema/meta/typedef.js';
-import { isNamespaceType, namespaceMapOf } from '../schema/meta/namespaces.js';
+import { isNamespaceType, namespaceAsMap } from '../schema/meta/namespaces.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -62,7 +62,7 @@ import { choiceTreeReader } from './choiceReader.js';
 import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
-import { terminalDefinition } from '../link/referenceChain.js';
+import { terminalDefinition } from '../link/aliasChain.js';
 import { fieldNameRule } from '../reader/tree/fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
@@ -210,22 +210,14 @@ function buildReader(
   // kinds it deliberately leaves alone (`choice`, `reference`, `scoped`).
   // §4.1: a namespace type is a map type keyed by names, and a value of it is the map its facets
   // describe -- a record's `fields` is its `field_map`, which is no namespace.
-  const namespaceMap = isNamespaceType(body) ? namespaceMapOf(body) : undefined;
-  if (namespaceMap !== undefined) {
-    const map: MapBody = {
-      kind: 'map',
-      keyType: { name: namespaceMap.keyType, arguments: [], annotations: [] },
-      valueType: { name: namespaceMap.valueType, arguments: [], annotations: [] },
-      voidable: false,
-      ordered: namespaceMap.ordered,
-    };
+  if (isNamespaceType(body)) {
     const built = mapTreeReader(
       name,
       name,
-      map,
+      namespaceAsMap(body),
       resolve,
       location(),
-      isNameType(namespaceMap.keyType),
+      isNameType(body.keyType.name),
     );
     return guardSubsumption(name, definition, built, schema.entries, resolve);
   }

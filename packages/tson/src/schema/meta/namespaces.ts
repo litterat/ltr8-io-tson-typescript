@@ -4,7 +4,7 @@
  * meta.identifier  value_type: method }`) alike. A value of one is a {@link Namespace}, and a
  * qualified name enters a namespace value and nothing else (§5.12).
  */
-import type { NamespaceBody } from './bodies.js';
+import type { MapBody, NamespaceBody } from './bodies.js';
 import type { Top } from './typedef.js';
 import { isTemplateBody } from './typedef.js';
 import { metaName } from './kernel.js';
@@ -33,5 +33,21 @@ export function namespaceMapOf(namespace: NamespaceBody): NamespaceMap {
     keyType: namespace.keyType.name,
     valueType: namespace.valueType.name,
     ordered: namespace.ordered,
+  };
+}
+
+/**
+ * The map type a value of `namespace` is read as (§4.1): keys of `key_type`, values of `value_type`, never void,
+ * with the size bounds and key order `meta.map` gives every map, which a namespace type refines.
+ */
+export function namespaceAsMap(namespace: NamespaceBody): MapBody {
+  return {
+    kind: 'map',
+    keyType: namespace.keyType,
+    valueType: namespace.valueType,
+    voidable: false,
+    ordered: namespace.ordered,
+    ...(namespace.minItems === undefined ? {} : { minItems: namespace.minItems }),
+    ...(namespace.maxItems === undefined ? {} : { maxItems: namespace.maxItems }),
   };
 }

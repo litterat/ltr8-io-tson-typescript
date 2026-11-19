@@ -53,6 +53,7 @@ import {
 } from '../schema/meta/bodies.js';
 import type { Top, TypeRef } from '../schema/meta/typedef.js';
 import {
+  isConstructor,
   isOpen,
   isTemplateBody,
   parametersOf,
@@ -317,21 +318,24 @@ function narrowest(
 }
 
 /**
- * A written bound names a type, so its name — an application's head, where it is one — resolves in
- * the type-name namespace and nowhere else. The governing meta's constructors are structure
- * vocabulary (§3.3.1): a bound naming one would admit no argument, since a type argument names a
- * type, and the lookup that falls back to the meta for a slot's declared type must not reach it
- * here.
+ * A written bound names a type, so its name -- an application's head, where it is one -- resolves in the
+ * schema's namespace and names no constructor: a type argument names a type, which IS-A no constructor
+ * (§4.1), so a bound naming one would admit no argument (§5.10). A reference is not a bound: `of` is the type
+ * of the named entry's value, and a bound is the type the argument itself IS-A.
  */
 function requireType(bound: TypeRef, namespaces: Namespaces): void {
-  if (namespaces.local(bound.name) !== undefined) return;
-  throw new TsonSchemaValidationError(
-    namespaces.meta(bound.name) !== undefined
-      ? `the bound '${spell(bound)}' names '${bound.name}', and '${bound.name}' is a constructor of ` +
-          'the governing meta -- structure vocabulary, not a type (§3.3.1); a bound names a type, ' +
-          'which every argument must IS-A (§5.10)'
-      : `the bound '${spell(bound)}': '${bound.name}' names no type in this schema or its imports (§5.10)`,
-  );
+  const named = namespaces.local(bound.name);
+  if (named === undefined) {
+    throw new TsonSchemaValidationError(
+      `the bound '${spell(bound)}': '${bound.name}' names no type in this schema or its imports (§5.10)`,
+    );
+  }
+  if (isConstructor(named, bound.name)) {
+    throw new TsonSchemaValidationError(
+      `the bound '${spell(bound)}' names '${bound.name}', and '${bound.name}' is a constructor, not a type ` +
+        '(§4.1); a bound names a type, which every argument must IS-A (§5.10)',
+    );
+  }
 }
 
 /**

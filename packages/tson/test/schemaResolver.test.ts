@@ -8,6 +8,7 @@ import {
   TsonInternalError,
   TsonNotImplementedError,
   TsonSchemaFetchError,
+  TsonLimitRefusedError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
 import {
@@ -176,10 +177,22 @@ describe('resolving a whole document, on demand and dependency-following', () =>
     expect(supertypesOf(recordBodyOf(schema, 'b'))).toEqual(['base']);
   });
 
-  it('rejects a circular composition chain', () => {
+  it('rejects a wait cycle, naming the entries on it in wait order (§3.4.1)', () => {
     const doc = document('a => b & {} b => a & {}');
-    expect(() => resolveSchema(doc, deps())).toThrow(/circular/);
+    expect(() => resolveSchema(doc, deps())).toThrow(/'a' waits on 'b' waits on 'a'/);
     expect(() => resolveSchema(doc, deps())).toThrow(TsonSchemaValidationError);
+  });
+
+  it('refuses a chain of waits past max_wait_depth at its head, in any declaration order (§11.5)', () => {
+    // e waits on d waits on c waits on b waits on a: four waits from the head.
+    const forward = document('a => {} b => a & {} c => b & {} d => c & {} e => d & {}');
+    const backward = document('e => d & {} d => c & {} c => b & {} b => a & {} a => {}');
+    for (const doc of [forward, backward]) {
+      expect(() => resolveSchema(doc, { ...deps(), maxWaitDepth: 3 })).toThrow(
+        TsonLimitRefusedError,
+      );
+      expect(() => resolveSchema(doc, { ...deps(), maxWaitDepth: 4 })).not.toThrow();
+    }
   });
 
   it('rejects a composition supertype naming nothing this schema declares', () => {

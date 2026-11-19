@@ -106,7 +106,7 @@ import {
   withChain,
 } from '../schema/meta/typedef.js';
 import { mapFields, type RecordBody } from '../schema/meta/bodies.js';
-import { checkAtomCoherence, isAtom } from './atomChecks.js';
+import { checkBodyCoherence } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { metaName } from '../schema/meta/kernel.js';
@@ -122,7 +122,7 @@ import {
   typePositionParameters,
   type Kind,
 } from './parameterTypes.js';
-import { terminal } from '../link/referenceChain.js';
+import { terminal } from '../link/aliasChain.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { enumLabelForm, type EnumEntry } from '../link/enumLabels.js';
 import { lexerFormOfMeta } from './tokenForms.js';
@@ -231,6 +231,12 @@ export interface MaterialiseResult {
   readonly synthetics: ReadonlySet<string>;
 }
 
+/** An application the schema closed, and the entry it denotes. */
+export interface ClosedApplication {
+  readonly entry: string;
+  readonly application: TypeRef;
+}
+
 /**
  * What the materialiser knows of an entry it minted beyond its value: the application the entry
  * closes (its `@application`, §8.2) and the constructor its value's tag names.
@@ -308,6 +314,9 @@ export interface TemplateMaterialiser {
    * expansion records no `@application` of its own.
    */
   expansionsByApplication(): ReadonlyMap<string, string>;
+
+  /** Every application this materialiser closed, each with the entry it denotes (§4.2, §8.2). */
+  closedApplications(): readonly ClosedApplication[];
 
   /**
    * The subset of every entry this materialiser has minted so far (on-demand closures included)
@@ -417,6 +426,23 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * applied-parent fold reads the edge an operand `& box<int32>` reaches from here.
    */
   const expansionsByApplication = new Map<string, string>();
+
+  /**
+   * Every application the schema closed, by canonical application, with the entry each denotes -- an
+   * expansion's among them, which carries no `@meta.application` of its own (§8.2). What a reference read
+   * in data is resolved against by structural identity (§4.2).
+   */
+  const closedApplications = new Map<string, ClosedApplication>();
+
+  function recordClosed(head: string, args: readonly TypeArgument[], entry: string): void {
+    const key = canonicalApplication(head, args);
+    if (!closedApplications.has(key)) {
+      closedApplications.set(key, {
+        entry,
+        application: { name: head, arguments: args, annotations: [] },
+      });
+    }
+  }
 
   /**
    * The applications whose closing reached themselves -- the knot tied on the application-derived
@@ -798,18 +824,23 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // matters.
     const args = canonicalArgs(byParameterKind(head, template, parameters, rawArgs));
     const name = ofApplication(head, args);
+    /** The entry this application denotes, recorded among the applications the schema closed. */
+    const denotes = (entry: string): string => {
+      recordClosed(head, args, entry);
+      return entry;
+    };
     // §8.2: "a use-site application resolves to a declaration that owns it where one exists" --
     // `owners` is populated by `closeApplicationAs`. A recursive application inside a
     // declaration-owned closure ties the knot on the declared name, and a use site writing the
     // same application names the declaration instead of a derived entry.
     const owner = owners.get(name);
     if (owner !== undefined) {
-      return owner;
+      return denotes(owner);
     }
     // An application nothing declares is its expansion: a later sight names the same synthetic.
     const expansion = expansions.get(name);
     if (expansion !== undefined) {
-      return expansion;
+      return denotes(expansion);
     }
     if (aliasClosing.has(name)) {
       throw new TsonSchemaValidationError(
@@ -827,7 +858,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // Already built, or under construction -- the knot-tying case. Under construction, the
       // expansion names its own application, so the application keeps an entry of its own.
       if (!materialised.has(name)) tied.add(name);
-      return name;
+      return denotes(name);
     }
     closing.add(name);
     if (closing.size > MAX_CLOSING_DEPTH) {
@@ -871,7 +902,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // hands back whatever that denotes.
       if (target === REFERENCE_HEAD) {
         aliasClosing.add(name);
-        return closeHeldAlias(head, held, bind(parameters, args));
+        return denotes(closeHeldAlias(head, held, bind(parameters, args)));
       }
       // A record template's closure is a record, named for its content like every other closed
       // form unless it names its own application (§8.2): a use site's application is its
@@ -880,12 +911,12 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         const closed = closeHeldRecord(head, held, bind(parameters, args));
         refuseMintedMember(head, args, closed);
         if (!tied.has(name)) {
-          return mintedRecord(name, canonicalApplication(head, args), closed);
+          return denotes(mintedRecord(name, canonicalApplication(head, args), closed));
         }
         materialised.set(name, closed);
         facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
         deps.publish(name, closed);
-        return name;
+        return denotes(name);
       }
       const formName = closeHeldTemplate(head, held, bind(parameters, args));
       if (generated.has(head)) {
@@ -896,7 +927,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       if (!tied.has(name)) {
         // An application nothing declares is its expansion: the use site names the synthetic.
         expansions.set(name, formName);
-        return formName;
+        return denotes(formName);
       }
       // The expansion names this application, so it is named by the application: a reference to
       // the synthetic, which the compiler collapses, so it costs nothing at read time.
@@ -904,7 +935,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       materialised.set(name, alias);
       facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
       deps.publish(name, alias);
-      return name;
+      return denotes(name);
     } finally {
       closing.delete(name);
       aliasClosing.delete(name);
@@ -968,8 +999,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * declaration is already refused by `checkCoherent`).
    */
   function checkMaterialisedCoherence(head: string, constructorName: string, body: Top): void {
-    if (!isAtom(body)) return;
-    const violations = checkAtomCoherence(body);
+    const violations = checkBodyCoherence(body);
     if (violations.length > 0) {
       throw new TsonSchemaValidationError(
         `'${head}<...>' closes to a '${constructorName}' body whose own constraints contradict ` +
@@ -1248,6 +1278,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         owners.set(identityKey, name);
       }
       minted.claim(name, canonicalApplication(head, canonical));
+      recordClosed(head, canonical, name);
       const already = declared.get(name);
       if (already !== undefined) {
         return already;
@@ -1322,6 +1353,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     },
     expansionsByApplication(): ReadonlyMap<string, string> {
       return new Map(expansionsByApplication);
+    },
+    closedApplications(): readonly ClosedApplication[] {
+      return [...closedApplications.values()];
     },
     syntheticNames(): ReadonlySet<string> {
       return new Set(synthetics);

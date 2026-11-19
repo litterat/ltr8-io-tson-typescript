@@ -1,7 +1,7 @@
 /**
  * §7.2's rule that a value's own type annotation must be admitted by the position it stands in:
  * "at a position whose declared type is `T`, a value annotated `!S` is valid if and only if,
- * after following the reference chain of both (§8.3) to its terminal, `S` is `T` or `T` appears
+ * after following the alias chain of both (§8.3) to its terminal, `S` is `T` or `T` appears
  * in `S`'s closed chain (`type_chain.supertypes`)". Ported from the reference implementation's
  * `Subsumption` (`tson-compiler/.../reader/Subsumption.java`) and the dispatch half of its
  * `VariantSchemaReader`; see those files' own module docs for the exhaustive rationale.
@@ -80,7 +80,7 @@ import { valuesEqual } from '../reader/tree/equality.js';
 import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
 import { isAtom } from './atomChecks.js';
 import { directMembers, type Member } from '../link/recordExtension.js';
-import { selfNames, terminal } from '../link/referenceChain.js';
+import { selfNames, terminal } from '../link/aliasChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import { applyNormalization } from '../unicode/normalization.js';

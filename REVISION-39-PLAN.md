@@ -431,6 +431,38 @@ Vectors: every `schema/`, `link/` and `validate/` vector naming `ref`, `referenc
 `qualified`, `value-entry`, `value-not-a-type`, `namespace`, `alias`, `declared`, `refine`,
 `restat`, `narrow`, `wait`, `cycle`, `count`, `facet`, `reserv`, `collision`, `nested`, `map`.
 
+### WP2B outcome
+
+Gate met. Class 1 is 316/316. Class 2 is 581/628: schema 240/264, link 130/133, validate 211/231.
+Every one of the 47 still red is WP2C's: 39 on dependent fields and siblings, 7 on record templates
+and literal arguments, and one on a synthetic minted by two documents. Unit tests: 4132 of 4135
+pass, the three JSON declared-position tests excepted.
+
+Both harness items are closed:
+
+- `Tson.readDocument` and `Tson.validateDocument` read a data document under its own `!!import`s,
+  with the root type taken from its root tag.
+- The corpus is served through a `SchemaSource` and resolved on demand by `Tson.preload`, so
+  `a-schema-imports-a-data-document` now meets the library's own refusal.
+
+What Stage 3 can reach from `src/json`:
+
+- the import merge, `link/importClosure.ts`;
+- the reference parser, `atom/reference.ts`, with `schema/meta/referenceIndex.ts`;
+- `ValuesByName.reach` in `link/valuesByName.ts`;
+- `link/restatedFields.ts`;
+- `namespaceAsMap`.
+
+The root-tag lookup lives in `facade/tree.ts`, which `src/json` may not import, so JSON needs its own
+root-tag step.
+
+Readings recorded:
+
+- A name read at a reference slot is delivered as its canonical text. TypeScript has no `Ref<T>`,
+  and the referent is reachable through the index.
+- `max_alias_chain` is not threaded through `terminal`. The reference's `AliasChain` consults no
+  limit either; see "To report upstream".
+
 ### WP2C: record templates, dependent fields, and the editorial rules (#1, #19, #20, #21, #23; Part 2 §1.3, §5.4, §5.5, §5.7, §5.8, §5.10, §5.10.1, §5.11, §8.1, §8.2; Part 1 §2.5)
 
 Java: `DependentFields` (new), `reader/DependentFieldReader` (new), `resolver/{RecordTemplateSubstitution
@@ -519,6 +551,9 @@ a corpus item names the file.
   port judges membership on data reads and only the spelling on annotation reads.
 - **§5.9 rule 8 against §4.1 (Part 2).** `x => !plain {}` over a non-constructor `plain` is a value
   entry, so "may not be applied" cannot be observed. The reference's BACKLOG records the same gap.
+- **§11.5 (Part 2), `max_alias_chain`.** `policy.tn` declares the limit, but the reference's
+  `AliasChain` walks with no limit and nothing in its compiler consults `maxAliasChain`. This port
+  matches the reference and walks under the default constant.
 - **Kernel name type during bootstrap.** The kernel's records ask for `meta.field_name` while its
   entries are still being made, which closes a wait cycle. This port states the terminal
   (`meta.identifier`) instead.

@@ -31,7 +31,12 @@
  * {@link TsonNotImplementedError}.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
-import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/errors.js';
+import {
+  TsonAtomParseError,
+  TsonNotImplementedError,
+  TsonSchemaValidationError,
+} from '../core/errors.js';
+import { createQualifiedNameParser } from '../atom/reference.js';
 import type { EntryFacts, MetaValue, NameSlot, Top } from '../schema/meta/typedef.js';
 import { typeNameOf } from '../schema/meta/bodies.js';
 import {
@@ -43,10 +48,11 @@ import {
   typeParameters,
 } from '../schema/meta/typedef.js';
 import { isNamespaceType, namespaceMapOf } from '../schema/meta/namespaces.js';
+import { isNestedMap } from '../schema/meta/schemaPaths.js';
 import { isValueEntry } from '../schema/meta/typedef.js';
 import { schemaPositionOf, spellingOf } from './facts.js';
-import { isKindMember } from './kindMembers.js';
-import { terminal, type EntryLookup } from './referenceChain.js';
+import { isKindMember, namesTypes } from './kindMembers.js';
+import { terminal, type EntryLookup } from './aliasChain.js';
 
 /** Dependencies {@link checkValuesByName} needs beyond the merged namespace. */
 export interface ValuesByNameOptions {
@@ -82,7 +88,7 @@ export function checkValuesByName(
   localNames: ReadonlySet<string>,
   options: ValuesByNameOptions,
 ): void {
-  const judge = new Judge(merged, options);
+  const judge = new ValuesByName(merged, options);
   for (const entry of localNames) {
     const value = merged.get(entry);
     if (value === undefined || !isNamespaceValue(value)) continue;
@@ -150,7 +156,13 @@ function namesIn(entry: Top): readonly HeldName[] {
   return found;
 }
 
-class Judge {
+/**
+ * The walk that judges a name, over one namespace. {@link checkValuesByName} runs it over the names a value
+ * entry holds; {@link ValuesByName.reach} runs it for a field's default or pin at a reference and for a name
+ * a data document writes at one (the lookup a linked reference over a type that is no constructor holds),
+ * so a name is judged by one rule wherever it is written.
+ */
+export class ValuesByName {
   private readonly local: EntryLookup;
   private readonly structure: EntryLookup;
 
@@ -167,22 +179,72 @@ class Judge {
     return spellingOf(type, this.structure(type), this.options.structureFacts);
   }
 
-  judge(where: string, held: HeldName): void {
-    const { name, slot } = held;
+  judge(where: string, held: HeldName): unknown {
     if (held.application === true) {
-      this.judgeApplication(where, name);
-      return;
+      this.judgeApplication(where, held.name);
+      return undefined;
     }
-    const segments = name.split('.');
-    const head = segments[0] ?? name;
+    return this.judgeName(where, held.name, held.slot);
+  }
+
+  /**
+   * The value `name` reaches at a slot typed by a reference over `of`, a type that is no constructor: a
+   * field's `~`/`=` value, or a name a data document writes, judged as a value body's names are (§5.12).
+   *
+   * @throws TsonSchemaValidationError opening with `where`, naming the step that failed.
+   */
+  reach(where: string, name: string, of: string): unknown {
+    return this.judgeName(where, name, { type: of, of, role: 'VALUE_NAME' });
+  }
+
+  /**
+   * The segments of the qualified name `name`: split at each `.`, each a [TSON-DATA] §7.7 identifier. Refused
+   * where a segment is empty or is no identifier.
+   */
+  private segments(where: string, name: string): readonly string[] {
+    try {
+      createQualifiedNameParser(where).read({ text: name, form: 'unquoted' });
+    } catch (error) {
+      if (!(error instanceof TsonAtomParseError)) throw error;
+      throw new TsonSchemaValidationError(
+        `${where} holds '${name}', which is no qualified name: ${error.message}`,
+      );
+    }
+    return name.split('.');
+  }
+
+  /**
+   * Judges one name by its slot, and returns the value it reaches, or `undefined` for a name at a slot
+   * that names types. What the slot's `of` names decides which names it holds, judged here over the
+   * final namespace whatever the read guessed: a constructor's values are types, and any other type's
+   * values are values.
+   */
+  private judgeName(where: string, name: string, slot: NameSlot): unknown {
+    const written = this.segments(where, name);
+    const types = namesTypes(slot.of, this.local);
+    let head = written[0] ?? name;
     if (!this.merged.has(head)) {
       throw new TsonSchemaValidationError(
         `${where} names '${name}', and '${head}' is no ` +
-          (slot.role === 'TYPE_NAME' && segments.length === 1
-            ? 'type declared in this schema or its imports -- a name resolves in the schema holding it and its imports, never in the meta layer declaring its slot (§3.3.2)'
+          (types && written.length === 1
+            ? 'type declared in this schema or its imports'
             : 'entry of this schema or its imports -- the first segment names the entry a value is reached through, and a member is reached through its entry (§5.12)'),
       );
     }
+    // A schema map nested as an entry is entered by its members' names: each is an entry under its path, so the
+    // walk goes on from the member a segment names, and a further segment selects in that member's value.
+    let entered = 1;
+    while (entered < written.length && isNestedMap(this.merged.get(head))) {
+      const member = `${head}.${written[entered] ?? ''}`;
+      if (!this.merged.has(member)) {
+        throw new TsonSchemaValidationError(
+          `${where} names '${name}', and the schema map '${head}' declares no '${written[entered] ?? ''}'`,
+        );
+      }
+      head = member;
+      entered += 1;
+    }
+    const segments = [head, ...written.slice(entered)];
     const end = terminal(head, this.local);
     const referent = this.merged.get(end);
     if (referent === undefined) {
@@ -196,17 +258,18 @@ class Judge {
         `${where} names '${name}', and ${entry} is an open entry: a template denotes no value until it is applied (§5.10), so nothing is there to name`,
       );
     }
-    if (slot.role === 'TYPE_NAME') {
+    if (types) {
       this.judgeMember(where, name, segments, slot, end, referent, entry);
-      return;
+      return undefined;
     }
-    this.judgeReference(where, name, segments, slot, end, referent, entry);
+    return this.judgeReference(where, name, segments, slot, end, referent, entry);
   }
 
   /**
-   * A kind-typed slot holds a type's name, one segment, a member of the kind (§4.2): built with the
-   * kind's `of` or a constructor IS-A it, and no constructor of types. A namespace entry is refused
-   * as a value, however many segments name it.
+   * A slot over a constructor holds a type's name, its path from the root -- one segment once a schema map
+   * nested as an entry has been entered by its members' names -- a member of the kind (§4.2): an entry whose
+   * value is of the kind's `of`. A value entry is refused as a value, however many segments name it, and a type
+   * admits no further segment.
    */
   private judgeMember(
     where: string,
@@ -218,15 +281,15 @@ class Judge {
     entry: string,
   ): void {
     const kind = this.slotSpelling(slot.type);
-    const wants = `${where} wants the name of a type built with '${slot.of}' (a member of '${kind}'), and `;
+    const wants = `${where} wants the name of a type whose value is of '${slot.of}' (a member of '${kind}'), and `;
     if (segments.length > 1 && isNamespaceValue(referent)) {
       throw new TsonSchemaValidationError(
         `${wants}'${name}' reaches into ${entry}, which is ${aValueNoType(referent)} -- and what a further segment selects in a value is a value too`,
       );
     }
     if (segments.length > 1) {
-      throw new TsonNotImplementedError(
-        `${where} names '${name}' at a position typed by the kind '${kind}', which holds a type's name -- this library does not yet read a type through a namespace of types, so the name is one segment`,
+      throw new TsonSchemaValidationError(
+        `${wants}'${name}' goes on past ${entry}, a type, which admits no further segment`,
       );
     }
     if (isKindMember(name, slot.of, this.local, (n) => this.headOf(n))) return;
@@ -247,7 +310,7 @@ class Judge {
     end: string,
     referent: Top,
     entry: string,
-  ): void {
+  ): unknown {
     const wanted = slot.of;
     let at = this.constructorOfEntry(end, referent);
     if (segments.length === 1) {
@@ -256,7 +319,7 @@ class Judge {
           `${where} wants ${a(wanted)} value, and ${entry} is an entry whose body is built by '${at}', which is no '${wanted}' (§5.12)`,
         );
       }
-      return;
+      return isValueEntry(referent) ? referent.value : referent;
     }
     if (!isNamespaceValue(referent)) {
       throw new TsonSchemaValidationError(
@@ -325,6 +388,7 @@ class Judge {
         `${where} names '${name}', and ${absent}, so the name reaches no value`,
       );
     }
+    return value;
   }
 
   /** A `type_ref` slot of a value body: a name that resolves, with as many arguments as the entry declares parameters, and never a value (§4.1). */

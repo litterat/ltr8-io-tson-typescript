@@ -66,7 +66,15 @@ export type DefinitionMetaReader = (type: string, value: DataValue) => Top;
  *
  * Throws to report a read failure, as {@link DefinitionMetaReader} does.
  */
-export type DefinitionValueReader = (type: string, value: DataValue) => MetaValue;
+export type DefinitionValueReader = (
+  type: string,
+  value: DataValue,
+  /**
+   * Closes an application a field the value is read against is typed by, to the entry it denotes: a record
+   * type resolved before the schema materialises holds such a type as written (§5.10).
+   */
+  close?: (application: TypeRef) => string,
+) => MetaValue;
 
 /**
  * Reads an annotation's value through the type its name refers to (Part 2 §6: "an annotation

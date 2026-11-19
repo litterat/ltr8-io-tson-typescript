@@ -7,7 +7,7 @@
  * decoded through the same parser a read uses rather than compared as spelled tokens. The
  * base-level structural facts §5.2 states about a selector — its declared type resolves to an
  * atom-family instance or an enum — are checked here too, since only a link-time pass can follow a
- * field's reference chain against the whole merged namespace (`referenceChain.ts`'s own
+ * field's alias chain against the whole merged namespace (`aliasChain.ts`'s own
  * `terminalDefinition`).
  *
  * This module's own shape follows this package's existing linker passes (`typeInhabitance.ts`,
@@ -42,7 +42,7 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isAtom } from '../compiler/atomChecks.js';
 import { buildAtomReader } from '../compiler/atomBuilder.js';
-import { terminal, terminalDefinition } from './referenceChain.js';
+import { terminal, terminalDefinition } from './aliasChain.js';
 import { collectBodyNames } from './referenceValidation.js';
 import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
@@ -467,7 +467,7 @@ function requireAt<T>(array: readonly T[], index: number): T {
 // ── Base-level selector checks ───────────────────────────────────────────────────────────────
 
 /**
- * §5.2: "the marked field's declared type resolves, after its reference chain, to an atom-family
+ * §5.2: "the marked field's declared type resolves, after its alias chain, to an atom-family
  * instance or an enum" — the one base-level fact declaration time cannot check, since it needs
  * the field's type resolved against the whole merged namespace. Every other base-level fact
  * (unmarked name, non-voidable type, no value, no group membership) is structurally guaranteed

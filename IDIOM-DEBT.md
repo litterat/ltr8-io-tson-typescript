@@ -369,7 +369,7 @@ duplicates a predicate the model itself now answers once), and `json/schema/reco
 `fieldValueOf`/`resolveFieldBody`/`fieldValueParser` (a discriminator's pin, decoded once, the same
 way a FIXED field's pin already was). §7.2's alias-flattened admissible-name set (`selfNames`/
 `admitting`) is not a sixth duplication: the repair pass moved it out of `compiler/subsumption.ts`'s
-own module-private copy and into `link/referenceChain.ts`, beside `terminal` (the walk it is built
+own module-private copy and into `link/aliasChain.ts`, beside `terminal` (the walk it is built
 on), so both `compiler/subsumption.ts` and every dispatcher here import the one function rather
 than each holding a copy — the reuse this item's own trigger describes, reached a step early
 because `link/` was already the walk's home and nothing stopped the text side from importing it
@@ -385,7 +385,7 @@ shared `Cursor`, exactly mirroring the text encoding's `PathStep`-adjacent field
 are now closer in shape than the trigger below already argued they were.
 
 **One more narrowing this pair shares, and it is not idiom debt.** `json/schema/dispatchChoice.ts`'s
-`$type` at a choice position is flattened for alias (`link/referenceChain.ts`'s own `admitting`,
+`$type` at a choice position is flattened for alias (`link/aliasChain.ts`'s own `admitting`,
 over the declared variant list, each first walked to its own terminal so a variant that is itself
 an alias admits its target and every sibling alias too) but not for subtype, and
 `compiler/choiceReader.ts` reads identically — alias-flattened, not subtype-flattened — so this is

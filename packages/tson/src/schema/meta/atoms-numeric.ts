@@ -17,6 +17,51 @@ export interface IntegerSize {
   readonly signed: boolean;
 }
 
+/** The bit length of `value`'s magnitude: 0 for 0, 1 for 1, 8 for 255 (two's-complement width is judged from it). */
+function bitLength(value: bigint): bigint {
+  // `toString(2)` is linear in the value's size and allocates nothing the value does not already hold.
+  const magnitude = value < 0n ? -value - 1n : value;
+  return magnitude === 0n ? 0n : BigInt(magnitude.toString(2).length);
+}
+
+/**
+ * Whether `value` is in `size`'s range (§5.6, §9). The range is judged by bit length and never
+ * materialised, so the answer is exact and total for any `bits` a schema states: a signed `n`-bit width
+ * admits a value of fewer than `n` bits, an unsigned one a non-negative value of at most `n`. A width
+ * of no bits admits nothing; it is refused at load.
+ */
+export function sizeAdmits(size: IntegerSize, value: bigint): boolean {
+  if (size.bits <= 0n) return false;
+  const length = bitLength(value);
+  if (size.signed) return length < size.bits;
+  return value >= 0n && length <= size.bits;
+}
+
+/**
+ * Whether every value `size` admits, `wider` admits: a width within one of the same signedness and at
+ * least as many bits, an unsigned one within a signed one of more bits, and a signed one within no
+ * unsigned one, since it admits -1.
+ */
+export function sizeWithin(size: IntegerSize, wider: IntegerSize): boolean {
+  if (size.signed === wider.signed) return size.bits <= wider.bits;
+  return !size.signed && size.bits < wider.bits;
+}
+
+/** Whether `value` is below `size`'s floor: negative and out of range. */
+export function sizeIsBelow(size: IntegerSize, value: bigint): boolean {
+  return value < 0n && !sizeAdmits(size, value);
+}
+
+/** Whether `value` is above `size`'s ceiling: non-negative and out of range. */
+export function sizeIsAbove(size: IntegerSize, value: bigint): boolean {
+  return value >= 0n && !sizeAdmits(size, value);
+}
+
+/** The width as a message names it: `signed 32-bit`. */
+export function describeSize(size: IntegerSize): string {
+  return `${size.signed ? 'signed' : 'unsigned'} ${String(size.bits)}-bit`;
+}
+
 /**
  * the kernel's `numeric.integer_type` constructor (§5.6, §9): the integer family's atom
  * constraint vocabulary — bit width/signedness (via {@link IntegerSize}), bounds, a

@@ -35,11 +35,14 @@ import {
 } from '../core/errors.js';
 import type { NonHeldTop } from './bodyKind.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
+import { checkRestatedFieldTypes } from './restatedFields.js';
+import { namesTypes } from './kindMembers.js';
+import { ValuesByName } from './valuesByName.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import { heldOf } from '../compiler/heldBody.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
-import { resolvesToConstructor, terminal, type EntryLookup } from './referenceChain.js';
+import { resolvesToConstructor, terminal, type EntryLookup } from './aliasChain.js';
 import type {
   ArrayBody,
   ChoiceBody,
@@ -104,9 +107,25 @@ export function validateReferences(
 ): void {
   const { schemaId, structureNamespace, receiver, facts } = options;
   const enumForms = options.enumForms ?? NO_ENUM_FORMS;
+  // A field's default or pin at a reference over a type that is no constructor is a value's qualified name,
+  // judged by the walk a value body's names take (§5.12).
+  const byName = new ValuesByName(merged, {
+    schemaId,
+    facts: facts ?? new Map(),
+    structureNamespace: merged,
+    ...(facts === undefined ? {} : { structureFacts: facts }),
+  });
   for (const [name, def] of merged) {
     try {
-      validateEntry(name, def, facts?.get(name)?.head, merged, structureNamespace, enumForms);
+      validateEntry(
+        name,
+        def,
+        facts?.get(name)?.head,
+        merged,
+        structureNamespace,
+        enumForms,
+        byName,
+      );
     } catch (e: unknown) {
       if (!isReportableLinkError(e)) {
         throw e;
@@ -159,6 +178,7 @@ function validateEntry(
   namespace: ReadonlyMap<string, Top>,
   structureNamespace: ReadonlyMap<string, Top> | undefined,
   enumForms: ReadonlyMap<string, Normalization>,
+  byName: ValuesByName,
 ): void {
   checkOpenEntryUsesEveryParameter(name, def);
 
@@ -198,7 +218,7 @@ function validateEntry(
     validateTypeRef(parent, lookup, typeParameters(def), name, ' parent');
   }
 
-  validateBody(name, def, namespace, typeParameters(def), enumForms);
+  validateBody(name, def, namespace, typeParameters(def), enumForms, byName);
 }
 
 function validateBody(
@@ -207,6 +227,7 @@ function validateBody(
   namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
   enumForms: ReadonlyMap<string, Normalization>,
+  byName: ValuesByName,
 ): void {
   const body = def;
   if (isTemplateBody(body)) {
@@ -254,7 +275,7 @@ function validateBody(
           continue;
         }
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
-        checkFieldValue(entryName, field, namespace, ownParameters, enumForms);
+        checkFieldValue(entryName, field, namespace, ownParameters, enumForms, byName);
       }
       for (const group of r.groups) {
         for (const member of group.members.flat()) {
@@ -265,6 +286,7 @@ function validateBody(
           }
         }
       }
+      checkRestatedFieldTypes(entryName, r, namespace);
       return;
     }
     // A reference body holds a `type_name`, so there is no argument list to check arity or
@@ -370,6 +392,7 @@ function checkFieldValue(
   namespace: ReadonlyMap<string, Top>,
   ownParameters: readonly string[],
   enumForms: ReadonlyMap<string, Normalization>,
+  byName: ValuesByName,
 ): void {
   if (
     field.value === undefined ||
@@ -409,8 +432,16 @@ function checkFieldValue(
   const body = target;
   const value = field.value;
   if (body.kind === 'reference_type') {
-    // A value at a reference-typed field is a name, judged a member of the reference by
-    // `namespaceTypes.ts`'s `checkReferencePins` (§4.2); nothing here second-guesses it.
+    // A value at a reference-typed field is a name. Over a constructor it is a type's name, judged a member of
+    // the reference by `namespaceTypes.ts`'s `checkReferencePins` (§4.2); over any other type it is a value's
+    // qualified name, judged by what it reaches as a value body's names are (§5.12), against this entry.
+    if (!namesTypes(body.of.name, lookupIn(namespace))) {
+      byName.reach(
+        `'${entryName}': field '${field.name}''s ${field.role === 'DEFAULT' ? 'default' : 'fixed value'}`,
+        value.text,
+        body.of.name,
+      );
+    }
     return;
   }
   if (!isScalarBody(body)) {
@@ -636,7 +667,7 @@ function lookupIn(namespace: ReadonlyMap<string, Top>): EntryLookup {
 
 /**
  * §5.4: "The resolver validates that each variant resolves to a distinct type." Judged at the end
- * of each variant's reference chain (§8.3: an alias and its target are one type), so `(text |
+ * of each variant's alias chain (§8.3: an alias and its target are one type), so `(text |
  * my_text)` with `my_text => text` is caught the same way `(text | text)` is.
  */
 function checkVariantsAreDistinct(

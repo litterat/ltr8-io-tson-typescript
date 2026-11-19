@@ -17,7 +17,7 @@ import {
   type Top,
 } from '../../packages/tson/src/schema/meta/typedef.js';
 
-import { newClass2Tson } from './class2Tson.js';
+import { loadSchema, newClass2Tson } from './class2Tson.js';
 import { assertSchemaOrLinkLoadFailed } from './schema.js';
 import { normalizeSyntheticName } from './synthetic.js';
 import type { LinkSidecar, LinkValid } from './sidecar.js';
@@ -101,15 +101,15 @@ function assertLinkedNamespaceMatches(
   }
 }
 
-export function checkLinkVector(
+export async function checkLinkVector(
   vector: Vector<Class2Layer>,
   subject: Uint8Array,
   sidecar: LinkSidecar,
-): void {
-  const tson = newClass2Tson(subject);
+): Promise<void> {
+  const tson = newClass2Tson();
   switch (sidecar.outcome) {
     case 'valid': {
-      const linked = tson.resolveSchema(subject);
+      const linked = await loadSchema(tson, subject);
       if (sidecar.valid === undefined) {
         throw new Error(
           `${vector.name}: a 'valid' class2/link vector must state what it claims about the linked namespace`,
@@ -121,7 +121,7 @@ export function checkLinkVector(
     case 'error': {
       let thrown: unknown;
       try {
-        tson.resolveSchema(subject);
+        await loadSchema(tson, subject);
       } catch (error) {
         thrown = error;
       }

@@ -5,7 +5,7 @@ import {
   TsonAtomValidationError,
   TsonNameHygieneRefusedError,
 } from '../src/core/errors.js';
-import { createKindParser, createQualifiedNameParser } from '../src/atom/reference.js';
+import { createReferenceParser, createQualifiedNameParser } from '../src/atom/reference.js';
 import { compile, validate } from '../src/compiler/compile.js';
 import { encodeUtf8 } from '../src/io/utf8.js';
 import { writeNamespaceValue } from '../src/schema/namespaceReader.js';
@@ -287,16 +287,16 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
       },
     } as const;
     expect(
-      createKindParser('k', reference, true).read({ text: 'net.uuid_type', form: 'unquoted' }),
+      createReferenceParser('k', reference, true).read({ text: 'net.uuid_type', form: 'unquoted' }),
     ).toBe('net.uuid_type');
     expect(() =>
-      createKindParser('k', reference, true).read({ text: 'sku', form: 'unquoted' }),
+      createReferenceParser('k', reference, true).read({ text: 'sku', form: 'unquoted' }),
     ).toThrow(TsonAtomValidationError);
-    expect(createKindParser('k', reference, false).read({ text: 'sku', form: 'unquoted' })).toBe(
-      'sku',
-    );
+    expect(
+      createReferenceParser('k', reference, false).read({ text: 'sku', form: 'unquoted' }),
+    ).toBe('sku');
     expect(() =>
-      createKindParser('k', reference, false).read({ text: 'a..b', form: 'unquoted' }),
+      createReferenceParser('k', reference, false).read({ text: 'a..b', form: 'unquoted' }),
     ).toThrow(TsonAtomParseError);
   });
 

@@ -74,7 +74,7 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('arr', namespace)).toBe('BRACKET');
   });
 
-  it('follows an argument-free reference chain to its terminal entry (§8.3)', () => {
+  it('follows an argument-free alias chain to its terminal entry (§8.3)', () => {
     expect(discriminationClassOf('alias', namespace)).toBe('STRING');
   });
 
@@ -297,7 +297,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
   it('is silent when the assertion is verified (disjoint: true)', () => {
     const choice = def(
       { kind: 'choice', variants: [] },
-      { annotations: [{ name: 'disjoint' }], disjoint: true },
+      { annotations: [{ name: 'meta.disjoint' }], disjoint: true },
     );
     const merged = new Map([['c', choice]]);
     expect(() => {
@@ -317,7 +317,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
           { name: 'other', arguments: [], annotations: [] },
         ],
       },
-      { annotations: [{ name: 'disjoint' }], disjoint: false },
+      { annotations: [{ name: 'meta.disjoint' }], disjoint: false },
     );
     const merged = new Map([['c', choice]]);
     expect(() => {
@@ -331,7 +331,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
   it('reports through a receiver instead of throwing when one is supplied', () => {
     const choice = def(
       { kind: 'choice', variants: [] },
-      { annotations: [{ name: 'disjoint' }], disjoint: false },
+      { annotations: [{ name: 'meta.disjoint' }], disjoint: false },
     );
     const merged = new Map([['c', choice]]);
     const diagnostics = collector();
@@ -358,7 +358,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
   it('skips an imported entry (not in localNames) even if its own assertion looks unverified', () => {
     const choice = def(
       { kind: 'choice', variants: [] },
-      { annotations: [{ name: 'disjoint' }], disjoint: false },
+      { annotations: [{ name: 'meta.disjoint' }], disjoint: false },
     );
     const merged = new Map([['imported_c', choice]]);
     expect(() => {
@@ -385,7 +385,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
         checkDisjointAssertions(merged, new Set(['shapes']), {
           facts: factsFor(merged),
           schemaId: 'https://x/s.tn',
-          keyAnnotations: new Map([['shapes', [{ name: 'disjoint' }]]]),
+          keyAnnotations: new Map([['shapes', [{ name: 'meta.disjoint' }]]]),
         });
       }).toThrow(TsonSchemaValidationError);
     });
@@ -397,7 +397,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
         checkDisjointAssertions(merged, new Set(['shapes']), {
           facts: factsFor(merged),
           schemaId: 'https://x/s.tn',
-          keyAnnotations: new Map([['shapes', [{ name: 'disjoint' }]]]),
+          keyAnnotations: new Map([['shapes', [{ name: 'meta.disjoint' }]]]),
         });
       }).not.toThrow();
     });

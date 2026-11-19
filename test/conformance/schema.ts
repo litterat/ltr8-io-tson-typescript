@@ -14,6 +14,7 @@ import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonBindMismatchError,
+  TsonContentHashMismatchError,
   TsonLexError,
   TsonNameHygieneRefusedError,
   TsonNotImplementedError,
@@ -34,7 +35,7 @@ import type { DefinitionGetter } from '../../packages/tson/src/compiler/resolver
 import type { Top } from '../../packages/tson/src/schema/meta/typedef.js';
 
 import { BUNDLED_SCHEMA_IDS } from './bundled-ids.js';
-import { newClass2Tson } from './class2Tson.js';
+import { loadSchema, newClass2Tson } from './class2Tson.js';
 import {
   markedSynthetics,
   ourSynthetics,
@@ -78,6 +79,9 @@ function schemaFailureCode(error: unknown): DiagnosticCode {
   if (error instanceof TsonSchemaFetchError) return diagnosticCodeForFetch(error.reason);
   if (
     error instanceof TsonSchemaValidationError ||
+    // [TSON-DATA] §2.2.1's integrity failure: the bytes a source returned are not the bytes the reference
+    // pinned. A verdict on the reference, coded like the schema it names failing to load.
+    error instanceof TsonContentHashMismatchError ||
     error instanceof TsonLexError ||
     error instanceof TsonParseError ||
     error instanceof TsonUnsupportedDocumentError ||
@@ -95,9 +99,12 @@ function schemaFailureCode(error: unknown): DiagnosticCode {
 }
 
 /** Runs `action`, returning what it threw -- fails the vector (via `expect`) if it did not throw at all. */
-function catchThrow(vector: Vector<Class2Layer>, action: () => void): unknown {
+async function catchThrow(
+  vector: Vector<Class2Layer>,
+  action: () => Promise<unknown>,
+): Promise<unknown> {
   try {
-    action();
+    await action();
   } catch (error) {
     return error;
   }
@@ -168,15 +175,15 @@ export function assertSchemaRefused(
  * (`resolvedForm.ts`'s `readResolved`) into the same `schema.meta` values the resolver itself
  * produces, and the two are compared structurally.
  */
-export function checkSchemaVector(
+export async function checkSchemaVector(
   vector: Vector<Class2Layer>,
   subject: Uint8Array,
   sidecar: SchemaSidecar,
-): void {
-  const tson = newClass2Tson(subject);
+): Promise<void> {
+  const tson = newClass2Tson();
   switch (sidecar.outcome) {
     case 'valid': {
-      const linked = tson.resolveSchema(subject);
+      const linked = await loadSchema(tson, subject);
       if (sidecar.resolved === undefined) {
         throw new Error(
           `${vector.name}: a 'valid' class2/schema vector must state its resolved output`,
@@ -201,12 +208,12 @@ export function checkSchemaVector(
       return;
     }
     case 'error': {
-      const error = catchThrow(vector, () => tson.resolveSchema(subject));
+      const error = await catchThrow(vector, () => loadSchema(tson, subject));
       assertSchemaOrLinkLoadFailed(vector, sidecar.category, error);
       return;
     }
     case 'refused': {
-      const error = catchThrow(vector, () => tson.resolveSchema(subject));
+      const error = await catchThrow(vector, () => loadSchema(tson, subject));
       assertSchemaRefused(vector, sidecar.refused, error);
       return;
     }

@@ -19,10 +19,15 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import type { NamespaceBody, RecordBody, ReferenceBody } from '../schema/meta/bodies.js';
 import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
 import type { EntryFacts, Top } from '../schema/meta/typedef.js';
-import { isOpen, isTemplateBody } from '../schema/meta/typedef.js';
+import { isOpen, isTemplateBody, referenceText, supertypesOf } from '../schema/meta/typedef.js';
+import { kernelName, UNICODE_MAP } from '../schema/meta/kernel.js';
 import { schemaPositionOf, spellingOf } from './facts.js';
-import { isKindMember, namesTypes } from './kindMembers.js';
-import { terminal, type EntryLookup } from './referenceChain.js';
+import { isKindMember, namesTypes, ofRefusal } from './kindMembers.js';
+import { isA } from './restatedFields.js';
+import { terminal, type EntryLookup } from './aliasChain.js';
+
+/** The constructor whose instances an identifier family is (§7.7): what a namespace's `key_type` must be built with. */
+const IDENTIFIER_TYPE = kernelName(UNICODE_MAP, 'identifier_type');
 
 /** Dependencies {@link checkKindsReferencesAndNamespaceTypes} needs beyond the merged namespace. */
 export interface NamespaceTypeOptions {
@@ -51,7 +56,7 @@ export function checkKindsReferencesAndNamespaceTypes(
           checkReferenceOf(spelled(name), value, local);
           break;
         case 'namespace':
-          checkNamespaceType(spelled(name), value, local);
+          checkNamespaceType(spelled(name), value, local, heads);
           break;
         case 'record':
           checkReferencePins(name, value, local, heads, spelled);
@@ -73,7 +78,11 @@ export function checkKindsReferencesAndNamespaceTypes(
   }
 }
 
-/** `of` names a type or a constructor of the schema's namespace -- never an open entry or nothing (§4.2). */
+/**
+ * `of` names a type or a constructor of the schema's namespace -- never an open entry, a value entry or
+ * nothing (§4.2) -- and a refinement of a reference narrows `of` (§5.7): the refined `of` is its source's or
+ * IS-A it, so every name the refinement admits the source admits too.
+ */
 function checkReferenceOf(name: string, reference: ReferenceBody, local: EntryLookup): void {
   const end = terminal(reference.of.name, local);
   const of = local(end);
@@ -82,16 +91,45 @@ function checkReferenceOf(name: string, reference: ReferenceBody, local: EntryLo
       `'${name}' has an unresolved reference '${reference.of.name}' in its 'of'`,
     );
   }
-  if (isOpen(of) || isTemplateBody(of)) {
-    throw new TsonSchemaValidationError(
-      `'${name}' is a reference whose 'of' names '${reference.of.name}', an open entry: a template ` +
-        'denotes no type until it is applied (§5.10)',
-    );
+  const refusal = ofRefusal(reference, local);
+  if (refusal !== undefined) {
+    throw new TsonSchemaValidationError(`'${name}' is a reference, but ${refusal}`);
+  }
+  checkReferenceNarrows(name, reference, local);
+}
+
+/**
+ * §5.7's rule for a refinement of a reference, `!meta.type_ref ^ { of: ... }`: its `of` is its source's or
+ * IS-A it. The resolver binds the refinement before the names `of` holds need be resolved, so the IS-A is
+ * asked here, over the one namespace both resolve in; the source is the reference the refinement's chain
+ * names, past its alias hops.
+ */
+function checkReferenceNarrows(name: string, reference: ReferenceBody, local: EntryLookup): void {
+  for (const supertype of supertypesOf(reference)) {
+    const source = local(terminal(supertype, local));
+    if (source === undefined || isTemplateBody(source) || source.kind !== 'reference_type')
+      continue;
+    if (!isA(reference.of.name, source.of.name, local)) {
+      throw new TsonSchemaValidationError(
+        `'${name}': not a valid refinement of '!${supertype}' (§5.7): of '${referenceText(reference.of)}' is not ` +
+          `'${referenceText(source.of)}' or IS-A it, so the refinement admits names the source refuses -- ` +
+          "a refinement narrows 'of' (§5.7)",
+      );
+    }
   }
 }
 
-/** A namespace type's `key_type` and `value_type` name entries of the schema's namespace (§4.1). */
-function checkNamespaceType(name: string, namespace: NamespaceBody, local: EntryLookup): void {
+/**
+ * A namespace type's `key_type` and `value_type` name entries of the schema's namespace (§4.1), and its keys
+ * are names: `key_type` is typed `meta.identifier_ref` (§7.4), a member of which is a type built with
+ * `identifier_type` -- what a qualified name's segment is -- so an enum-keyed map is no namespace.
+ */
+function checkNamespaceType(
+  name: string,
+  namespace: NamespaceBody,
+  local: EntryLookup,
+  heads: (name: string) => string | undefined,
+): void {
   for (const [slot, type] of [
     ['key_type', namespace.keyType],
     ['value_type', namespace.valueType],
@@ -102,6 +140,14 @@ function checkNamespaceType(name: string, namespace: NamespaceBody, local: Entry
           'namespace does not declare (§4.1)',
       );
     }
+  }
+  const key = namespace.keyType.name;
+  if (local(IDENTIFIER_TYPE) !== undefined && !isKindMember(key, IDENTIFIER_TYPE, local, heads)) {
+    throw new TsonSchemaValidationError(
+      `'${name}' key_type names '${key}', which is no identifier family -- a namespace's keys are names, so its ` +
+        'key type is a member of meta.identifier_ref, a type built with identifier_type; a closed set of names ' +
+        'is an identifier family with members (§4.2, §7.4)',
+    );
   }
 }
 

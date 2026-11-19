@@ -24,15 +24,20 @@
  * between them admit a value ({@link networkCoherence}).
  */
 import type { Atom, Top } from '../schema/meta/typedef.js';
-import type {
-  ComplexComponent,
-  ComplexType,
-  DecimalType,
-  FloatFormat,
-  FloatType,
-  IntegerSize,
-  IntegerType,
-  RationalType,
+import { isTemplateBody } from '../schema/meta/typedef.js';
+import {
+  describeSize,
+  sizeAdmits,
+  sizeIsAbove,
+  sizeIsBelow,
+  sizeWithin,
+  type ComplexComponent,
+  type ComplexType,
+  type DecimalType,
+  type FloatFormat,
+  type FloatType,
+  type IntegerType,
+  type RationalType,
 } from '../schema/meta/atoms-numeric.js';
 import type { BytesType } from '../schema/meta/atoms-bytes.js';
 import type {
@@ -78,9 +83,8 @@ import {
   checkSubset,
   checkSuperset,
   checkUpper,
+  describeBound,
   renderBoundValue,
-  tighterLower,
-  tighterUpper,
 } from './atomNarrowing.js';
 import {
   checkIdentifier,
@@ -110,49 +114,54 @@ import { decimalFractionDigits, decimalOf, decimalPrecision } from '../atom/nume
 
 // ── integer_type ─────────────────────────────────────────────────────────────────────────────
 
-/** The widest `IntegerSize.bits` a derived range is materialised for — matching the Java original's own `MAX_DERIVED_BITS`, above which an implied range would allocate an arbitrarily large bound from one schema declaration. */
-const MAX_DERIVED_BITS = 4096n;
-
-function derivedBits(size: IntegerSize | undefined): number | undefined {
-  if (size === undefined || size.bits <= 0n || size.bits > MAX_DERIVED_BITS) return undefined;
-  return Number(size.bits);
+function integerStatedLower(t: IntegerType): Bound<bigint> | undefined {
+  return bound(t.min, t.exclusiveMin, 'min', 'exclusive_min');
 }
 
-function sizeLower(size: IntegerSize | undefined): Bound<bigint> | undefined {
-  const bits = derivedBits(size);
-  if (bits === undefined || size === undefined) return undefined;
-  return { value: size.signed ? -(1n << BigInt(bits - 1)) : 0n, inclusive: true, facet: 'size' };
+function integerStatedUpper(t: IntegerType): Bound<bigint> | undefined {
+  return bound(t.max, t.exclusiveMax, 'max', 'exclusive_max');
 }
 
-function sizeUpper(size: IntegerSize | undefined): Bound<bigint> | undefined {
-  const bits = derivedBits(size);
-  if (bits === undefined || size === undefined) return undefined;
-  const ceiling = (1n << BigInt(size.signed ? bits - 1 : bits)) - 1n;
-  return { value: ceiling, inclusive: true, facet: 'size' };
-}
-
-function integerEffectiveLower(t: IntegerType): Bound<bigint> | undefined {
-  return tighterLower(
-    sizeLower(t.size),
-    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
-    compareBigint,
-  );
-}
-
-function integerEffectiveUpper(t: IntegerType): Bound<bigint> | undefined {
-  return tighterUpper(
-    sizeUpper(t.size),
-    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
-    compareBigint,
-  );
-}
-
+/**
+ * A stated bound is compared against the source's stated bound and, apart from it, against the range the
+ * source's width fixes; the refinement's own width is compared with the source's by {@link sizeWithin}.
+ * Intersecting first would make every widening vacuous, so each facet is judged on its own against what
+ * the source already guarantees (§5.7). A width's range is never materialised: every comparison against
+ * one is the bit-length test of {@link sizeAdmits}, exact for any `bits`.
+ */
 function integerNarrows(source: IntegerType, refined: IntegerType): string[] {
   const out: string[] = [];
-  checkLower(out, integerEffectiveLower(source), integerEffectiveLower(refined), compareBigint);
-  checkUpper(out, integerEffectiveUpper(source), integerEffectiveUpper(refined), compareBigint);
-  checkLower(out, sizeLower(source.size), sizeLower(refined.size), compareBigint);
-  checkUpper(out, sizeUpper(source.size), sizeUpper(refined.size), compareBigint);
+  const lower = integerStatedLower(refined);
+  const upper = integerStatedUpper(refined);
+  let before = out.length;
+  checkLower(out, integerStatedLower(source), lower, compareBigint);
+  if (
+    out.length === before &&
+    lower !== undefined &&
+    source.size !== undefined &&
+    sizeIsBelow(source.size, lower.value)
+  ) {
+    out.push(`${describeBound(lower)} is below the source's own ${describeSize(source.size)} size`);
+  }
+  before = out.length;
+  checkUpper(out, integerStatedUpper(source), upper, compareBigint);
+  if (
+    out.length === before &&
+    upper !== undefined &&
+    source.size !== undefined &&
+    sizeIsAbove(source.size, upper.value)
+  ) {
+    out.push(`${describeBound(upper)} is above the source's own ${describeSize(source.size)} size`);
+  }
+  if (
+    source.size !== undefined &&
+    refined.size !== undefined &&
+    !sizeWithin(refined.size, source.size)
+  ) {
+    out.push(
+      `size ${describeSize(refined.size)} is wider than the source's own ${describeSize(source.size)}`,
+    );
+  }
   if (
     source.multipleOf !== undefined &&
     refined.multipleOf !== undefined &&
@@ -203,10 +212,15 @@ function integerMemberCoherence(t: IntegerType): string[] {
     }
     seen.add(member);
   }
-  const lower = integerEffectiveLower(t);
-  const upper = integerEffectiveUpper(t);
+  const lower = integerStatedLower(t);
+  const upper = integerStatedUpper(t);
   for (const member of t.members) {
-    if (!admitsLower(lower, member, compareBigint) || !admitsUpper(upper, member, compareBigint)) {
+    if (t.size !== undefined && t.size.bits > 0n && !sizeAdmits(t.size, member)) {
+      out.push(`member ${String(member)} is outside the ${describeSize(t.size)} size`);
+    } else if (
+      !admitsLower(lower, member, compareBigint) ||
+      !admitsUpper(upper, member, compareBigint)
+    ) {
       out.push(
         `members includes ${renderBoundValue(member)}, which the body's own bounds do not admit`,
       );
@@ -227,8 +241,30 @@ function integerMemberCoherence(t: IntegerType): string[] {
  */
 function integerCoherence(t: IntegerType): string[] {
   const out: string[] = [];
-  checkRange(out, integerEffectiveLower(t), integerEffectiveUpper(t), compareBigint);
+  const lower = integerStatedLower(t);
+  const upper = integerStatedUpper(t);
+  checkRange(out, lower, upper, compareBigint);
   checkPositiveStep(out, 'multiple_of', t.multipleOf, integerSignum);
+  if (t.size !== undefined) {
+    const width = t.size;
+    if (width.bits <= 0n) {
+      out.push(`size.bits ${String(width.bits)} is not a width above zero`);
+    } else {
+      // An exclusive end excludes the width's own end too: `exclusive_min: 255` leaves nothing of uint8.
+      if (
+        lower !== undefined &&
+        sizeIsAbove(width, lower.inclusive ? lower.value : lower.value + 1n)
+      ) {
+        out.push(`${describeBound(lower)} is above the ${describeSize(width)} size's ceiling`);
+      }
+      if (
+        upper !== undefined &&
+        sizeIsBelow(width, upper.inclusive ? upper.value : upper.value - 1n)
+      ) {
+        out.push(`${describeBound(upper)} is below the ${describeSize(width)} size's floor`);
+      }
+    }
+  }
   out.push(...integerMemberCoherence(t));
   return out;
 }
@@ -1554,4 +1590,21 @@ function mediaTypeCoherence(atom: MediaTypeType): string[] {
     }
   }
   return out;
+}
+
+/**
+ * §7.4's coherence rule over any body (§5.3, §5.5): an atom's facets between them admit a value, and a
+ * container's `min_items` does not exceed its `max_items` -- one rule over arrays, maps and namespace
+ * types, so a size specifier and the explicit `!meta.array { ... }` body it denotes are refused alike. Every
+ * other shape has no orderable facet and admits everything.
+ */
+export function checkBodyCoherence(body: Top): readonly string[] {
+  if (isAtom(body)) return checkAtomCoherence(body);
+  if (isTemplateBody(body)) return [];
+  if (body.kind === 'array' || body.kind === 'map' || body.kind === 'namespace') {
+    const out: string[] = [];
+    checkOrdered(out, 'min_items', body.minItems, 'max_items', body.maxItems, compareBigint);
+    return out;
+  }
+  return [];
 }

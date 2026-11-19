@@ -163,8 +163,8 @@ import { refValue, scoped } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
 import { checkSlots } from './parameterTypes.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
-import { checkAtomCoherence, checkAtomNarrows, isAtom } from './atomChecks.js';
-import { terminal, terminalDefinition } from '../link/referenceChain.js';
+import { checkAtomNarrows, checkBodyCoherence, isAtom } from './atomChecks.js';
+import { terminal, terminalDefinition } from '../link/aliasChain.js';
 import { ofParent as ancestryOfParent } from './ancestry.js';
 import { metaFormOfLexer } from './tokenForms.js';
 
@@ -337,7 +337,7 @@ function applyRecordExtensionMark(
 /**
  * The selectors a record template's members are dispatched by (§5.10): a field written `=?`, or,
  * in a *fresh* record template, a field pinned to a value parameter. `undefined` for a template
- * that composes onto a meta-level base kind (`supertypes.includes('top')`, a constructor template in
+ * that composes onto a meta-level base kind (`supertypes` including `meta.top`, a constructor template in
  * a meta-schema): no value is ever read against a position typed by a constructor the way one is
  * typed by a family base, so it derives none.
  *
@@ -354,7 +354,7 @@ function familyDiscriminators(
   supertypes: readonly string[],
   isFreshRecordTemplate: boolean,
 ): readonly string[] | undefined {
-  if (parameters.length === 0 || supertypes.includes('top')) {
+  if (parameters.length === 0 || supertypes.includes(metaName('top'))) {
     return undefined;
   }
   const candidates = new Set(record.discriminators ?? []);
@@ -519,7 +519,7 @@ function isRecordBody(body: Top | undefined): body is RecordBody {
 
 /**
  * §8.1: "`template` is resolver vocabulary: nothing is ever typed by it, and a source declaration
- * applying it directly is a resolver error" -- checked at the end of the head's own reference chain
+ * applying it directly is a resolver error" -- checked at the end of the head's own alias chain
  * (`resolveConstructorTarget` already walked it), since `template` composes with `top` directly and
  * would otherwise pass every other structural check `resolveInstance`/`resolveInstanceTemplate`
  * make of an ordinary constructor. The open spelling (`<U> !template { ... }`) is refused on the
@@ -768,7 +768,11 @@ function resolveValueEntry(
   }
   let value;
   try {
-    value = deps.definitionValueReader(head.name, readAsConstructor(payload, head.name));
+    value = deps.definitionValueReader(
+      head.name,
+      readAsConstructor(payload, head.name),
+      deps.applicationCloser,
+    );
   } catch (e) {
     if (e instanceof TsonReadError) {
       throw new TsonSchemaValidationError(
@@ -1202,7 +1206,7 @@ interface ConstructorHead {
 
 /**
  * A constructor-application target (`!C value`) resolves against the structure namespace only —
- * never the type-name namespace (§3.3.1) — **after following its reference chain** (§8.3): `C`
+ * never the type-name namespace (§3.3.1) — **after following its alias chain** (§8.3): `C`
  * may itself be an alias (`alias_array => array`), and every question this resolver asks of the
  * head from here on — is it a template, is it applicable, whose vocabulary reads the payload — is
  * a question about the entry at the end of the chain, not about the hop. A constructor is always
@@ -1287,7 +1291,7 @@ function bindAtomInstance(deps: DefinitionResolverDeps, name: string, value: Dat
 
 /** §7.4's "Coherence of a body's facets": family coherence between a constructor's own bindings is a resolver question, checked here rather than left to the atom parsers (which would surface it as a library-gap "not implemented", exactly the wrong classification for the author's own mistake). */
 function checkCoherent(name: string, constructorName: string, body: Top): void {
-  const violations = isAtom(body) ? checkAtomCoherence(body) : [];
+  const violations = checkBodyCoherence(body);
   if (violations.length > 0) {
     throw new TsonSchemaValidationError(
       `'${name}': the body's own '${constructorName}' constraints contradict each other: ${violations.join('; ')}`,
@@ -1526,7 +1530,10 @@ function resolveComposition(
     // Every type constructor composes the kernel's `type`, and so already has the field `chain`,
     // the IS-A chain the resolver computes (§4.1): one declaring a field of that name is refused
     // where it is declared, rather than when an instance first uses it.
-    if (transitiveSupertypes.includes('type') && bodyNames(construction).has(CHAIN_FIELD)) {
+    if (
+      transitiveSupertypes.includes(metaName('type')) &&
+      bodyNames(construction).has(CHAIN_FIELD)
+    ) {
       throw new TsonSchemaValidationError(
         `'${name}' composes 'type', so it already has the field 'chain' -- the IS-A chain the ` +
           'resolver computes and no declaration writes (§4.1). Name the field something else',
@@ -1793,7 +1800,7 @@ function resolveRefinement(
       `'${name}': refinement source '${sourceName}' names no type this schema declares or imports`,
     );
   }
-  // §4.3, §5.7: the operand's body is judged **after following its reference chain** (§8.3), so an
+  // §4.3, §5.7: the operand's body is judged **after following its alias chain** (§8.3), so an
   // alias to a record is an admissible source and an alias to a binding record is not -- "an alias
   // resolving to either is *finished*". The vocabulary tightened is the terminal's; the name
   // recorded in `supertypes` stays the one the author wrote, since §8.3 states the chain as written.
@@ -1832,11 +1839,11 @@ function resolveRefinement(
 }
 
 /**
- * The entry `name`'s reference chain ends at (§8.3), or `undefined` where the walk reaches no
+ * The entry `name`'s alias chain ends at (§8.3), or `undefined` where the walk reaches no
  * entry at all -- an undeclared name, an argument-bearing target, or a cycle.
  *
  * §4.3 states the rule every caller here needs in one line: the source of a refinement and every
- * operand of a composition or subtraction MUST, **after following its reference chain**, be a
+ * operand of a composition or subtraction MUST, **after following its alias chain**, be a
  * definition whose body is a `!record`. So an alias to a record is an admissible operand and an
  * alias to a binding record is not -- "an alias resolving to either is *finished*". §5.5 asks the
  * same question of an atom refinement's source.

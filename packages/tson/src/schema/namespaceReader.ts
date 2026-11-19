@@ -48,7 +48,7 @@ import {
 } from '../core/errors.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { createQualifiedNameParser } from '../atom/reference.js';
-import { terminal, type EntryLookup } from '../link/referenceChain.js';
+import { terminal, type EntryLookup } from '../link/aliasChain.js';
 import { lexerFormOfMeta, metaFormOfLexer } from '../compiler/tokenForms.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import {
@@ -69,11 +69,13 @@ import type {
   NameSlot,
   Token,
   Top,
+  TypeRef,
 } from './meta/typedef.js';
 import {
   isConstructor,
   isTemplateBody,
   namespaceOf,
+  referenceText,
   subtypesOf,
   supertypesOf,
 } from './meta/typedef.js';
@@ -103,8 +105,9 @@ export function readValueEntry(
   value: DataValue,
   meta: EntryLookup,
   identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
+  close?: (application: TypeRef) => string,
 ): MetaValue {
-  const read = new ValueBodyReader(meta, identifierPolicy);
+  const read = new ValueBodyReader(meta, identifierPolicy, close);
   // The payload's own tag names its type, which the position states already.
   const untagged: DataValue = value.typeRef === type ? withoutTag(value) : value;
   return read.value(untagged, type, []);
@@ -121,7 +124,7 @@ export function createDefinitionValueReader(
   meta: EntryLookup,
   identifierPolicy?: IdentifierPolicy,
 ): DefinitionValueReader {
-  return (type, value) => readValueEntry(type, value, meta, identifierPolicy);
+  return (type, value, close) => readValueEntry(type, value, meta, identifierPolicy, close);
 }
 
 /**
@@ -223,10 +226,26 @@ class ValueBodyReader {
   constructor(
     private readonly meta: EntryLookup,
     private readonly policy: IdentifierPolicy,
+    private readonly close?: (application: TypeRef) => string,
   ) {}
 
   /**
-   * The identifier family `type` resolves to, past its reference chain, or `undefined` where it
+   * The entry `ref` names: its own name, or where it is an application the resolution has not closed yet (a
+   * type written `meta.ref<meta.record>` at a field the value is read against), the entry it closes to (§5.10).
+   */
+  private named(ref: TypeRef): string {
+    if (ref.arguments.length === 0) return ref.name;
+    if (this.close === undefined) {
+      throw new TsonReadError({
+        code: 'TYPE_MISMATCH',
+        message: `'${referenceText(ref)}' is an application no resolution closed here (§5.10)`,
+      });
+    }
+    return this.close(ref);
+  }
+
+  /**
+   * The identifier family `type` resolves to, past its alias chain, or `undefined` where it
    * is no identifier family -- what makes a token at a position typed by it a name (§8.2).
    */
   private identifierFamily(type: string): IdentifierType | undefined {
@@ -320,6 +339,19 @@ class ValueBodyReader {
         keyAnnotations.set(key, entry.key.annotations.map(annotationOf));
       }
       entries.push([key, this.value(entry.value, map.valueType, [...path, key])]);
+    }
+    // A namespace type refines `meta.map`, so its size bounds bound a value as a map's do (§4.1, §5.3).
+    if (body.minItems !== undefined && BigInt(entries.length) < body.minItems) {
+      throw new TsonReadError({
+        code: 'TYPE_MISMATCH',
+        message: `${at(path)}'${name}' has ${String(entries.length)} entries, fewer than the minimum ${body.minItems.toString()}`,
+      });
+    }
+    if (body.maxItems !== undefined && BigInt(entries.length) > body.maxItems) {
+      throw new TsonReadError({
+        code: 'TYPE_MISMATCH',
+        message: `${at(path)}'${name}' has ${String(entries.length)} entries, more than the maximum ${body.maxItems.toString()}`,
+      });
     }
     const keyFamily = this.identifierFamily(map.keyType);
     if (keyFamily !== undefined) this.judgeNames([...seen], keyFamily, path);
@@ -583,7 +615,7 @@ class ValueBodyReader {
       const read =
         declaration.type.kind === 'sibling'
           ? heldAsWritten(written, at_)
-          : this.value(written, declaration.type.name, at_);
+          : this.value(written, this.named(declaration.type), at_);
       if (
         declaration.role === 'FIXED' &&
         declaration.value !== undefined &&
@@ -636,10 +668,12 @@ class ValueBodyReader {
     const elements = core.elements.map((element, index) =>
       element.coreValue.kind === 'void' && body.voidable
         ? ({ form: 'void' } as const)
-        : this.value(element, body.elementType.name, [...path, String(index)]),
+        : this.value(element, this.named(body.elementType), [...path, String(index)]),
     );
     // A unique array of names is a scope of them (§8.2), as an identifier-keyed map's keys are.
-    const family = body.uniqueItems ? this.identifierFamily(body.elementType.name) : undefined;
+    const family = body.uniqueItems
+      ? this.identifierFamily(this.named(body.elementType))
+      : undefined;
     if (family !== undefined) {
       this.judgeNames(
         elements.flatMap((element) => (element.form === 'token' ? [element.token.text] : [])),
@@ -658,7 +692,7 @@ class ValueBodyReader {
     const entries: (readonly [MetaValue, MetaValue])[] = [];
     const seen = new Set<string>();
     for (const entry of core.kind === 'map' ? core.entries : []) {
-      const key = this.value(entry.key, body.keyType.name, path);
+      const key = this.value(entry.key, this.named(body.keyType), path);
       const text = key.form === 'token' ? key.token.text : undefined;
       if (text !== undefined) {
         if (seen.has(text)) {
@@ -673,10 +707,13 @@ class ValueBodyReader {
       const read =
         written.coreValue.kind === 'void' && body.voidable
           ? ({ form: 'void' } as const)
-          : this.value(written, body.valueType.name, [...path, text ?? String(entries.length)]);
+          : this.value(written, this.named(body.valueType), [
+              ...path,
+              text ?? String(entries.length),
+            ]);
       entries.push([key, read]);
     }
-    const keyFamily = this.identifierFamily(body.keyType.name);
+    const keyFamily = this.identifierFamily(this.named(body.keyType));
     if (keyFamily !== undefined) this.judgeNames([...seen], keyFamily, path);
     return { form: 'map', entries };
   }
@@ -696,7 +733,7 @@ class ValueBodyReader {
       if (declared === undefined) throw mismatch(path, `a '${name}' tuple`, core);
       return element.coreValue.kind === 'void' && declared.voidable
         ? ({ form: 'void' } as const)
-        : this.value(element, declared.elementType.name, [...path, String(index)]);
+        : this.value(element, this.named(declared.elementType), [...path, String(index)]);
     });
     return { form: 'list', elements };
   }
@@ -711,9 +748,9 @@ class ValueBodyReader {
     if (value.typeRef !== undefined) {
       const tag = this.resolved(value.typeRef);
       for (const variant of body.variants) {
-        const resolved = this.resolved(variant.name);
+        const resolved = this.resolved(this.named(variant));
         if (tag.name === resolved.name || supertypesOf(tag.body).includes(resolved.name)) {
-          return this.value(value, variant.name, path);
+          return this.value(value, this.named(variant), path);
         }
       }
       throw new TsonReadError({
@@ -723,7 +760,7 @@ class ValueBodyReader {
     }
     for (const variant of body.variants) {
       try {
-        return this.value(value, variant.name, path);
+        return this.value(value, this.named(variant), path);
       } catch (error) {
         if (!(error instanceof TsonReadError)) throw error;
       }

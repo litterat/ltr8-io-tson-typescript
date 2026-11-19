@@ -1,14 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import type { Tson } from '../../packages/tson/src/config.js';
+import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
+import type { SchemaSource, Tson } from '../../packages/tson/src/config.js';
+import { TsonSchemaFetchError } from '../../packages/tson/src/core/errors.js';
+import { createDataStream } from '../../packages/tson/src/stream/dataStream.js';
+import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
 import { standardLibrary } from '../../packages/tson/src/stdlib/index.js';
 
 import { CORPUS_SCHEMA_PREFIX } from './bundled-ids.js';
 
 /**
- * A fresh Class 2 {@link Tson} for one vector: the standard library (the six bundled schemas) plus
- * the corpus schemas that vector's `subject` reaches, transitively.
+ * A fresh Class 2 {@link Tson} for one vector: the standard library (the six bundled schemas) plus a
+ * {@link SchemaSource} serving the corpus's own schemas.
  *
  * **A fresh instance per vector, always** (`newClass2Tson()` builds one, never a shared
  * singleton) -- the reference implementation's own `Class2ConformanceSuiteTest.newTson()` note
@@ -18,75 +22,60 @@ import { CORPUS_SCHEMA_PREFIX } from './bundled-ids.js';
  * **The corpus's schemas are served by path** (RUNNER.md, "Every subject is a complete document"):
  * `https://tson.io/test-suite/schemas/<path>` is the file `schemas/<path>` of the checkout, a rule
  * rather than a table, and any other identity a subject imports is a bundled schema this processor
- * already holds. The reach is read off the subject's own text and off each reached schema's own
- * `!!import` headers, so the topology stays a rule about which files exist. Each reached schema
- * resolves on its own; one that does not fails exactly the vectors that import it.
+ * already holds.
  *
- * **No {@link SchemaSource} is wired up for the corpus's schemas, deliberately.**
- * `config.ts`'s own top note is explicit that `Tson.resolveSchema` "resolves only against what is
- * already registered... never fetches", so a `SchemaSource` would still need every reached schema
- * preloaded before a subject naming one could resolve. Registering the reached files directly,
- * dependencies first, is `config.ts`'s own "simpler" alternative. A reached schema that never
- * resolves throws here with its real error, which is what fails the vectors that need it.
+ * **Schemas resolve on demand, never up front.** The Java reference reads each `!!import` through its
+ * `SchemaAccess` when the subject names it. This is the same: {@link loadImports} preloads exactly what
+ * the subject's own header names, each fetched schema bringing the schemas its own header names first
+ * (`Tson.preload`), so a schema that does not resolve -- or a document that is no schema at all, which
+ * RUNNER.md serves as `fixtures/a-data-document.tn` "to be refused as an import" -- fails the vector that
+ * imports it, with the library's own verdict, and no other.
  */
-export function newClass2Tson(subject: Uint8Array): Tson {
-  const tson = standardLibrary();
-  if (!existsSync(SCHEMAS_ROOT)) {
-    return tson;
-  }
-
-  const reached = new Map<string, Uint8Array>();
-  const queue: string[] = [new TextDecoder().decode(subject)];
-  for (let text = queue.pop(); text !== undefined; text = queue.pop()) {
-    for (const path of corpusPathsIn(text)) {
-      if (reached.has(path)) continue;
-      const file = `${SCHEMAS_ROOT}/${path}`;
-      if (!existsSync(file)) continue; // not a schema the corpus serves: a bundled identity, or none
-      const bytes = readFileSync(file);
-      reached.set(path, bytes);
-      queue.push(new TextDecoder().decode(bytes));
-    }
-  }
-
-  const pending = new Map(reached);
-  const failures = new Map<string, unknown>();
-  while (pending.size > 0) {
-    let progressed = false;
-    for (const [name, bytes] of pending) {
-      try {
-        tson.resolveSchema(bytes);
-      } catch (error) {
-        failures.set(name, error); // an !!import this pass hasn't registered yet, or a real error
-        continue;
-      }
-      pending.delete(name);
-      failures.delete(name);
-      progressed = true;
-    }
-    if (!progressed) {
-      const causes = [...failures].map(
-        ([name, error]) => `${name}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      throw new Error(
-        `a corpus schema this vector imports does not resolve -- ${causes.join('; ')}`,
-      );
-    }
-  }
-  return tson;
+export function newClass2Tson(): Tson {
+  return standardLibrary({ schemaSource: corpusSource });
 }
 
-/** Every path under the corpus's schema prefix that `text` names, in order of appearance. */
-function corpusPathsIn(text: string): string[] {
-  const paths: string[] = [];
-  for (let at = text.indexOf(CORPUS_SCHEMA_PREFIX); at >= 0;) {
-    const start = at + CORPUS_SCHEMA_PREFIX.length;
-    const end = text.indexOf('"', start);
-    if (end < 0) break;
-    paths.push(text.slice(start, end));
-    at = text.indexOf(CORPUS_SCHEMA_PREFIX, end);
+/** The `!!import`s `subject`'s own header names. A subject that does not parse names none; the read itself reports why. */
+export function importsOf(subject: Uint8Array): readonly string[] {
+  try {
+    const start = runSync(createDataStream(fromBytes(subject)).next());
+    return start.kind === 'document-start' ? start.imports : [];
+  } catch {
+    return [];
   }
-  return paths;
 }
+
+/**
+ * Obtains every schema `subject`'s header imports, as the processor does for a document it reads
+ * (`Tson.preload`): fetched through the corpus source and resolved in dependency order, throwing the
+ * library's own error for one that cannot be.
+ */
+export async function loadImports(tson: Tson, subject: Uint8Array): Promise<void> {
+  await tson.preload(importsOf(subject));
+}
+
+/** Loads `subject`'s imports and then resolves `subject` itself as a schema document. */
+export async function loadSchema(tson: Tson, subject: Uint8Array): Promise<LinkedSchema> {
+  await loadImports(tson, subject);
+  return tson.resolveSchema(subject);
+}
+
+/** Serves the corpus's own schemas, by the path under `schemas/` an identity ends in. */
+const corpusSource: SchemaSource = {
+  fetch(reference: string): Promise<Uint8Array> {
+    // A `?sha256=` pin is no part of the file, and a scheme-relative spelling is the same identity.
+    const query = reference.indexOf('?');
+    const bare = query < 0 ? reference : reference.slice(0, query);
+    const identity = bare.startsWith('//') ? `https:${bare}` : bare;
+    if (identity.startsWith(CORPUS_SCHEMA_PREFIX)) {
+      const file = `${SCHEMAS_ROOT}/${identity.slice(CORPUS_SCHEMA_PREFIX.length)}`;
+      if (existsSync(file)) return Promise.resolve(readFileSync(file));
+    }
+    return Promise.reject(
+      new TsonSchemaFetchError(reference, 'not-found', `no such corpus schema: ${identity}`),
+    );
+  },
+};
 
 const SCHEMAS_ROOT = fileURLToPath(
   new URL('../../.references/ltr8-io-tson-test-suite/schemas', import.meta.url),

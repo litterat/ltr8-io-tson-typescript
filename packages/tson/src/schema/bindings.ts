@@ -309,6 +309,13 @@ const booleanBinding: Binding<boolean> = atom<boolean>('boolean');
  */
 const bigintBinding: Binding<bigint> = atom<bigint>('integer');
 
+/**
+ * `numeric.count` (§5.5), the type of every facet that counts something -- a length, an item count, a digit
+ * count, a prefix length, a precision: `!int64 ^ { min: 0 }`. Its range stops at 2^63-1 so that every
+ * implementation holds a count in a native type. The host form is `bigint`; the range is judged where the wire token is read, and a count never reaches a body outside it.
+ */
+const countBinding: Binding<bigint> = atom<bigint>('count');
+
 // -------------------------------------------------------------------------------------------
 // Exact-numeric bounds -- `decimal_type`/`float_type`/`rational_type`'s own `min`/
 // `exclusive_min`/`max`/`exclusive_max`/`multiple_of` (§5.6, §9)
@@ -327,9 +334,10 @@ const bigintBinding: Binding<bigint> = atom<bigint>('integer');
  * of it, this module included.
  */
 
-/** Total over every {@link NumberForm} a bound's own token can resolve to -- `special-value` (`nan`/`infinity`) has no exact decimal or rational expansion and is rejected the same way an unparsable token is. */
+/** Total over every {@link NumberForm} a bound's own token can resolve to -- `special-value` (`nan`/`infinity`) has no exact decimal or rational expansion, and a `based-integer` is no `number`; both are rejected the same way an unparsable token is. */
 function decimalOfNumberForm(form: NumberForm): Decimal | undefined {
-  if (form.kind === 'integer' || form.kind === 'based-integer') {
+  // `number` admits the integer and float forms and no based integer (§5.6): `0x10` is refused as `!number 0x10` is.
+  if (form.kind === 'integer') {
     return { unscaledValue: toExactInteger(form), scale: 0 };
   }
   if (form.kind === 'float') {
@@ -1138,8 +1146,8 @@ const arrayBodyBinding: RecordBinding<ArrayBody> = typed(
         field<ArrayBody, 'uniqueItems'>(3, 'unique_items', 'uniqueItems', booleanBinding),
         true,
       ),
-      optional<ArrayBody, 'minItems'>(4, 'min_items', 'minItems', bigintBinding),
-      optional<ArrayBody, 'maxItems'>(5, 'max_items', 'maxItems', bigintBinding),
+      optional<ArrayBody, 'minItems'>(4, 'min_items', 'minItems', countBinding),
+      optional<ArrayBody, 'maxItems'>(5, 'max_items', 'maxItems', countBinding),
     ],
     construct: (slots) => {
       const [elementType, voidable, ordered, uniqueItems, minItems, maxItems] = slots as [
@@ -1170,8 +1178,8 @@ const mapBodyBinding: RecordBinding<MapBody> = typed(
       field<MapBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
       field<MapBody, 'voidable'>(2, 'voidable', 'voidable', booleanBinding),
       field<MapBody, 'ordered'>(3, 'ordered', 'ordered', booleanBinding),
-      optional<MapBody, 'minItems'>(4, 'min_items', 'minItems', bigintBinding),
-      optional<MapBody, 'maxItems'>(5, 'max_items', 'maxItems', bigintBinding),
+      optional<MapBody, 'minItems'>(4, 'min_items', 'minItems', countBinding),
+      optional<MapBody, 'maxItems'>(5, 'max_items', 'maxItems', countBinding),
     ],
     construct: (slots) => {
       const [keyType, valueType, voidable, ordered, minItems, maxItems] = slots as [
@@ -1207,8 +1215,8 @@ const namespaceBodyBinding: RecordBinding<NamespaceBody> = typed(
       field<NamespaceBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
       field<NamespaceBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
       field<NamespaceBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding),
-      optional<NamespaceBody, 'minItems'>(3, 'min_items', 'minItems', bigintBinding),
-      optional<NamespaceBody, 'maxItems'>(4, 'max_items', 'maxItems', bigintBinding),
+      optional<NamespaceBody, 'minItems'>(3, 'min_items', 'minItems', countBinding),
+      optional<NamespaceBody, 'maxItems'>(4, 'max_items', 'maxItems', countBinding),
     ],
     construct: (slots) => {
       const [keyType, valueType, ordered, minItems, maxItems] = slots as [
@@ -1430,13 +1438,8 @@ const decimalTypeBinding: RecordBinding<DecimalType> = typed(
       optional<DecimalType, 'max'>(2, 'max', 'max', decimalBinding),
       optional<DecimalType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', decimalBinding),
       optional<DecimalType, 'multipleOf'>(4, 'multiple_of', 'multipleOf', decimalBinding),
-      optional<DecimalType, 'totalDigits'>(5, 'total_digits', 'totalDigits', bigintBinding),
-      optional<DecimalType, 'fractionDigits'>(
-        6,
-        'fraction_digits',
-        'fractionDigits',
-        bigintBinding,
-      ),
+      optional<DecimalType, 'totalDigits'>(5, 'total_digits', 'totalDigits', countBinding),
+      optional<DecimalType, 'fractionDigits'>(6, 'fraction_digits', 'fractionDigits', countBinding),
       optional<DecimalType, 'members'>(7, 'members', 'members', arrayOf<Decimal>(decimalBinding)),
     ],
     construct: (slots) => {
@@ -1520,9 +1523,9 @@ const complexTypeBinding: RecordBinding<ComplexType> = typed(
 const textTypeBinding: RecordBinding<TextType> = typed(
   record<TextType>({
     fields: [
-      optional<TextType, 'minLength'>(0, 'min_length', 'minLength', bigintBinding),
-      optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', bigintBinding),
-      optional<TextType, 'length'>(2, 'length', 'length', bigintBinding),
+      optional<TextType, 'minLength'>(0, 'min_length', 'minLength', countBinding),
+      optional<TextType, 'maxLength'>(1, 'max_length', 'maxLength', countBinding),
+      optional<TextType, 'length'>(2, 'length', 'length', countBinding),
       optional<TextType, 'pattern'>(3, 'pattern', 'pattern', textBinding),
       // `text_member_set => !set_type { element_type: text  min_items: 1 }` (§7.4): a value set on
       // the text tier itself, reached the same way `integer_type.members`/`decimal_type.members` are.
@@ -1558,9 +1561,9 @@ const identifierTypeBinding: RecordBinding<IdentifierType> = typed(
         field<IdentifierType, 'spec'>(0, 'spec', 'spec', textBinding),
         'https://www.unicode.org/reports/tr31/',
       ),
-      optional<IdentifierType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
-      optional<IdentifierType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
-      optional<IdentifierType, 'length'>(3, 'length', 'length', bigintBinding),
+      optional<IdentifierType, 'minLength'>(1, 'min_length', 'minLength', countBinding),
+      optional<IdentifierType, 'maxLength'>(2, 'max_length', 'maxLength', countBinding),
+      optional<IdentifierType, 'length'>(3, 'length', 'length', countBinding),
       optional<IdentifierType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
       optional<IdentifierType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
       field<IdentifierType, 'normalization'>(
@@ -1630,8 +1633,8 @@ const bytesTypeBinding: RecordBinding<BytesType> = typed(
   record<BytesType>({
     fields: [
       field<BytesType, 'encoding'>(0, 'encoding', 'encoding', bytesEncodingBinding),
-      optional<BytesType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
-      optional<BytesType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
+      optional<BytesType, 'minLength'>(1, 'min_length', 'minLength', countBinding),
+      optional<BytesType, 'maxLength'>(2, 'max_length', 'maxLength', countBinding),
     ],
     construct: (slots) => {
       const [encoding, minLength, maxLength] = slots as [
@@ -1656,9 +1659,9 @@ const regexTypeBinding: RecordBinding<RegexType> = typed(
         field<RegexType, 'spec'>(0, 'spec', 'spec', textBinding),
         'https://www.rfc-editor.org/rfc/rfc9485',
       ),
-      optional<RegexType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
-      optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
-      optional<RegexType, 'length'>(3, 'length', 'length', bigintBinding),
+      optional<RegexType, 'minLength'>(1, 'min_length', 'minLength', countBinding),
+      optional<RegexType, 'maxLength'>(2, 'max_length', 'maxLength', countBinding),
+      optional<RegexType, 'length'>(3, 'length', 'length', countBinding),
       optional<RegexType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
       optional<RegexType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
       unwrittenAt(
@@ -1706,9 +1709,9 @@ function uriFamilyBinding<T extends UriType | IriType>(kind: T['kind']): RecordB
             ? 'https://www.rfc-editor.org/rfc/rfc3986'
             : 'https://www.rfc-editor.org/rfc/rfc3987',
         ),
-        optional<T, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
-        optional<T, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
-        optional<T, 'length'>(3, 'length', 'length', bigintBinding),
+        optional<T, 'minLength'>(1, 'min_length', 'minLength', countBinding),
+        optional<T, 'maxLength'>(2, 'max_length', 'maxLength', countBinding),
+        optional<T, 'length'>(3, 'length', 'length', countBinding),
         optional<T, 'pattern'>(4, 'pattern', 'pattern', textBinding),
         optional<T, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
         optional<T, 'schemes'>(6, 'schemes', 'schemes', arrayOf<string>(schemeNameBinding)),
@@ -1771,9 +1774,9 @@ const emailTypeBinding: RecordBinding<EmailType> = typed(
         field<EmailType, 'spec'>(0, 'spec', 'spec', textBinding),
         'https://www.rfc-editor.org/rfc/rfc5322',
       ),
-      optional<EmailType, 'minLength'>(1, 'min_length', 'minLength', bigintBinding),
-      optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', bigintBinding),
-      optional<EmailType, 'length'>(3, 'length', 'length', bigintBinding),
+      optional<EmailType, 'minLength'>(1, 'min_length', 'minLength', countBinding),
+      optional<EmailType, 'maxLength'>(2, 'max_length', 'maxLength', countBinding),
+      optional<EmailType, 'length'>(3, 'length', 'length', countBinding),
       optional<EmailType, 'pattern'>(4, 'pattern', 'pattern', textBinding),
       optional<EmailType, 'members'>(5, 'members', 'members', arrayOf<string>(textBinding)),
       unwrittenAt(
@@ -1812,7 +1815,7 @@ const emailTypeBinding: RecordBinding<EmailType> = typed(
 
 const uuidTypeBinding: RecordBinding<UuidType> = typed(
   record<UuidType>({
-    fields: [optional<UuidType, 'version'>(0, 'version', 'version', bigintBinding)],
+    fields: [optional<UuidType, 'version'>(0, 'version', 'version', countBinding)],
     construct: (slots) => {
       const [version] = slots as [bigint | undefined];
       return { kind: 'uuid_type', ...opt('version', version) };
@@ -1842,7 +1845,7 @@ const timeTypeBinding: RecordBinding<TimeType> = typed(
     fields: [
       optional<TimeType, 'min'>(0, 'min', 'min', offsetTimeBinding),
       optional<TimeType, 'max'>(1, 'max', 'max', offsetTimeBinding),
-      optional<TimeType, 'precision'>(2, 'precision', 'precision', bigintBinding),
+      optional<TimeType, 'precision'>(2, 'precision', 'precision', countBinding),
     ],
     construct: (slots) => {
       const [min, max, precision] = slots as [
@@ -1865,7 +1868,7 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = typed(
     fields: [
       optional<DateTimeType, 'min'>(0, 'min', 'min', offsetDateTimeBinding),
       optional<DateTimeType, 'max'>(1, 'max', 'max', offsetDateTimeBinding),
-      optional<DateTimeType, 'precision'>(2, 'precision', 'precision', bigintBinding),
+      optional<DateTimeType, 'precision'>(2, 'precision', 'precision', countBinding),
     ],
     construct: (slots) => {
       const [min, max, precision] = slots as [
@@ -1921,7 +1924,7 @@ const durationTypeBinding: RecordBinding<DurationType> = typed(
         'exclusiveMax',
         durationBoundBinding,
       ),
-      optional<DurationType, 'precision'>(4, 'precision', 'precision', bigintBinding),
+      optional<DurationType, 'precision'>(4, 'precision', 'precision', countBinding),
       optional<DurationType, 'multipleOf'>(5, 'multiple_of', 'multipleOf', durationBoundBinding),
     ],
     construct: (slots) => {
@@ -2040,8 +2043,8 @@ const cidr4TypeBinding: RecordBinding<Cidr4Type> = typed(
         field<Cidr4Type, 'spec'>(0, 'spec', 'spec', textBinding),
         'https://www.rfc-editor.org/rfc/rfc4632',
       ),
-      optional<Cidr4Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', bigintBinding),
-      optional<Cidr4Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', bigintBinding),
+      optional<Cidr4Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', countBinding),
+      optional<Cidr4Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', countBinding),
       field<Cidr4Type, 'within'>(3, 'within', 'within', arrayOf<string>(textBinding)),
       field<Cidr4Type, 'excluding'>(4, 'excluding', 'excluding', arrayOf<string>(textBinding)),
     ],
@@ -2072,8 +2075,8 @@ const cidr6TypeBinding: RecordBinding<Cidr6Type> = typed(
         field<Cidr6Type, 'spec'>(0, 'spec', 'spec', textBinding),
         'https://www.rfc-editor.org/rfc/rfc4291',
       ),
-      optional<Cidr6Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', bigintBinding),
-      optional<Cidr6Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', bigintBinding),
+      optional<Cidr6Type, 'minPrefix'>(1, 'min_prefix', 'minPrefix', countBinding),
+      optional<Cidr6Type, 'maxPrefix'>(2, 'max_prefix', 'maxPrefix', countBinding),
       field<Cidr6Type, 'within'>(3, 'within', 'within', arrayOf<string>(textBinding)),
       field<Cidr6Type, 'excluding'>(4, 'excluding', 'excluding', arrayOf<string>(textBinding)),
     ],
