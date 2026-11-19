@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import { standardLibrary } from '../src/stdlib/index.js';
 
-const KERNEL = 'https://tson.io/2026/38/m/meta-kernel.tn';
-const META = 'https://tson.io/2026/38/m/meta.tn';
-const CORE = 'https://tson.io/2026/38/m/core.tn';
+const KERNEL = 'https://tson.io/2026/39/m/meta-kernel.tn';
+const META = 'https://tson.io/2026/39/m/meta.tn';
+const CORE = 'https://tson.io/2026/39/m/core.tn';
 
 function schema(id: string, meta: string, imports: readonly string[], body: string): string {
   const header = imports.map((uri) => `!!import:"${uri}"`).join('\n');

@@ -16,9 +16,9 @@ import { standardLibrary } from '../src/stdlib/index.js';
 import type { Tson } from '../src/config.js';
 import type { LinkedSchema } from '../src/link/link.js';
 
-const KERNEL = 'https://tson.io/2026/38/m/meta-kernel.tn';
-const META = 'https://tson.io/2026/38/m/meta.tn';
-const CORE = 'https://tson.io/2026/38/m/core.tn';
+const KERNEL = 'https://tson.io/2026/39/m/meta-kernel.tn';
+const META = 'https://tson.io/2026/39/m/meta.tn';
+const CORE = 'https://tson.io/2026/39/m/core.tn';
 const LAYER = 'https://example.com/m/service.tn';
 
 /** A meta layer in the shape §4.1 describes: records, and namespace types holding them. */

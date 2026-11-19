@@ -8,10 +8,11 @@
  * never the vectors that reference `core.tn`.
  */
 export const BUNDLED_SCHEMA_IDS = {
-  'meta-kernel.tn': 'https://tson.io/2026/38/m/meta-kernel.tn',
-  'meta.tn': 'https://tson.io/2026/38/m/meta.tn',
-  'core.tn': 'https://tson.io/2026/38/m/core.tn',
-  'net.tn': 'https://tson.io/2026/38/m/net.tn',
+  'meta.tn': 'https://tson.io/2026/39/m/meta.tn',
+  'numeric.tn': 'https://tson.io/2026/39/m/numeric.tn',
+  'temporal.tn': 'https://tson.io/2026/39/m/temporal.tn',
+  'net.tn': 'https://tson.io/2026/39/m/net.tn',
+  'core.tn': 'https://tson.io/2026/39/m/core.tn',
 } as const satisfies Record<string, string>;
 
 /** A short, unversioned bundled-schema name usable in a sidecar's `meta`/`import` fields. */

@@ -8,8 +8,8 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import { applicationOf, isTemplateBody } from '../src/schema/meta/typedef.js';
 import { subtypesIn, supertypesIn } from './model-fixtures.js';
 
-const META = 'https://tson.io/2026/38/m/meta.tn';
-const CORE = 'https://tson.io/2026/38/m/core.tn';
+const META = 'https://tson.io/2026/39/m/meta.tn';
+const CORE = 'https://tson.io/2026/39/m/core.tn';
 
 let counter = 0;
 

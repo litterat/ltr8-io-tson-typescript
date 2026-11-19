@@ -23,8 +23,8 @@ const WIDE = 'https://例え.test/注文.tn';
 const LIBRARY = '/local/json-scope-orders.tn';
 
 const PREAMBLE = (id: string): string => `!!id:"${id}"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"`;
+!!meta:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/39/m/core.tn"`;
 
 const HOST_SCHEMA = `${PREAMBLE('https://example.test/json-scope-host.tn')}
 {

@@ -43,8 +43,8 @@ import { entry } from './model-fixtures.js';
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
+!!meta:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/39/m/core.tn"
 {
   reading => {
     id: uuid

@@ -987,7 +987,7 @@ describe("the spec's own worked example (§1.6)", () => {
     const doc = parse(`
 !!id:"https://example.com/task.tn"
 ${META}
-!!import:"https://tson.io/2026/38/m/core.tn"
+!!import:"https://tson.io/2026/39/m/core.tn"
 @doc:"Task-tracking example schema."
 {
   priority => integer

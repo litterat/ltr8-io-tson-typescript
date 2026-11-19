@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 import { classifyDocument } from '../src/facade/classify.js';
 import { TsonLexError, TsonParseError } from '../src/core/errors.js';
-import { CORE_TN, META_KERNEL_TN, META_TN } from '../src/stdlib/index.js';
+import { CORE_TN, META_TN, NET_TN, NUMERIC_TN, TEMPORAL_TN } from '../src/stdlib/index.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
@@ -155,8 +155,10 @@ describe('the header itself is still checked', () => {
 
 describe('against the real bundled schemas', () => {
   it.each([
-    ['meta-kernel.tn', META_KERNEL_TN],
     ['meta.tn', META_TN],
+    ['numeric.tn', NUMERIC_TN],
+    ['temporal.tn', TEMPORAL_TN],
+    ['net.tn', NET_TN],
     ['core.tn', CORE_TN],
   ])('%s classifies as a schema document', (_file, text) => {
     expect(classifyDocument(bytesOf(text)).kind).toBe('schema');

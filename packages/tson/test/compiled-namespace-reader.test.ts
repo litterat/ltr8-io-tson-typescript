@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { canonicalizeIdentity } from '../src/link/identity.js';
 import { standardLibrary } from '../src/stdlib/index.js';
 
-const META = 'https://tson.io/2026/38/m/meta.tn';
+const META = 'https://tson.io/2026/39/m/meta.tn';
 
 function diagnosticsOf(document: string): readonly { code: string; path?: string }[] {
   const tson = standardLibrary();

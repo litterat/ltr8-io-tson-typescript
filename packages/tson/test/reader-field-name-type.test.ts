@@ -8,8 +8,8 @@ import type { Diagnostic } from '../src/core/diagnostic.js';
 
 const HEAD = [
   '!!id:"https://example.test/names.tn"',
-  '!!meta:"https://tson.io/2026/38/m/meta.tn"',
-  '!!import:"https://tson.io/2026/38/m/core.tn"',
+  '!!meta:"https://tson.io/2026/39/m/meta.tn"',
+  '!!import:"https://tson.io/2026/39/m/core.tn"',
 ].join('\n');
 
 const SCHEMA = `

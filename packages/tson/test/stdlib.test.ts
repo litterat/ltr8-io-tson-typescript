@@ -12,9 +12,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CORE_TN,
-  META_KERNEL_TN,
   META_TN,
+  NET_TN,
+  NUMERIC_TN,
   POLICY_TN,
+  TEMPORAL_TN,
   registerStandardLibrary,
   standardLibrary,
 } from '../src/stdlib/index.js';
@@ -27,8 +29,10 @@ const SPEC_M = join(import.meta.dirname, '../../../spec/m');
 
 describe('the embedded copies are the vendored documents', () => {
   it.each([
-    ['meta-kernel.tn', META_KERNEL_TN],
     ['meta.tn', META_TN],
+    ['numeric.tn', NUMERIC_TN],
+    ['temporal.tn', TEMPORAL_TN],
+    ['net.tn', NET_TN],
     ['core.tn', CORE_TN],
     ['policy.tn', POLICY_TN],
   ])('%s matches spec/m/ byte for byte', (file, embedded) => {

@@ -159,7 +159,7 @@ function schema(
   }
   return {
     id,
-    meta: 'https://tson.io/2026/38/m/meta-kernel.tn',
+    meta: 'https://tson.io/2026/39/m/meta-kernel.tn',
     imports,
     entries: own,
     keyAnnotations: new Map(),
