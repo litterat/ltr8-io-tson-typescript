@@ -16,15 +16,15 @@
  * browser cannot read files at all. Nothing here touches a {@link SchemaSource}, so registering
  * the standard library never reaches the network even when one is configured.
  *
- * **Registration order is the whole algorithm.** The kernel is pre-loaded (Part 2 §3.4): it
- * imports nothing and its one wait cycle is broken by `schema/bootstrap.ts`'s
- * `bootstrapMetaKernel`. Each library is then resolved after everything it imports is registered,
- * so `resolveImport` always finds what it needs already present and never has to suspend — which
- * is exactly the property `config.ts`'s own note says `preload` exists to arrange for schemas that
- * must be fetched.
+ * **Registration order is the whole algorithm.** The kernel is pre-loaded (Part 2 §3.4): it imports
+ * nothing and `schema/bootstrap.ts`'s `bootstrapKernel` resolves it from its own source. Each library is
+ * then resolved after everything it imports is registered -- `numeric.tn`, `temporal.tn` and `net.tn`
+ * import the kernel alone, `core.tn` the three, `policy.tn` the kernel -- so `resolveImport` always finds
+ * what it needs already present and never has to suspend, which is exactly the property `config.ts`'s own
+ * note says `preload` exists to arrange for schemas that must be fetched.
  */
 import { encodeUtf8 } from '../io/utf8.js';
-import { bootstrapMetaKernel } from '../schema/bootstrap.js';
+import { bootstrapKernel } from '../schema/bootstrap.js';
 import { linkSchema } from '../link/link.js';
 import { createTson, type Config, type Tson } from '../config.js';
 import {
@@ -56,11 +56,7 @@ export {
 export function registerStandardLibrary(tson: Tson): Tson {
   // `io/utf8.ts`'s own encoder rather than the host `TextEncoder`: this project's type
   // configuration carries no `DOM` lib, and the library encodes UTF-8 itself everywhere else too.
-  tson.register(linkSchema(bootstrapMetaKernel(encodeUtf8(META_TN))));
-  // Then the kernel again, ordinarily, against the bootstrap output just registered, so its
-  // entries carry the resolver-attached key annotations the bootstrap route does not attach. It
-  // re-registers under the same canonical identity, replacing the transient form.
-  tson.resolveSchema(META_TN);
+  tson.register(linkSchema(bootstrapKernel(encodeUtf8(META_TN))));
   // The three data-format libraries each import the kernel alone (Part 2 §9).
   tson.resolveSchema(NUMERIC_TN);
   tson.resolveSchema(TEMPORAL_TN);

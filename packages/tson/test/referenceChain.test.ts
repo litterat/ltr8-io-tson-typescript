@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { terminal, terminalDefinition } from '../src/link/referenceChain.js';
 import { TsonLimitRefusedError } from '../src/core/errors.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
-import type { Reference, Top, TypeRef } from '../src/schema/meta/typedef.js';
+import type { Alias, Top, TypeRef } from '../src/schema/meta/typedef.js';
 import { fieldMapOf } from './model-fixtures.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ function recordEntry(): Top {
 
 /** A REFERENCE entry -- an alias to `target`. */
 function aliasOf(target: TypeRef): Top {
-  const body: Reference = { kind: 'reference', target };
+  const body: Alias = { kind: 'alias', target };
   return body;
 }
 

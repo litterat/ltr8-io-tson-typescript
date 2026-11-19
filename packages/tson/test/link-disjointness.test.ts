@@ -9,6 +9,7 @@ import {
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { Annotations, EntryFacts, MetaValue, Top } from '../src/schema/meta/typedef.js';
+import { namespaceEntry } from './model-fixtures.js';
 import { choiceDisjoint, namespaceOf } from '../src/schema/meta/typedef.js';
 import { fieldMapOf } from '../src/schema/meta/bodies.js';
 
@@ -52,7 +53,7 @@ const arr = def({
   ordered: true,
   uniqueItems: false,
 });
-const alias = def({ kind: 'reference', target: { name: 'text', arguments: [], annotations: [] } });
+const alias = def({ kind: 'alias', target: { name: 'text', arguments: [], annotations: [] } });
 
 describe('discriminationClassOf (§5.4)', () => {
   const namespace = new Map<string, Top>([
@@ -83,8 +84,8 @@ describe('discriminationClassOf (§5.4)', () => {
 
   it('returns undefined for a reference cycle rather than hanging', () => {
     const cyclic = new Map<string, Top>([
-      ['a', def({ kind: 'reference', target: { name: 'b', arguments: [], annotations: [] } })],
-      ['b', def({ kind: 'reference', target: { name: 'a', arguments: [], annotations: [] } })],
+      ['a', def({ kind: 'alias', target: { name: 'b', arguments: [], annotations: [] } })],
+      ['b', def({ kind: 'alias', target: { name: 'a', arguments: [], annotations: [] } })],
     ]);
     expect(discriminationClassOf('a', cyclic)).toBeUndefined();
   });
@@ -102,7 +103,7 @@ describe('discriminationClassOf (§5.4)', () => {
     const operation: MetaValue = { form: 'record', type: 'operation', fields: new Map() };
     const ns = new Map<string, Top>([
       ['rational', def({ kind: 'rational_type' })],
-      ['op', def(namespaceOf('api', new Map([['orders', operation]])))],
+      ['op', def(namespaceEntry(namespaceOf('api', new Map([['orders', operation]]))))],
     ]);
     expect(discriminationClassOf('rational', ns)).toBeUndefined();
     expect(discriminationClassOf('op', ns)).toBeUndefined();
@@ -180,15 +181,15 @@ describe('discriminationClassOf (§5.4)', () => {
     expect(discriminationClassOf('byMap', ns)).toBeUndefined();
   });
 
-  it('a map keyed by a `value_type` or `void_type` instance has no class, whatever the instance is named (§4.2, §5.4)', () => {
+  it('a map keyed by a `void_type` instance has no class, whatever the instance is named (§4.2, §5.4)', () => {
     const ns = new Map<string, Top>([
-      ['value', def({ kind: 'value_type' })],
       ['void', def({ kind: 'void_type' })],
-      ['byValue', withKeyType('value')],
+      ['nothing', def({ kind: 'void_type' })],
       ['byVoid', withKeyType('void')],
+      ['byNothing', withKeyType('nothing')],
     ]);
-    expect(discriminationClassOf('byValue', ns)).toBeUndefined();
     expect(discriminationClassOf('byVoid', ns)).toBeUndefined();
+    expect(discriminationClassOf('byNothing', ns)).toBeUndefined();
   });
 
   it('a map keyed by an identifier family is keyed by scalar content (§5.4, §7.7)', () => {
@@ -307,7 +308,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
     }).not.toThrow();
   });
 
-  it('throws (fail-fast) when @disjoint is asserted but the derived fact is false', () => {
+  it('throws (fail-fast) when @meta.disjoint is asserted but the derived fact is false', () => {
     const choice = def(
       {
         kind: 'choice',
@@ -343,7 +344,7 @@ describe('checkDisjointAssertions (§5.4)', () => {
     expect(diagnostics.diagnostics[0]?.code).toBe('SCHEMA_ERROR');
   });
 
-  it('does nothing for a choice with no @disjoint assertion at all, whatever the derived fact', () => {
+  it('does nothing for a choice with no @meta.disjoint assertion at all, whatever the derived fact', () => {
     const choice = def({ kind: 'choice', variants: [] }, { disjoint: false, annotations: [] });
     const merged = new Map([['c', choice]]);
     expect(() => {
@@ -368,10 +369,10 @@ describe('checkDisjointAssertions (§5.4)', () => {
     }).not.toThrow();
   });
 
-  describe('keyAnnotations (§6): @disjoint written before the declared name', () => {
+  describe('keyAnnotations (§6): @meta.disjoint written before the declared name', () => {
     it('throws when the marker is a key annotation only, not a value annotation, and the derived fact is false', () => {
       // `def()` carries no `annotations` of its own here -- the marker sits only in the
-      // key-position map, exactly as `@disjoint\nshapes => ( circle | square )` resolves.
+      // key-position map, exactly as `@meta.disjoint\nshapes => ( circle | square )` resolves.
       const choice = def({
         kind: 'choice',
         variants: [

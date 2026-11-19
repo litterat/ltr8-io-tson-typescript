@@ -189,9 +189,8 @@ describe('the bundle runs with no Node globals in scope', () => {
       const tson = stdlib.standardLibrary();
       const id = (text) => /^!!id:"([^"]+)"/.exec(text)[1];
       const schema = '!!id:"https://example.com/reading.tn"\\n'
-        + '!!meta:"' + id(stdlib.META_TN) + '"\\n'
         + '!!import:"' + id(stdlib.CORE_TN) + '"\\n'
-        + '{ reading => { label: text } }\\n';
+        + '!schema { reading => { label: text } }\\n';
       const compiled = tson.compile(tson.resolveSchema(schema));
       globalThis.value = tson.readTree(
         new TextEncoder().encode('{ label: "north ridge" }'),

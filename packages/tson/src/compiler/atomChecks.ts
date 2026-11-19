@@ -50,7 +50,7 @@ import type {
   Ipv6Type,
   MediaTypeType,
 } from '../schema/meta/atoms-network.js';
-import type { EnumBody } from '../schema/meta/bodies.js';
+import type { EnumBody, ReferenceBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
 import type {
   EmailType,
@@ -1245,14 +1245,15 @@ function enumNarrows(source: EnumBody, refined: EnumBody): string[] {
   return out;
 }
 
-/** A kind's one authored facet is `of`, and it is what the kind is: fixed where it is constructed (§4.2, §5.7). */
-function ofNarrows(label: string, source: string, refined: string): string[] {
-  return source === refined
-    ? []
-    : [
-        `of '${refined}' replaces the source's own '${source}' -- ${label} is fixed where it is ` +
-          'constructed',
-      ];
+/**
+ * `meta.reference_type`'s `allow_sibling` is a permission a refinement may withdraw and never grant back
+ * (§4.2). Whether the refined `of` narrows the source's -- is the source's or IS-A it -- is an IS-A question
+ * about two names, which only the namespace they resolve in answers; the linker asks it (§5.7).
+ */
+function referenceNarrows(source: ReferenceBody, refined: ReferenceBody): string[] {
+  const out: string[] = [];
+  checkOnlyWithdraws(out, 'allow_sibling', source.allowSibling, refined.allowSibling);
+  return out;
 }
 
 /** `hostname_type`'s `allow_idn` may be withdrawn and never granted back (§5.7). */
@@ -1391,13 +1392,9 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'ipv6_type'
         ? ipv6Narrows(source, refined)
         : mismatch('an ipv6', refined);
-    case 'kind_type':
-      return refined.kind === 'kind_type'
-        ? ofNarrows('a kind', source.of, refined.of)
-        : mismatch('a kind', refined);
-    case 'ref_type':
-      return refined.kind === 'ref_type'
-        ? ofNarrows('a reference', source.of, refined.of)
+    case 'reference_type':
+      return refined.kind === 'reference_type'
+        ? referenceNarrows(source, refined)
         : mismatch('a reference', refined);
     case 'hostname_type':
       return refined.kind === 'hostname_type'
@@ -1410,7 +1407,6 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
     // No orderable facet and no selector at all: `value_type` and `void_type` (empty
     // vocabularies), `uuid_type`, `mac_type` and `host_type` (spec-pinned, no facet of their own
     // to compare).
-    case 'value_type':
     case 'void_type':
     case 'uuid_type':
     case 'mac_type':
@@ -1425,7 +1421,6 @@ function mismatch(sourceLabel: string, refined: Atom): readonly string[] {
 
 /** Every `Atom` union member's own `kind` literal — used by {@link isAtom} to tell an atom body from every other `Top` shape without importing each family's type just to name it. */
 const ATOM_KINDS: ReadonlySet<string> = new Set([
-  'value_type',
   'void_type',
   'enum',
   'integer_type',
@@ -1451,8 +1446,7 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'ipv4_type',
   'ipv6_type',
   'complex_type',
-  'kind_type',
-  'ref_type',
+  'reference_type',
   'hostname_type',
   'host_type',
   'media_type_type',
@@ -1531,13 +1525,11 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
       return periodCoherence(atom);
     // `component` is `complex_type`'s only field: a single selector has nothing else to
     // contradict.
-    case 'value_type':
     case 'void_type':
     case 'uuid_type':
     case 'complex_type':
     case 'mac_type':
-    case 'kind_type':
-    case 'ref_type':
+    case 'reference_type':
     case 'hostname_type':
     case 'host_type':
       return [];

@@ -1,6 +1,6 @@
 import type { Annotation, DataValue, TokenValue } from '../value.js';
 
-import type { TypeRef } from './typeref.js';
+import type { TypeExpr } from './typeref.js';
 
 /**
  * `record-entry = field-def / group-def` (Part 2 §12.1) — one entry inside a `RecordDef`'s
@@ -40,9 +40,9 @@ export interface FieldDef {
   readonly modifier?: FieldModifier;
 }
 
-/** `field-type = type-ref ["?"]` (§12.1, §5.2) — `voidable` is the type's own `?`: a written `_` is admitted at this field when `true`. */
+/** `field-type = type-expr ["?"]` (§12.1, §5.2) — `voidable` is the type's own `?`: a written `_` is admitted at this field when `true`. */
 export interface FieldType {
-  readonly typeRef: TypeRef;
+  readonly typeRef: TypeExpr;
   readonly voidable: boolean;
 }
 
@@ -106,7 +106,7 @@ export interface GroupDef {
 export type GroupQuantifier = 'EXACTLY_ONE' | 'AT_MOST_ONE' | 'AT_LEAST_ONE';
 
 /**
- * `group-member = *annotation field-name ["?"] ws ":" ws type-ref ["?"]` (§12.1, §5.11) — one
+ * `group-member = *annotation field-name ["?"] ws ":" ws type-expr ["?"]` (§12.1, §5.11) — one
  * member of a {@link GroupDef} option. The name's `?` (`omittable`) makes the member optional once
  * its option is chosen; the type's (`voidable`) admits `_`, and a voidable member written `_` is
  * present and chooses its option. A member takes no `~`/`=`/`=?` value modifier, since a group
@@ -116,7 +116,7 @@ export interface GroupMember {
   readonly annotations: readonly Annotation[];
   readonly name: string;
   readonly omittable: boolean;
-  readonly typeRef: TypeRef;
+  readonly typeRef: TypeExpr;
   readonly voidable: boolean;
 }
 
@@ -173,7 +173,7 @@ export interface RemovalSet {
 }
 
 /**
- * `instance = [type-params] "!" type-name ws core-value` (§12.1, §5.5) — constructor
+ * `instance = [type-params] "!" qualified-name ws core-value` (§12.1, §5.5) — constructor
  * application: produces a fresh atom-family instance filled with `value`'s own core-value.
  *
  * The payload is deliberately narrower than a full `data-value` (`*annotation [type-ref]
@@ -192,7 +192,7 @@ export interface RemovalSet {
  *
  * **No separate `target` field.** `value` (a `DataValue`, imported from `../value.js`) already
  * has exactly the right shape to carry the constructor name via its own `typeRef` — always
- * present here, populated from the `"!" type-name` prefix at parse time — and `value`'s own
+ * present here, populated from the `"!" qualified-name` prefix at parse time — and `value`'s own
  * `annotations` are always empty (the grammar has no room for any). A reader wanting the
  * constructor name reads `value.typeRef`.
  *
@@ -207,7 +207,7 @@ export interface Instance {
 }
 
 /**
- * `atom-refinement = "!" type-name ws "^" ws record-def` (§12.1, §5.5) — refines an
+ * `atom-refinement = "!" qualified-name ws "^" ws data-value` (§12.1, §5.5) — refines an
  * atom-family instance by tightening its constructor's constraint fields. `target` MUST
  * resolve to a non-constructor atom-family instance and `bindings` is a braced record of
  * constraint values (both semantic-layer checks, not enforced here); this establishes IS-A

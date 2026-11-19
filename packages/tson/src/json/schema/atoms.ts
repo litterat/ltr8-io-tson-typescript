@@ -353,7 +353,7 @@ export function atomReader(
 ): AtomReader {
   const form = atomFormOf(body);
   const parser: ScalarParser | undefined =
-    body.kind === 'kind_type'
+    body.kind === 'reference_type'
       ? createKindParser(displayName, body, options.judgesKindMembers ?? false)
       : atomParserFor(displayName, body);
   const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;

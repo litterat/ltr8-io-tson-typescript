@@ -33,6 +33,7 @@ import type { Task } from '../../io/bytes.js';
 import { FIELD_NAME_RULE, fieldNameRule, matchKey } from '../../link/fieldNameRule.js';
 import { directMembers, type Member } from '../../link/recordExtension.js';
 import type { RecordField } from '../../schema/meta/bodies.js';
+import { typeNameOf } from '../../schema/meta/bodies.js';
 import { subtypesOf, type Namespace, type Top } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/referenceChain.js';
 import { toNfc } from '../../unicode/nfc.js';
@@ -72,10 +73,10 @@ function fieldTypeOf(
   members: readonly Member[],
 ): string {
   const own = baseFields?.entries.get(fieldName);
-  if (own !== undefined) return own.type.name;
+  if (own !== undefined) return typeNameOf(own);
   for (const member of members) {
     const field = member.body.fields.entries.get(fieldName);
-    if (field !== undefined) return field.type.name;
+    if (field !== undefined) return typeNameOf(field);
   }
   throw new Error(
     `'${fieldName}' names a discriminator but neither the base nor any of its members declares such a field`,
@@ -113,7 +114,7 @@ function pinsOf(
     )?.[1];
     if (field?.role !== 'FIXED' || field.value === undefined) return undefined;
     try {
-      key.push(identityOfHost(fieldValueOf(ctx, field.type.name, field.value).hostValue));
+      key.push(identityOfHost(fieldValueOf(ctx, typeNameOf(field), field.value).hostValue));
     } catch {
       return undefined;
     }

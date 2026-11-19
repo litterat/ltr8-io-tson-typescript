@@ -13,7 +13,7 @@ describe('an enum refinement loads through the public API (§7.4, §5.6)', () =>
   it('an !enum_type{name_type} refinement loads, and a closed set of text is a text atom (§7.4)', () => {
     expect(() =>
       load(
-        `k => !identifier_type { }\ne => !enum_type { name_type: k members: [a b c] }\ne2 => !e ^ { members: [a b] }`,
+        `k => !unicode.identifier_type { }\ne => !meta.enum_type { name_type: k members: [a b c] }\ne2 => !e ^ { members: [a b] }`,
       ),
     ).not.toThrow();
     expect(() => load(`e => !text ^ { members: [a b c] }`)).not.toThrow();
@@ -24,7 +24,7 @@ describe('enum members are judged under the label type’s profile (§7.4)', () 
   it('a member the profile adds is exempt, as a value of the family at a position is', () => {
     expect(
       loadError(
-        `k => !identifier_type { continue_add: "+" }\ne => !enum_type { name_type: k members: ["a+b"] }`,
+        `k => !unicode.identifier_type { continue_add: "+" }\ne => !meta.enum_type { name_type: k members: ["a+b"] }`,
       ),
     ).toBeUndefined();
   });
@@ -32,7 +32,7 @@ describe('enum members are judged under the label type’s profile (§7.4)', () 
   it('a member the profile does not add is still refused', () => {
     expect(
       loadError(
-        `k => !identifier_type { continue_add: "+" }\ne => !enum_type { name_type: k members: ["a$b"] }`,
+        `k => !unicode.identifier_type { continue_add: "+" }\ne => !meta.enum_type { name_type: k members: ["a$b"] }`,
       ),
     ).toBeDefined();
   });

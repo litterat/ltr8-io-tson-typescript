@@ -178,7 +178,7 @@ describe("checkBinding -- dispatches from an entry's value without hand-narrowin
   });
 
   it('is a no-op for a non-record definition (e.g. an atom-kind type)', () => {
-    const definition: Top = { kind: 'value_type' };
+    const definition: Top = { kind: 'void_type' };
     expect(() => {
       checkBinding('void', definition, INT);
     }).not.toThrow();

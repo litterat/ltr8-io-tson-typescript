@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `uuid_type` constructor (§5.5's `!uuid` atom, RFC
+ * Parses and validates against `net.uuid_type` constructor (§5.5's `!uuid` atom, RFC
  * 9562) -- the port of `atom/UuidParser.java`. A pure format check (§5.2: "the remaining atoms
  * are pure format checks") unless `version` is set, which no built-in instance does -- `uuid =>
  * !uuid_type {}` in core.tn is fully unconstrained.

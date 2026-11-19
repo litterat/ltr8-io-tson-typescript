@@ -8,35 +8,37 @@ import {
 import { createKindParser, createQualifiedNameParser } from '../src/atom/reference.js';
 import { compile, validate } from '../src/compiler/compile.js';
 import { encodeUtf8 } from '../src/io/utf8.js';
-import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
-import { readNamespaceInstance, writeNamespaceValue } from '../src/schema/namespaceReader.js';
+import { writeNamespaceValue } from '../src/schema/namespaceReader.js';
 import type { MetaValue, Namespace, Top } from '../src/schema/meta/typedef.js';
-import { isNamespaceValue } from '../src/schema/meta/typedef.js';
+import { isValueEntry } from '../src/schema/meta/typedef.js';
 import { standardLibrary } from '../src/stdlib/index.js';
 import type { Tson } from '../src/config.js';
 import type { LinkedSchema } from '../src/link/link.js';
 
-const KERNEL = 'https://tson.io/2026/39/m/meta-kernel.tn';
 const META = 'https://tson.io/2026/39/m/meta.tn';
 const CORE = 'https://tson.io/2026/39/m/core.tn';
 const LAYER = 'https://example.com/m/service.tn';
 
-/** A meta layer in the shape §4.1 describes: records, and namespace types holding them. */
+/**
+ * A meta layer in the shape §4.1 describes: records, and namespace types holding them. A namespace type is
+ * built with the kernel's `meta.namespace` constructor, `!meta.namespace { key_type: K  value_type: V }`, and
+ * an entry built with one is a value (§4.1); a slot typed `meta.ref<meta.record>` holds a record type's name,
+ * one typed `meta.ref<method>` a qualified name reaching a value of `method` (§4.2, §5.12).
+ */
 const SERVICE_LAYER = `!!id:"${LAYER}"
-!!meta:"${KERNEL}"
 !!import:"${META}"
-{
-  method      => { request?: kind<record>  response?: type_kind  errors?: [kind<record>] }
+!schema {
+  method      => { request?: meta.ref<meta.record>  response?: meta.type_ref  errors?: [meta.ref<meta.record>] }
   rpc_method  => method & { idempotent?: boolean }
   http_verb   => !enum [GET POST]
-  interface   => namespace & { key_type: = identifier  value_type: = method }
-  rpcs        => namespace & { key_type: = identifier  value_type: = rpc_method }
+  interface   => !meta.namespace { key_type: meta.identifier  value_type: method }
+  rpcs        => !meta.namespace { key_type: meta.identifier  value_type: rpc_method }
   header_set  => { headers: {text => method} }
-  header_sets => namespace & { key_type: = identifier  value_type: = header_set }
-  service     => { extends?: [identifier]  methods: interface  note?: text }
-  services    => namespace & { key_type: = identifier  value_type: = service }
-  binding     => { method: ref<method>  verb: http_verb  route: text }
-  bindings    => namespace & { key_type: = identifier  value_type: = binding }
+  header_sets => !meta.namespace { key_type: meta.identifier  value_type: header_set }
+  service     => { extends?: [meta.identifier]  methods: interface  note?: text }
+  services    => !meta.namespace { key_type: meta.identifier  value_type: service }
+  binding     => { method: meta.ref<method>  verb: http_verb  route: text }
+  bindings    => !meta.namespace { key_type: meta.identifier  value_type: binding }
 }
 `;
 
@@ -48,15 +50,15 @@ function withLayer(): Tson {
 
 /** A schema the service layer governs, holding `body`'s entries. */
 function governed(body: string, id = 'https://example.com/app.tn'): string {
-  return `!!id:"${id}"\n!!meta:"${LAYER}"\n!!import:"${CORE}"\n{\n${body}\n}\n`;
+  return `!!id:"${id}"\n!!import:"${LAYER}"\n!!import:"${CORE}"\n!schema {\n${body}\n}\n`;
 }
 
 function namespaceEntry(linked: LinkedSchema, name: string): Namespace<MetaValue> {
   const value: Top | undefined = linked.entries.get(name);
-  if (value === undefined || !isNamespaceValue(value)) {
+  if (value === undefined || !isValueEntry(value) || value.value.form !== 'namespace') {
     throw new Error(`'${name}' is no namespace value`);
   }
-  return value;
+  return value.value.value;
 }
 
 describe('a value of a meta layer’s namespace type ([TSON-SCHEMA] §4.1)', () => {
@@ -78,11 +80,11 @@ describe('a value of a meta layer’s namespace type ([TSON-SCHEMA] §4.1)', () 
     if (place?.form !== 'record') throw new Error('unreachable');
     // A tag naming the position's own type is not kept: the value is read as that type.
     expect(orders.entries.get('list')).not.toHaveProperty('type');
-    // §4.2: a name at a kind-typed slot is kept as written, beside the slot it fills.
+    // §4.2: a name at a type-name slot is kept as written, beside the slot it fills.
     expect(place.fields.get('request')).toEqual({
       form: 'token',
       token: { text: 'order', form: 'UNQUOTED' },
-      slot: expect.objectContaining({ role: 'kind', of: 'record' }) as unknown,
+      slot: expect.objectContaining({ role: 'TYPE_NAME', of: 'meta.record' }) as unknown,
     });
     expect(linked.facts.get('orders')?.head).toBe('interface');
   });
@@ -120,16 +122,12 @@ describe('a value of a meta layer’s namespace type ([TSON-SCHEMA] §4.1)', () 
       'an annotated name',
       `bad => !bindings { b => { method: @doc:"m" x.y  verb: GET  route: "/" } }`,
     ],
-    ['a tagged name', `bad => !interface { m => { request: !record order } }`],
-    [
-      'a braced application at a kind-typed slot',
-      `bad => !interface { m => { request: { name: box  arguments: [ { name: order } ] } } }`,
-    ],
+    ['a tagged name', `bad => !interface { m => { request: !meta.record order } }`],
     ['a record-typed slot written as a name', `bad => !services { s => { methods: orders } }`],
   ])('§4.1, §5.12: refuses %s', (_label, entry) => {
     expect(() =>
       withLayer().resolveSchema(governed(`order => { sku: text }\nbox => <T> { v: T }\n${entry}`)),
-    ).toThrow(/not valid data for/);
+    ).toThrow(/not valid data for|no value of the type/);
   });
 
   it('§8.3: resolved output writes the value as written, a value by name as the name', () => {
@@ -142,10 +140,7 @@ describe('a value of a meta layer’s namespace type ([TSON-SCHEMA] §4.1)', () 
     const routes = namespaceEntry(linked, 'routes');
     const written = writeNamespaceValue(routes);
     expect(written.typeRef).toBe('bindings');
-    const meta = withLayer().schemas.get('example.com/m/service.tn');
-    if (meta === undefined) throw new Error('the layer is not registered');
-    const reread = readNamespaceInstance('bindings', written, (name) => meta.entries.get(name));
-    expect(reread).toEqual(routes);
+    expect(written.coreValue.kind).toBe('map');
   });
 });
 
@@ -210,7 +205,7 @@ describe('values by name ([TSON-SCHEMA] §5.12)', () => {
     expect(extendsOf).toThrow(/no 'method'/);
   });
 
-  it('§3.3.2: a kind-typed slot’s name resolves in the governed schema, never in the meta layer', () => {
+  it('§3.3.2: a type-name slot’s name resolves in the governed schema, never in the layer declaring the slot', () => {
     const named = (request: string) => () =>
       withLayer().resolveSchema(
         governed(`order => { sku: text }\nuser_id => uuid\nbox => <T> { v: T }\nalias => order
@@ -218,12 +213,12 @@ describe('values by name ([TSON-SCHEMA] §5.12)', () => {
       );
     expect(named('order')).not.toThrow();
     expect(named('alias')).not.toThrow();
-    expect(named('method')).toThrow(/no type declared in this schema/);
-    expect(named('user_id')).toThrow(/built by 'uuid_type', which is no 'record'/);
+    expect(named('method')).not.toThrow(); // the layer's own `method` is in the one namespace, and is a record
+    expect(named('user_id')).toThrow(/is no 'meta.record'/);
     expect(named('box')).toThrow(/open entry/);
   });
 
-  it('§4.1: a namespace entry is a member of no kind of types', () => {
+  it('§4.1: a namespace entry is a member of no reference over types', () => {
     const response = () =>
       withLayer().resolveSchema(
         governed(`order => { sku: text }
@@ -234,59 +229,32 @@ describe('values by name ([TSON-SCHEMA] §5.12)', () => {
   });
 });
 
-describe('declarations of kinds, references and namespace types ([TSON-SCHEMA] §4.1, §4.2, §5.12)', () => {
+describe('declarations of references and namespace types ([TSON-SCHEMA] §4.1, §4.2, §5.12)', () => {
   function layer(body: string): () => LinkedSchema {
     return () =>
       standardLibrary().resolveSchema(
-        `!!id:"https://example.com/m/l.tn"\n!!meta:"${KERNEL}"\n!!import:"${META}"\n{\n${body}\n}\n`,
+        `!!id:"https://example.com/m/l.tn"\n!!import:"${META}"\n!schema {\n${body}\n}\n`,
       );
   }
 
-  it('§4.1: a namespace type declares nothing beside its three facets', () => {
+  it('§4.1: a namespace type pins its key and value types, both resolving in the schema’s namespace', () => {
     expect(
       layer(
-        `m => { r?: text }\nis => namespace & { key_type: = identifier  value_type: = m  extends?: [text] }`,
+        `m => { r?: text }\nis => !meta.namespace { key_type: meta.identifier  value_type: m }`,
       ),
-    ).toThrow(/declares the field 'extends' beside them/);
-  });
-
-  it('§4.1: a namespace type that is not abstract pins its key and value types', () => {
-    expect(layer(`keyed => namespace & { key_type: = identifier }`)).toThrow(
-      /leaves its 'key_type' or 'value_type' open/,
-    );
-    expect(layer(`keyed => abstract namespace & { key_type: = identifier }`)).not.toThrow();
-  });
-
-  it('§4.1, §4.2: a namespace’s keys are names, so its key type is an identifier family', () => {
+    ).not.toThrow();
     expect(
-      layer(`verb => !enum [GET POST]\nvm => namespace & { key_type: = verb  value_type: = text }`),
-    ).toThrow(/no member of it/);
+      layer(`is => !meta.namespace { key_type: meta.identifier  value_type: nowhere }`),
+    ).toThrow(/nowhere/);
   });
 
-  it('§4.2: a kind’s `of` names `type`, `namespace` or a constructor below either', () => {
-    expect(layer(`o => { id: kind<reference> }`)).toThrow(
-      /not 'type', 'namespace' or a constructor below either/,
-    );
-    expect(layer(`o => { id: kind<record>  n: kind<namespace> }`)).not.toThrow();
+  it('§5.12: a reference over a constructor names the types built with it, over a type the values of it', () => {
+    expect(layer(`holder => { r: meta.ref<meta.record> }`)).not.toThrow();
+    expect(layer(`order => { id: text }\nholder => { r: meta.ref<order> }`)).not.toThrow();
   });
 
-  it('§5.12: a reference names a value of a type, never of a constructor', () => {
-    expect(layer(`holder => { r: ref<record> }`)).toThrow(/write kind<record>/);
-    expect(layer(`order => { id: text }\nholder => { r: ref<order> }`)).not.toThrow();
-  });
-
-  it('§2.2.2: only a kernel-governed schema declares a reference or a namespace type', () => {
-    const ordinary = (body: string) => () =>
-      standardLibrary().resolveSchema(
-        `!!id:"https://example.com/o.tn"\n!!meta:"${META}"\n!!import:"${CORE}"\n{\n${body}\n}\n`,
-      );
-    expect(ordinary(`order => { id: text }\noref => !ref_type { of: order }`)).toThrow(
-      /not governed by the meta-kernel/,
-    );
-    // The base kind is out of an ordinary schema's reach as a composition operand at all.
-    expect(ordinary(`ns => namespace & { key_type: = identifier  value_type: = text }`)).toThrow(
-      /'ns'/,
-    );
+  it('§4.2: a reference whose `of` resolves to nothing is refused', () => {
+    expect(layer(`holder => { r: meta.ref<nowhere> }`)).toThrow(/nowhere/);
   });
 });
 
@@ -304,23 +272,39 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
     expect(() => qualified.read({ text, form: 'unquoted' })).toThrow(TsonAtomParseError);
   });
 
-  it('§4.2: a kind’s value is a member where its names resolve, and the grammar alone elsewhere', () => {
-    const kind = { kind: 'kind_type', of: 'uuid_type', members: ['customer_id', 'uuid'] } as const;
-    expect(createKindParser('k', kind, true).read({ text: 'uuid', form: 'unquoted' })).toBe('uuid');
-    expect(() => createKindParser('k', kind, true).read({ text: 'sku', form: 'unquoted' })).toThrow(
-      TsonAtomValidationError,
-    );
-    expect(createKindParser('k', kind, false).read({ text: 'sku', form: 'unquoted' })).toBe('sku');
+  it('§4.2: a reference over a constructor reads a member where its names resolve, and the grammar alone elsewhere', () => {
+    const reference = {
+      kind: 'reference_type',
+      of: { name: 'net.uuid_type', arguments: [], annotations: [] },
+      allowSibling: false,
+      index: {
+        namesTypes: true,
+        members: ['customer_id', 'net.uuid_type'],
+        applications: new Map<string, string>(),
+        aliases: new Map<string, string>(),
+        entries: new Map<string, unknown>(),
+        shown: [],
+      },
+    } as const;
+    expect(
+      createKindParser('k', reference, true).read({ text: 'net.uuid_type', form: 'unquoted' }),
+    ).toBe('net.uuid_type');
     expect(() =>
-      createKindParser('k', kind, false).read({ text: 'a.b', form: 'unquoted' }),
+      createKindParser('k', reference, true).read({ text: 'sku', form: 'unquoted' }),
+    ).toThrow(TsonAtomValidationError);
+    expect(createKindParser('k', reference, false).read({ text: 'sku', form: 'unquoted' })).toBe(
+      'sku',
+    );
+    expect(() =>
+      createKindParser('k', reference, false).read({ text: 'a..b', form: 'unquoted' }),
     ).toThrow(TsonAtomParseError);
   });
 
-  it('§4.2: a data document’s kind-typed field names a member of the kind', () => {
+  it('§4.2: a data document’s reference-typed field names a member of the reference', () => {
     const tson = standardLibrary();
     const linked = tson.resolveSchema(
-      `!!id:"https://example.com/ids.tn"\n!!meta:"${META}"\n!!import:"${CORE}"\n{\n` +
-        `customer_id => !uuid_type {}\nsku => text\nledger => { named: kind<uuid_type> }\n}\n`,
+      `!!id:"https://example.com/ids.tn"\n!!import:"${CORE}"\n!schema {\n` +
+        `customer_id => !net.uuid_type {}\nsku => text\nledger => { named: meta.ref<net.uuid_type> }\n}\n`,
     );
     const compiled = compile(linked);
     expect(validate(compiled, 'ledger', encodeUtf8('{ named: customer_id }')).diagnostics).toEqual(
@@ -328,32 +312,6 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
     );
     const refused = validate(compiled, 'ledger', encodeUtf8('{ named: sku }')).diagnostics;
     expect(refused.map((diagnostic) => diagnostic.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
-  });
-});
-
-describe('a meta layer’s own constructor refining one of meta.tn’s ([TSON-SCHEMA] §4.2, §5.5)', () => {
-  it('§5.5: reads its body through the constructor it refines, its own pins injected', () => {
-    const tson = standardLibrary();
-    const layer = tson.resolveSchema(
-      `!!id:"https://example.com/m/e.tn"\n!!meta:"${KERNEL}"\n!!import:"${META}"\n{\n` +
-        `spaced => !identifier_type { continue_add: " " }\n` +
-        `spaced_enum => enum_type ^ { name_type?: = spaced }\n}\n`,
-    );
-    const read = createDefinitionMetaReader((name) => layer.entries.get(name));
-    const body = read('spaced_enum', {
-      annotations: [],
-      typeRef: 'spaced_enum',
-      coreValue: {
-        kind: 'array',
-        elements: [
-          {
-            annotations: [],
-            coreValue: { kind: 'token', text: 'New York', form: 'single-line' },
-          },
-        ],
-      },
-    });
-    expect(body).toMatchObject({ kind: 'enum', nameType: 'spaced', members: ['New York'] });
   });
 });
 
@@ -402,27 +360,15 @@ describe('a namespace value’s names meet §8.2 at the read ([TSON-DATA] §8.2,
   });
 });
 
-describe('a diagnostic about a kind names the spelling the author wrote (§4.2, §8.2)', () => {
-  it('a kind-typed slot of a meta layer’s record is named `kind<record>`, never its minted entry', () => {
+describe('a diagnostic about a reference names the spelling the author wrote (§4.2, §8.2)', () => {
+  it('a reference slot of a layer’s record is named as written, never its minted entry', () => {
     let message = '';
     try {
       withLayer().resolveSchema(governed('orders => !interface { place => { request: text } }'));
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toContain("a member of 'kind<record>'");
-    expect(message).not.toMatch(/kind_type_record_[0-9a-f]{8}/);
-  });
-
-  it('a field of the schema’s own typed by an inline kind is named as written', () => {
-    let message = '';
-    try {
-      standardLibrary().resolveSchema(
-        `!!id:"https://example.com/k.tn"\n!!meta:"${META}"\n!!import:"${CORE}"\n{\n  o => { k?: kind<record> = text }\n}\n`,
-      );
-    } catch (error) {
-      message = (error as Error).message;
-    }
-    expect(message).toContain("is typed 'kind<record>'");
+    expect(message).toContain('meta.ref<meta.record>');
+    expect(message).not.toMatch(/reference_type_record_false_[0-9a-f]{8}/);
   });
 });

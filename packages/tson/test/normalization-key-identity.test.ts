@@ -16,7 +16,7 @@ describe('NFKC_CASEFOLD never goes below the NFC floor (Unicode D147; change log
   });
 
   it('makes NFC-equal map keys one key under an NFKC_CASEFOLD key type, in both readers', () => {
-    const linked = load(`cf_key => !text_type { normalization: NFKC_CASEFOLD }
+    const linked = load(`cf_key => !unicode.text_type { normalization: NFKC_CASEFOLD }
 m => { cf_key => int32 }`);
     expect(textCodes(linked, 'm', `{ "${COMPOSED}" => 1  "${DECOMPOSED}" => 2 }`)).toContain(
       'DUPLICATE_MAP_KEY',

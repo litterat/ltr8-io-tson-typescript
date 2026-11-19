@@ -48,11 +48,12 @@ import type {
   RecordBody,
   TupleBody,
 } from '../schema/meta/bodies.js';
-import { namedFields } from '../schema/meta/bodies.js';
+import { isNestedMap } from '../schema/meta/schemaPaths.js';
+import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
 import type { Token, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
 import {
   isFamilyBase,
-  isNamespaceValue,
+  isValueEntry,
   isTemplateBody,
   parentsOf,
   subtypesOf,
@@ -161,7 +162,8 @@ function validateEntry(
 ): void {
   checkOpenEntryUsesEveryParameter(name, def);
 
-  if (head !== undefined) {
+  // A nested map's tag names the pre-loaded kernel's `meta.schema` whatever the schema imports (§2.1, §4.1).
+  if (head !== undefined && !isNestedMap(def)) {
     // The constructor an entry's tag names was consumed at a *constructor role* (§3.3.1) when the
     // entry was resolved, unlike an ordinary type-ref (§3.3.2), so it gets the structure
     // namespace's fallback.
@@ -215,13 +217,42 @@ function validateBody(
     return;
   }
   switch (body.kind) {
-    case 'namespace':
+    case 'value_entry':
       // A value of a meta layer's own vocabulary: the names it holds are judged by its own slots'
-      // types (a kind's, a reference's), which the linker reads at link (§4.2, §5.12).
+      // types (a reference's), which the linker reads at link (§4.2, §5.12).
       return;
+    case 'namespace':
+      validateTypeRef(body.keyType, namespace, ownParameters, entryName, ' key_type');
+      validateTypeRef(body.valueType, namespace, ownParameters, entryName, ' value_type');
+      return;
+    case 'reference_type':
+      validateTypeRef(body.of, namespace, ownParameters, entryName, ' of');
+      return;
+    case 'record_template': {
+      // A field's type where it names a type: a parameter standing as the whole type is a label
+      // (`type_param`), and an application may carry one as an argument (§5.10).
+      for (const [fieldName, field] of body.fields.entries) {
+        if (field.type === undefined) continue;
+        if (field.type.kind === 'sibling') {
+          if (!body.fields.entries.has(field.type.field)) {
+            throw new TsonSchemaValidationError(
+              `'${entryName}' field '${fieldName}' is typed by the sibling reference '${field.type.field}!', ` +
+                `and the record template declares no field '${field.type.field}' (§5.2)`,
+            );
+          }
+          continue;
+        }
+        validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${fieldName}'`);
+      }
+      return;
+    }
     case 'record': {
       const r: RecordBody = body;
       for (const field of namedFields(r)) {
+        if (field.type.kind === 'sibling') {
+          checkSibling(entryName, field.name, field.type.field, r);
+          continue;
+        }
         validateTypeRef(field.type, namespace, ownParameters, entryName, ` field '${field.name}'`);
         checkFieldValue(entryName, field, namespace, ownParameters, enumForms);
       }
@@ -238,7 +269,7 @@ function validateBody(
     }
     // A reference body holds a `type_name`, so there is no argument list to check arity or
     // nested references against beyond the target itself.
-    case 'reference':
+    case 'alias':
       validateTypeRef(body.target, namespace, ownParameters, entryName, '');
       return;
     case 'map': {
@@ -274,11 +305,9 @@ function validateBody(
       checkVariantsAreNotVoid(entryName, c, namespace);
       return;
     }
-    case 'value_type':
     case 'void_type':
     case 'enum':
-    case 'kind_type':
-    case 'ref_type':
+    case 'declared_type':
     case 'integer_type':
     case 'text_type':
     case 'identifier_type':
@@ -305,7 +334,6 @@ function validateBody(
     case 'host_type':
     case 'media_type_type':
     case 'complex_type':
-    case 'scoped':
       return; // no type reference of their own to validate
   }
 }
@@ -343,15 +371,20 @@ function checkFieldValue(
   ownParameters: readonly string[],
   enumForms: ReadonlyMap<string, Normalization>,
 ): void {
-  if (field.value === undefined || ownParameters.includes(field.type.name)) {
+  if (
+    field.value === undefined ||
+    field.type.kind === 'sibling' ||
+    ownParameters.includes(field.type.name)
+  ) {
     return;
   }
+  const fieldType: TypeRef = field.type;
   // A parametric `= P` / `~ P` in a record template (§5.7, §5.10): the parameter rides `value`
   // where it is written, and materialisation substitutes the argument, which is checked then.
   if (field.value.form === 'UNQUOTED' && ownParameters.includes(field.value.text)) {
     return;
   }
-  const terminalName = terminal(field.type.name, lookupIn(namespace));
+  const terminalName = terminal(fieldType.name, lookupIn(namespace));
   const target = namespace.get(terminalName);
   // An unresolved reference is already reported by validateTypeRef, above (a name the walk itself
   // does not reach, undeclared or a cycle, resolves no `target` here either). A target that is
@@ -366,19 +399,18 @@ function checkFieldValue(
   if (
     target === undefined ||
     typeParameters(target).length > 0 ||
-    field.type.arguments.length > 0 ||
+    fieldType.arguments.length > 0 ||
     isTemplateBody(target) ||
-    target.kind === 'namespace' ||
-    target.kind === 'reference'
+    target.kind === 'value_entry' ||
+    target.kind === 'alias'
   ) {
     return;
   }
   const body = target;
   const value = field.value;
-  if (body.kind === 'kind_type') {
-    // A value at a kind-typed field is a type's name, judged a member of the kind by
-    // `namespaceTypes.ts`'s `checkKindPins` (§4.2), which follows a constructor template to the
-    // constructor it applies; nothing here second-guesses it.
+  if (body.kind === 'reference_type') {
+    // A value at a reference-typed field is a name, judged a member of the reference by
+    // `namespaceTypes.ts`'s `checkReferencePins` (§4.2); nothing here second-guesses it.
     return;
   }
   if (!isScalarBody(body)) {
@@ -400,7 +432,7 @@ function checkFieldValue(
     // atom's own message follows: it already states the rule and cites the section, so nothing
     // here restates it.
     throw new TsonSchemaValidationError(
-      `'${entryName}': field '${field.name}' is declared '${field.type.name}', but its ` +
+      `'${entryName}': field '${field.name}' is declared '${typeNameOf(field)}', but its ` +
         `${field.role === 'DEFAULT' ? 'default' : 'fixed value'} ${asWritten(value)} is ` +
         `not a value of that type -- ${e.message}. §5.2 makes a field's fixed or default value a ` +
         "value of the field's own declared type",
@@ -421,7 +453,7 @@ function notAScalarType(
   body: NonHeldTop,
 ): Error {
   return new TsonSchemaValidationError(
-    `'${entryName}': field '${field.name}' is declared '${field.type.name}', which is ` +
+    `'${entryName}': field '${field.name}' is declared '${typeNameOf(field)}', which is ` +
       `${describeBody(body)}, so it cannot have ` +
       `${field.role === 'DEFAULT' ? 'a default' : 'a fixed value'} -- ${asWritten(value)} ` +
       'is a token, and §5.2 admits only a bare token there. A fixed or default value is ' +
@@ -443,12 +475,12 @@ function describeBody(body: NonHeldTop): string {
       return 'a record';
     case 'choice':
       return 'a choice';
-    case 'reference':
+    case 'alias':
       return 'an alias';
     case 'void_type':
       return 'the void type'; // reached only when isScalarBody already refused this same body
-    case 'scoped':
-      return "a scoped type, whose value names its own type rather than taking one from the position's own token shape";
+    case 'declared_type':
+      return "a declared type, whose value names its own type rather than taking one from the position's own token shape";
     default:
       return 'not a scalar type';
   }
@@ -461,6 +493,16 @@ function asWritten(token: Token): string {
 
 // ── Type references ──────────────────────────────────────────────────────────────────────────
 
+/** §5.2: a dependent field's `kind!` names a sibling field the same record declares. */
+function checkSibling(entryName: string, field: string, sibling: string, record: RecordBody): void {
+  if (!record.fields.entries.has(sibling)) {
+    throw new TsonSchemaValidationError(
+      `'${entryName}' field '${field}' is typed by the sibling reference '${sibling}!', and the ` +
+        `record declares no field '${sibling}' (§5.2)`,
+    );
+  }
+}
+
 function validateTypeRef(
   ref: TypeRef,
   namespace: ReadonlyMap<string, Top>,
@@ -470,7 +512,7 @@ function validateTypeRef(
 ): void {
   const context = `'${subject}'${trail}`;
   const target = namespace.get(ref.name);
-  if (target !== undefined && !ownParameters.includes(ref.name) && isNamespaceValue(target)) {
+  if (target !== undefined && !ownParameters.includes(ref.name) && isValueEntry(target)) {
     // An entry applying a namespace type is a value, never a type (§4.1): without this check the
     // misuse resolves, links AND compiles, and fails only when a document is read against it.
     throw new TsonSchemaValidationError(
@@ -693,15 +735,25 @@ export function collectBodyNames(body: Top, into: Set<string>): void {
     return;
   }
   switch (body.kind) {
-    case 'namespace':
-      return; // a namespace value names no type parameter -- there is nothing to introspect
+    case 'value_entry':
+      return; // a value names no type parameter -- there is nothing to introspect
     case 'record':
       for (const parent of parentsOf(body)) collectNames(parent, into);
       for (const field of body.fields.entries.values()) {
-        collectNames(field.type, into);
+        if (field.type.kind !== 'sibling') collectNames(field.type, into);
         // A routed parameter rides `value` like any other token, so it is named here too --
         // which is what keeps `<S> base ^ { status: = S }` from reading as a template that
         // never uses S.
+        if (field.value !== undefined) into.add(field.value.text);
+      }
+      return;
+    case 'record_template':
+      for (const parent of parentsOf(body)) collectNames(parent, into);
+      for (const field of body.fields.entries.values()) {
+        if (field.typeParam !== undefined) into.add(field.typeParam);
+        if (field.valueParam !== undefined) into.add(field.valueParam);
+        if (field.type !== undefined && field.type.kind !== 'sibling')
+          collectNames(field.type, into);
         if (field.value !== undefined) into.add(field.value.text);
       }
       return;
@@ -718,8 +770,15 @@ export function collectBodyNames(body: Top, into: Set<string>): void {
     case 'choice':
       for (const variant of body.variants) collectNames(variant, into);
       return;
-    case 'reference':
+    case 'alias':
       collectNames(body.target, into);
+      return;
+    case 'namespace':
+      collectNames(body.keyType, into);
+      collectNames(body.valueType, into);
+      return;
+    case 'reference_type':
+      collectNames(body.of, into);
       return;
     default:
       return; // an atom body, an EnumBody, or a Scoped names no type parameter

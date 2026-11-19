@@ -6,7 +6,7 @@ import type { TypeBase } from './typedef.js';
 import type { Decimal, Rational } from './algebra.js';
 
 /**
- * The meta-kernel's `integer_size` record (§8.1, §9): a fixed-width integer representation,
+ * the kernel's `numeric.integer_size` record (§8.1, §9): a fixed-width integer representation,
  * bit width paired with two's-complement signedness — {@link IntegerType.size}'s own field
  * type. `bits` is `bigint` because the kernel's own `bits` field is typed `integer`, the
  * kernel's arbitrary-precision integer, even though every built-in width in practice (8..256)
@@ -18,7 +18,7 @@ export interface IntegerSize {
 }
 
 /**
- * The meta-kernel's `integer_type` constructor (§5.6, §9): the integer family's atom
+ * the kernel's `numeric.integer_type` constructor (§5.6, §9): the integer family's atom
  * constraint vocabulary — bit width/signedness (via {@link IntegerSize}), bounds, a
  * multiple-of constraint, and a sparse member set.
  *
@@ -61,7 +61,7 @@ export interface IntegerType extends TypeBase {
 export type FloatFormat = 'BINARY32' | 'BINARY64';
 
 /**
- * The meta-kernel's `float_type` constructor (§5.6's `float32`/`float64` atoms — SQL's
+ * `numeric.float_type` constructor (§5.6's `float32`/`float64` atoms — SQL's
  * approximate tier, IEEE 754-2019).
  *
  * The four `allow*` flags are permissions (may a value be NaN, infinite, subnormal, or
@@ -87,7 +87,7 @@ export interface FloatType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `decimal_type` constructor (§5.6's `number` atom — SQL's exact tier,
+ * `numeric.decimal_type` constructor (§5.6's `number` atom — SQL's exact tier,
  * ISO/IEC 11404 `scaled`).
  *
  * `totalDigits`/`fractionDigits` are SQL's own `DECIMAL(precision, scale)` pair: the total
@@ -118,7 +118,7 @@ export interface DecimalType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `rational_type` constructor (§5.6's `rational` atom): bounds and a
+ * `numeric.rational_type` constructor (§5.6's `rational` atom): bounds and a
  * multiple-of constraint over exact fractions.
  *
  * `min`/`exclusiveMin` and `max`/`exclusiveMax` are mutually exclusive pairs, the same

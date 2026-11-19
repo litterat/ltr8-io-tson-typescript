@@ -51,9 +51,9 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
   const terminalName = terminal(keyTypeName, lookup);
   const body = definition;
   if (!('kind' in body)) return undefined;
-  if (body.kind === 'reference') return undefined;
-  if (body.kind === 'value_type' || body.kind === 'void_type') return undefined; // no content grammar
-  if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/scoped/Data
+  if (body.kind === 'alias') return undefined;
+  if (body.kind === 'void_type') return undefined; // no content grammar
+  if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/declared
   try {
     return fieldValueParser(terminalName, body as Atom, enumFormOf(ctx.linkedSchema, terminalName));
   } catch {

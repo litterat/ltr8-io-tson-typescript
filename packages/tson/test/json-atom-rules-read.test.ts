@@ -17,9 +17,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-atom-rules-1.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   link      => { u: uri }
   link_ref  => { u: uri_reference }
   ilink     => { u: iri }
@@ -27,8 +26,8 @@ const LINKED = resolveUserSchema(`
   clock     => { t: time }
   stamp     => { t: datetime }
   tags      => { t: set<text> }
-  single    => { t: tuple1<text> }
-  maybe     => { t: voidable_tuple1<text> }
+  single    => { t: meta.tuple1<text> }
+  maybe     => { t: meta.voidable_tuple1<text> }
   answer    => !text ^ { members: ["true" "false"] }
   verdict   => !enum [true false unsure]
   survey    => { reply?: answer ~ "true"  agreed?: boolean ~ true  pick?: verdict }

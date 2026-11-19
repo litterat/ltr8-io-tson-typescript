@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `float_type` constructor (§5.6's `float32`/`float64`
+ * Parses and validates against `numeric.float_type` constructor (§5.6's `float32`/`float64`
  * atoms -- SQL's approximate tier, IEEE 754-2019) -- the port of `atom/FloatParser.java`.
  *
  * Accepts `integer`/`float`/`hex-float`/`special-value` forms (§7.6) -- the integer atoms'

@@ -96,16 +96,28 @@ export function checkValidateVector(
 ): void {
   const tson = newClass2Tson(subject);
   const { imports, root } = headerOf(vector, subject);
-  const [schemaId] = imports;
-  if (schemaId === undefined || imports.length > 1) {
+  if (imports.length === 0) {
     throw new Error(
-      `${vector.name}: a class2/validate subject imports the schema it is read under, one per ` +
-        `vector today (this processor reads under a single import); found ${String(imports.length)}`,
+      `${vector.name}: a class2/validate subject imports the schema it is read under`,
     );
   }
-  const linked = tson.schemas.get(canonicalizeIdentity(schemaId));
+  // One namespace per schema (§2.2.3): a subject's several imports are read under the namespace they
+  // merge into, which a schema document importing each of them and declaring one empty record of its own is. A single
+  // import is read under that schema itself.
+  let linked =
+    imports.length === 1 ? tson.schemas.get(canonicalizeIdentity(imports[0] ?? '')) : undefined;
+  if (imports.length > 1) {
+    const header =
+      '!!id:"https://example.test/conformance/subject-imports.tn"\n' +
+      imports.map((id) => `!!import:${JSON.stringify(id)}\n`).join('');
+    linked = tson.resolveSchema(
+      new TextEncoder().encode(`${header}!schema { subject_imports_ => {} }\n`),
+    );
+  }
   if (linked === undefined) {
-    throw new Error(`${vector.name}: '${schemaId}' is not registered on this Tson instance`);
+    throw new Error(
+      `${vector.name}: '${imports.join(', ')}' is not registered on this Tson instance`,
+    );
   }
   const compiled = tson.compile(linked);
   const result = tson.validate(subject, { schema: compiled, root });

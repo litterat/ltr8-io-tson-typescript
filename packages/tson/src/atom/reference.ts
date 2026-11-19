@@ -1,12 +1,12 @@
 /**
- * The two atoms whose values are names (Part 2 §4.2, §5.12): a kind's value, a type's name, and a
- * reference's value, a value's qualified name. Neither is part of Part 1's built-in vocabulary
- * (§5): what a name denotes is the linked closure's, so these parsers judge the spelling alone and
- * leave the referent to whoever holds the closure.
+ * The atom whose values are names (Part 2 §4.2, §5.12), `meta.reference_type`: a type's name where its
+ * `of` is a constructor, and a value's qualified name otherwise. It is no part of Part 1's built-in
+ * vocabulary (§5): what a name denotes is the linked closure's, so these parsers judge the spelling
+ * alone and leave the referent to whoever holds the closure.
  */
 import { TsonAtomParseError, TsonAtomValidationError } from '../core/errors.js';
 import type { IdentifierType } from '../schema/meta/atoms-text.js';
-import type { KindBody } from '../schema/meta/typedef.js';
+import type { ReferenceBody } from '../schema/meta/bodies.js';
 import type { AtomToken, AtomType } from './contract.js';
 import { createIdentifierParser } from './text/identifier.js';
 
@@ -27,7 +27,7 @@ export const TYPE_NAME_GRAMMAR: IdentifierType = {
 const QUALIFIED_NAME = 'a qualified name';
 
 /**
- * A `ref_type` instance's value (§5.12): a qualified name, segments joined by `.`, each a
+ * A `meta.reference_type` instance's value (§5.12): a qualified name, segments joined by `.`, each a
  * [TSON-DATA] §7.7 identifier read as `type_name` reads it, none empty. So `orders.1x`, `.orders`
  * and `orders.` are no names. The value is the name as written; what it reaches is judged where
  * it resolves, when the schema holding it links.
@@ -62,7 +62,7 @@ export function createQualifiedNameParser(typeRef: string): AtomType<string> {
 }
 
 /**
- * A `kind_type` instance's value (§4.2): a type's name, read by the type-name grammar, and -- where
+ * A `meta.reference_type` instance's value where `of` is a constructor (§4.2): a type's name, read by the type-name grammar, and -- where
  * `judgesMembers` -- a member of the kind's linked `members`, as an enum refuses a label it does
  * not list. The value is the name, never a value of the type it names.
  *
@@ -74,11 +74,11 @@ export function createQualifiedNameParser(typeRef: string): AtomType<string> {
  */
 export function createKindParser(
   typeRef: string,
-  kind: KindBody,
+  kind: ReferenceBody,
   judgesMembers: boolean,
 ): AtomType<string> {
-  const grammar = createIdentifierParser(typeRef, TYPE_NAME_GRAMMAR);
-  const members = kind.members ?? [];
+  const grammar = createQualifiedNameParser(typeRef);
+  const members = kind.index?.members ?? [];
   return {
     read(token: AtomToken): string {
       const name = grammar.read(token);
@@ -86,7 +86,7 @@ export function createKindParser(
       throw new TsonAtomValidationError(
         typeRef,
         `'${name}' is not a member of this kind -- expected the name of a type built with ` +
-          `'${kind.of}', ${members.length === 0 ? 'and the kind has no members' : `one of ${members.join(', ')}`} (§4.2)`,
+          `'${kind.of.name}', ${members.length === 0 ? 'and the kind has no members' : `one of ${members.join(', ')}`} (§4.2)`,
         members.length === 0
           ? 'no value (the kind has no members)'
           : `one of (${members.join(', ')})`,

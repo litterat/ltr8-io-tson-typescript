@@ -18,7 +18,6 @@ import { entry, fieldMapOf } from './model-fixtures.js';
 function linkedSchema(entries: ReadonlyMap<string, Top>): LinkedSchema {
   return {
     id: 'test://s.tn',
-    meta: 'test://m.tn',
     imports: [],
     entries,
     keyAnnotations: new Map(),
@@ -127,9 +126,8 @@ describe('validate -- collects diagnostics rather than throwing', () => {
 
 const USER_SCHEMA = `
 !!id:"test://person.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   person => {
     name: text
     age: int32

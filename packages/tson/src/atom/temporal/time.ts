@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `time_type` constructor (§5.4's `!time` atom, RFC
+ * Parses and validates against `temporal.time_type` constructor (§5.4's `!time` atom, RFC
  * 3339 `full-time`) -- the port of `atom/TimeParser.java`.
  *
  * No host `Date`/`Temporal` and no JDK `OffsetTime` to delegate to; `rfc3339.ts`'s

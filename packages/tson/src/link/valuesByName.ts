@@ -32,17 +32,18 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/errors.js';
-import type { EntryFacts, MetaValue, Namespace, NameSlot, Top } from '../schema/meta/typedef.js';
+import type { EntryFacts, MetaValue, NameSlot, Top } from '../schema/meta/typedef.js';
+import { typeNameOf } from '../schema/meta/bodies.js';
 import {
   constructorOf,
   isConstructor,
-  isNamespaceValue,
   isOpen,
   isTemplateBody,
   supertypesOf,
   typeParameters,
 } from '../schema/meta/typedef.js';
 import { isNamespaceType, namespaceMapOf } from '../schema/meta/namespaces.js';
+import { isValueEntry } from '../schema/meta/typedef.js';
 import { schemaPositionOf, spellingOf } from './facts.js';
 import { isKindMember } from './kindMembers.js';
 import { terminal, type EntryLookup } from './referenceChain.js';
@@ -51,9 +52,9 @@ import { terminal, type EntryLookup } from './referenceChain.js';
 export interface ValuesByNameOptions {
   readonly schemaId: string;
   readonly facts: ReadonlyMap<string, EntryFacts>;
-  /** The governing meta's namespace, where every slot's declared type is named. */
+  /** The schema's one namespace, where every slot's declared type is named. */
   readonly structureNamespace: ReadonlyMap<string, Top>;
-  /** The governing meta's entry facts, so a slot type it minted is named as its author wrote it. */
+  /** The entry facts of that namespace, so a slot type the resolver minted is named as its author wrote it. */
   readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   readonly receiver?: DiagnosticsReceiver;
 }
@@ -63,6 +64,13 @@ interface HeldName {
   readonly name: string;
   readonly path: readonly string[];
   readonly slot: NameSlot;
+  /** Whether the name heads an application, `box<text>`, judged as one (§5.10). */
+  readonly application?: true;
+}
+
+/** Whether `value` is a value entry, which no type is and nothing is typed by (§4.1). */
+function isNamespaceValue(value: Top): boolean {
+  return isValueEntry(value);
 }
 
 /**
@@ -102,13 +110,22 @@ export function checkValuesByName(
 }
 
 /** Every name `value` holds at a kind-, reference- or `type_ref`-typed slot, with its path. */
-function namesIn(value: Namespace<MetaValue>): readonly HeldName[] {
+function namesIn(entry: Top): readonly HeldName[] {
+  if (!isValueEntry(entry) || entry.value.form === 'schema_map') return [];
   const found: HeldName[] = [];
   const walk = (meta: MetaValue, path: readonly string[]): void => {
     switch (meta.form) {
       case 'token':
         if (meta.slot !== undefined) found.push({ name: meta.token.text, path, slot: meta.slot });
         return;
+      case 'reference':
+        // An application or a sibling reference at a name slot: the head is judged as a name resolving
+        // with the arity it is applied at; a sibling names a field and no entry (§5.2).
+        if (meta.slot !== undefined && meta.reference.kind !== 'sibling') {
+          found.push({ name: meta.reference.name, path, slot: meta.slot, application: true });
+        }
+        return;
+      case 'schema_map':
       case 'void':
         return;
       case 'list':
@@ -129,7 +146,7 @@ function namesIn(value: Namespace<MetaValue>): readonly HeldName[] {
         return;
     }
   };
-  for (const [key, entry] of value.entries) walk(entry, [key]);
+  walk(entry.value, []);
   return found;
 }
 
@@ -142,7 +159,7 @@ class Judge {
     private readonly options: ValuesByNameOptions,
   ) {
     this.local = (name) => merged.get(name);
-    this.structure = (name) => options.structureNamespace.get(name);
+    this.structure = this.local;
   }
 
   /** A slot's declared type as the meta's author wrote it (`kind<record>`, `link/facts.ts`). */
@@ -152,7 +169,7 @@ class Judge {
 
   judge(where: string, held: HeldName): void {
     const { name, slot } = held;
-    if (slot.role === 'application') {
+    if (held.application === true) {
       this.judgeApplication(where, name);
       return;
     }
@@ -161,7 +178,7 @@ class Judge {
     if (!this.merged.has(head)) {
       throw new TsonSchemaValidationError(
         `${where} names '${name}', and '${head}' is no ` +
-          (slot.role === 'kind' && segments.length === 1
+          (slot.role === 'TYPE_NAME' && segments.length === 1
             ? 'type declared in this schema or its imports -- a name resolves in the schema holding it and its imports, never in the meta layer declaring its slot (§3.3.2)'
             : 'entry of this schema or its imports -- the first segment names the entry a value is reached through, and a member is reached through its entry (§5.12)'),
       );
@@ -179,7 +196,7 @@ class Judge {
         `${where} names '${name}', and ${entry} is an open entry: a template denotes no value until it is applied (§5.10), so nothing is there to name`,
       );
     }
-    if (slot.role === 'kind') {
+    if (slot.role === 'TYPE_NAME') {
       this.judgeMember(where, name, segments, slot, end, referent, entry);
       return;
     }
@@ -212,7 +229,7 @@ class Judge {
         `${where} names '${name}' at a position typed by the kind '${kind}', which holds a type's name -- this library does not yet read a type through a namespace of types, so the name is one segment`,
       );
     }
-    if (isKindMember(name, slot.of, this.local, (n) => this.headOf(n), this.structure)) return;
+    if (isKindMember(name, slot.of, this.local, (n) => this.headOf(n))) return;
     if (isNamespaceValue(referent)) {
       throw new TsonSchemaValidationError(`${wants}${entry} is ${aValueNoType(referent)}`);
     }
@@ -246,20 +263,15 @@ class Judge {
         `${where} names '${name}', and ${entry} is a type: a type entry admits no further segment, so '${segments[1] ?? ''}' selects in no value (§5.12)`,
       );
     }
-    let value: MetaValue | undefined = { form: 'namespace', value: referent };
+    let value: MetaValue | undefined = isValueEntry(referent) ? referent.value : undefined;
     let absent: string | undefined;
     let reached = segments[0] ?? name;
     for (const segment of segments.slice(1)) {
       const atName = terminal(at, this.structure);
       const body = this.structure(atName);
-      const namespaceType = isNamespaceType(body, atName) ? body : undefined;
+      const namespaceType = body !== undefined && isNamespaceType(body) ? body : undefined;
       if (namespaceType !== undefined) {
         const map = namespaceMapOf(namespaceType);
-        if (map === undefined) {
-          throw new TsonSchemaValidationError(
-            `${where} names '${name}', and '${reached}' is ${a(at)}, a namespace type leaving its 'value_type' open`,
-          );
-        }
         if (value !== undefined) {
           const entries = entriesOf(value);
           const found = entries?.get(segment);
@@ -287,7 +299,7 @@ class Judge {
           }
           value = held;
         }
-        at = field.type.name;
+        at = typeNameOf(field);
       } else if (body !== undefined && !isTemplateBody(body) && body.kind === 'map') {
         throw new TsonSchemaValidationError(
           `${where} names '${name}', and '${reached}' is ${a(at)}, a map that is no namespace, so it is not entered by name -- a segment selects a key of a namespace value or a field of a record value (§5.12)`,
@@ -381,8 +393,9 @@ function entriesOf(value: MetaValue): ReadonlyMap<string, MetaValue> | undefined
 }
 
 /** What a namespace entry is, where a type is wanted: a value, which nothing can be typed by (§4.1). */
-function aValueNoType(namespace: Namespace<MetaValue>): string {
-  return `a value of the namespace type '${namespace.type}', a map of names -- a value and not a type, so nothing can be typed by it (§4.1)`;
+function aValueNoType(entry: Top): string {
+  const type = isValueEntry(entry) ? entry.type : 'a type';
+  return `a value of the type '${type}' -- a value and not a type, so nothing can be typed by it (§4.1)`;
 }
 
 /** A type named with its article, as a message says it: `a 'method'`, `an 'interface'`. */

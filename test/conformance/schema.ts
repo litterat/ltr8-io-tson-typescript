@@ -29,6 +29,9 @@ import {
   type DiagnosticCode,
 } from '../../packages/tson/src/core/diagnostic.js';
 import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
+import type { Tson } from '../../packages/tson/src/config.js';
+import type { DefinitionGetter } from '../../packages/tson/src/compiler/resolverTypes.js';
+import type { Top } from '../../packages/tson/src/schema/meta/typedef.js';
 
 import { BUNDLED_SCHEMA_IDS } from './bundled-ids.js';
 import { newClass2Tson } from './class2Tson.js';
@@ -43,6 +46,13 @@ import type { Category, ExpectedRefusal, SchemaSidecar } from './sidecar.js';
 import type { Class2Layer, Vector } from './vectors.js';
 
 const META_TN_ID = BUNDLED_SCHEMA_IDS['meta.tn'];
+
+/** The pre-loaded kernel's entries on `tson`, which every schema is read under (§3.4). */
+function kernelEntries(tson: Tson): ReadonlyMap<string, Top> {
+  const kernel = tson.schemas.get(canonicalizeIdentity(META_TN_ID));
+  if (kernel === undefined) throw new Error('the pre-loaded kernel is not registered');
+  return kernel.entries;
+}
 
 /**
  * Whichever error `Tson.resolveSchema` threw, as the {@link DiagnosticCode} an equivalent
@@ -172,20 +182,13 @@ export function checkSchemaVector(
           `${vector.name}: a 'valid' class2/schema vector must state its resolved output`,
         );
       }
-      // The expected side is read under the subject's own governing meta: a fixture meta layer
-      // imports meta.tn and adds constructors, and a namespace entry is typed there (RUNNER.md).
-      // RUNNER.md's "A meta layer's own records" asks a binding runner for a host class per record
-      // a fixture meta's namespace types hold; this port binds none -- the schema model holds a
-      // meta layer's records as generic values (`schema/meta`'s `MetaValue`), so the runner
-      // supplies nothing and the rule is met by construction.
-      const metaLinked =
-        tson.schemas.get(canonicalizeIdentity(linked.meta)) ??
-        tson.schemas.get(canonicalizeIdentity(META_TN_ID));
-      if (metaLinked === undefined) {
-        throw new Error(`${vector.name}: the subject's governing meta is not registered`);
-      }
+      // The expected side is read under the subject's own imports, and under the pre-loaded kernel
+      // alone when it has none (RUNNER.md, "A fixture schema's own records"): a constructor resolves
+      // in the subject's own namespace, whose entries carry every import's.
+      const lookup: DefinitionGetter = (name) =>
+        linked.entries.get(name) ?? kernelEntries(tson).get(name);
       const ours = ownEntries(linked);
-      const expected = readResolved(sidecar.resolved, metaLinked.entries);
+      const expected = readResolved(sidecar.resolved, lookup);
       expect(new Set(ours.keys())).toEqual(new Set(expected.keys()));
       for (const [name, expectedDefinition] of expected) {
         const ourDefinition = ours.get(name);

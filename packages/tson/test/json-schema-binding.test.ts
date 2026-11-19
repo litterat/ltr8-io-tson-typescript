@@ -51,9 +51,8 @@ const ID = 'https://example.test/json-schema-binding.tn';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"${ID}"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   person => { name: text  tries?: int32 ~ 0 }
   alias  => person
 }

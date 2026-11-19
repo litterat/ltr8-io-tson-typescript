@@ -41,12 +41,19 @@ import type {
   TokenValue,
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
-import type { FieldGroup, RecordBody } from '../schema/meta/bodies.js';
-import { namedFields } from '../schema/meta/bodies.js';
-import type { TypeArgument, TypeRef } from '../schema/meta/typedef.js';
+import type {
+  FieldGroup,
+  RecordBody,
+  RecordField as RecordField_,
+  RecordTemplateBody,
+  RecordTemplateField,
+} from '../schema/meta/bodies.js';
+import type { TypeRef } from '../schema/meta/typedef.js';
 import { parentsOf } from '../schema/meta/typedef.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
-import { lexerFormOfMeta, metaFormOfLexer } from './tokenForms.js';
+import { referenceToWire, typeRefFromAst } from '../schema/referenceAtoms.js';
+import { metaName } from '../schema/meta/kernel.js';
+import { lexerFormOfMeta } from './tokenForms.js';
 
 // ── The vocabulary's own member names ───────────────────────────────────────────────────────────
 
@@ -64,7 +71,7 @@ export const ARGUMENTS = 'arguments';
 export const VALUE = 'value';
 
 /** The constructor a held record body carries. */
-export const RECORD = 'record';
+export const RECORD = metaName('record');
 
 export const FIELDS = 'fields';
 export const GROUPS = 'groups';
@@ -205,11 +212,26 @@ export function defaultAnnotationValueEncoder(value: unknown): DataValue {
  * parameter reference in the held body indistinguishable from a literal.
  */
 export function heldRecord(
-  body: RecordBody,
+  body: RecordBody | RecordTemplateBody,
   encodeAnnotation: AnnotationValueEncoder = defaultAnnotationValueEncoder,
 ): DataValue {
-  const fields = namedFields(body).map((f) => {
-    const members: RecordField[] = [{ name: TYPE, value: scoped(refValue(f.type)) }];
+  const entries: (readonly [string, RecordField_ | RecordTemplateField])[] = [
+    ...body.fields.entries,
+  ];
+  const fields = entries.map(([name, f]) => {
+    // A parameter stands wherever a token stands in a held body: the labelled `type_param`/`value_param`
+    // is written as the plain `type`/`value` it will be once an application substitutes it away.
+    const typeParam = 'typeParam' in f ? f.typeParam : undefined;
+    const valueParam = 'valueParam' in f ? f.valueParam : undefined;
+    const type: CoreValue | undefined =
+      typeParam !== undefined
+        ? tokenValue(typeParam)
+        : f.type === undefined
+          ? undefined
+          : f.type.kind === 'sibling'
+            ? { kind: 'reference', reference: { kind: 'sibling', field: f.type.field } }
+            : refValue(f.type);
+    const members: RecordField[] = type === undefined ? [] : [{ name: TYPE, value: scoped(type) }];
     if (f.optional) {
       members.push(nameField(OPTIONAL, 'true'));
     }
@@ -219,12 +241,14 @@ export function heldRecord(
     if (f.role !== 'FREE') {
       members.push(nameField(ROLE, f.role));
     }
-    if (f.value !== undefined) {
+    if (valueParam !== undefined) {
+      members.push({ name: VALUE, value: scoped(tokenValue(valueParam)) });
+    } else if (f.value !== undefined) {
       const form = lexerFormOfMeta(f.value.form);
       members.push({ name: VALUE, value: scoped({ kind: 'token', text: f.value.text, form }) });
     }
     return [
-      f.name,
+      name,
       scoped(
         { kind: 'record' as const, fields: members },
         f.annotations.map((a) => ({
@@ -302,38 +326,17 @@ export function groupValue(group: FieldGroup, annotations: readonly Annotation[]
 }
 
 /**
- * A *resolved* `schema/meta` {@link TypeRef} in the held spelling: a bare name, or `type_ref`'s
- * record form.
+ * A *resolved* `schema/meta` {@link TypeRef} in the held spelling: a bare name as one token, an
+ * application as the data grammar's reference value, `pair<uuid B>` ([TSON-DATA] §7.4).
  *
- * **The `arguments.length === 0` branch is load-bearing, not an optimisation.** A held body is
- * read by later phases as wire form, and `type_argument` is told from `type_ref` by which shape a
- * slot carries — so stating a no-argument reference in the record form would make the two
- * indistinguishable to a walk that reads neither against a vocabulary, and would give one type two
- * entry names, since a name derives from what is written. That is why `templateSubstitution.ts`'s
- * own substitution writes a bound reference through this rather than spelling one of its own: the
- * open form needs one spelling however many phases produce it.
+ * **The `arguments.length === 0` branch is load-bearing, not an optimisation.** A held body is read by
+ * later phases as wire form, and a no-argument reference stated as a reference value would give one type
+ * two spellings and so two entry names, since a name derives from what is written. That is why
+ * `templateSubstitution.ts`'s own substitution writes a bound reference through this rather than spelling
+ * one of its own: the open form needs one spelling however many phases produce it.
  */
 export function refValue(ref: TypeRef): CoreValue {
-  if (ref.arguments.length === 0) {
-    return tokenValue(ref.name);
-  }
-  const args: DataValue[] = ref.arguments.map((argument) => {
-    const member: RecordField =
-      argument.kind === 'ref'
-        ? { name: NAME, value: scoped(refValue(argument.ref)) }
-        : {
-            name: VALUE,
-            value: scoped(tokenValue(argument.value.text, lexerFormOfMeta(argument.value.form))),
-          };
-    return scoped({ kind: 'record', fields: [member] });
-  });
-  return {
-    kind: 'record',
-    fields: [
-      nameField(NAME, ref.name),
-      { name: ARGUMENTS, value: scoped({ kind: 'array', elements: args }) },
-    ],
-  };
+  return referenceToWire(ref);
 }
 
 // ── Reading: the wire form back as the reference it spells ─────────────────────────────────────
@@ -344,47 +347,12 @@ export function field(record: RecordValue, name: string): CoreValue | undefined 
 }
 
 /**
- * `type_ref`'s record form is the one shape carrying both `name` and `arguments`; a bare name is a
- * token, and a `type_argument` carries `name` *or* `value` but never `arguments`. Shared so
- * `heldBody.ts` recognises an application by the same test that closes one — a held body is
- * written by one phase and read by several, and a second opinion about what an application looks
- * like is what makes one of them wrong.
+ * The application `value` spells, if it is one: a reference value with an argument list. A held body is
+ * written by one phase and read by several, and a second opinion about what an application looks like is
+ * what makes one of them wrong. A quoted token is never an application, so a held body's text literal
+ * (`pattern: "box<T>"`) is text whatever it spells.
  */
-export function isApplication(record: RecordValue): boolean {
-  return field(record, NAME) !== undefined && field(record, ARGUMENTS) !== undefined;
-}
-
-/** `{ name: head  arguments: [ ... ] }` back as the reference it spells. */
-export function typeRefOf(record: RecordValue): TypeRef {
-  const name = field(record, NAME);
-  if (name === undefined) {
-    throw new TsonInternalError("a type_ref record form always carries 'name'");
-  }
-  const head = name.kind === 'token' ? name.text : typeRefOf(name as RecordValue).name;
-  const args: TypeArgument[] = [];
-  const argumentsValue = field(record, ARGUMENTS);
-  if (argumentsValue?.kind === 'array') {
-    for (const element of argumentsValue.elements) {
-      args.push(argumentOf(element.coreValue as RecordValue));
-    }
-  }
-  return { name: head, arguments: args, annotations: [] };
-}
-
-/** One argument record: `value` carries a literal, `name` a reference, simple or compound. */
-export function argumentOf(argument: RecordValue): TypeArgument {
-  const literal = field(argument, VALUE);
-  if (literal !== undefined) {
-    const token = literal as TokenValue;
-    return { kind: 'value', value: { text: token.text, form: metaFormOfLexer(token.form) } };
-  }
-  const name = field(argument, NAME);
-  if (name === undefined) {
-    throw new TsonInternalError("a type_argument record form always carries 'name' or 'value'");
-  }
-  const ref =
-    name.kind === 'token'
-      ? { name: name.text, arguments: [], annotations: [] }
-      : typeRefOf(name as RecordValue);
-  return { kind: 'ref', ref };
+export function applicationIn(value: CoreValue): TypeRef | undefined {
+  if (value.kind !== 'reference' || value.reference.kind !== 'application') return undefined;
+  return typeRefFromAst(value.reference);
 }

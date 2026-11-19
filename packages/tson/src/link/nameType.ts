@@ -21,14 +21,15 @@
 import type { IdentifierBase, IdentifierType } from '../schema/meta/atoms-text.js';
 import type { RecordBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
+import { metaName } from '../schema/meta/kernel.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import { terminal, type EntryLookup } from './referenceChain.js';
 
 /** The kernel's `field_name` (§5.2), the name type a record that states none has. */
-export const FIELD_NAME = 'field_name';
+export const FIELD_NAME = metaName('field_name');
 
 /** The kernel's `identifier` (§7.7), the entry `field_name` resolves to. */
-const IDENTIFIER = 'identifier';
+const IDENTIFIER = metaName('identifier');
 
 /** A resolved name type: the terminal entry's name, its value, and the namespace its own names resolve in. */
 export interface ResolvedNameType {

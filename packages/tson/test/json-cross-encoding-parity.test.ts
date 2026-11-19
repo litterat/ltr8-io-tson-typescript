@@ -47,9 +47,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/parity-1.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   person => {
     name:   text
     tries?: int32 ~ 0
@@ -102,8 +101,7 @@ const SCHEMA_SOURCE = `
   int_box    => box<int32>
   text_box   => box<text>
   crate      => { b: box }
-  local_box  => { v: declared }
-  extern_box => { v: extern }
+  local_box  => { v: meta.declared }
   port_label  => !text ^ { members: ["80" "443"] }
   port_slot   => ( port_label | int32 )
   ported      => { p: port_slot }
@@ -115,26 +113,26 @@ const SCHEMA_SOURCE = `
   fragment   => { ( include: text | name?: text  type?: text ) }
   endpoint   => { ( host: text  port: int32 | socket: text )? }
   contact    => { ( email: text | phone: text )+ }
-  header_name => !identifier_type { start: NONE  continue: NONE
+  header_name => !unicode.identifier_type { start: NONE  continue: NONE
     start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
     normalization: NFKC_CASEFOLD }
   headers     => { header_name => text }
-  field_name  => !identifier_type { start: NONE  continue: NONE
+  field_name  => !unicode.identifier_type { start: NONE  continue: NONE
     start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
     normalization: ASCII_CASEFOLD }
   fields      => { field_name => text }
   pinned      => { h: header_name = Idempotency-Key }
-  charset     => !text_type { members: [UTF-8 us-ascii]  normalization: NFKC_CASEFOLD }
+  charset     => !unicode.text_type { members: [UTF-8 us-ascii]  normalization: NFKC_CASEFOLD }
   encoded     => { c: charset }
-  safe_header => !enum_type { name_type: header_name  members: [Accept content-type] }
+  safe_header => !meta.enum_type { name_type: header_name  members: [Accept content-type] }
   screened    => { h: safe_header }
-  stock_id    => !uuid_type {}
-  customer_id => !uuid_type {}
-  ided        => { id: kind<uuid_type> }
-  a_host       => !host_type {}
+  stock_id    => !net.uuid_type {}
+  customer_id => !net.uuid_type {}
+  ided        => { id: meta.ref<net.uuid_type> }
+  a_host       => !net.host_type {}
   host_or_port => ( a_host | int32 )
   addressed    => { at: host_or_port }
-  kind_or_port => ( kind<uuid_type> | int32 )
+  kind_or_port => ( meta.ref<net.uuid_type> | int32 )
   chosen       => { k: kind_or_port }
   marks      => {
     nickname?: text
@@ -756,19 +754,6 @@ describe('§8.5 scoped positions: the value names its own type', () => {
       '{"v": {"$type": "nowhere", "serial": "R2"}}',
     );
   });
-
-  it('a cell the instance does not hold: a scope push at declared, a bare type at extern', () => {
-    sameVerdict(
-      'local_box',
-      '{ v: !!schema:"https://example.test/other.tn" !robot { serial: R2 } }',
-      '{"v": {"$schema": "https://example.test/other.tn", "$type": "robot", "serial": "R2"}}',
-    );
-    sameVerdict(
-      'extern_box',
-      '{ v: !robot { serial: R2 } }',
-      '{"v": {"$type": "robot", "serial": "R2"}}',
-    );
-  });
 });
 
 // ── §5.2: an enum whose type is not an identifier family is string-class ─────────────────────
@@ -919,7 +904,7 @@ describe('\u00a76.1.5 a record template under a sealed base', () => {
 
 // \u2500\u2500 Kind positions ([TSON-SCHEMA] \u00a74.2, [TSON-JSON] \u00a75.6): an atom whose values are names \u2500\u2500\u2500\u2500\u2500
 
-describe('\u00a75.6 a kind position', () => {
+describe('\u00a75.6 a reference position over a constructor', () => {
   it('a member name at a kind is accepted by both', () => {
     bothAccept('ided', '{ id: stock_id }', '{"id": "stock_id"}');
   });

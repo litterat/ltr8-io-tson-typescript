@@ -53,7 +53,7 @@ describe('readIdDirective ([TSON-DATA] §2.2)', () => {
 });
 
 describe('against the real vendored schemas, through @ltr8/tson/identity', () => {
-  const files = ['meta-kernel.tn', 'meta.tn', 'core.tn'];
+  const files = ['meta.tn', 'numeric.tn', 'temporal.tn', 'net.tn', 'core.tn', 'policy.tn'];
 
   it.each(files)('%s’s own !!id pin matches its recomputed content hash', async (file) => {
     const bytes = readFileSync(join(SPEC_M, file));

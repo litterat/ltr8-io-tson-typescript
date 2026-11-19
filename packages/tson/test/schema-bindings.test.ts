@@ -20,7 +20,12 @@ import {
   periodTypeBinding,
   emailTypeBinding,
   enumBodyBinding,
-  scopedBinding,
+  aliasBinding,
+  declaredTypeBinding,
+  namespaceBodyBinding,
+  recordTemplateBodyBinding,
+  recordTemplateFieldBinding,
+  referenceBodyBinding,
   fieldGroupBinding,
   fieldRoleBinding,
   recordExtensionTypeBinding,
@@ -43,6 +48,7 @@ import {
   rationalTypeBinding,
   recordBodyBinding,
   recordFieldBinding,
+  referenceAnnotatedBinding,
   referenceBinding,
   regexTypeBinding,
   sourcePositionBinding,
@@ -53,29 +59,22 @@ import {
   headed,
   tupleBodyBinding,
   tupleElementBinding,
-  typeArgumentBinding,
-  typeArgumentRefBinding,
-  typeArgumentValueBinding,
   typeChainBinding,
   typeRefBinding,
   typeRefAnnotatedBinding,
   templateParamBinding,
-  valueTypeBinding,
   voidTypeBinding,
   uriTypeBinding,
   uuidTypeBinding,
   valueBinding,
 } from '../src/schema/bindings.js';
-import type { Decimal, Rational, ValueType, VoidType } from '../src/schema/meta/algebra.js';
+import type { Decimal, DeclaredType, Rational, VoidType } from '../src/schema/meta/algebra.js';
 import type {
   Annotation,
+  Alias,
   Reference,
-  Scoped,
   Token,
   Top,
-  TypeArgument,
-  TypeArgumentRef,
-  TypeArgumentValue,
   TypeChain,
   TypeRef,
 } from '../src/schema/meta/typedef.js';
@@ -87,8 +86,12 @@ import type {
   FieldRole,
   RecordExtensionType,
   MapBody,
+  NamespaceBody,
   RecordBody,
   RecordField,
+  RecordTemplateBody,
+  RecordTemplateField,
+  ReferenceBody,
   TemplateParam,
   TupleBody,
   TupleElement,
@@ -151,7 +154,8 @@ type AssertExact<A, B> = [A] extends [B]
   : ['expected', B, 'got', A];
 /** `const _check: AssertExact<Infer<typeof binding>, HandWrittenType> = true;` fails to compile -- with a message naming both sides -- whenever the two disagree. */
 
-const _check1: AssertExact<Infer<typeof valueTypeBinding>, ValueType> = true;
+const _check1: AssertExact<Infer<typeof declaredTypeBinding>, DeclaredType> = true;
+const _check1a: AssertExact<Infer<typeof aliasBinding>, Alias> = true;
 const _check1b: AssertExact<Infer<typeof voidTypeBinding>, VoidType> = true;
 const _check1c: AssertExact<Infer<typeof templateParamBinding>, TemplateParam> = true;
 const _check1d: AssertExact<Infer<typeof identifierTypeBinding>, IdentifierType> = true;
@@ -170,11 +174,11 @@ const _check12c: AssertExact<Infer<typeof normalizationBinding>, Normalization> 
 const _check13: AssertExact<Infer<typeof identifierBaseBinding>, IdentifierBase> = true;
 const _check14: AssertExact<Infer<typeof sourcePositionBinding>, SourcePosition> = true;
 const _check15: AssertExact<Infer<typeof annotationBinding>, Annotation> = true;
-const _check16: AssertExact<Infer<typeof typeArgumentRefBinding>, TypeArgumentRef> = true;
-const _check17: AssertExact<Infer<typeof typeArgumentValueBinding>, TypeArgumentValue> = true;
-const _check18: AssertExact<Infer<typeof typeArgumentBinding>, TypeArgument> = true;
 const _check19: AssertExact<Infer<typeof referenceBinding>, Reference> = true;
-const _check20: AssertExact<Infer<typeof scopedBinding>, Scoped> = true;
+const _check20: AssertExact<Infer<typeof namespaceBodyBinding>, NamespaceBody> = true;
+const _check20b: AssertExact<Infer<typeof referenceBodyBinding>, ReferenceBody> = true;
+const _check20c: AssertExact<Infer<typeof recordTemplateBodyBinding>, RecordTemplateBody> = true;
+const _check20d: AssertExact<Infer<typeof recordTemplateFieldBinding>, RecordTemplateField> = true;
 const _check22: AssertExact<Infer<typeof integerSizeBinding>, IntegerSize> = true;
 const _check23: AssertExact<Infer<typeof recordFieldBinding>, RecordField> = true;
 const _check24: AssertExact<Infer<typeof fieldGroupBinding>, FieldGroup> = true;
@@ -274,14 +278,15 @@ describe('bridge leaves round-trip host <-> wire ([TSON-SCHEMA] §5.6, §9)', ()
 describe("topBinding -- the polymorphic binding of an entry's value ([TSON-SCHEMA] §4.1, §8.1)", () => {
   it('every member is keyed by the constructor name the resolved wire actually writes', () => {
     const names = topBinding.members.map((m) => m.wireName).sort();
-    expect(names).toContain('record');
-    expect(names).toContain('integer_type');
-    expect(names).toContain('reference');
+    // A constructor is named by its path (§4.1): the kernel's machinery is nested under its map.
+    expect(names).toContain('meta.record');
+    expect(names).toContain('numeric.integer_type');
+    expect(names).toContain('meta.alias');
   });
 
-  it('"set", "set_type" and "array" all resolve to the same ArrayBody binding', () => {
-    const arrayMember = topBinding.members.find((m) => m.wireName === 'array');
-    for (const name of ['set', 'set_type']) {
+  it('"meta.set_type" and "meta.array" resolve to the same ArrayBody binding', () => {
+    const arrayMember = topBinding.members.find((m) => m.wireName === 'meta.array');
+    for (const name of ['meta.set_type']) {
       expect(topBinding.members.find((m) => m.wireName === name)?.binding).toBe(
         arrayMember?.binding,
       );
@@ -305,9 +310,9 @@ describe("topBinding -- the polymorphic binding of an entry's value ([TSON-SCHEM
       ordered: false,
       uniqueItems: true,
     };
-    expect(headOf('array', set)).toBe('array');
-    expect(headOf('set_type', set)).toBe('set_type');
-    expect(headOf(undefined, set)).toBe('array');
+    expect(headOf('meta.array', set)).toBe('meta.array');
+    expect(headOf('meta.set_type', set)).toBe('meta.set_type');
+    expect(headOf(undefined, set)).toBe('meta.array');
   });
 
   it('a set_type body leaves unwritten what set_type pins, an array body writes it (§8.1)', () => {
@@ -323,33 +328,51 @@ describe("topBinding -- the polymorphic binding of an entry's value ([TSON-SCHEM
       const core = writtenBody(source, set).coreValue;
       return core.kind === 'record' ? core.fields.map((f) => f.name) : [];
     };
-    expect(fieldNames('set_type')).toEqual(['element_type']);
-    expect(fieldNames('array')).toEqual(['element_type', 'voidable', 'ordered', 'unique_items']);
+    expect(fieldNames('meta.set_type')).not.toContain('ordered');
+    expect(fieldNames('meta.set_type')).not.toContain('unique_items');
+    expect(fieldNames('meta.array')).toEqual(
+      expect.arrayContaining(['element_type', 'ordered', 'unique_items']),
+    );
   });
 
-  it('value_type and void_type are members of their own, with no unit between them (§4.2)', () => {
+  it('void_type is a member of its own, with no value type nor unit beside it (§4.2)', () => {
     const names = topBinding.members.map((m) => m.wireName);
-    expect(names).toContain('value_type');
-    expect(names).toContain('void_type');
+    expect(names).toContain('meta.void_type');
+    expect(names).not.toContain('value_type');
     expect(names).not.toContain('unit');
-    expect(topBinding.memberFor({ kind: 'value_type' })?.wireName).toBe('value_type');
-    expect(topBinding.memberFor({ kind: 'void_type' })?.wireName).toBe('void_type');
+    expect(topBinding.memberFor({ kind: 'void_type' })?.wireName).toBe('meta.void_type');
+  });
+
+  it('the declared_type, namespace, reference_type and record_template constructors are members of their own (§4.1, §4.2, §5.10, §7.8)', () => {
+    const names = topBinding.members.map((m) => m.wireName);
+    for (const name of [
+      'meta.declared_type',
+      'meta.namespace',
+      'meta.reference_type',
+      'meta.record_template',
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(topBinding.memberFor({ kind: 'declared_type' })?.wireName).toBe('meta.declared_type');
+    expect(topBinding.memberFor({ kind: 'record_template' })?.wireName).toBe(
+      'meta.record_template',
+    );
   });
 
   it('"enum" and "enum_type" share one binding, and an enum is written under the constructor its facts name (§8.1)', () => {
     const enumMember = topBinding.members.find((m) => m.wireName === 'enum');
-    expect(topBinding.members.find((m) => m.wireName === 'enum_type')?.binding).toBe(
+    expect(topBinding.members.find((m) => m.wireName === 'meta.enum_type')?.binding).toBe(
       enumMember?.binding,
     );
     expect(topBinding.members.some((m) => m.wireName === 'text_enum')).toBe(false);
     const body = (nameType: string): EnumBody => ({ kind: 'enum', nameType, members: ['a'] });
     // An enum is written under the constructor its entry's facts name, whatever its name type.
-    expect(headOf('enum', body('identifier'))).toBe('enum');
-    expect(headOf('enum_type', body('identifier'))).toBe('enum_type');
-    expect(headOf('enum_type', body('text'))).toBe('enum_type');
-    expect(headOf('enum_type', body('kebab'))).toBe('enum_type');
+    expect(headOf('enum', body('meta.identifier'))).toBe('enum');
+    expect(headOf('meta.enum_type', body('meta.identifier'))).toBe('meta.enum_type');
+    expect(headOf('meta.enum_type', body('text'))).toBe('meta.enum_type');
+    expect(headOf('meta.enum_type', body('kebab'))).toBe('meta.enum_type');
     // No source: the base constructor.
-    expect(headOf(undefined, body('identifier'))).toBe('enum_type');
+    expect(headOf(undefined, body('meta.identifier'))).toBe('meta.enum_type');
   });
 
   it('is sealed, matching every other variant in this module', () => {
@@ -357,45 +380,20 @@ describe("topBinding -- the polymorphic binding of an entry's value ([TSON-SCHEM
   });
 });
 
-describe('typeArgumentBinding -- the field-group choice ([TSON-SCHEMA] §5.11, §8.1)', () => {
-  it('dispatches on the TypeScript-side kind discriminant', () => {
-    const refValue: TypeArgumentRef = {
-      kind: 'ref',
-      ref: { name: 'text', arguments: [], annotations: [] },
-    };
-    const literalValue: TypeArgumentValue = {
-      kind: 'value',
-      value: { text: '3', form: 'UNQUOTED' },
-    };
-    expect(typeArgumentBinding.memberFor(refValue)?.wireName).toBe('ref');
-    expect(typeArgumentBinding.memberFor(literalValue)?.wireName).toBe('value');
-  });
-});
-
-describe('the TypeRef <-> TypeArgument declaration-order cycle ([TSON-SCHEMA] §5.10, §8.1)', () => {
-  it('typeRefBinding\'s "arguments" element binding is lazy and resolves back to typeArgumentBinding', () => {
-    const argumentsSlot = typeRefBinding.fields.find((f) => f.wireName === 'arguments');
-    if (argumentsSlot === undefined) throw new Error('no arguments field');
-    const argumentsArray = argumentsSlot.binding;
-    if (argumentsArray.kind !== 'array') throw new Error('expected an array');
-    const element = argumentsArray.element;
-    if (element.kind !== 'lazy') throw new Error('expected the cycle-closing lazy()');
-    expect(element.peek()).toBeUndefined();
-    expect(element.get()).toBe(typeArgumentBinding);
-  });
-
-  it('typeArgumentRefBinding\'s own "ref" field resolves eagerly to typeRefAnnotatedBinding (no cycle needed on this edge)', () => {
-    const refSlot = typeArgumentRefBinding.fields[0];
-    expect(refSlot?.wireName).toBe('name'); // TypeArgument.java: @Field("name") TypeRef ref
-    expect(refSlot?.binding).toBe(typeRefAnnotatedBinding);
+describe('the reference atoms ([TSON-SCHEMA] §4.2, [TSON-DATA] §7.4)', () => {
+  it('typeRefBinding and referenceBinding are leaves of their own wire types, read by the data grammar', () => {
+    expect(typeRefBinding.kind).toBe('atom');
+    expect(referenceBinding.kind).toBe('atom');
+    if (typeRefBinding.kind !== 'atom' || referenceBinding.kind !== 'atom') throw new Error('atom');
+    expect(typeRefBinding.wireType).toBe('type_ref');
+    expect(referenceBinding.wireType).toBe('reference');
   });
 });
 
 describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([TSON-SCHEMA] §3.1)", () => {
   it('is what every type_ref-typed field slot in this module actually binds through', () => {
-    expect(typeArgumentRefBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
-    expect(referenceBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
-    expect(recordFieldBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
+    // A record field's type is a `meta.field_type_ref`, which also admits a sibling reference (§5.2).
+    expect(recordFieldBinding.fields[0]?.binding).toBe(referenceAnnotatedBinding);
     expect(tupleElementBinding.fields[0]?.binding).toBe(typeRefAnnotatedBinding);
     // A type body's first slot is `type`'s `chain` (§4.1); its type slots follow it.
     expect(arrayBodyBinding.fields[1]?.binding).toBe(typeRefAnnotatedBinding);
@@ -404,7 +402,7 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
   });
 
   it('construct() attaches the wire annotations onto TypeRef.annotations, on top of the bare name/arguments typeRefBinding builds', () => {
-    const inner = typeRefBinding.construct(['user_id', []]);
+    const inner: TypeRef = { name: 'user_id', arguments: [], annotations: [] };
     const built = typeRefAnnotatedBinding.construct(inner, {
       values: [
         {
@@ -424,9 +422,12 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
   });
 
   it('construct() carries a valueless annotation with no "value" key (exactOptionalPropertyTypes)', () => {
-    const built = typeRefAnnotatedBinding.construct(typeRefBinding.construct(['x', []]), {
-      values: [{ name: 'synthetic' }],
-    });
+    const built = typeRefAnnotatedBinding.construct(
+      { name: 'x', arguments: [], annotations: [] },
+      {
+        values: [{ name: 'synthetic' }],
+      },
+    );
     expect(built.annotations).toEqual([{ name: 'synthetic' }]);
     const [firstAnnotation] = built.annotations;
     expect(firstAnnotation === undefined ? undefined : 'value' in firstAnnotation).toBe(false);
@@ -454,11 +455,6 @@ describe("typeRefAnnotatedBinding -- a type_ref value's own wire annotations ([T
 });
 
 describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', () => {
-  it('typeRefBinding.construct builds a TypeRef from ordered slots', () => {
-    const built = typeRefBinding.construct(['int32', [], []]);
-    expect(built).toEqual({ name: 'int32', arguments: [], annotations: [] });
-  });
-
   it('recordFieldBinding wire names match RecordField.java field-for-field: no name, the field map keys it (§5.2)', () => {
     expect(recordFieldBinding.fields.map((f) => f.wireName)).toEqual([
       'type',
@@ -607,9 +603,9 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
       if (written.kind !== 'record') throw new Error('expected a record');
       return written.fields.some((f) => f.name === 'name_type');
     };
-    expect(nameTypeWritten('enum', 'identifier')).toBe(false);
-    expect(nameTypeWritten('enum_type', 'identifier')).toBe(true);
-    expect(nameTypeWritten('enum_type', 'kebab')).toBe(true);
+    expect(nameTypeWritten('enum', 'meta.identifier')).toBe(false);
+    expect(nameTypeWritten('meta.enum_type', 'meta.identifier')).toBe(true);
+    expect(nameTypeWritten('meta.enum_type', 'kebab')).toBe(true);
   });
 
   it('integerTypeBinding.construct synthesises kind and omits every absent bound', () => {
@@ -626,11 +622,15 @@ describe('construct() round-trips the wire-name mapping ([TSON-SCHEMA] §8.1)', 
   });
 
   it("every type body's binding states `type`'s one field, `chain`, first, and omits it when empty (§4.1)", () => {
-    expect(valueTypeBinding.fields.map((f) => f.wireName)).toEqual(['chain']);
+    expect(voidTypeBinding.fields.map((f) => f.wireName)).toEqual(['chain']);
     expect(integerTypeBinding.fields[0]?.wireName).toBe('chain');
-    expect(valueTypeBinding.construct([undefined])).toEqual({ kind: 'value_type' });
-    const chain: TypeChain = { parents: [], supertypes: ['atom', 'top'], subtypes: [] };
-    expect(valueTypeBinding.construct([chain])).toEqual({ kind: 'value_type', chain });
+    expect(voidTypeBinding.construct([undefined])).toEqual({ kind: 'void_type' });
+    const chain: TypeChain = {
+      parents: [],
+      supertypes: ['meta.atom', 'meta.top'],
+      subtypes: [],
+    };
+    expect(voidTypeBinding.construct([chain])).toEqual({ kind: 'void_type', chain });
   });
 
   it('no member binding carries a position: where an entry sat is a fact beside its value (§8.1)', () => {
@@ -649,8 +649,8 @@ describe('metaBindings -- the constructor-name lookup table ([TSON-SCHEMA] §8.1
     }
   });
 
-  it('resolves "type_chain" to typeChainBinding, and holds no "type_definition" (an entry is its value, §8.1)', () => {
-    expect(metaBindings.get('type_chain')).toBe(typeChainBinding);
+  it('resolves "meta.type_chain" to typeChainBinding, and holds no "type_definition" (an entry is its value, §8.1)', () => {
+    expect(metaBindings.get('meta.type_chain')).toBe(typeChainBinding);
     expect(metaBindings.get('type_definition')).toBeUndefined();
   });
 

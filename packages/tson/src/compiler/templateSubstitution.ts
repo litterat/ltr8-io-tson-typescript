@@ -14,6 +14,8 @@
 import { TsonNotImplementedError } from '../core/errors.js';
 import type { ArrayValue, CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
 import type { TypeArgument } from '../schema/meta/typedef.js';
+import type { ApplicationReference, ReferenceArgument } from '../ast/reference.js';
+import { referenceToWire } from '../schema/referenceAtoms.js';
 import { NAME, VALUE, refValue, rescope, tokenValue } from './wireForm.js';
 import { lexerFormOfMeta } from './tokenForms.js';
 
@@ -130,11 +132,70 @@ export function substitute(
       };
       return map;
     }
-    case 'empty-brace':
     case 'reference':
+      return value.reference.kind === 'application'
+        ? {
+            kind: 'reference',
+            reference: substituteReference(value.reference, head, parameters, bindings),
+          }
+        : value;
+    case 'empty-brace':
     case 'void':
       return value;
   }
+}
+
+/**
+ * An application written in a held body with its parameters replaced (§5.10): a parameter standing as an
+ * argument is the argument applied for it, a reference there (a name or an application) or a literal; one
+ * standing as the head is replaced by the bare name it is bound to, and a head bound to anything else is
+ * left for the application's own check to refuse.
+ */
+function substituteReference(
+  application: ApplicationReference,
+  head: string,
+  parameters: readonly string[],
+  bindings: ReadonlyMap<string, TypeArgument>,
+): ApplicationReference {
+  let name = application.name;
+  if (parameters.includes(name)) {
+    const bound = argumentFor(name, head, bindings);
+    if (bound.kind === 'ref' && bound.ref.arguments.length === 0) name = bound.ref.name;
+  }
+  return {
+    kind: 'application',
+    name,
+    arguments: application.arguments.map((argument) =>
+      substituteArgument(argument, head, parameters, bindings),
+    ),
+  };
+}
+
+function substituteArgument(
+  argument: ReferenceArgument,
+  head: string,
+  parameters: readonly string[],
+  bindings: ReadonlyMap<string, TypeArgument>,
+): ReferenceArgument {
+  if (argument.kind === 'value') return argument;
+  const reference = argument.reference;
+  if (reference.kind === 'application') {
+    return {
+      kind: 'reference',
+      reference: substituteReference(reference, head, parameters, bindings),
+    };
+  }
+  if (!parameters.includes(reference.name)) return argument;
+  const bound = argumentFor(reference.name, head, bindings);
+  if (bound.kind === 'value') {
+    return { kind: 'value', text: bound.value.text, form: lexerFormOfMeta(bound.value.form) };
+  }
+  const wire = referenceToWire(bound.ref);
+  return wire.kind === 'token'
+    ? { kind: 'reference', reference: { kind: 'name', name: wire.text } }
+    : wire.reference.kind === 'application'
+      ? { kind: 'reference', reference: wire.reference }
+      : argument;
 }
 
 /** Substitutes a whole held `DataValue`'s own core value, keeping its annotations and type-ref. */

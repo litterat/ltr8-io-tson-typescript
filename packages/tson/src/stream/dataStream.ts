@@ -135,7 +135,14 @@ export function* requireDataDocument(stream: DataStream, at: Position): Task<voi
  * of captured by closure or spread across instance fields — a plain record of cursor position,
  * lookahead, the frame stack, and events produced but not yet handed to the caller.
  */
-interface StreamState {
+/**
+ * The token cursor the reference productions ({@link referenceArguments}, {@link siblingReference})
+ * run over: a lexer, at most two tokens of lookahead and the end of the last token consumed. The
+ * stream's own state has this shape, and so does the schema grammar's cursor
+ * (`compiler/cursor.ts`), so a reference in a schema payload is read by the one production the data
+ * grammar reads it with (§7.4).
+ */
+export interface TokenCursor {
   readonly lexer: Lexer;
   /** The next not-yet-consumed token — populated lazily by {@link peekToken}. */
   current: Token | undefined;
@@ -143,6 +150,9 @@ interface StreamState {
   pending: Token | undefined;
   /** End position of the most recently consumed token — what {@link consumeSeparatorOrCloseCheck} compares a fresh peek against. */
   lastEnd: Position;
+}
+
+interface StreamState extends TokenCursor {
   /** The explicit frame stack replacing recursion, LIFO (top = last element). */
   readonly frames: Frame[];
   /** Events produced but not yet returned from {@link EventSource.next}/{@link EventSource.peek}, FIFO. */
@@ -210,12 +220,15 @@ function* peekEvent(state: StreamState): Task<TsonEvent> {
 
 // ── Startup: header directives (§2.2) ───────────────────────────────────
 
-function* ensureStarted(state: StreamState): Task<void> {
-  if (state.started) return;
-  state.started = true;
-
-  const docStart = (yield* peekToken(state)).start;
-
+/**
+ * The document header (§2.2, §3.3): `[id-directive] *import-directive`, the same for a data document
+ * and a schema document. `!!meta` and `!!schema` are retired and name `!!import` as their replacement,
+ * and any other directive is refused. Shared with the schema grammar, which reads its header with this
+ * production and decides the document's kind from the root's tag (§2.2).
+ */
+export function* parseHeader(
+  state: TokenCursor,
+): Task<{ readonly id?: string; readonly imports: string[] }> {
   let id: string | undefined;
   const imports: string[] = [];
   while (yield* check(state, 'directive-token')) {
@@ -252,6 +265,16 @@ function* ensureStarted(state: StreamState): Task<void> {
         );
     }
   }
+  return { ...(id !== undefined ? { id } : {}), imports };
+}
+
+function* ensureStarted(state: StreamState): Task<void> {
+  if (state.started) return;
+  state.started = true;
+
+  const docStart = (yield* peekToken(state)).start;
+
+  const { id, imports } = yield* parseHeader(state);
 
   const event: DocumentStart = {
     kind: 'document-start',
@@ -297,23 +320,23 @@ function* rootTagOf(state: StreamState): Task<string | undefined> {
 
 // ── Cursor primitives over Lexer.nextToken() (bounded 2-token lookahead) ─
 
-function* fetchToken(state: StreamState): Task<Token> {
+function* fetchToken(state: TokenCursor): Task<Token> {
   const type = yield* state.lexer.nextToken();
   return currentToken(state.lexer, type);
 }
 
-function* peekToken(state: StreamState): Task<Token> {
+function* peekToken(state: TokenCursor): Task<Token> {
   state.current ??= yield* fetchToken(state);
   return state.current;
 }
 
 /** The token after {@link peekToken}, without consuming either — the second of the at-most-two tokens of lookahead this stream keeps. */
-function* peekSecond(state: StreamState): Task<Token> {
+function* peekSecond(state: TokenCursor): Task<Token> {
   state.pending ??= yield* fetchToken(state);
   return state.pending;
 }
 
-function* advance(state: StreamState): Task<Token> {
+function* advance(state: TokenCursor): Task<Token> {
   const t = yield* peekToken(state);
   state.lastEnd = t.end;
   if (state.pending !== undefined) {
@@ -325,7 +348,7 @@ function* advance(state: StreamState): Task<Token> {
   return t;
 }
 
-function* check(state: StreamState, type: TokenType): Task<boolean> {
+function* check(state: TokenCursor, type: TokenType): Task<boolean> {
   const t = yield* peekToken(state);
   return t.type === type;
 }
@@ -335,7 +358,7 @@ function* check(state: StreamState, type: TokenType): Task<boolean> {
  * phrased as the author would say it (`"a record field's ':'"`), never the token class that would
  * have satisfied it.
  */
-function* expect(state: StreamState, type: TokenType, construct: string): Task<Token> {
+function* expect(state: TokenCursor, type: TokenType, construct: string): Task<Token> {
   const t = yield* peekToken(state);
   if (t.type !== type) throw mismatch(construct, t);
   return yield* advance(state);
@@ -449,7 +472,7 @@ function sameStart(a: Position, b: Position): boolean {
  * element and finds a comma sitting in value position, which needs no rule of its own (§2.4) --
  * a comma is not a value.
  */
-function* consumeSeparatorOrCloseCheck(state: StreamState, closing: TokenType): Task<boolean> {
+function* consumeSeparatorOrCloseCheck(state: TokenCursor, closing: TokenType): Task<boolean> {
   if (yield* check(state, closing)) return false;
 
   const t = yield* peekToken(state);
@@ -466,13 +489,13 @@ function* consumeSeparatorOrCloseCheck(state: StreamState, closing: TokenType): 
 }
 
 /** Looks ahead at an upcoming `!!name` directive's name without consuming anything. */
-function* peekDirectiveName(state: StreamState): Task<string | undefined> {
+function* peekDirectiveName(state: TokenCursor): Task<string | undefined> {
   const name = yield* peekSecond(state);
   return name.type === 'unquoted-token' ? name.text : undefined;
 }
 
 /** `"!!" name ":" single-line-token`, requiring the directive name to equal `expectedName` (§3.3). */
-function* parseNamedDirective(state: StreamState, expectedName: string): Task<string> {
+function* parseNamedDirective(state: TokenCursor, expectedName: string): Task<string> {
   const bangbang = yield* expect(state, 'directive-token', 'a directive');
   const name = yield* peekToken(state);
   if (name.type !== 'unquoted-token') {
@@ -532,7 +555,7 @@ function* parseNamedDirective(state: StreamState, expectedName: string): Task<st
  * matched as the identifier grammar matches a name (§7.7). A leading, trailing or doubled `.` and a
  * segment that is no identifier are parse errors.
  */
-function requireQualifiedName(name: Token, role: string, section: string): void {
+export function requireQualifiedName(name: Token, role: string, section: string): void {
   if (isQualifiedName(name.text)) return;
   const segments = name.text.split('.');
   const bad = segments.find((segment) => !isIdentifierText(segment));
@@ -550,7 +573,7 @@ function requireQualifiedName(name: Token, role: string, section: string): void 
 }
 
 /** `"!" qualified-name-token` (§3.2), rejecting the schema-only type-expression forms (array brackets, `<...>`, `?`) that have no role in a data value. */
-function* parseTypeRefName(state: StreamState): Task<string> {
+export function* parseTypeRefName(state: TokenCursor): Task<string> {
   const bang = yield* advance(state);
   const name = yield* peekToken(state);
   if (name.type !== 'unquoted-token') {
@@ -612,7 +635,7 @@ function* parseTypeRefName(state: StreamState): Task<string> {
  * `<` adjacent to it. A `<` with whitespace before it opens nothing and is refused, as is one after
  * a quoted token, which is never a reference (§7.5).
  */
-function* opensArguments(state: StreamState, head: Token): Task<boolean> {
+export function* opensArguments(state: TokenCursor, head: Token): Task<boolean> {
   const next = yield* peekToken(state);
   if (next.type !== 'less-than') return false;
   if (!adjacentTo(head, next)) {
@@ -636,7 +659,7 @@ function* opensArguments(state: StreamState, head: Token): Task<boolean> {
  * argument a qualified name (a reference, itself possibly applied) or any other token (a value),
  * separated as an array's elements are. Assembled whole, so the stream delivers one value.
  */
-function* referenceArguments(state: StreamState, head: Token): Task<ApplicationReference> {
+export function* referenceArguments(state: TokenCursor, head: Token): Task<ApplicationReference> {
   requireApplicable(head);
   yield* advance(state); // '<'
   const args: ReferenceArgument[] = [];
@@ -656,7 +679,7 @@ function* referenceArguments(state: StreamState, head: Token): Task<ApplicationR
 }
 
 /** `type-arg = application / token` (§7.4). */
-function* referenceArgument(state: StreamState): Task<ReferenceArgument> {
+function* referenceArgument(state: TokenCursor): Task<ReferenceArgument> {
   const t = yield* peekToken(state);
   switch (t.type) {
     case 'unquoted-token': {
@@ -695,7 +718,7 @@ function* referenceArgument(state: StreamState): Task<ReferenceArgument> {
  * is a `!` adjacent to it. A prefix `!` is adjacent to the token after it and so is never adjacent
  * to the one before. A quoted token is never a reference, so a `!` after one is refused.
  */
-function* marksSibling(state: StreamState, head: Token): Task<boolean> {
+export function* marksSibling(state: TokenCursor, head: Token): Task<boolean> {
   const next = yield* peekToken(state);
   // A multi-line token's end is past its closing line's terminator, where the next line starts, so
   // a prefix `!` opening that line would read as adjacent to it.
@@ -718,7 +741,7 @@ function* marksSibling(state: StreamState, head: Token): Task<boolean> {
  * the end of the document. The whitespace is what keeps a postfix `!` apart from a prefix one, so
  * `a!b`, `kind!}`, `kind!]` and `kind!?` are refused here. Assembled whole.
  */
-function* siblingReference(state: StreamState, head: Token): Task<SiblingReference> {
+export function* siblingReference(state: TokenCursor, head: Token): Task<SiblingReference> {
   if (!isSiblingField(head.text)) {
     throw parseError(
       head,

@@ -39,6 +39,7 @@ import type {
 } from '../ast/value.js';
 import { TsonReadError } from '../core/errors.js';
 import { toNfc } from '../unicode/nfc.js';
+import { referenceText } from '../ast/reference.js';
 import type { Diagnostic, DiagnosticCode } from '../core/diagnostic.js';
 import type { Annotations } from '../annotations/index.js';
 import type { AtomBinding, Binding, BindingRef, RecordBinding, VariantMember } from './binding.js';
@@ -146,6 +147,11 @@ function refuseRepeatedKey(entries: readonly MapEntry[]): void {
 }
 
 function tokenOf(value: CoreValue, wireType: string): TokenValue {
+  // A structured reference (`pair<uuid B>`, `kind!`) is read at an atom position as the one token its
+  // canonical text spells: the atom's own decoder parses it, as it parses a bare name (§7.4).
+  if (value.kind === 'reference') {
+    return { kind: 'token', text: referenceText(value.reference), form: 'unquoted' };
+  }
   if (value.kind !== 'token') {
     throw readError(
       'TYPE_MISMATCH',

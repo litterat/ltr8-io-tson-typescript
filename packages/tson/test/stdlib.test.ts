@@ -53,9 +53,8 @@ describe('standardLibrary()', () => {
   };
 
   const USER_SCHEMA = `!!id:"https://example.com/reading.tn"
-!!meta:"${idOf(META_TN)}"
 !!import:"${idOf(CORE_TN)}"
-{
+!schema {
   reading => {
     label: text
   }
@@ -98,31 +97,32 @@ describe('standardLibrary()', () => {
 
 describe('the standard library carries its own key annotations (§6)', () => {
   const tson = standardLibrary();
-  const kernel = [...tson.schemas.values()].find((s) => s.id.includes('meta-kernel'));
+  const kernel = [...tson.schemas.values()].find((s) => s.id.includes('/m/meta.tn'));
 
-  it('registers meta-kernel with its @doc values, not the bare bootstrap form', () => {
-    // `bootstrapMetaKernel` exists to break §1.5's circularity and stops there: it attaches no
-    // `@synthetic` marker and carries no key annotations. `registerStandardLibrary` therefore
-    // resolves meta-kernel a second time, ordinarily, against the bootstrap output -- which is
-    // what `schema/bootstrap.ts`'s own doc says a caller wanting properly marked entries does.
+  it('registers the kernel with its @doc values on its entries (§3.4, §6)', () => {
     expect(kernel).toBeDefined();
-    const doc = kernel?.keyAnnotations.get('top')?.find((a) => a.name === 'doc');
+    const doc = kernel?.keyAnnotations.get('meta.top')?.find((a) => a.name === 'doc');
     expect(doc?.value).toBeDefined();
   });
 
   it('marks every sugar-lifted entry @synthetic (§8.2)', () => {
     const synthetic = [...(kernel?.keyAnnotations ?? [])].filter(([, annotations]) =>
-      annotations.some((a) => a.name === 'synthetic'),
+      annotations.some((a) => a.name === 'meta.synthetic'),
     );
     expect(synthetic.length).toBeGreaterThan(0);
   });
 
-  it('reads a @doc value as an atom node carrying the text the author wrote', () => {
-    const doc = kernel?.keyAnnotations.get('top')?.find((a) => a.name === 'doc');
+  it("reads the kernel's own @doc as the text the author wrote, the kernel having no governing annotation reader (§6)", () => {
+    // The annotation's type is declared in the very document being read, so there is no compiled
+    // reader to read its value through yet: it is read by its base type, the text itself.
+    const doc = kernel?.keyAnnotations.get('meta.top')?.find((a) => a.name === 'doc');
+    expect(doc?.value).toMatch(/^The structural root: every constructor IS-A `top`/u);
+  });
+
+  it("reads a library's @doc through the compiled reader of the schema declaring `doc`, an atom node (§6)", () => {
+    const core = [...tson.schemas.values()].find((s) => s.id.includes('/m/core.tn'));
+    const doc = core?.keyAnnotations.get('title')?.find((a) => a.name === 'doc');
     expect(doc?.value).toMatchObject({ kind: 'atom' });
-    expect((doc?.value as { value: unknown }).value).toMatch(
-      /^The structural root, and what a schema map's entries are/u,
-    );
   });
 });
 
@@ -138,7 +138,12 @@ describe('policy.tn, the processor-policy vocabulary ([TSON-DATA] §8.2)', () =>
     const linked = tson.schemas.get(canonicalizeIdentity(POLICY_ID));
     expect(linked).toBeDefined();
     expect([...(linked?.entries.keys() ?? [])]).toEqual(
-      expect.arrayContaining(['restriction_level', 'script_policy', 'identifier_policy', 'policy']),
+      expect.arrayContaining([
+        'policy',
+        'policy.restriction_level',
+        'policy.script_policy',
+        'policy.identifier_policy',
+      ]),
     );
   });
 

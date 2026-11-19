@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `ipv4_type` constructor (§5.5's `!ipv4` atom, RFC
+ * Parses and validates against `net.ipv4_type` constructor (§5.5's `!ipv4` atom, RFC
  * 3986's `IPv4address` production) -- the port of `atom/Ipv4Parser.java`.
  *
  * **Parses the token itself; there is no host `InetAddress` to lean on and no reason to want

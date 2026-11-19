@@ -12,16 +12,17 @@
  * parameter list.
  *
  * ```text
- * [T]              !array { element_type: T }
- * [T; N..M]        !array { element_type: T  min_items: N  max_items: M }
+ * [T]              !meta.array { element_type: T }
+ * [T; N..M]        !meta.array { element_type: T  min_items: N  max_items: M }
  * [T?; ...]        the corresponding form with voidable: true bound directly
- * [T, U]           !tuple { elements: [{ element_type: T } { element_type: U }] }
- * (A | B)          !choice { variants: [A B] }
- * {K => V}         !map   { key_type: K  value_type: V }
- * {K => V?}        !map   { key_type: K  value_type: V  voidable: true }
+ * [T, U]           !meta.tuple { elements: [{ element_type: T } { element_type: U }] }
+ * (A | B)          !meta.choice { variants: [A B] }
+ * {K => V}         !meta.map   { key_type: K  value_type: V }
+ * {K => V?}        !meta.map   { key_type: K  value_type: V  voidable: true }
  * {K => V; N..M}   the same, with min_items/max_items
- * { x: T }         !record { fields: [{ name: x  type: T }] } -- only inside a *template* (§5.2);
- *                  a non-template record body stays a plain record definition
+ * <T> { x: T }     !meta.record_template { fields: { x => { type_param: T } }  parameters: [...] }
+ *                  -- §5.2's rewrite, applied where a template's body is written; a non-template
+ *                  record body stays a plain record definition
  * ```
  *
  * **A nested bracket or brace form expands innermost first.** §5.3's declaration-level container
@@ -80,14 +81,21 @@ import type {
   StructuralTypeDef,
   TypeDef,
 } from '../ast/schema/typedef.js';
-import type { ElementType, GenericRef, TypeArg, TypeRef } from '../ast/schema/typeref.js';
-import type { CoreValue, DataValue, RecordField, RecordValue } from '../ast/value.js';
+import type {
+  ApplicationRef,
+  ElementType,
+  Reference,
+  TypeArg,
+  TypeExpr,
+} from '../ast/schema/typeref.js';
+import type { CoreValue, DataValue, MapEntry, RecordField, RecordValue } from '../ast/value.js';
+import type { ApplicationReference, ReferenceArgument } from '../ast/reference.js';
+import { metaName } from '../schema/meta/kernel.js';
 import { canonicalBinding, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { groupMembers, lowerGroup } from './groupLowering.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import {
-  ARGUMENTS,
   DISCRIMINATORS,
   FIELDS,
   GROUPS,
@@ -98,6 +106,7 @@ import {
   TYPE,
   VALUE,
   VOIDABLE,
+  declaredName,
   fieldsValue,
   groupValue,
   nameField,
@@ -143,6 +152,11 @@ export interface DesugarOptions {
    * position table is in play.
    */
   readonly positions?: WeakMap<Declaration, Position>;
+  /**
+   * Receives, keyed by derived name, the declaration each lift whose name an import already declares would
+   * have injected: the form that import's entry must be, which the resolver holds it to (§8.2).
+   */
+  readonly reused?: Map<string, Declaration>;
 }
 
 /**
@@ -164,6 +178,7 @@ export function desugar(
     injected: new Map<string, Declaration>(),
     minted: createMintedNames(),
     reporter: options.reporter,
+    reused: options.reused ?? new Map<string, Declaration>(),
     currentParameters: [],
   };
   const body = schemaMapPass(document.body, context, options.positions);
@@ -222,6 +237,8 @@ interface DesugarContext {
    */
   readonly minted: MintedNames;
   readonly reporter: DesugarFailureReporter | undefined;
+  /** Where a lift whose name an import already declares is kept: the form the import's entry must be (§8.2). */
+  readonly reused: Map<string, Declaration>;
   /**
    * The type parameters of the declaration currently being walked, empty outside a template. A
    * sugar form naming one of these lifts to an *open* entry rather than a closed one — a closed
@@ -300,6 +317,7 @@ function desugarOrReport(declaration: Declaration, context: DesugarContext): Dec
 }
 
 function declarationPass(declaration: Declaration, context: DesugarContext): Declaration {
+  siblingsAtFieldTypesOnly(declaration.typeDef);
   const local: DesugarContext = {
     ...context,
     currentParameters: typeParamsOf(declaration.typeDef),
@@ -327,15 +345,15 @@ function absorbed(declaration: Declaration): TypeDef {
 }
 
 /** A declaration's declared type parameters, or none. */
-function typeParamsOf(typeDef: TypeDef): readonly string[] {
+export function typeParamsOf(typeDef: TypeDef): readonly string[] {
   switch (typeDef.kind) {
     case 'instance':
-      return typeDef.typeParams;
     case 'structuralTypeDef':
-      return typeDef.typeParams;
     case 'referenceTypeDef':
+    case 'recordTemplateDef':
       return typeDef.typeParams;
     case 'atomRefinement':
+    case 'schemaMapDef':
       return [];
   }
 }
@@ -351,9 +369,113 @@ function typeDefPass(typeDef: TypeDef, context: DesugarContext): TypeDef {
       return structuralTypeDefPass(typeDef, context);
     case 'referenceTypeDef':
       return referenceTypeDefPass(typeDef, context);
-    case 'atomRefinement':
+    // The explicit spelling of a record template, `<T> !meta.record { ... }`, takes the same labels the
+    // sugar body does, so the two reach the resolver as one payload.
     case 'instance':
+      return typeDef.typeParams.length > 0 && typeDef.value.typeRef === RECORD
+        ? {
+            kind: 'recordTemplateDef',
+            typeParams: typeDef.typeParams,
+            payload: labelled(typeDef.value, typeDef.typeParams),
+          }
+        : typeDef;
+    case 'atomRefinement':
+    case 'schemaMapDef':
+    case 'recordTemplateDef':
       return typeDef;
+  }
+}
+
+// ── §5.2's position rule: a sibling reference stands only at a record field's type ────────────
+
+/**
+ * Refuses a sibling reference (`kind!`) written in sugar anywhere but at a record field's type, naming the
+ * slot ([TSON-SCHEMA] §5.2). The grammar admits one wherever a type-expr stands, and it is refused here,
+ * before any lift: a lift would carry it into an entry outside the record, which has no sibling to read.
+ * A group member is a field of the record, and takes one as a field does. A construction's payload is data,
+ * read against its constructor, whose slot readers state the same rule.
+ */
+function siblingsAtFieldTypesOnly(typeDef: TypeDef): void {
+  switch (typeDef.kind) {
+    case 'referenceTypeDef':
+      siblingRefused(typeDef.ref, 'an alias target');
+      return;
+    case 'structuralTypeDef': {
+      const body = typeDef.body;
+      switch (body.kind) {
+        case 'recordDef':
+          siblingsInRecord(body);
+          return;
+        case 'refinedDef':
+          siblingRefused(body.target, 'a refinement source');
+          siblingsInRecord(body.body);
+          return;
+        case 'constructionDef':
+          body.supertypes.forEach((operand) => {
+            siblingRefused(operand, 'a composition operand');
+          });
+          if (body.body !== undefined) siblingsInRecord(body.body);
+          return;
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+function siblingsInRecord(record: RecordDef): void {
+  for (const entry of record.entries) {
+    if (entry.kind === 'fieldDef') {
+      if (entry.type !== undefined) siblingInside(entry.type.typeRef);
+    } else {
+      for (const option of entry.options)
+        for (const member of option) siblingInside(member.typeRef);
+    }
+  }
+}
+
+/** A record field's type: a sibling reference itself stands here, and is refused anywhere inside the type. */
+function siblingInside(ref: TypeExpr): void {
+  if (ref.kind !== 'siblingRef') siblingRefused(ref, '');
+}
+
+/** The refusal of a sibling reference at `slot`, in the one phrasing every place that states the rule uses. */
+export function siblingRefusal(field: string, slot: string): TsonSchemaValidationError {
+  return new TsonSchemaValidationError(
+    `a sibling reference ('${field}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not at ${slot}`,
+  );
+}
+
+/** `ref`, standing at `slot`, refused where it is a sibling reference or holds one at any depth. */
+function siblingRefused(ref: TypeExpr, slot: string): void {
+  switch (ref.kind) {
+    case 'siblingRef':
+      throw siblingRefusal(ref.field, slot);
+    case 'nameRef':
+      return;
+    case 'applicationRef':
+      for (const argument of ref.args) {
+        if (argument.kind === 'ref') siblingRefused(argument.ref, 'a template argument');
+      }
+      return;
+    case 'arrayExpr':
+      siblingRefused(ref.elementType.typeRef, "an array's element type");
+      return;
+    case 'mapExpr':
+      siblingRefused(ref.keyType, "a map's key type");
+      siblingRefused(ref.valueType.typeRef, "a map's value type");
+      return;
+    case 'tupleExpr':
+      ref.elementTypes.forEach((element) => {
+        siblingRefused(element.typeRef, 'a tuple element');
+      });
+      return;
+    case 'choiceExpr':
+      ref.variants.forEach((variant) => {
+        siblingRefused(variant, 'a choice variant');
+      });
+      return;
   }
 }
 
@@ -369,7 +491,11 @@ function typeDefPass(typeDef: TypeDef, context: DesugarContext): TypeDef {
 function structuralTypeDefPass(typeDef: StructuralTypeDef, context: DesugarContext): TypeDef {
   const body = structuralDefPass(typeDef.body, context);
   if (typeDef.typeParams.length > 0 && body.kind === 'recordDef') {
-    return instanceOf(recordBinding(body), typeDef.typeParams);
+    return {
+      kind: 'recordTemplateDef',
+      typeParams: typeDef.typeParams,
+      payload: recordTemplatePayload(recordBinding(body, typeDef.typeParams), typeDef.typeParams),
+    };
   }
   return body === typeDef.body ? typeDef : { ...typeDef, body };
 }
@@ -387,18 +513,21 @@ function referenceTypeDefPass(typeDef: ReferenceTypeDef, context: DesugarContext
   }
   if (typeDef.typeParams.length > 0) {
     // §5.10's partial application -- `uuid_pair => <B> pair<text, B>` denotes
-    // `!reference { target: pair<text, B> }`, spellable because a reference's target is a
-    // type-ref. Closes by the same walk as every other template, one phase later.
+    // `!meta.alias { target: pair<text, B> }`, spellable because an alias's target is a reference. Closes by the same walk as every other template, one phase later.
     return instanceOf(
       {
-        head: REFERENCE,
+        head: ALIAS,
         fields: [{ name: TARGET, value: scoped(refValueOf(typeDef.ref)) }],
-        applicationSlots: new Map(),
       },
       typeDef.typeParams,
     );
   }
-  const ref = argumentsOnlyPass(typeDef.ref, context);
+  const ref =
+    typeDef.ref.kind === 'nameRef' ||
+    typeDef.ref.kind === 'applicationRef' ||
+    typeDef.ref.kind === 'siblingRef'
+      ? argumentsOnlyPass(typeDef.ref, context)
+      : typeDef.ref;
   return ref === typeDef.ref ? typeDef : { ...typeDef, ref };
 }
 
@@ -419,7 +548,7 @@ function structuralDefPass(def: StructuralDef, context: DesugarContext): Structu
 
 /** §5.8 composes with named supertypes; only their arguments are expandable. */
 function constructionDefPass(def: ConstructionDef, context: DesugarContext): StructuralDef {
-  const supertypes = mapShared(def.supertypes, (ref) => argumentsOnlyPass(ref, context));
+  const supertypes = mapShared<Reference>(def.supertypes, (ref) => argumentsOnlyPass(ref, context));
   const body = def.body === undefined ? undefined : recordDefPass(def.body, context);
   const bodyChanged = def.body !== undefined && body !== def.body;
   return supertypes === def.supertypes && !bodyChanged
@@ -463,35 +592,39 @@ function groupMemberPass(member: GroupMember, context: DesugarContext): GroupMem
 }
 
 /**
- * A reference at a position where a sugar form *is* expandable: expands children first, so a
- * nested form is already a plain name by the time the enclosing one is built (`{text => [integer]}`
- * injects the inner array, then the outer map refers to it).
+ * A reference at a position where a sugar form *is* expandable: expands children first, so a nested
+ * form is already a plain name by the time the enclosing one is built (`{text => [integer]}` injects the
+ * inner array, then the outer map refers to it).
  */
-function typeRefPass(ref: TypeRef, context: DesugarContext): TypeRef {
+function typeRefPass(ref: TypeExpr, context: DesugarContext): TypeExpr {
   switch (ref.kind) {
-    case 'simpleRef':
+    case 'nameRef':
+    case 'siblingRef': // a field's type, as written: it names no entry to lift
       return ref;
-    case 'arrayRef':
-    case 'tupleRef':
-    case 'mapRef':
-    case 'choiceRef':
+    case 'arrayExpr':
+    case 'tupleExpr':
+    case 'mapExpr':
+    case 'choiceExpr':
       return hoistOrKeep(bindingOf(ref, context), ref, context);
-    case 'genericRef':
-      return genericRefPass(ref, context);
+    case 'applicationRef':
+      return applicationArgumentsPass(ref, context);
   }
 }
 
 /** Expands only within a reference's arguments, leaving its own head in place. */
-function argumentsOnlyPass(ref: TypeRef, context: DesugarContext): TypeRef {
-  return ref.kind === 'genericRef' ? genericRefPass(ref, context) : ref;
+function argumentsOnlyPass<R extends Reference>(
+  ref: R,
+  context: DesugarContext,
+): R | ApplicationRef {
+  return ref.kind === 'applicationRef' ? applicationArgumentsPass(ref, context) : ref;
 }
 
-function genericRefPass(ref: GenericRef, context: DesugarContext): TypeRef {
+function applicationArgumentsPass(ref: ApplicationRef, context: DesugarContext): ApplicationRef {
   checkTemplateApplication(ref.name, context);
   const args = mapShared(ref.args, (arg) => typeArgPass(arg, context));
   return args === ref.args
     ? ref
-    : { kind: 'genericRef', name: ref.name, args: args as GenericRef['args'] };
+    : { kind: 'applicationRef', name: ref.name, args: args as ApplicationRef['args'] };
 }
 
 function typeArgPass(arg: TypeArg, context: DesugarContext): TypeArg {
@@ -533,26 +666,31 @@ function checkTemplateApplication(head: string, context: DesugarContext): void {
  * form binds, in the table's own order. Everything downstream — the emitted `!C { ... }`, the
  * derived entry name, the bound-coherence check — reads this and nothing else.
  *
- * `applicationSlots` holds, for every field whose value is a §5.10 application rather than a bare
- * name, that field's own `TypeRef` — kept whole because an application has no bare-token
- * spelling yet (the entry it denotes does not exist until materialisation), so the open form
- * needs the reference itself, not the entry name it will eventually become.
+ * A slot holding an application is written as its reference value, `box<text>`, since an application
+ * has no bare-token spelling: the entry it denotes does not exist until materialisation. The
+ * construction therefore names something that is not yet an entry, which is fine — materialisation
+ * rewrites every closed entry's references afterwards.
  */
 interface Binding {
   readonly head: string;
   readonly fields: readonly RecordField[];
-  readonly applicationSlots: ReadonlyMap<string, TypeRef>;
 }
 
-const ARRAY = 'array';
-const MAP = 'map';
-const TUPLE = 'tuple';
-const CHOICE = 'choice';
-const REFERENCE = 'reference';
+const ARRAY = metaName('array');
+const MAP = metaName('map');
+const TUPLE = metaName('tuple');
+const CHOICE = metaName('choice');
+const ALIAS = metaName('alias');
+const RECORD_TEMPLATE = metaName('record_template');
+const RECORD_TEMPLATE_FIELD = metaName('record_template_field');
+const RECORD_FIELD = metaName('record_field');
 
 const ELEMENT_TYPE = 'element_type';
 const KEY_TYPE = 'key_type';
 const VALUE_TYPE = 'value_type';
+const TYPE_PARAM = 'type_param';
+const VALUE_PARAM = 'value_param';
+const PARAMETERS = 'parameters';
 const MIN_ITEMS = 'min_items';
 const MAX_ITEMS = 'max_items';
 const ELEMENTS = 'elements';
@@ -565,30 +703,30 @@ const TARGET = 'target';
  * since a partially reduced one would be a differently-broken shape rather than a recognisable
  * sugar form.
  */
-function bindingOf(ref: TypeRef, context: DesugarContext): Binding | undefined {
+function bindingOf(ref: TypeExpr, context: DesugarContext): Binding | undefined {
   switch (ref.kind) {
-    case 'arrayRef':
+    case 'arrayExpr':
       return arrayBinding(
         elementRefOf(ref.elementType, context),
         ref.elementType.voidable,
         ref.size,
         shownElement(ref.elementType),
       );
-    case 'mapRef':
+    case 'mapExpr':
       return mapBinding(
         typeRefPass(ref.keyType, context),
         elementRefOf(ref.valueType, context),
         ref.valueType.voidable,
         ref.size,
       );
-    case 'tupleRef':
+    case 'tupleExpr':
       return tupleBinding(
         ref.elementTypes.map((element) => ({
           typeRef: elementRefOf(element, context),
           voidable: element.voidable,
         })),
       );
-    case 'choiceRef':
+    case 'choiceExpr':
       return choiceBinding(mapShared(ref.variants, (variant) => typeRefPass(variant, context)));
     default:
       return undefined;
@@ -597,29 +735,28 @@ function bindingOf(ref: TypeRef, context: DesugarContext): Binding | undefined {
 
 /** One position of a tuple after expansion: the type it names, and whether it is marked voidable. */
 interface TuplePosition {
-  readonly typeRef: TypeRef;
+  readonly typeRef: TypeExpr;
   readonly voidable: boolean;
 }
 
 /**
- * Whether a position holds something this table can put in a type slot: a name, or a name
- * carrying arguments. Anything else is a sugar form the caller was supposed to have expanded
- * first.
+ * Whether a position holds something this table can put in a type slot: a name, or a name carrying
+ * arguments. Anything else is a sugar form the caller was supposed to have expanded first.
  */
-function isReference(ref: TypeRef): boolean {
-  return ref.kind === 'simpleRef' || ref.kind === 'genericRef';
+function isReference(ref: TypeExpr): ref is Exclude<Reference, { kind: 'siblingRef' }> {
+  return ref.kind === 'nameRef' || ref.kind === 'applicationRef';
 }
 
 /**
- * `!array { element_type: T [voidable: true] [min_items: N] [max_items: M] }` — the whole array
+ * `!meta.array { element_type: T [voidable: true] [min_items: N] [max_items: M] }` — the whole array
  * row of the desugar table, the unsized and sized spellings alike.
  *
- * The element `?` binds `voidable` directly, alongside the bounds rather than through them:
- * §5.3's `[T?; 3]` states both at once and both land on the one record. An unmarked element states
- * nothing at all and lets the kernel's `voidable ~ false` default supply it.
+ * The element `?` binds `voidable` directly, alongside the bounds rather than through them: §5.3's
+ * `[T?; 3]` states both at once and both land on the one record. An unmarked element states nothing at
+ * all and lets the kernel's `voidable ~ false` default supply it.
  */
 function arrayBinding(
-  element: TypeRef,
+  element: TypeExpr,
   voidable: boolean,
   size: SizeSpec | undefined,
   shown: string,
@@ -627,9 +764,7 @@ function arrayBinding(
   if (!isReference(element)) {
     return undefined;
   }
-  const fields: RecordField[] = [];
-  const applicationSlots = new Map<string, TypeRef>();
-  refSlot(ELEMENT_TYPE, element, fields, applicationSlots);
+  const fields: RecordField[] = [{ name: ELEMENT_TYPE, value: scoped(refValueOf(element)) }];
   if (voidable) {
     fields.push(nameField(VOIDABLE, 'true'));
   }
@@ -637,28 +772,28 @@ function arrayBinding(
     fields.push(...sizeFields(size, `[${shown}; 0..]`));
   }
   checkBounds(fields);
-  return { head: ARRAY, fields, applicationSlots };
+  return { head: ARRAY, fields };
 }
 
 /**
- * `!map { key_type: K  value_type: V [voidable: true] [min_items: N] [max_items: M] }` — the map
- * row. `voidable` governs the entry value, as `array`'s governs the element: `{K => V?}`
- * binds `voidable: true` and admits the void sentinel there (§5.3, §7.6). The key side carries
- * none — a void key is already a Part 1 resolver error.
+ * `!meta.map { key_type: K  value_type: V [voidable: true] [min_items: N] [max_items: M] }` — the map
+ * row. `voidable` governs the entry value, as `array`'s governs the element: `{K => V?}` binds
+ * `voidable: true` and admits the void sentinel there (§5.3, §7.6). The key side carries none — a void
+ * key is already a Part 1 resolver error.
  */
 function mapBinding(
-  key: TypeRef,
-  value: TypeRef,
+  key: TypeExpr,
+  value: TypeExpr,
   valueVoidable: boolean,
   size: SizeSpec | undefined,
 ): Binding | undefined {
   if (!isReference(key) || !isReference(value)) {
     return undefined;
   }
-  const fields: RecordField[] = [];
-  const applicationSlots = new Map<string, TypeRef>();
-  refSlot(KEY_TYPE, key, fields, applicationSlots);
-  refSlot(VALUE_TYPE, value, fields, applicationSlots);
+  const fields: RecordField[] = [
+    { name: KEY_TYPE, value: scoped(refValueOf(key)) },
+    { name: VALUE_TYPE, value: scoped(refValueOf(value)) },
+  ];
   if (valueVoidable) {
     fields.push(nameField(VOIDABLE, 'true'));
   }
@@ -666,29 +801,20 @@ function mapBinding(
     fields.push(...sizeFields(size, `{${shownRef(key)} => ${shownRef(value)}; 0..}`));
   }
   checkBounds(fields);
-  return { head: MAP, fields, applicationSlots };
+  return { head: MAP, fields };
+}
+
+/** How a map side is quoted back in the one diagnostic that shows the form. */
+function shownRef(ref: Exclude<Reference, { kind: 'siblingRef' }>): string {
+  return ref.kind === 'nameRef' ? ref.name : `${ref.name}<...>`;
 }
 
 /**
- * How a map side is quoted back in the one diagnostic that shows the form. Only ever called with
- * an {@link isReference} `ref` (a `simpleRef` or `genericRef`), never a container form.
- */
-function shownRef(ref: TypeRef): string {
-  if (ref.kind === 'simpleRef') {
-    return ref.name;
-  }
-  if (ref.kind === 'genericRef') {
-    return `${ref.name}<...>`;
-  }
-  throw new TsonInternalError('shownRef is only ever called with a simpleRef or genericRef');
-}
-
-/**
- * `!tuple { elements: [{ element_type: T } { element_type: U }] }` — the tuple row.
+ * `!meta.tuple { elements: [{ element_type: T } { element_type: U }] }` — the tuple row.
  *
- * Distinct from {@link choiceBinding} in what one position *is*: a tuple element is a
- * `tuple_element` record carrying a type *and* its own state, where a choice variant is a bare
- * type-ref, so each tuple position needs a record built for it rather than a name token.
+ * Distinct from {@link choiceBinding} in what one position *is*: a tuple element is a `tuple_element`
+ * record carrying a type *and* its own state, where a choice variant is a bare type reference, so each
+ * tuple position needs a record built for it rather than a name token.
  */
 function tupleBinding(positions: readonly TuplePosition[]): Binding {
   const elements: DataValue[] = positions.map((position) => {
@@ -700,41 +826,38 @@ function tupleBinding(positions: readonly TuplePosition[]): Binding {
     }
     return scoped(recordValue(members));
   });
-  return {
-    head: TUPLE,
-    fields: [{ name: ELEMENTS, value: scoped(arrayValue(elements)) }],
-    applicationSlots: new Map(),
-  };
+  return { head: TUPLE, fields: [{ name: ELEMENTS, value: scoped(arrayValue(elements)) }] };
 }
 
 /**
- * `!choice { variants: [A B ...] }` — the choice row. Variants arrive already expanded: a nested
- * inline form was hoisted by the caller first, so what reaches here is a bare name or, for a
- * §5.10 application (which has no entry to be hoisted to until materialisation mints one), a
- * `type_ref` application spelled through {@link refValueOf}.
+ * `!meta.choice { variants: [A B ...] }` — the choice row. Variants arrive already expanded: a nested
+ * inline form was hoisted by the caller first, so what reaches here is a bare name or, for a §5.10
+ * application (which has no entry to be hoisted to until materialisation mints one), the application
+ * written as its reference.
  *
- * Distinctness of the variants (§5.4) is deliberately not checked here — it is a question about
- * what the names *resolve* to, after reference flattening, which this phase has no answer to.
+ * Distinctness of the variants (§5.4) is deliberately not checked here — it is a question about what
+ * the names *resolve* to, which this phase has no answer to.
  */
-function choiceBinding(variants: readonly TypeRef[]): Binding {
+function choiceBinding(variants: readonly TypeExpr[]): Binding {
   const members: DataValue[] = variants.map((variant) => scoped(refValueOf(variant)));
-  return {
-    head: CHOICE,
-    fields: [{ name: VARIANTS, value: scoped(arrayValue(members)) }],
-    applicationSlots: new Map(),
-  };
+  return { head: CHOICE, fields: [{ name: VARIANTS, value: scoped(arrayValue(members)) }] };
 }
 
 /**
- * `!record { fields: { x => { type: T } ... } }` — §5.2's own rewrite of a bare record body,
- * applied where the body is written so that a record template reaches the resolver as the
- * construction it is (§5.10: a record template is a `record` with `parameters`).
+ * A record template's body as the bindings of `!meta.record_template { fields: { x => { type_param: T } ... } }`
+ * — §5.2's own rewrite, applied where the body is written, so the template's explicit spelling
+ * ({@link labelled}) and its sugar reach the resolver as one payload ({@link RecordTemplateDef}).
  *
- * **Only what the author wrote is written.** A field's unmarked `optional: false`/`voidable:
- * false`/`role: FREE` is the `record_field` constructor's own default, so it is never stated —
- * the same economy {@link arrayBinding} makes with an unmarked element's `voidable`.
+ * **The rewrite is syntactic.** Each field is classified here, once, by its source spelling while the
+ * parameters are in scope (§5.10's shadowing rule, {@link label}): a bare parameter name in a field's
+ * type is its `type_param`, an unquoted parameter token in its value its `value_param`, and everything
+ * else is written as the author wrote it. The role is the modifier's either way, so closing substitutes a
+ * value and changes no fact.
+ *
+ * **Only what the author wrote is written.** A field's unmarked `optional: false`/`voidable: false`/
+ * `role: FREE` is the `record_template_field` constructor's own default, so it is never stated.
  */
-function recordBinding(record: RecordDef): Binding {
+function recordBinding(record: RecordDef, parameters: readonly string[]): RecordField[] {
   const fields: (readonly [string, DataValue])[] = [];
   const groups: DataValue[] = [];
   const discriminators: string[] = [];
@@ -742,9 +865,12 @@ function recordBinding(record: RecordDef): Binding {
   for (const entry of record.entries) {
     if (entry.kind === 'fieldDef') {
       requireFieldNameUnseen(entry.name, seen, 'this body declares it twice');
-      const field = recordFieldValue(entry);
+      const field = recordFieldValue(entry, parameters);
       fields.push([entry.name, field.value]);
-      if (field.selector) discriminators.push(entry.name);
+      // `=?`, or — in a template — a pin taken from a value parameter, which supplies one value per
+      // application and so one per member (§5.10).
+      if (field.selector || parametricallyPinned(entry, parameters))
+        discriminators.push(entry.name);
       continue;
     }
     for (const member of groupMembers(entry)) {
@@ -753,11 +879,12 @@ function recordBinding(record: RecordDef): Binding {
         seen,
         "a group member repeats it -- member labels share the enclosing record's field namespace",
       );
-      // A group's members lower to ordinary fields with `optional: true` (plus `voidable` for a
-      // `T?` member); the group itself records only their names, which are optional within their
-      // option, and whether it is optional (§5.11, `spec/m/meta-kernel-resolved.tn`).
+      // A group's members lower to ordinary fields with `optional: true` (plus `voidable` for a `T?`
+      // member); the group itself records only their names, which are optional within their option, and
+      // whether it is optional (§5.11).
+      const type = refValueOf(member.typeRef);
       const memberFields: RecordField[] = [
-        { name: TYPE, value: scoped(refValueOf(member.typeRef)) },
+        { name: label(TYPE, type, parameters), value: scoped(type) },
         nameField(OPTIONAL, 'true'),
       ];
       if (member.voidable) {
@@ -771,25 +898,123 @@ function recordBinding(record: RecordDef): Binding {
   if (groups.length > 0) {
     binding.push({ name: GROUPS, value: scoped(arrayValue(groups)) });
   }
-  // §5.2's `=?` selector, lowered the same way `resolveEntry`'s own non-template path lowers it
-  // (`definitionResolver.ts`): the base's own statement of which fields its members pin, in
-  // declaration order -- a fresh record TEMPLATE reaches this constructor via `desugar.ts` rather
-  // than that path (§5.2's canonical-form rewrite, `structuralTypeDefPass`), so it has to be
-  // written here too, or a template's own selectors would never reach the resolver at all.
+  // The record's own statement about which of its fields select a member (§5.2), written once rather
+  // than per field, so a member simply states none.
   if (discriminators.length > 0) {
     binding.push({
       name: DISCRIMINATORS,
-      value: scoped(arrayValue(discriminators.map((d) => scoped(tokenValue(d, 'unquoted'))))),
+      value: scoped(arrayValue(discriminators.map((d) => scoped(declaredName(d).coreValue)))),
     });
   }
-  return { head: RECORD, fields: binding, applicationSlots: new Map() };
+  return binding;
+}
+
+/** A record template's `bindings`, its `parameters` stated last, each provisionally a type parameter. */
+function recordTemplatePayload(
+  bindings: readonly RecordField[],
+  parameters: readonly string[],
+): DataValue {
+  const declared: DataValue[] = parameters.map((parameter) =>
+    scoped(recordValue([nameField(NAME, parameter), nameField(TYPE, metaName('type_ref'))])),
+  );
+  return {
+    annotations: [],
+    typeRef: RECORD_TEMPLATE,
+    coreValue: recordValue([
+      ...bindings,
+      { name: PARAMETERS, value: scoped(arrayValue(declared)) },
+    ]),
+  };
+}
+
+/**
+ * The explicit spelling, `<T> !meta.record { ... }`, as the `!meta.record_template { ... }` it denotes:
+ * each field of a written `fields` map labelled as {@link recordBinding} labels a sugar body's, a
+ * `!meta.record_field` tag read as `!meta.record_template_field`, and the parameters stated last. Every
+ * other slot is carried as written, for the resolver to answer in the author's terms. A positional field
+ * (`x => text`, `x => T`) is spelled out and labelled as its `type` would be.
+ */
+function labelled(written: DataValue, parameters: readonly string[]): DataValue {
+  if (written.coreValue.kind !== 'record') {
+    return { ...written, typeRef: RECORD_TEMPLATE };
+  }
+  const fields = written.coreValue.fields.map((slot): RecordField => {
+    const value = slot.value.coreValue;
+    if (slot.name !== FIELDS || value.kind !== 'map') return slot;
+    const entries: MapEntry[] = value.entries.map((entry) => ({
+      key: entry.key,
+      value: labelledField(entry.value, parameters),
+    }));
+    return { name: slot.name, value: { ...slot.value, coreValue: { kind: 'map', entries } } };
+  });
+  const payload = recordTemplatePayload(fields, parameters);
+  return { ...payload, annotations: written.annotations };
+}
+
+/** One written `meta.record_field` as the `meta.record_template_field` it is in a template. */
+function labelledField(field: DataValue, parameters: readonly string[]): DataValue {
+  const tag = field.typeRef === RECORD_FIELD ? RECORD_TEMPLATE_FIELD : field.typeRef;
+  const core = field.coreValue;
+  let members: CoreValue;
+  if (core.kind === 'record') {
+    members = {
+      kind: 'record',
+      fields: core.fields.map((member) => ({
+        name: label(member.name, member.value.coreValue, parameters),
+        value: member.value,
+      })),
+    };
+  } else if (core.kind === 'empty-brace') {
+    members = core;
+  } else {
+    members = recordValue([{ name: label(TYPE, core, parameters), value: scoped(core) }]);
+  }
+  return {
+    annotations: field.annotations,
+    ...(tag === undefined ? {} : { typeRef: tag }),
+    coreValue: members,
+  };
+}
+
+/**
+ * The name a record template field's `slot` is written under: `type_param` for a `type` and
+ * `value_param` for a `value` that is an unquoted token naming one of `parameters` (§5.10's shadowing
+ * rule over the source spelling), and `slot` itself otherwise.
+ */
+function label(slot: string, value: CoreValue, parameters: readonly string[]): string {
+  const parameter =
+    value.kind === 'token' && value.form === 'unquoted' && parameters.includes(value.text);
+  if (!parameter) return slot;
+  if (slot === TYPE) return TYPE_PARAM;
+  if (slot === VALUE) return VALUE_PARAM;
+  return slot;
+}
+
+/**
+ * Whether this field's value is pinned to one of the enclosing template's own value parameters — a
+ * selector by derivation. A field whose declared *type* is a parameter is passed over: a position typed
+ * by the template reads a selector before it knows the member, so a type that varies per application is
+ * one it cannot read, and `<T, N> { v: T = N }` is an ordinary template rather than a family.
+ */
+function parametricallyPinned(field: FieldDef, parameters: readonly string[]): boolean {
+  if (
+    field.type === undefined ||
+    (field.type.typeRef.kind === 'nameRef' && parameters.includes(field.type.typeRef.name))
+  ) {
+    return false;
+  }
+  const modifier = field.modifier;
+  return (
+    modifier?.kind === 'fixed' &&
+    modifier.token.form === 'unquoted' &&
+    parameters.includes(modifier.token.text)
+  );
 }
 
 /**
  * §5.11's uniqueness rule over the body this phase is rewriting: a field name is unique across a
- * record's plain fields and all its groups' members. Asked here as well as by a later resolution
- * phase, and asking it twice is not duplication — this copy sees a template's body, the other a
- * closed one, and after normalisation those are two different phases.
+ * record's plain fields and all its groups' members. Asked here as well as by a later resolution phase,
+ * and asking it twice is not duplication — this copy sees a template's body, the other a closed one.
  */
 function requireFieldNameUnseen(name: string, seen: Set<string>, explanation: string): void {
   if (seen.has(name)) {
@@ -801,18 +1026,18 @@ function requireFieldNameUnseen(name: string, seen: Set<string>, explanation: st
   seen.add(name);
 }
 
-/** {@link recordFieldValue}'s own result: the field's wire value, plus whether §5.2's `=?` marked it a selector (`recordBinding`'s own `discriminators` list, never carried on the field itself -- §8.1's `record_field` has no such member). */
+/** {@link recordFieldValue}'s own result: the field's wire value, plus whether §5.2's `=?` marked it a selector. */
 interface RecordFieldValue {
   readonly value: DataValue;
   readonly selector: boolean;
 }
 
 /**
- * One `record_field`'s wire value, with `optional`/`voidable`/`role`/`value` written only where
- * the author's marks say something the constructor's own defaults do not (§5.2's
- * `resolveFieldMarks` table, `fieldModifiers.ts`).
+ * One `record_template_field`'s wire value, with `optional`/`voidable`/`role`/`value` written only where
+ * the author's marks say something the constructor's own defaults do not (§5.2's `resolveFieldMarks`
+ * table, `fieldModifiers.ts`), and a parameter labelled ({@link label}).
  */
-function recordFieldValue(field: FieldDef): RecordFieldValue {
+function recordFieldValue(field: FieldDef, parameters: readonly string[]): RecordFieldValue {
   if (field.type === undefined) {
     throw new TsonSchemaValidationError(
       `field '${field.name}' states only a modifier and no type-ref, but names no inherited ` +
@@ -827,7 +1052,8 @@ function recordFieldValue(field: FieldDef): RecordFieldValue {
     field.type.voidable,
     field.modifier,
   );
-  const members: RecordField[] = [{ name: TYPE, value: scoped(refValueOf(field.type.typeRef)) }];
+  const type = refValueOf(field.type.typeRef);
+  const members: RecordField[] = [{ name: label(TYPE, type, parameters), value: scoped(type) }];
   if (resolved.optional) {
     members.push(nameField(OPTIONAL, 'true'));
   }
@@ -838,7 +1064,10 @@ function recordFieldValue(field: FieldDef): RecordFieldValue {
     members.push(nameField(ROLE, resolved.role));
   }
   if (resolved.value !== undefined) {
-    members.push({ name: VALUE, value: scoped(resolved.value) });
+    members.push({
+      name: label(VALUE, resolved.value, parameters),
+      value: scoped(resolved.value),
+    });
   }
   return {
     value: scoped(recordValue(members), field.annotations),
@@ -847,14 +1076,13 @@ function recordFieldValue(field: FieldDef): RecordFieldValue {
 }
 
 /**
- * §5.3's size specifier as the `min_items`/`max_items` pair it binds — one rule for arrays and
- * maps alike, since both constructors declare the same two fields. An exact `N` pins both, so
- * `[T; 3]` and `[T; 3..3]` land on the very same entry.
+ * §5.3's size specifier as the `min_items`/`max_items` pair it binds — one rule for arrays and maps
+ * alike, since both constructors declare the same two fields. An exact `N` pins both, so `[T; 3]` and
+ * `[T; 3..3]` land on the very same entry.
  *
- * **A zero floor is rejected** rather than desugared (§5.3's own rule): identity is structural
- * (§8.2), so `[T; 0..]` would land on an entry distinct from the unbounded `[T]` that means
- * exactly the same thing. Only a literal `0` is caught — a bound naming a value parameter is not
- * concrete until materialisation.
+ * **A zero floor is rejected** rather than desugared (§5.3's own rule): identity is structural (§8.2), so
+ * `[T; 0..]` would land on an entry distinct from the unbounded `[T]` that means exactly the same thing.
+ * Only a literal `0` is caught — a bound naming a value parameter is not concrete until materialisation.
  */
 function sizeFields(size: SizeSpec, shown: string): RecordField[] {
   switch (size.kind) {
@@ -878,9 +1106,9 @@ function sizeFields(size: SizeSpec, shown: string): RecordField[] {
 }
 
 /**
- * §5.3's bound-coherence rule on the `min_items`/`max_items` pair, applying identically to arrays
- * and maps: a resolver error where both bounds are literal at schema load. A bound that names a
- * value parameter is not concrete here, and checking it is a materialisation-time question.
+ * §5.3's bound-coherence rule on the `min_items`/`max_items` pair, applying identically to arrays and
+ * maps: a resolver error where both bounds are literal at schema load. A bound that names a value
+ * parameter is not concrete here, and checking it is a materialisation-time question.
  */
 function checkBounds(fields: readonly RecordField[]): void {
   let min: bigint | undefined;
@@ -912,9 +1140,9 @@ function checkBounds(fields: readonly RecordField[]): void {
 }
 
 /**
- * A plain (no digit separators, no radix prefix) signed decimal integer literal, or `undefined`
- * when `text` is not one — the shape a size-spec bound's raw token text has whenever it names a
- * concrete number rather than a template parameter.
+ * A plain (no digit separators, no radix prefix) signed decimal integer literal, or `undefined` when
+ * `text` is not one — the shape a size-spec bound's raw token text has whenever it names a concrete
+ * number rather than a template parameter.
  */
 function tryParseDecimalInteger(text: string): bigint | undefined {
   let start = 0;
@@ -949,53 +1177,51 @@ function instanceOf(binding: Binding, typeParams: readonly string[] = []): Insta
 
 function hoistOrKeep(
   binding: Binding | undefined,
-  unexpanded: TypeRef,
+  unexpanded: TypeExpr,
   context: DesugarContext,
-): TypeRef {
+): TypeExpr {
   return binding === undefined ? unexpanded : hoist(binding, context);
 }
 
 /**
- * Records an injected declaration under its derived name and returns the reference that replaces
- * the sugar.
+ * Records an injected declaration under its derived name and returns the reference that replaces the
+ * sugar. The name is minted at the root whatever map the sugar sits in (§2.2.3).
  *
- * **Which entry it lifts to is the one rule that decides open vs. closed.** A form naming none of
- * the enclosing declaration's parameters lifts *closed* — an ordinary construction referenced by
- * a bare name — whether or not the declaration around it is itself a template. A form naming one
- * lifts *open*: a template over just the parameters it uses, referenced by an application binding
- * them straight back through. `<T> { a: [T]  b: [order] }` therefore injects one of each, and
- * only the first has to wait for materialisation.
+ * **Which entry it lifts to is the one rule that decides open vs. closed.** A form naming none of the
+ * enclosing declaration's parameters lifts *closed* — an ordinary construction referenced by a bare name
+ * — whether or not the declaration around it is itself a template. A form naming one lifts *open*: a
+ * template over just the parameters it uses, referenced by an application binding them straight back
+ * through. `<T> { a: [T]  b: [order] }` therefore injects one of each, and only the first has to wait for
+ * materialisation.
  */
-function hoist(binding: Binding, context: DesugarContext): TypeRef {
+function hoist(binding: Binding, context: DesugarContext): Reference {
   const parameters = parametersIn(binding, context.currentParameters);
   if (parameters.length === 0) {
     const name = bindingName(binding);
     inject(name, binding, () => instanceOf(binding), context);
-    return { kind: 'simpleRef', name };
+    return { kind: 'nameRef', name };
   }
   const renamed = positionalNames(binding, parameters);
   const normalised = rename(binding, parameters, renamed);
   const name = bindingName(normalised);
   inject(name, normalised, () => instanceOf(normalised, renamed), context);
   return {
-    kind: 'genericRef',
+    kind: 'applicationRef',
     name,
     args: asNonEmpty(
       parameters.map((parameter): TypeArg => ({
         kind: 'ref',
-        ref: { kind: 'simpleRef', name: parameter },
+        ref: { kind: 'nameRef', name: parameter },
       })),
     ),
   };
 }
 
 /**
- * Injects `declaration` under `name`, unless the same form already claimed it — §8.2's freshness
- * MUST, decided rather than assumed (`mintedNames.ts`'s own doc). `binding` is the form `name` was
- * derived from, canonically rendered here for {@link MintedNames.claim} to compare against
- * whatever that name was first claimed with; a mismatch is a genuine 32-bit hash collision between
- * two distinct forms; TS's own `claim` throws for that rather than silently overwriting the
- * earlier declaration.
+ * Injects `declaration` under `name`, unless the same form already claimed it — §8.2's freshness MUST,
+ * decided rather than assumed (`mintedNames.ts`'s own doc). A mismatch is a genuine 32-bit hash collision
+ * between two distinct forms; `claim` throws for that rather than silently overwriting the earlier
+ * declaration.
  */
 function inject(
   name: string,
@@ -1004,6 +1230,14 @@ function inject(
   context: DesugarContext,
 ): void {
   if (context.imported.has(name)) {
+    // A name an import already declares is referenced, not redeclared; the form it stands for is kept so
+    // the resolver can hold that entry to it (§8.2).
+    context.reused.set(name, {
+      nameAnnotations: [],
+      name,
+      typeDefAnnotations: [],
+      typeDef: build(),
+    });
     return;
   }
   if (context.minted.claim(name, canonicalBinding(binding.head, binding.fields))) {
@@ -1017,13 +1251,8 @@ function inject(
 }
 
 /**
- * Every parameter of the enclosing declaration this binding record names, in the order the
- * declaration lists them — the form's own parameter list, and the argument list of the reference
- * that replaces it.
- *
- * Asked of the resolved record, not of the source form, so a parameter reaches it the same way
- * whichever channel carried it: `[T]` names one in a type slot and `[order; N]` in a value slot,
- * and §5.3's size specifier keeps its bound as raw token text precisely because it may be either.
+ * Every parameter of the enclosing declaration this binding record names, in the order the declaration
+ * lists them — the form's own parameter list, and the argument list of the reference that replaces it.
  */
 function parametersIn(binding: Binding, currentParameters: readonly string[]): string[] {
   const found: string[] = [];
@@ -1035,7 +1264,7 @@ function parametersIn(binding: Binding, currentParameters: readonly string[]): s
   return found;
 }
 
-/** Whether `value`, or anything nested inside it, is the bare unquoted token `text`. */
+/** Whether `value`, or anything nested inside it (an application's arguments included), is the bare unquoted token `text`. */
 function namesToken(value: CoreValue, text: string): boolean {
   switch (value.kind) {
     case 'token':
@@ -1044,25 +1273,34 @@ function namesToken(value: CoreValue, text: string): boolean {
       return value.elements.some((element) => namesToken(element.coreValue, text));
     case 'record':
       return value.fields.some((field) => namesToken(field.value.coreValue, text));
+    case 'reference':
+      return value.reference.kind === 'application' && namesInApplication(value.reference, text);
     case 'map':
     case 'empty-brace':
-    case 'reference':
     case 'void':
       return false;
   }
 }
 
+function namesInApplication(application: ApplicationReference, text: string): boolean {
+  if (application.name === text) return true;
+  return application.arguments.some((argument) =>
+    argument.kind === 'reference'
+      ? argument.reference.kind === 'name'
+        ? argument.reference.name === text
+        : namesInApplication(argument.reference, text)
+      : argument.form === 'unquoted' && argument.text === text,
+  );
+}
+
 /**
  * The names an open form's own parameters take: `p0`, `p1`, ... positionally.
  *
- * **Renaming is what makes an open entry identify with its equals.** Two forms alike up to a
- * consistent renaming of parameters are one template (§8.2), so `<T> [T]` and `<A> [A]` have to
- * land on one entry — and since the name is derived from the record, normalising the record is
- * what normalises the name.
+ * **Renaming is what makes an open entry identify with its equals.** Two forms alike up to a consistent
+ * renaming of parameters are one template (§8.2), so `<T> [T]` and `<A> [A]` have to land on one entry —
+ * and since the name is derived from the record, normalising the record is what normalises the name.
  *
- * The prefix grows until it collides with nothing the record already names: a binding may hold a
- * concrete reference to a type genuinely called `p0`, and renaming a parameter on top of it would
- * make the two indistinguishable in the body that results.
+ * The prefix grows until it collides with nothing the record already names.
  */
 function positionalNames(binding: Binding, parameters: readonly string[]): string[] {
   let prefix = 'p';
@@ -1095,41 +1333,20 @@ function rename(
     }
     substitution.set(parameter, target);
   }
-  const applicationSlots = new Map<string, TypeRef>();
-  binding.applicationSlots.forEach((ref, slot) =>
-    applicationSlots.set(slot, renameRef(ref, substitution)),
-  );
   return {
     head: binding.head,
     fields: binding.fields.map((field) => ({
       name: field.name,
       value: renameScoped(field.value, substitution),
     })),
-    applicationSlots,
   };
 }
 
-/** An application's own arguments renamed alongside the wire record beside it, so the two stay in step. */
-function renameRef(ref: TypeRef, substitution: ReadonlyMap<string, string>): TypeRef {
-  if (ref.kind === 'simpleRef') {
-    const renamed = substitution.get(ref.name);
-    return renamed === undefined ? ref : { kind: 'simpleRef', name: renamed };
-  }
-  if (ref.kind !== 'genericRef') {
-    throw new TsonInternalError('an application slot may only ever hold a simpleRef or genericRef');
-  }
-  const args = asNonEmpty(
-    ref.args.map((argument): TypeArg =>
-      argument.kind === 'ref'
-        ? { kind: 'ref', ref: renameRef(argument.ref, substitution) }
-        : argument,
-    ),
-  );
-  return { kind: 'genericRef', name: ref.name, args };
-}
-
-function renameScoped(scoped: DataValue, substitution: ReadonlyMap<string, string>): DataValue {
-  return { ...scoped, coreValue: renameValue(scoped.coreValue, substitution) };
+function renameScoped(
+  scopedValue: DataValue,
+  substitution: ReadonlyMap<string, string>,
+): DataValue {
+  return { ...scopedValue, coreValue: renameValue(scopedValue.coreValue, substitution) };
 }
 
 function renameValue(value: CoreValue, substitution: ReadonlyMap<string, string>): CoreValue {
@@ -1151,34 +1368,63 @@ function renameValue(value: CoreValue, substitution: ReadonlyMap<string, string>
           value: renameScoped(field.value, substitution),
         })),
       };
+    case 'reference':
+      return value.reference.kind === 'application'
+        ? { kind: 'reference', reference: renameApplication(value.reference, substitution) }
+        : value;
     case 'map':
     case 'empty-brace':
-    case 'reference':
     case 'void':
       return value;
   }
 }
 
+/** An application's own head and arguments renamed alongside the wire record beside it. */
+function renameApplication(
+  application: ApplicationReference,
+  substitution: ReadonlyMap<string, string>,
+): ApplicationReference {
+  return {
+    kind: 'application',
+    name: substitution.get(application.name) ?? application.name,
+    arguments: application.arguments.map((argument): ReferenceArgument => {
+      if (argument.kind === 'reference') {
+        return {
+          kind: 'reference',
+          reference:
+            argument.reference.kind === 'name'
+              ? {
+                  kind: 'name',
+                  name: substitution.get(argument.reference.name) ?? argument.reference.name,
+                }
+              : renameApplication(argument.reference, substitution),
+        };
+      }
+      const renamed = argument.form === 'unquoted' ? substitution.get(argument.text) : undefined;
+      return renamed === undefined ? argument : { ...argument, text: renamed };
+    }),
+  };
+}
+
 /**
- * The type-ref an element or map-value position denotes: an ordinary reference expanded the usual
- * way, or a **nested declaration-level form** hoisted into its own declaration and replaced by its
- * name.
+ * The type-expr an element or map-value position denotes: an ordinary reference expanded the usual way,
+ * or a **nested declaration-level form** hoisted into its own declaration and replaced by its name.
  *
- * §5.3's declaration-level container syntax nests inside itself (`[[T; 2], U]`,
- * `{text => [order; 1..]}`), and the inner form desugars first — the bottom-up hoist
- * {@link typeRefPass} already performs for an inline form, one tier down.
+ * §5.3's declaration-level container syntax nests inside itself (`[[T; 2], U]`, `{text => [order; 1..]}`),
+ * and the inner form desugars first — the bottom-up hoist {@link typeRefPass} already performs for an
+ * inline form, one tier down.
  */
-function elementRefOf(element: ElementType, context: DesugarContext): TypeRef {
+function elementRefOf(element: ElementType, context: DesugarContext): TypeExpr {
   return typeRefPass(element.typeRef, context);
 }
 
 /**
- * How an element position was spelled, for the one diagnostic that quotes the sugar form back at
- * its author: the position's own name when it has one, and a stand-in when it is an inline or
- * nested form whose expansion carries a derived name the author never wrote.
+ * How an element position was spelled, for the one diagnostic that quotes the sugar form back at its
+ * author: the position's own name when it has one, and a stand-in when it is an inline or nested form
+ * whose expansion carries a derived name the author never wrote.
  */
 function shownElement(element: ElementType): string {
-  return element.typeRef.kind === 'simpleRef' ? element.typeRef.name : 'T';
+  return element.typeRef.kind === 'nameRef' ? element.typeRef.name : 'T';
 }
 
 // ── Wire-value builders ──────────────────────────────────────────────────────────────────────
@@ -1196,73 +1442,60 @@ function arrayValue(elements: readonly DataValue[]): CoreValue {
 }
 
 /**
- * A scalar type slot as both of the things downstream needs it as: the wire field a closed
- * construction writes, and — when the reference carries arguments — the reference itself, kept
- * whole for the open form to bind.
+ * What a reference-typed slot holds: a bare token for a plain name, the data grammar's reference value
+ * for an application or a sibling reference ([TSON-DATA] §7.4). **One spelling per shape, produced in
+ * one place** — a slot written two ways is a slot two phases disagree about, and `derivedName.ts`'s
+ * `ofBinding` hashes what is written, so a second spelling of one reference would split one type across
+ * two entries.
+ *
+ * A value argument makes the trip intact, its token as written: §5.10 describes a type argument's literal
+ * as a bare token rather than as the value it denotes.
  */
-function refSlot(
-  slot: string,
-  ref: TypeRef,
-  fields: RecordField[],
-  applicationSlots: Map<string, TypeRef>,
-): void {
-  fields.push({ name: slot, value: scoped(refValueOf(ref)) });
-  if (ref.kind !== 'simpleRef') {
-    applicationSlots.set(slot, ref);
+function refValueOf(ref: TypeExpr): CoreValue {
+  switch (ref.kind) {
+    case 'nameRef':
+      return tokenValue(ref.name, 'unquoted');
+    case 'siblingRef':
+      // A record template field's type, the one slot a sibling reference reaches here.
+      return { kind: 'reference', reference: { kind: 'sibling', field: ref.field } };
+    case 'applicationRef':
+      return { kind: 'reference', reference: applicationOf(ref) };
+    default:
+      throw new TsonInternalError(
+        'refValueOf is only ever called with a name, an application or a sibling reference',
+      );
   }
 }
 
 /**
- * What a `type_ref`-typed slot holds: a bare token for a plain name, `type_ref`'s record form for
- * an application. **One spelling per shape, produced in one place** — a slot written two ways is
- * a slot two phases disagree about, and `derivedName.ts`'s own `ofBinding` hashes what is
- * written, so a second spelling of one reference would split one type across two entries.
- *
- * This is the AST-layer half of that one spelling — it operates on `ast/schema/typeref.js`'s own
- * (unresolved) `TypeRef`, since desugaring runs before resolution. `wireForm.ts`'s own `refValue`
- * is the resolved-layer twin, over `schema/meta`'s `TypeRef` — a held composition/refinement
- * template's fields are already resolved by the time they are held, so that function cannot reuse
- * this one, but both spell the shape identically by construction (see its own doc).
+ * The reference value an application spells. By the time this runs, every argument's own reference has
+ * already passed through {@link typeRefPass}, so an argument is always a bare name or a further
+ * application — never an inline container form.
  */
-function refValueOf(ref: TypeRef): CoreValue {
-  if (ref.kind === 'simpleRef') {
-    return tokenValue(ref.name, 'unquoted');
-  }
-  if (ref.kind === 'genericRef') {
-    return refRecordOf(ref);
-  }
-  throw new TsonInternalError('refValueOf is only ever called with a simpleRef or genericRef');
-}
-
-/**
- * `{ name: head  arguments: [ { name: A } ] }` — `type_ref`'s record form, which is how a closed
- * slot carries an application through the constructor's own reader.
- *
- * By the time this runs, every argument's own reference has already passed through
- * {@link typeRefPass} (as part of expanding the `GenericRef` this record form is spelling), so an
- * argument here is always a bare name or a further application — never an inline container form —
- * which is the invariant the two `TypeArg.Ref` branches below rely on.
- */
-function refRecordOf(generic: GenericRef): RecordValue {
-  const args: DataValue[] = generic.args.map((argument) => {
-    if (argument.kind === 'value') {
-      return scoped(recordValue([{ name: VALUE, value: scoped(argument.value) }]));
-    }
-    const inner = argument.ref;
-    if (inner.kind === 'genericRef') {
-      return scoped(recordValue([{ name: NAME, value: scoped(refRecordOf(inner)) }]));
-    }
-    if (inner.kind === 'simpleRef') {
-      return scoped(recordValue([nameField(NAME, inner.name)]));
-    }
-    throw new TsonInternalError(
-      'a type argument reference may only ever be a simpleRef or genericRef by this point in the walk',
-    );
-  });
-  return recordValue([
-    nameField(NAME, generic.name),
-    { name: ARGUMENTS, value: scoped(arrayValue(args)) },
-  ]);
+function applicationOf(application: ApplicationRef): ApplicationReference {
+  return {
+    kind: 'application',
+    name: application.name,
+    arguments: application.args.map((argument): ReferenceArgument => {
+      if (argument.kind === 'value') {
+        return {
+          kind: 'value',
+          text: argument.value.text,
+          form: argument.value.form,
+        };
+      }
+      const inner = argument.ref;
+      if (inner.kind === 'applicationRef') {
+        return { kind: 'reference', reference: applicationOf(inner) };
+      }
+      if (inner.kind === 'nameRef') {
+        return { kind: 'reference', reference: { kind: 'name', name: inner.name } };
+      }
+      throw new TsonInternalError(
+        'a type argument reference may only ever be a name or an application by this point in the walk',
+      );
+    }),
+  };
 }
 
 // ── Internal names (§8.2) ────────────────────────────────────────────────────────────────────
@@ -1274,9 +1507,9 @@ function bindingName(binding: Binding): string {
 // ── Small shared helpers ─────────────────────────────────────────────────────────────────────
 
 /**
- * Asserts `items` is non-empty and returns it typed as such. Only ever called where the caller
- * already knows this by construction (a non-empty `parameters` list, an application's own
- * argument list); the runtime check is a defensive backstop, not a real possibility.
+ * Asserts `items` is non-empty and returns it typed as such. Only ever called where the caller already
+ * knows this by construction (a non-empty `parameters` list, an application's own argument list); the
+ * runtime check is a defensive backstop, not a real possibility.
  */
 function asNonEmpty<T>(items: readonly T[]): readonly [T, ...T[]] {
   if (items.length === 0) {
@@ -1287,8 +1520,8 @@ function asNonEmpty<T>(items: readonly T[]): readonly [T, ...T[]] {
 
 /**
  * Maps `items`, returning the exact original array when every element came back identical. The
- * reference-equality check is what lets an unchanged subtree propagate "nothing changed" all the
- * way up rather than rebuilding every ancestor.
+ * reference-equality check is what lets an unchanged subtree propagate "nothing changed" all the way up
+ * rather than rebuilding every ancestor.
  */
 function mapShared<T>(items: readonly T[], rewrite: (item: T) => T): readonly T[] {
   let out: T[] | undefined;

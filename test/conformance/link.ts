@@ -89,11 +89,11 @@ function assertLinkedNamespaceMatches(
   if (expected.members !== undefined) {
     for (const claim of expected.members) {
       const definition = definitionOf(vector, entries, claim.name);
-      if (isTemplateBody(definition) || definition.kind !== 'kind_type') {
-        throw new Error(`${vector.name}: '${claim.name}' is not a kind (§4.2)`);
+      if (isTemplateBody(definition) || definition.kind !== 'reference_type') {
+        throw new Error(`${vector.name}: '${claim.name}' is not a reference (§4.2)`);
       }
       const actual = new Set(
-        (definition.members ?? []).map((name) => normalizeSyntheticName(name)),
+        (definition.index?.members ?? []).map((name) => normalizeSyntheticName(name)),
       );
       const wanted = new Set(claim.members.map((name) => normalizeSyntheticName(name)));
       expect(actual).toEqual(wanted);

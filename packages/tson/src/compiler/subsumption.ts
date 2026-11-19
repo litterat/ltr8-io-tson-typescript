@@ -72,6 +72,7 @@ import {
   typeRefAhead,
 } from '../reader/tree/grammar.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
+import { typeNameOf } from '../schema/meta/bodies.js';
 import type { Namespace, Token, Top } from '../schema/meta/typedef.js';
 import { isFamilyBase, isTemplateBody, subtypesOf } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
@@ -84,7 +85,14 @@ import { metaFormOfLexer } from './tokenForms.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import { applyNormalization } from '../unicode/normalization.js';
 
-const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
+const PRODUCT_KINDS: ReadonlySet<string> = new Set([
+  'record',
+  'record_template',
+  'namespace',
+  'array',
+  'map',
+  'tuple',
+]);
 
 /**
  * Whether `body` is `Atom`- or `Product`-shaped -- the bodies §7.2's rule governs. A record
@@ -150,9 +158,9 @@ export function guardSubsumption(
     subtypeNames.map((subtype) => [terminal(subtype, (n) => entries.get(n)), subtype] as const),
   );
   const subtypeList = subtypeNames.join(', ');
-  const recordBody = isRecordBody(definition) ? definition : undefined;
   // §5.10: a record template is a family base, ABSTRACT by construction whatever its own
-  // `extension` (each application's) says.
+  // `extension` (each application's) says; its selector fields live on its members.
+  const recordBody = isRecordBody(definition) || isFamilyBase(definition) ? definition : undefined;
   const isAbstract = recordBody?.extension === 'ABSTRACT' || isFamilyBase(recordBody);
   const discriminators = recordBody?.discriminators ?? [];
 
@@ -160,7 +168,7 @@ export function guardSubsumption(
     return buildMemberDispatchReader(
       name,
       discriminators,
-      recordBody?.fields,
+      isRecordBody(definition) ? definition.fields : undefined,
       entries,
       own,
       resolve,
@@ -365,7 +373,7 @@ function buildMemberDispatchReader(
             'any member of it declares such a field',
         );
       }
-      return [fieldName, resolve(typedField.type.name)] as const;
+      return [fieldName, resolve(typeNameOf(typedField))] as const;
     }),
   );
   const candidates: DispatchCandidate[] = [];

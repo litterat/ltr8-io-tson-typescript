@@ -2,16 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { createHeldBody } from '../src/compiler/heldBody.js';
 import {
-  argumentOf,
+  applicationIn,
   defaultAnnotationValueEncoder,
   heldEmptyRecord,
   heldRecord,
-  isApplication,
   refValue as metaRefValue,
-  typeRefOf,
 } from '../src/compiler/wireForm.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
-import type { RecordValue } from '../src/ast/value.js';
 import { fieldMapOf } from './model-fixtures.js';
 
 describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", () => {
@@ -23,7 +20,7 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
     });
   });
 
-  it('an application is the { name arguments } record form, round-tripping through typeRefOf', () => {
+  it('an application is the structured reference value of the data grammar (§7.4), round-tripping through applicationIn', () => {
     const ref = {
       name: 'box',
       arguments: [
@@ -33,9 +30,8 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
       annotations: [],
     };
     const wire = metaRefValue(ref);
-    expect(wire.kind).toBe('record');
-    expect(isApplication(wire as RecordValue)).toBe(true);
-    expect(typeRefOf(wire as RecordValue)).toEqual({
+    expect(wire.kind).toBe('reference');
+    expect(applicationIn(wire)).toEqual({
       name: 'box',
       arguments: [
         { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
@@ -56,51 +52,16 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
       arguments: [{ kind: 'ref' as const, ref: inner }],
       annotations: [],
     };
-    const wire = metaRefValue(outer) as RecordValue;
-    const back = typeRefOf(wire);
-    expect(back.name).toBe('box');
-    expect(back.arguments[0]).toEqual({ kind: 'ref', ref: inner });
-  });
-});
-
-describe('argumentOf', () => {
-  it('a `value` member is a literal argument', () => {
-    const record: RecordValue = {
-      kind: 'record',
-      fields: [
-        {
-          name: 'value',
-          value: { annotations: [], coreValue: { kind: 'token', text: '42', form: 'unquoted' } },
-        },
-      ],
-    };
-    expect(argumentOf(record)).toEqual({ kind: 'value', value: { text: '42', form: 'UNQUOTED' } });
-  });
-
-  it('a `name` member naming a bare token is a reference argument', () => {
-    const record: RecordValue = {
-      kind: 'record',
-      fields: [
-        {
-          name: 'name',
-          value: {
-            annotations: [],
-            coreValue: { kind: 'token', text: 'uuid', form: 'unquoted' },
-          },
-        },
-      ],
-    };
-    expect(argumentOf(record)).toEqual({
-      kind: 'ref',
-      ref: { name: 'uuid', arguments: [], annotations: [] },
-    });
+    const back = applicationIn(metaRefValue(outer));
+    expect(back?.name).toBe('box');
+    expect(back?.arguments[0]).toEqual({ kind: 'ref', ref: inner });
   });
 });
 
 describe('heldEmptyRecord', () => {
-  it('is `!record { fields: {} }` -- an empty field map (§5.2)', () => {
+  it('is `!meta.record { fields: {} }` -- an empty field map (§5.2)', () => {
     const held = heldEmptyRecord();
-    expect(held.typeRef).toBe('record');
+    expect(held.typeRef).toBe('meta.record');
     expect(held.coreValue).toEqual({
       kind: 'record',
       fields: [
@@ -146,7 +107,7 @@ describe('heldRecord', () => {
       extension: 'OPEN',
     };
     const held = heldRecord(body);
-    expect(held.typeRef).toBe('record');
+    expect(held.typeRef).toBe('meta.record');
     if (held.coreValue.kind !== 'record') throw new Error('unreachable');
     const chainField = held.coreValue.fields.find((f) => f.name === 'chain');
     expect(chainField?.value.coreValue).toEqual({
@@ -234,7 +195,7 @@ describe('createHeldBody', () => {
     expect(held.names()).toEqual(new Set(['T']));
     expect(held.parameterNames).toEqual(['T']);
     expect(held.parameters).toEqual([
-      { name: 'T', type: { name: 'type_kind', arguments: [], annotations: [] } },
+      { name: 'T', type: { name: 'meta.type_ref', arguments: [], annotations: [] } },
     ]);
   });
 

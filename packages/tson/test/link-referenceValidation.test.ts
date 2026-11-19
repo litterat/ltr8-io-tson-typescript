@@ -7,7 +7,7 @@ import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
 import { TYPE_KIND } from '../src/schema/meta/bodies.js';
 import type { MetaValue, Token, Top, TypeRef } from '../src/schema/meta/typedef.js';
 import { isTemplateBody, namespaceOf } from '../src/schema/meta/typedef.js';
-import { entry, fieldMapOf } from './model-fixtures.js';
+import { entry, fieldMapOf, namespaceEntry, recordTemplate } from './model-fixtures.js';
 
 function ref(name: string, args: TypeRef['arguments'] = []): TypeRef {
   return { name, arguments: args, annotations: [] };
@@ -44,13 +44,7 @@ function def(
   const value: Top =
     parameters.length === 0 || isTemplateBody(body) || body.kind !== 'record'
       ? body
-      : {
-          ...body,
-          parameters: parameters.map((name) => ({
-            name,
-            type: { name: TYPE_KIND, arguments: [], annotations: [] },
-          })),
-        };
+      : recordTemplate(parameters, body);
   return entry(value, options.supertypes ?? [], options.subtypes ?? []);
 }
 
@@ -132,7 +126,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
           elements: [{ elementType: ref('text'), voidable: false }],
         }),
       ],
-      ['al', def({ kind: 'reference', target: ref('text') })],
+      ['al', def({ kind: 'alias', target: ref('text') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -142,9 +136,9 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   it('reports through a receiver, letting every other entry still be checked', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      ['bad_a', def({ kind: 'reference', target: ref('nowhere_a') })],
-      ['bad_b', def({ kind: 'reference', target: ref('nowhere_b') })],
-      ['good', def({ kind: 'reference', target: ref('text') })],
+      ['bad_a', def({ kind: 'alias', target: ref('nowhere_a') })],
+      ['bad_b', def({ kind: 'alias', target: ref('nowhere_b') })],
+      ['good', def({ kind: 'alias', target: ref('text') })],
     ]);
     const diagnostics = collector();
     validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
@@ -155,7 +149,7 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
   it('rejects a reference to an entry applying a namespace type, a value and not a type (§4.1)', () => {
     const merged = new Map<string, Top>([
       ['myapi', apiValue()],
-      ['user', def({ kind: 'reference', target: ref('myapi') })],
+      ['user', def({ kind: 'alias', target: ref('myapi') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -199,7 +193,7 @@ function apiValue(): Top {
     type: 'operation',
     fields: new Map([['verb', { form: 'token', token: { text: 'GET', form: 'UNQUOTED' } }]]),
   };
-  return namespaceOf('api', new Map([['orders', operation]]));
+  return namespaceEntry(namespaceOf('api', new Map([['orders', operation]])));
 }
 
 describe('validateReferences: a namespace value is a value, never a type (§4.1)', () => {
@@ -231,7 +225,7 @@ describe('validateReferences: a namespace value is a value, never a type (§4.1)
   it('reports the refusal through a receiver as a schema error', () => {
     const merged = new Map<string, Top>([
       ['myapi', apiValue()],
-      ['user', def({ kind: 'reference', target: ref('myapi') })],
+      ['user', def({ kind: 'alias', target: ref('myapi') })],
     ]);
     const diagnostics = collector();
     validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
@@ -267,7 +261,7 @@ describe('validateReferences: arity (§5.10)', () => {
       [
         'user',
         def({
-          kind: 'reference',
+          kind: 'alias',
           target: ref('box', [
             { kind: 'ref', ref: ref('text') },
             { kind: 'ref', ref: ref('text') },
@@ -283,7 +277,7 @@ describe('validateReferences: arity (§5.10)', () => {
   it('admits a bare reference to a record template, a family base and itself a type (§5.10)', () => {
     const merged = new Map<string, Top>([
       ['box', template],
-      ['user', def({ kind: 'reference', target: ref('box') })],
+      ['user', def({ kind: 'alias', target: ref('box') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -297,7 +291,7 @@ describe('validateReferences: arity (§5.10)', () => {
     };
     const merged = new Map<string, Top>([
       ['wrapped', held],
-      ['user', def({ kind: 'reference', target: ref('wrapped') })],
+      ['user', def({ kind: 'alias', target: ref('wrapped') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -307,10 +301,7 @@ describe('validateReferences: arity (§5.10)', () => {
   it('rejects arguments applied to a name that declares no type parameters', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      [
-        'user',
-        def({ kind: 'reference', target: ref('text', [{ kind: 'ref', ref: ref('text') }]) }),
-      ],
+      ['user', def({ kind: 'alias', target: ref('text', [{ kind: 'ref', ref: ref('text') }]) })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -352,7 +343,7 @@ describe('validateReferences: choice variants (§5.4)', () => {
   it('rejects two variants that resolve to the same type', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      ['other_text', def({ kind: 'reference', target: ref('text') })],
+      ['other_text', def({ kind: 'alias', target: ref('text') })],
       [
         'c',
         def({
@@ -632,7 +623,7 @@ describe('validateReferences: field values (§5.2)', () => {
   it("checks a fixed value against the terminal of the field's own type when that type is itself an alias (§5.2, §8.3)", () => {
     const merged = new Map<string, Top>([
       ['int', int],
-      ['count', def({ kind: 'reference', target: ref('int') })],
+      ['count', def({ kind: 'alias', target: ref('int') })],
       [
         'widget',
         def({
@@ -653,7 +644,7 @@ describe('validateReferences: field values (§5.2)', () => {
   it("accepts a fixed value that is a value of the terminal an alias-typed field's own chain leads to (§5.2, §8.3)", () => {
     const merged = new Map<string, Top>([
       ['int', int],
-      ['count', def({ kind: 'reference', target: ref('int') })],
+      ['count', def({ kind: 'alias', target: ref('int') })],
       [
         'widget',
         def({
@@ -737,24 +728,6 @@ describe('validateReferences: field values (§5.2)', () => {
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).toThrow(/the void type/u);
-  });
-
-  it("accepts a default on unit's scalar, non-'void' instance without checking the value’s shape", () => {
-    const merged = new Map<string, Top>([
-      ['token', def({ kind: 'value_type' })],
-      [
-        'widget',
-        def({
-          kind: 'record',
-          fields: fieldMapOf([field('t', ref('token'), 'DEFAULT', token('anything at all'))]),
-          groups: [],
-          extension: 'OPEN',
-        }),
-      ],
-    ]);
-    expect(() => {
-      validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).not.toThrow();
   });
 
   it('quotes the echoed value in the message when it was written quoted', () => {

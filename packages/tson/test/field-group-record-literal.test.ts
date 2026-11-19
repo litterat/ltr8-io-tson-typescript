@@ -12,11 +12,11 @@ describe('§5.11 declaration rules hold for a group written as a `!record` liter
 
   it('accepts the shapes the sugar accepts', () => {
     expect(() =>
-      load(`r => !record { ${fields('a', 'b')} groups: [ { members: [[a] [b]] } ] }`),
+      load(`r => !meta.record { ${fields('a', 'b')} groups: [ { members: [[a] [b]] } ] }`),
     ).not.toThrow();
     expect(() =>
       load(
-        `r => !record { ${fields('a', 'b')} groups: [ { members: [[a b]] optional_members: [a b] } ] }`,
+        `r => !meta.record { ${fields('a', 'b')} groups: [ { members: [[a b]] optional_members: [a b] } ] }`,
       ),
     ).not.toThrow();
   });
@@ -48,6 +48,6 @@ describe('§5.11 declaration rules hold for a group written as a `!record` liter
     ],
     ['a member naming no field', `${fields('a')} groups: [ { members: [[a] [z]] } ]`],
   ])('refuses %s', (_label, body) => {
-    expect(loadError(`r => !record { ${body} }`)).toMatch(/field group is refused/);
+    expect(loadError(`r => !meta.record { ${body} }`)).toMatch(/field group is refused/);
   });
 });

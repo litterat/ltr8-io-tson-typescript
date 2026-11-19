@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `complex_type` constructor (§5.6's `complex` atom)
+ * Parses and validates against `numeric.complex_type` constructor (§5.6's `complex` atom)
  * -- the port of `atom/ComplexParser.java`/`atom/Complex.java`.
  *
  * `complex_type`'s `component` field selects which numeric family backs the real/imaginary parts

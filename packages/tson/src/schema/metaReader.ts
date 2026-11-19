@@ -65,17 +65,19 @@ import { tryParseNumber } from '../base/numberGrammar.js';
 import { toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType, type BaseToken } from '../base/baseTypeResolver.js';
 import { readFullDate, readFullTime } from '../atom/temporal/rfc3339.js';
-import { parseReference } from '../atom/network/uri.js';
+import { referenceOfWire } from './referenceAtoms.js';
 import {
   fieldGroupBinding,
   integerSizeBinding,
   metaBindings,
   recordFieldBinding,
+  recordTemplateFieldBinding,
+  templateParamBinding,
   tokenFormToWire,
   tupleElementBinding,
   typeChainBinding,
-  typeRefBinding,
 } from './bindings.js';
+import { NUMERIC_MAP, kernelName, metaName } from './meta/kernel.js';
 import {
   fieldOmission,
   isGroupMember,
@@ -87,9 +89,6 @@ import {
 import type { Top } from './meta/typedef.js';
 import { isTemplateBody } from './meta/typedef.js';
 import { inheritedBindingName } from './inheritedBinding.js';
-import { isNamespaceType } from './meta/namespaces.js';
-import { readNamespaceInstance } from './namespaceReader.js';
-import type { IdentifierPolicy } from '../unicode/policy.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -121,22 +120,18 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
     case 'text':
       return wire.text;
 
-    // `schema_identity => !iri_type { allow_fragment: false }` (meta.tn, [TSON-DATA] §2.2.1): an
-    // IRI-reference, relative included, never carrying a fragment -- the key type of
-    // `scoped.schemas`, so the rule is the type's and not a check beside it.
-    case 'schema_identity': {
-      let shape;
-      try {
-        shape = parseReference(wire.text, true, 'schema_identity');
-      } catch (error) {
-        throw readError(error instanceof Error ? error.message : String(error));
-      }
-      if (shape.fragment) {
+    // `meta.type_ref`, a position that names a type, and `meta.field_type_ref`, a record field's type
+    // (§4.2, [TSON-DATA] §7.4): the wire token is the reference's canonical text, and a sibling
+    // reference stands only at the second.
+    case 'type_ref':
+    case 'reference': {
+      const reference = referenceOfWire(wire.text, wire.form);
+      if (reference.kind === 'sibling' && binding.wireType === 'type_ref') {
         throw readError(
-          `'${wire.text}' has a fragment, which a schema identity refuses -- it names a schema, not a place in one ([TSON-DATA] §2.2.1)`,
+          `a sibling reference ('${reference.field}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not here`,
         );
       }
-      return wire.text;
+      return reference;
     }
 
     case 'boolean':
@@ -292,12 +287,13 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
   RecordBinding<unknown>,
   string
 >([
-  [typeRefBinding, 'type_ref'],
-  [recordFieldBinding, 'record_field'],
-  [tupleElementBinding, 'tuple_element'],
-  [fieldGroupBinding, 'field_group'],
-  [integerSizeBinding, 'integer_size'],
-  [typeChainBinding, 'type_chain'],
+  [recordFieldBinding, metaName('record_field')],
+  [recordTemplateFieldBinding, metaName('record_template_field')],
+  [tupleElementBinding, metaName('tuple_element')],
+  [fieldGroupBinding, metaName('field_group')],
+  [integerSizeBinding, kernelName(NUMERIC_MAP, 'integer_size')],
+  [typeChainBinding, metaName('type_chain')],
+  [templateParamBinding, metaName('template_param')],
 ]);
 
 // -------------------------------------------------------------------------------------------
@@ -315,16 +311,8 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
 export function createDefinitionMetaReader(
   lookupConstructorDef: DefinitionGetter,
   decodeAtom: AtomDecoder = metaAtomDecoder,
-  identifierPolicy?: IdentifierPolicy,
 ): DefinitionMetaReader {
   return (type, value) => {
-    const constructor = lookupConstructorDef(type);
-    // A meta layer's own namespace type: its value is the map its facets describe, read into the
-    // generic value model rather than bound (§4.1), its names judged under the processor's
-    // identifier policy (§8.2, [TSON-SCHEMA] §11.4) since the linker cannot see into it.
-    if (isNamespaceType(constructor, type)) {
-      return readNamespaceInstance(type, value, lookupConstructorDef, identifierPolicy);
-    }
     const binding =
       metaBindings.get(type) ??
       metaBindings.get(

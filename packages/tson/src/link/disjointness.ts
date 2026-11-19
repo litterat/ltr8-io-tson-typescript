@@ -85,8 +85,8 @@ function isScalarContentKeyType(keyName: string, namespace: ReadonlyMap<string, 
   const def = namespace.get(terminalName);
   if (def === undefined) return false; // unresolved or cyclic: no class either
   const body = def;
-  if (isTemplateBody(body) || body.kind === 'namespace' || !isAtom(body)) return false;
-  return body.kind !== 'value_type' && body.kind !== 'void_type';
+  if (isTemplateBody(body) || !isAtom(body)) return false;
+  return body.kind !== 'void_type';
 }
 
 /**
@@ -104,8 +104,8 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
   if (isTemplateBody(body)) {
     return undefined; // a held TemplateBody: no class until an application closes it
   }
-  if (body.kind === 'namespace') {
-    return undefined; // a namespace value is no type, and has no class
+  if (body.kind === 'value_entry') {
+    return undefined; // a value is no type, and has no class
   }
   switch (body.kind) {
     case 'integer_type':
@@ -118,8 +118,7 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
     // are string content in both encodings.
     case 'text_type':
     case 'identifier_type':
-    case 'kind_type':
-    case 'ref_type':
+    case 'reference_type':
     case 'hostname_type':
     case 'host_type':
     case 'media_type_type':
@@ -143,6 +142,7 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
     case 'enum':
       return classifyEnum(body);
     case 'record':
+    case 'namespace':
       return 'BRACE';
     case 'map':
       // §5.4, #17: a map whose key type has no class of its own -- after following its own

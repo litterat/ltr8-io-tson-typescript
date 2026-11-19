@@ -6,7 +6,7 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
 import type { MetaValue, Top, TypeRef } from '../src/schema/meta/typedef.js';
 import { namespaceOf } from '../src/schema/meta/typedef.js';
-import { entry, fieldMapOf } from './model-fixtures.js';
+import { entry, fieldMapOf, namespaceEntry } from './model-fixtures.js';
 
 function ref(name: string): TypeRef {
   return { name, arguments: [], annotations: [] };
@@ -184,7 +184,7 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
   it('rejects a required, non-voidable field typed by an ALIAS of void, followed through the reference chain (§5.10.1, §5.2, §8.3)', () => {
     const merged = new Map<string, Top>([
       ['void', def({ kind: 'void_type' })],
-      ['nothing', def({ kind: 'reference', target: ref('void') })],
+      ['nothing', def({ kind: 'alias', target: ref('void') })],
       [
         'sealed_off',
         def({
@@ -232,7 +232,7 @@ describe('checkEveryEntryIsInhabited: uninhabited entries are rejected (§5.10.1
           extension: 'OPEN',
         }),
       ],
-      ['alias', def({ kind: 'reference', target: ref('loop') })],
+      ['alias', def({ kind: 'alias', target: ref('loop') })],
     ]);
     const diagnostics = collector();
     checkEveryEntryIsInhabited(merged, names(merged), {
@@ -612,7 +612,7 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
   it('treats a namespace value as inhabited unconditionally: it is a value, not a type (§4.1)', () => {
     const operation: MetaValue = { form: 'record', type: 'operation', fields: new Map() };
     const merged = new Map<string, Top>([
-      ['op', def(namespaceOf('api', new Map([['orders', operation]])))],
+      ['op', def(namespaceEntry(namespaceOf('api', new Map([['orders', operation]]))))],
     ]);
     expect(() => {
       check(merged);

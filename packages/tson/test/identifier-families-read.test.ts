@@ -19,17 +19,16 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/identifier-families-read.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
-  identifier => !identifier_type { continue_add: "-" }
-  header_name => !identifier_type { start: NONE  continue: NONE
+!schema {
+  identifier => !unicode.identifier_type { continue_add: "-" }
+  header_name => !unicode.identifier_type { start: NONE  continue: NONE
     start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
     normalization: NFKC_CASEFOLD }
-  field_name => !identifier_type { start: NONE  continue: NONE
+  field_name => !unicode.identifier_type { start: NONE  continue: NONE
     start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
     normalization: ASCII_CASEFOLD }
-  kebab_name => !identifier_type { medial: "-" }
+  kebab_name => !unicode.identifier_type { medial: "-" }
 
   handlers => { identifier => text }
   roles    => set<identifier>

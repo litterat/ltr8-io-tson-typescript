@@ -273,35 +273,11 @@ describe('buildAtomReader -- value_type and void_type (§4.2): told apart by con
     expect(diagnostics.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
   });
 
-  it('reads value through base type resolution (§4), narrowing every token to its base value -- including the unquoted token "null", an ordinary string (§4.4)', () => {
-    const reader = buildAtomReader('value', { kind: 'value_type' });
-    expect(runSync(reader.read(bodyContextOver('42')))).toEqual({
-      kind: 'atom',
-      value: 42n,
-      annotations: { values: [] },
-    });
-    expect(runSync(reader.read(bodyContextOver('null')))).toEqual({
-      kind: 'atom',
-      value: 'null',
-      annotations: { values: [] },
-    });
-    expect(runSync(reader.read(bodyContextOver('true')))).toEqual({
-      kind: 'atom',
-      value: true,
-      annotations: { values: [] },
-    });
-  });
-
-  it('recognises both by constructor: an instance under any other name reads the same', () => {
+  it('recognises void by constructor: an instance under any other name reads the same', () => {
     const nothing = buildAtomReader('nothing', { kind: 'void_type' });
     expect(runSync(nothing.read(bodyContextOver('_')))).toEqual({
       kind: 'void',
       annotations: { values: [] },
-    });
-    const anything = buildAtomReader('anything', { kind: 'value_type' });
-    expect(runSync(anything.read(bodyContextOver('42')))).toMatchObject({
-      kind: 'atom',
-      value: 42n,
     });
   });
 

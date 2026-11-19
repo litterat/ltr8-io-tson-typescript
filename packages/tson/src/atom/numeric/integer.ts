@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `integer_type` constructor (§5.6's integer atoms:
+ * Parses and validates against the kernel's `numeric.integer_type` constructor (§5.6's integer atoms:
  * the fixed-width `int8`..`int256`/`uint8`..`uint256` ladder and the four sign-bounded,
  * unbounded-precision refinements) -- the port of `atom/IntegerParser.java`.
  *

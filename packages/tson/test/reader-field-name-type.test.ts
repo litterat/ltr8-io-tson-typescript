@@ -8,26 +8,26 @@ import type { Diagnostic } from '../src/core/diagnostic.js';
 
 const HEAD = [
   '!!id:"https://example.test/names.tn"',
-  '!!meta:"https://tson.io/2026/39/m/meta.tn"',
+
   '!!import:"https://tson.io/2026/39/m/core.tn"',
 ].join('\n');
 
 const SCHEMA = `
-  json_name => !identifier_type { start_add: "@$" }
-  json_record => !record { name_type: json_name  extension: ABSTRACT  fields: {} }
+  json_name => !unicode.identifier_type { start_add: "@$" }
+  json_record => !meta.record { name_type: json_name  extension: ABSTRACT  fields: {} }
   node => json_record & { "@id": text  label?: text }
   plain => { a?: text }
   holder => json_record & { "@id": text  inner: plain }
-  folded => !identifier_type { normalization: NFKC_CASEFOLD }
-  frow => !record { name_type: folded  fields: { name => { type: text } } }
-  fbase => !record { name_type: folded  extension: ABSTRACT  fields: {} }
+  folded => !unicode.identifier_type { normalization: NFKC_CASEFOLD }
+  frow => !meta.record { name_type: folded  fields: { name => { type: text } } }
+  fbase => !meta.record { name_type: folded  extension: ABSTRACT  fields: {} }
   fpet => abstract fbase & { kind: text =?  name: text }
   fdog => fpet & { kind?: = "dog"  breed: text }
   fkennel => { p: fpet }
 `;
 
 const tson = standardLibrary();
-const compiled = tson.compile(tson.resolveSchema(`${HEAD}\n{\n${SCHEMA}\n}`));
+const compiled = tson.compile(tson.resolveSchema(`${HEAD}\n!schema {\n${SCHEMA}\n}`));
 
 function read(root: string, document: string): readonly Diagnostic[] {
   return tson.validate(new TextEncoder().encode(document), { schema: compiled, root }).diagnostics;

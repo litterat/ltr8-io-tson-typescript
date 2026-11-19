@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `datetime_type` constructor (§5.4's `!datetime`
+ * Parses and validates against `temporal.datetime_type` constructor (§5.4's `!datetime`
  * atom, RFC 3339 `date-time = full-date "T" full-time`) -- the port of `atom/DateTimeParser.java`.
  *
  * Composed from `date.ts`/`time.ts`'s own `rfc3339.ts` primitives rather than duplicating either

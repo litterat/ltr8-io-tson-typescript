@@ -75,7 +75,12 @@ import type { DataValue, RecordValue } from '../ast/value.js';
 import { asciiLowercase } from '../unicode/normalization.js';
 import type { Annotation as WrittenAnnotation } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
-import type { ConstructionDef, RefinedDef, TypeDef } from '../ast/schema/typedef.js';
+import type {
+  ConstructionDef,
+  RecordTemplateDef,
+  RefinedDef,
+  TypeDef,
+} from '../ast/schema/typedef.js';
 import type {
   AtomRefinement,
   FieldDef,
@@ -85,7 +90,12 @@ import type {
   RecordEntry,
   RemovalSet,
 } from '../ast/schema/fields.js';
-import type { GenericRef, TypeArg, TypeRef as AstTypeRef } from '../ast/schema/typeref.js';
+import type {
+  ApplicationRef,
+  Reference as AstReference,
+  TypeArg,
+  TypeExpr,
+} from '../ast/schema/typeref.js';
 import type { SourcePosition } from '../schema/meta/position.js';
 import type {
   Annotation,
@@ -93,7 +103,6 @@ import type {
   EntryFacts,
   EntryKind,
   Reference,
-  Scoped,
   Top,
   TypeArgument,
   TypeRef,
@@ -103,6 +112,10 @@ import {
   isFamilyBase,
   isOpen,
   isConstructor,
+  isValueEntry,
+  referenceText,
+  parametersOf,
+  namespaceOf,
   subtypesOf,
   supertypesOf,
   typeChain,
@@ -122,7 +135,10 @@ import {
   type NamedField,
   type RecordBody,
   type RecordExtensionType,
+  type RecordTemplateBody,
   type TemplateParam,
+  labelFields,
+  parameterInType,
 } from '../schema/meta/bodies.js';
 import type { Token } from '../schema/meta/typedef.js';
 import { tryParseNumber } from '../base/numberGrammar.js';
@@ -136,11 +152,14 @@ import type {
   DeclaredApplicationCloser,
   DefinitionGetter,
   DefinitionMetaReader,
+  DefinitionValueReader,
   EntryFactsTable,
   SourceBodyEncoder,
 } from './resolverTypes.js';
 import { createHeldBody, heldOf } from './heldBody.js';
-import { EXTENSION, nameField, refValue, scoped } from './wireForm.js';
+import { siblingRefusal } from './desugar.js';
+import { SCHEMA, metaName } from '../schema/meta/kernel.js';
+import { refValue, scoped } from './wireForm.js';
 import { substitute } from './templateSubstitution.js';
 import { checkSlots } from './parameterTypes.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
@@ -163,6 +182,8 @@ import { metaFormOfLexer } from './tokenForms.js';
  */
 export interface DefinitionResolverDeps {
   readonly definitionMetaReader: DefinitionMetaReader;
+  /** Reads a value entry's payload against the ordinary type its tag names (§4.1). Omitted means a value entry is a gap. */
+  readonly definitionValueReader?: DefinitionValueReader;
   readonly annotationValueReader?: AnnotationValueReader;
   readonly metaDefinitions: DefinitionGetter;
   readonly namespaceDefinitions: DefinitionGetter;
@@ -201,7 +222,7 @@ export interface DefinitionResolver {
    * form is not lifted at this position, so it has no entry to name and is refused here in those
    * terms.
    */
-  parameterType(parameter: string, written: AstTypeRef): TypeRef;
+  parameterType(parameter: string, written: TypeExpr): TypeRef;
 }
 
 export function createDefinitionResolver(given: DefinitionResolverDeps): DefinitionResolver {
@@ -232,10 +253,10 @@ export function createDefinitionResolver(given: DefinitionResolverDeps): Definit
     annotationsFor(name: string, written: readonly WrittenAnnotation[]): Annotations {
       return annotationsOf(deps, name, written);
     },
-    parameterType(parameter: string, written: AstTypeRef): TypeRef {
-      if (written.kind !== 'simpleRef' && written.kind !== 'genericRef') {
+    parameterType(parameter: string, written: TypeExpr): TypeRef {
+      if (written.kind !== 'nameRef' && written.kind !== 'applicationRef') {
         throw new TsonSchemaValidationError(
-          `parameter '${parameter}' is written with ${written.kind === 'arrayRef' ? 'an array' : written.kind === 'mapRef' ? 'a map' : written.kind === 'tupleRef' ? 'a tuple' : 'a choice'} ` +
+          `parameter '${parameter}' is written with ${written.kind === 'arrayExpr' ? 'an array' : written.kind === 'mapExpr' ? 'a map' : written.kind === 'tupleExpr' ? 'a tuple' : written.kind === 'siblingRef' ? 'a sibling reference' : 'a choice'} ` +
             "type, and a parameter's written type names a declared type or an application of one " +
             '(§5.10); declare the form under a name and write that name',
         );
@@ -349,6 +370,7 @@ function familyDiscriminators(
         field.role === 'FIXED' &&
         field.value?.form === 'UNQUOTED' &&
         parameters.includes(field.value.text) &&
+        field.type.kind !== 'sibling' &&
         !parameters.includes(field.type.name)
       ) {
         candidates.add(field.name);
@@ -358,7 +380,7 @@ function familyDiscriminators(
   const discriminators: string[] = [];
   for (const field of fields) {
     if (!candidates.has(field.name)) continue;
-    if (typeRefMentionsParameter(field.type, parameters)) {
+    if (field.type.kind !== 'sibling' && typeRefMentionsParameter(field.type, parameters)) {
       throw new TsonSchemaValidationError(
         `'${name}': the selector '${field.name}' is typed '${field.type.name}', which mentions a ` +
           "type parameter -- a selector's declared type MUST contain no type parameter, since a " +
@@ -398,7 +420,7 @@ function recordValue(
   isFreshRecordTemplate: boolean,
 ): Resolved {
   const parameters = draft.parameters;
-  let body: RecordBody = record;
+  let body: RecordBody | RecordTemplateBody = record;
   if (parameters.length > 0) {
     const discriminators = familyDiscriminators(
       name,
@@ -409,17 +431,21 @@ function recordValue(
     );
     const { discriminators: _written, ...rest } = record;
     void _written;
-    body = {
-      ...rest,
-      ...(discriminators === undefined
-        ? record.discriminators === undefined
-          ? {}
-          : { discriminators: record.discriminators }
-        : discriminators.length > 0
-          ? { discriminators }
-          : {}),
-      parameters: parameters.map(undecidedParameter),
-    };
+    // A record template is its own constructor (§5.10): the record's fields with each parameter standing
+    // as a whole type or value labelled `type_param`/`value_param`, and its parameters stated last.
+    body = labelFields(
+      {
+        ...rest,
+        ...(discriminators === undefined
+          ? record.discriminators === undefined
+            ? {}
+            : { discriminators: record.discriminators }
+          : discriminators.length > 0
+            ? { discriminators }
+            : {}),
+      },
+      parameters.map(undecidedParameter),
+    );
   }
   // A template keeps its parents as written; a closed record keeps only its applied ones, until
   // `schemaResolver.ts`'s fold has turned each into an edge and drops them (§5.8).
@@ -473,7 +499,7 @@ function requiredGet<K, V>(map: ReadonlyMap<K, V>, key: K, context: string): V {
  */
 function referenceDefinition(target: TypeRef, parameters: readonly string[]): Resolved {
   if (parameters.length === 0) {
-    const value: Reference = { kind: 'reference', target };
+    const value: Top = { kind: 'alias', target };
     return { value };
   }
   const application = {
@@ -502,7 +528,7 @@ function isRecordBody(body: Top | undefined): body is RecordBody {
  * hand).
  */
 function refuseTemplateAppliedDirectly(name: string, terminalHead: string): void {
-  if (terminalHead === 'template') {
+  if (terminalHead === metaName('template')) {
     throw new TsonSchemaValidationError(
       `'${name}': '!template' is resolver vocabulary -- an open entry's own body, derived from a ` +
         "declaration's parameter list -- and a source declaration applying it directly is a " +
@@ -533,6 +559,21 @@ function typeArgumentEquals(a: TypeArgument, b: TypeArgument): boolean {
   return false;
 }
 
+/** A record field's type: a type reference, or a sibling reference (`kind!`, §5.2). */
+function resolveFieldType(deps: DefinitionResolverDeps, ref: TypeExpr): Reference {
+  return ref.kind === 'siblingRef'
+    ? { kind: 'sibling', field: ref.field, annotations: [] }
+    : resolveTypeRef(deps, ref);
+}
+
+/** Equality of two references: the variant and its components, annotations excluded. */
+function referenceEquals(a: Reference, b: Reference): boolean {
+  if (a.kind === 'sibling' || b.kind === 'sibling') {
+    return a.kind === 'sibling' && b.kind === 'sibling' && a.field === b.field;
+  }
+  return typeRefEquals(a, b);
+}
+
 /** `TypeRef` equality per its own contract note: name and arguments, `annotations` excluded (identity is where a reference points, not where it came from). */
 function typeRefEquals(a: TypeRef, b: TypeRef): boolean {
   if (a.name !== b.name || a.arguments.length !== b.arguments.length) return false;
@@ -550,78 +591,90 @@ function resolveTypeDef(
   mark: 'abstract' | 'final' | undefined,
 ): Resolved {
   // §5.2's mark is refused outright on every shape but a record and a *record-bodied* template --
-  // the latter reached below either as `structuralTypeDef`'s own `recordDef` (a non-parameterised
-  // fresh record, or a composition/refinement template, which the desugarer cannot flatten to an
-  // `instance` in advance) or, for a record TEMPLATE specifically, as `instance` with
-  // `typeParams.length > 0` (`desugar.ts`'s own `structuralTypeDefPass` rewrites a parameterised
-  // `recordDef` to `!record { fields: { ... } }` ahead of resolution, §5.2's canonical form). Both
+  // the latter reached below either as `structuralTypeDef`'s own `recordDef` (an error placeholder, or a
+  // composition/refinement template, which the desugarer cannot flatten in advance) or, for a record
+  // TEMPLATE specifically, as the `recordTemplateDef` the desugarer wrote (§5.2's canonical form). Both
   // branches below carry their own, narrower validation; this refuses every other shape.
   const isRecordShaped =
-    typeDef.kind === 'structuralTypeDef' ||
-    (typeDef.kind === 'instance' && typeDef.typeParams.length > 0);
+    typeDef.kind === 'structuralTypeDef' || typeDef.kind === 'recordTemplateDef';
   if (!isRecordShaped && mark !== undefined) {
     throw new TsonSchemaValidationError(
       `'${name}' writes the definition mark '${mark}', but its body is not a record -- only a ` +
         'record states how it may be realised (§5.2)',
     );
   }
-  if (typeDef.kind === 'structuralTypeDef') {
-    // No marker to read here (§4.2): a fresh record, composition or refinement is a constructor
-    // only by actually composing or refining IS-A `top` below -- `resolveComposition`/
-    // `resolveRefinement` build the chain from what the declaration's own body names, and
-    // {@link isConstructor} reads it off the result. A bare record body never does, whatever an
-    // author might have intended.
-    const parameters = typeDef.typeParams;
-    const body = typeDef.body;
-    if (body.kind === 'recordDef') {
-      const recordBody = applyRecordExtensionMark(
-        name,
-        resolveRecordBody(deps, body.entries, parameters),
-        mark,
-        parameters,
-      );
-      return recordValue(
-        name,
-        { parameters, supertypes: [], parents: [], body: recordBody },
-        recordBody,
-        true,
-      );
-    }
-    if (body.kind === 'constructionDef') {
-      const draft = resolveComposition(deps, name, body, parameters);
+  switch (typeDef.kind) {
+    case 'structuralTypeDef': {
+      // No marker to read here (§4.2): a fresh record, composition or refinement is a constructor
+      // only by actually composing or refining IS-A `top` below -- `resolveComposition`/
+      // `resolveRefinement` build the chain from what the declaration's own body names, and
+      // {@link isConstructor} reads it off the result. A bare record body never does, whatever an
+      // author might have intended.
+      const parameters = typeDef.typeParams;
+      const body = typeDef.body;
+      if (body.kind === 'recordDef') {
+        const recordBody = applyRecordExtensionMark(
+          name,
+          resolveRecordBody(deps, body.entries, parameters),
+          mark,
+          parameters,
+        );
+        return recordValue(
+          name,
+          { parameters, supertypes: [], parents: [], body: recordBody },
+          recordBody,
+          true,
+        );
+      }
+      if (body.kind === 'constructionDef') {
+        const draft = resolveComposition(deps, name, body, parameters);
+        const recordBody = applyRecordExtensionMark(name, draft.body, mark, parameters);
+        return recordValue(name, { ...draft, body: recordBody }, recordBody, false);
+      }
+      const draft = resolveRefinement(deps, name, body, parameters);
       const recordBody = applyRecordExtensionMark(name, draft.body, mark, parameters);
       return recordValue(name, { ...draft, body: recordBody }, recordBody, false);
     }
-    const draft = resolveRefinement(deps, name, body, parameters);
-    const recordBody = applyRecordExtensionMark(name, draft.body, mark, parameters);
-    return recordValue(name, { ...draft, body: recordBody }, recordBody, false);
-  }
-  if (typeDef.kind === 'referenceTypeDef') {
-    const parameters = typeDef.typeParams;
-    if (typeDef.ref.kind === 'simpleRef') {
-      return referenceDefinition(
-        { name: typeDef.ref.name, arguments: [], annotations: [] },
-        parameters,
+    case 'referenceTypeDef': {
+      const parameters = typeDef.typeParams;
+      if (typeDef.ref.kind === 'nameRef') {
+        return referenceDefinition(
+          { name: typeDef.ref.name, arguments: [], annotations: [] },
+          parameters,
+        );
+      }
+      if (typeDef.ref.kind === 'applicationRef') {
+        return resolveTemplateApplication(deps, name, typeDef.ref, parameters);
+      }
+      // Every declaration-level container form is rewritten by the desugarer before resolution
+      // (§5.3), and a sibling reference is refused there (§5.2). One reaching here means the desugar
+      // phase was skipped.
+      throw new TsonInternalError(
+        `'${name}': a container sugar form or a sibling reference reached resolution unlifted (§5.3, §5.2) -- ` +
+          'SchemaDesugarer lifts every sugar form to an entry before the definition resolver runs',
       );
     }
-    if (typeDef.ref.kind === 'genericRef') {
-      return resolveTemplateApplication(deps, name, typeDef.ref, parameters);
-    }
-    // Every declaration-level container form is rewritten by the desugarer before resolution
-    // (§5.3). One reaching here means either the desugar phase was skipped, or a position inside
-    // it is itself an application with no entry to name until materialisation runs.
-    throw new TsonNotImplementedError(
-      'a container sugar form must be lifted to an entry before resolution (§5.3); this one was ' +
-        'not, which means either the desugar phase was skipped or a position inside it is an ' +
-        'application, which has no entry to name until it is materialised',
-    );
+    case 'instance':
+      return typeDef.typeParams.length === 0
+        ? resolveInstance(deps, name, typeDef)
+        : resolveInstanceTemplate(deps, name, typeDef, mark);
+    case 'recordTemplateDef':
+      return openRecord(deps, name, typeDef, mark);
+    case 'atomRefinement':
+      return resolveAtomRefinement(deps, name, typeDef);
+    // A schema map nested as an entry: a value of `meta.schema` whose members are declarations of this
+    // document under their paths, each resolved as any entry is. Its map is built from them wherever the
+    // schema is (`link/schemaPaths.ts`), so it holds none here and waits on none.
+    case 'schemaMapDef':
+      return {
+        value: {
+          kind: 'value_entry',
+          type: SCHEMA,
+          value: { form: 'schema_map', members: namespaceOf(SCHEMA, []) },
+        },
+        head: SCHEMA,
+      };
   }
-  if (typeDef.kind === 'instance') {
-    return typeDef.typeParams.length === 0
-      ? resolveInstance(deps, name, typeDef)
-      : resolveInstanceTemplate(deps, name, typeDef, mark);
-  }
-  return resolveAtomRefinement(deps, name, typeDef);
 }
 
 // ── Constructor application (§5.5, §5.6) ────────────────────────────────────────────────────
@@ -635,16 +688,28 @@ function requireTypeRef(value: DataValue, context: string): string {
   return value.typeRef;
 }
 
-/** `!C value` (constructor application, no `^`) — produces a fresh instance filled with `value`. */
+/**
+ * `!C value` (constructor application, no `^`) — produces a fresh instance filled with `value`.
+ *
+ * `C` resolves in the schema's one namespace (§3.3.1). Where `C` is no constructor — not IS-A `top`
+ * (§4.1) — the entry is a value of the type `C` ({@link resolveValueEntry}); `C` IS-A `top` builds its
+ * instance. Construction transfers only `C`'s kind (§5.5): no supertypes, no parameters — except for an
+ * alias, where the result is the entry `name => X` denotes, since `!meta.alias { target: X }` is that
+ * alias written out (§8.3).
+ */
 function resolveInstance(deps: DefinitionResolverDeps, name: string, instance: Instance): Resolved {
   const target = requireTypeRef(instance.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
   refuseTemplateAppliedDirectly(name, head.name);
-  if (!isConstructor(head.definition, head.name)) {
+  if (parametersOfHead(head.definition).length > 0) {
     throw new TsonSchemaValidationError(
-      `'${name}': '!${target}' does not resolve to a constructor (§3.3.1) -- did you mean atom refinement ` +
-        `('!${target} ^ { ... }')?`,
+      `'${name}': '${target}' is a template, and a template closes by application, not by construction -- ` +
+        `write '${target}<...>' with its arguments (§5.10). '!${target} { ... }' fills a constructor's ` +
+        'own vocabulary (§4.2), which is a different operation and needs a closed constructor',
     );
+  }
+  if (!isConstructor(head.definition, head.name)) {
+    return resolveValueEntry(deps, name, target, head, instance.value);
   }
   if (!isRecordBody(head.definition)) {
     throw new TsonInternalError(
@@ -655,7 +720,74 @@ function resolveInstance(deps: DefinitionResolverDeps, name: string, instance: I
   refuseAbstractConstructor(deps, name, target, head.definition);
   refuseWrittenChain(name, instance.value);
   const value = bindAtomInstance(deps, name, readAsConstructor(instance.value, head.name));
-  return { value, head: target };
+  // `!meta.alias { target: X }` is the explicit spelling of the alias `name => X` (§8.3): the same entry.
+  return kindOf(value) === 'alias' ? { value } : { value, head: target };
+}
+
+/** `value`'s `kind` where it has one: a held template body has none. */
+function kindOf(value: Top): string | undefined {
+  return 'kind' in value ? value.kind : undefined;
+}
+
+/** The parameters the entry `definition` binds -- empty for a closed entry. */
+function parametersOfHead(definition: Top): readonly TemplateParam[] {
+  return parametersOf(definition);
+}
+
+/**
+ * `name => !T { ... }` where `T` is no constructor: a value entry, an instance of the ordinary type `T`
+ * (§4.1), its payload read against `T` as a data value is and held as the value ({@link ValueEntry}). It
+ * is no type, so nothing is minted or lifted for it, and its tag is `T`.
+ *
+ * Refused: a head that is itself a value, since a value has no instances; and a braced payload at an atom
+ * type, which reads as no value of it and is almost always an atom refinement missing its `^`.
+ */
+function resolveValueEntry(
+  deps: DefinitionResolverDeps,
+  name: string,
+  target: string,
+  head: ConstructorHead,
+  payload: DataValue,
+): Resolved {
+  if (isValueEntry(head.definition)) {
+    throw new TsonSchemaValidationError(
+      `'${name}': '!${target}' names a value of the type '${head.definition.type}', and a value has no ` +
+        "instances -- '!T { ... }' builds a value of the type T",
+    );
+  }
+  if (isAtom(head.definition) && payload.coreValue.kind === 'record') {
+    throw new TsonSchemaValidationError(
+      `'${name}': '!${target}' is an atom, and a braced body is no value of it, so there is nothing for ` +
+        `'!${target} { ... }' to build. Did you mean atom refinement ('!${target} ^ { ... }')?`,
+    );
+  }
+  if (deps.definitionValueReader === undefined) {
+    throw new TsonNotImplementedError(
+      `'${name}': '!${target}' builds a value entry, and this resolver was built without a value reader`,
+    );
+  }
+  let value;
+  try {
+    value = deps.definitionValueReader(head.name, readAsConstructor(payload, head.name));
+  } catch (e) {
+    if (e instanceof TsonReadError) {
+      throw new TsonSchemaValidationError(
+        `'${name}': the body is no value of the type '${head.name}' -- ${e.message}`,
+        { cause: e },
+      );
+    }
+    if (e instanceof TsonNameHygieneRefusedError) {
+      throw new TsonNameHygieneRefusedError(`'${name}': ${e.message}`, {
+        mechanism: e.mechanism,
+        names: e.names,
+        uts39Version: e.uts39Version,
+        pointer: `/${name}`,
+        cause: e,
+      });
+    }
+    throw e;
+  }
+  return { value: { kind: 'value_entry', type: target, value }, head: target };
 }
 
 /**
@@ -703,15 +835,13 @@ function refuseAbstractConstructor(
   );
 }
 
-const REFERENCE_HEAD = 'reference';
+const REFERENCE_HEAD = metaName('alias');
 
 /**
- * `<T, N> !C { ... }` — the open counterpart of {@link resolveInstance}. A record template
- * (`C` is `record`) is the record it is (§5.10): its payload is read through the `record`
- * constructor with its parameters standing in field types and values as written, and it becomes
- * a family base. Every other payload is held rather than read through the constructor's reader —
- * only the two structural questions that don't depend on the parameters are checked here
- * ({@link checkTemplateBindings}); the rest waits for materialisation.
+ * `<T, N> !C { ... }` — the open counterpart of {@link resolveInstance}. The payload is held rather than
+ * read through the constructor's reader — only the two structural questions that don't depend on the
+ * parameters are checked here ({@link checkTemplateBindings}); the rest waits for materialisation. A
+ * record template is no held body: it is built directly ({@link openRecord}).
  */
 function resolveInstanceTemplate(
   deps: DefinitionResolverDeps,
@@ -722,14 +852,22 @@ function resolveInstanceTemplate(
   const target = requireTypeRef(template.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
   refuseTemplateAppliedDirectly(name, head.name);
-  // `reference => top & { target: type_ref }` composes with `top` directly (§4.1), so it is
-  // `isConstructor`-eligible on the same terms as every other constructor and needs no carve-out
-  // here: §5.5 says the kernel's `reference` "is applicable like any other".
-  if (!isConstructor(head.definition, head.name)) {
+  if (mark !== undefined) {
     throw new TsonSchemaValidationError(
-      `'${name}': '!${target}' does not resolve to a constructor (§3.3.1), so there is nothing for ` +
-        `'<...> !${target} { ... }' to build`,
+      `'${name}' writes the definition mark '${mark}' on a template -- only a record-bodied ` +
+        "template may be a family base, and only 'abstract' asserts it there, since its " +
+        'applications are subtypes by construction and never FINAL (§5.10)',
     );
+  }
+  if (!isConstructor(head.definition, head.name)) {
+    // A template over an ordinary type closes to a value entry, read against the type when it is applied.
+    if (isValueEntry(head.definition)) {
+      throw new TsonSchemaValidationError(
+        `'${name}': '!${target}' names a value of the type '${head.definition.type}', and a value has no ` +
+          "instances -- '!T { ... }' builds a value of the type T",
+      );
+    }
+    return { value: createHeldBody(template.value, template.typeParams) };
   }
   if (!isRecordBody(head.definition)) {
     throw new TsonInternalError(
@@ -739,69 +877,111 @@ function resolveInstanceTemplate(
   }
   refuseAbstractConstructor(deps, name, target, head.definition);
   refuseWrittenChain(name, template.value);
-  // §5.10: only a record template (`head.name === 'record'`, applying the `record` constructor
-  // itself, not merely something record-*shaped* like `record_field`) may be a family base, and
-  // only `abstract` asserts it there (§5.2's other mark, `final`, is refused on any template: its
-  // applications are subtypes by construction).
-  const isRecordBodied = head.name === RECORD_CONSTRUCTOR;
-  if (mark !== undefined && (mark === 'final' || !isRecordBodied)) {
-    throw new TsonSchemaValidationError(
-      `'${name}' writes the definition mark '${mark}' on a template -- only a record-bodied ` +
-        "template may be a family base, and only 'abstract' asserts it there, since its " +
-        'applications are subtypes by construction and never FINAL (§5.10)',
-    );
-  }
   if (template.value.coreValue.kind === 'record') {
     checkTemplateBindings(name, target, head.definition, template.value.coreValue);
   }
-  if (!isRecordBodied) {
-    return { value: createHeldBody(template.value, template.typeParams) };
-  }
-  // §5.10's slot rule first, on the payload as written, so a parameter in a scalar slot is
-  // refused for standing there rather than for not reading as a boolean.
-  checkSlots(template.typeParams, template.value, deps.metaDefinitions);
-  const markedValue = markHeldRecordValue(template.value, mark);
-  const read = bindAtomInstance(deps, name, readAsConstructor(markedValue, head.name));
-  if (!isRecordBody(read)) {
-    throw new TsonInternalError(`'${name}': a '!record' payload read as something else`);
-  }
-  return recordValue(
-    name,
-    { parameters: template.typeParams, supertypes: [], parents: [], body: read, head: target },
-    read,
-    true,
-  );
+  return { value: createHeldBody(template.value, template.typeParams) };
 }
-
-/** The kernel's own constructor name for a record body (§4.2, §5.2) -- the terminal a record template's head resolves to. */
-const RECORD_CONSTRUCTOR = 'record';
 
 /**
- * `value` with §5.2's mark baked in as the wire `extension` field -- the counterpart of {@link
- * applyRecordExtensionMark} over an already-desugared `!record { fields: { ... } }` wire value,
- * §5.2's canonical form a record *template* reaches through `desugar.ts`'s own
- * `structuralTypeDefPass` ahead of this module ever seeing it. On a template the record's own
- * `extension` is each application's (§5.10): its selectors are the base's, which is ABSTRACT by
- * construction, so they derive nothing here, and `final` is refused before this is reached.
+ * A record template, built directly: the `!meta.record_template { ... }` payload the desugarer labelled
+ * ({@link RecordTemplateDef}), read through `record_template`'s own reader (§5.10). What the author wrote is
+ * answered first -- a binding the record does not declare names the record's vocabulary, and a parameter in
+ * a scalar slot is refused for standing there rather than for not reading as a boolean. The parameter list
+ * the desugarer stated last is no binding the author wrote.
  */
-function markHeldRecordValue(value: DataValue, mark: 'abstract' | 'final' | undefined): DataValue {
-  let extension: RecordExtensionType = 'OPEN';
-  if (mark === 'abstract') extension = 'ABSTRACT';
-  if (mark === 'final') extension = 'FINAL';
-  if (extension === 'OPEN' || value.coreValue.kind !== 'record') {
-    return value;
+function openRecord(
+  deps: DefinitionResolverDeps,
+  name: string,
+  template: RecordTemplateDef,
+  mark: 'abstract' | 'final' | undefined,
+): Resolved {
+  const payload = template.payload;
+  const head = resolveConstructorTarget(deps, name, RECORD_TEMPLATE);
+  if (!isRecordBody(head.definition)) {
+    throw new TsonInternalError(`'${name}': '${RECORD_TEMPLATE}' is no record`);
   }
-  return {
-    ...value,
-    coreValue: {
-      kind: 'record',
-      fields: [
-        ...value.coreValue.fields.filter((field) => field.name !== EXTENSION),
-        nameField(EXTENSION, extension),
-      ],
-    },
-  };
+  if (mark === 'final') {
+    throw new TsonSchemaValidationError(
+      `'${name}' writes 'final' on a template -- a template's applications are subtypes by ` +
+        "construction, so a template can never be FINAL; only 'abstract' asserts what a " +
+        'record-bodied template already is (§5.10)',
+    );
+  }
+  refuseWrittenChain(name, payload);
+  if (payload.coreValue.kind === 'record' && payload.coreValue.fields.length > 0) {
+    checkTemplateBindings(
+      name,
+      RECORD_TEMPLATE,
+      head.definition,
+      { kind: 'record', fields: payload.coreValue.fields.slice(0, -1) },
+      ['parameters'],
+    );
+  }
+  checkSlots(template.typeParams, payload, deps.metaDefinitions);
+  const read = bindAtomInstance(deps, name, payload);
+  if (kindOf(read) !== 'record_template' || !('fields' in read) || !('parameters' in read)) {
+    throw new TsonInternalError(
+      `'${name}': '!${RECORD_TEMPLATE} { ... }' bound to something other than a record template`,
+    );
+  }
+  const built = read;
+  const marked: RecordTemplateBody =
+    mark === 'abstract' && built.extension !== 'ABSTRACT'
+      ? { ...built, extension: 'ABSTRACT' }
+      : built;
+  refuseLiteralOnOpenType(marked);
+  refuseParameterTypedSelector(marked);
+  return { value: withChain(marked, typeChain([], [])) };
 }
+
+/**
+ * A literal `value` needs a closed type (§5.10): what a literal token means is decided by the type it is
+ * read as, and a field typed by a parameter, whole (`w?: T ~ 5`) or as an argument (`w?: box<T> ~ 5`), has a
+ * different type in every application. Such a field takes a value parameter or no value; a field of a closed
+ * type takes either.
+ */
+function refuseLiteralOnOpenType(template: RecordTemplateBody): void {
+  const names = template.parameters.map((parameter) => parameter.name);
+  for (const [fieldName, field] of template.fields.entries) {
+    const parameter = parameterInType(field, names);
+    if (parameter !== undefined && field.value !== undefined) {
+      throw new TsonSchemaValidationError(
+        `field '${fieldName}' is typed by the parameter '${parameter}' and carries the literal value ` +
+          `'${field.value.text}' -- a literal needs a closed type, and this field's type differs in every ` +
+          'application. Supply the value as a parameter too, or write none (§5.10)',
+      );
+    }
+  }
+}
+
+/**
+ * A family base's selector may not be typed by one of its parameters, directly (`kind: K =?`) or as an
+ * argument (`kind: bounded<M> = N`): a position typed by the base reads the selector before it knows which
+ * member it has, so a type that varies per application is one it cannot read. The *pin* varying is the
+ * whole point, and does (§5.10).
+ */
+function refuseParameterTypedSelector(template: RecordTemplateBody): void {
+  const names = template.parameters.map((parameter) => parameter.name);
+  for (const selector of template.discriminators ?? []) {
+    const field = template.fields.entries.get(selector);
+    const parameter = field === undefined ? undefined : parameterInType(field, names);
+    if (parameter !== undefined && field !== undefined) {
+      const typed =
+        field.typeParam !== undefined
+          ? 'typed by the type parameter '
+          : 'typed by an application of the parameter ';
+      throw new TsonSchemaValidationError(
+        `discriminator field '${selector}' is ${typed}'${parameter}', and a position typed by this ` +
+          'template reads a discriminator before it knows which member it has -- so its type cannot vary ' +
+          'per application (§5.10). The value it is pinned to is what an argument supplies; its type is ' +
+          "the base's own",
+      );
+    }
+  }
+}
+
+const RECORD_TEMPLATE = metaName('record_template');
 
 /** §5.10's two declaration-time questions about a held binding record. */
 function checkTemplateBindings(
@@ -809,8 +989,9 @@ function checkTemplateBindings(
   target: string,
   vocabulary: RecordBody,
   bindings: RecordValue,
+  statedByTheDesugarer: readonly string[] = [],
 ): void {
-  const bound = new Set<string>();
+  const bound = new Set<string>(statedByTheDesugarer);
   for (const binding of bindings.fields) {
     if (!vocabulary.fields.entries.has(binding.name)) {
       throw new TsonSchemaValidationError(
@@ -1106,43 +1287,12 @@ function bindAtomInstance(deps: DefinitionResolverDeps, name: string, value: Dat
 
 /** §7.4's "Coherence of a body's facets": family coherence between a constructor's own bindings is a resolver question, checked here rather than left to the atom parsers (which would surface it as a library-gap "not implemented", exactly the wrong classification for the author's own mistake). */
 function checkCoherent(name: string, constructorName: string, body: Top): void {
-  const violations = isAtom(body)
-    ? checkAtomCoherence(body)
-    : isScopedBody(body)
-      ? scopedCoherence(body)
-      : [];
+  const violations = isAtom(body) ? checkAtomCoherence(body) : [];
   if (violations.length > 0) {
     throw new TsonSchemaValidationError(
       `'${name}': the body's own '${constructorName}' constraints contradict each other: ${violations.join('; ')}`,
     );
   }
-}
-
-function isScopedBody(body: Top): body is Scoped {
-  return 'kind' in body && body.kind === 'scoped';
-}
-
-/**
- * `scoped`'s own coherence rule (§7.8), stated once in `meta.tn`'s own `@doc`: "One coherence
- * rule, of the family a resolver already runs over `min_items`/`max_items`: `schemas` requires
- * EXTERN in `scope`."
- *
- * `schemas` narrows which *foreign* schemas a value may be drawn from, so a body naming them
- * without admitting EXTERN narrows a namespace it never opens -- the same shape as a bound pair
- * admitting nothing, and reachable the same way, by editing one of the two and not the other.
- *
- * The other state §7.8 could refuse is unspellable rather than checked: `min_items: 1` on both
- * collections means an empty `scope` and an empty `schemas` have no spelling to begin with.
- */
-function scopedCoherence(body: Scoped): string[] {
-  if (body.schemas === undefined || body.schemas.size === 0) return [];
-  return body.scope.includes('EXTERN')
-    ? []
-    : [
-        "'schemas' names the foreign schemas a value may come from, but 'scope' does not admit " +
-          "EXTERN, so no value here can come from one (§7.8) -- add EXTERN to 'scope', or drop " +
-          "'schemas'",
-      ];
 }
 
 /** A body the constructor's own vocabulary rejects is the author's error (§7.2), not a coverage gap. */
@@ -1169,7 +1319,7 @@ function bodyIsNotValidData(
 function resolveTemplateApplication(
   deps: DefinitionResolverDeps,
   name: string,
-  generic: GenericRef,
+  generic: ApplicationRef,
   parameters: readonly string[],
 ): Resolved {
   const args: TypeArgument[] = [];
@@ -1216,20 +1366,22 @@ function typeArgument(deps: DefinitionResolverDeps, arg: TypeArg): TypeArgument 
  * materialises an entry for every application first — and is refused here with a diagnostic
  * naming why, rather than silently mis-resolving.
  */
-function resolveTypeRef(deps: DefinitionResolverDeps, ref: AstTypeRef): TypeRef {
+function resolveTypeRef(deps: DefinitionResolverDeps, ref: TypeExpr): TypeRef {
   switch (ref.kind) {
-    case 'simpleRef':
+    case 'nameRef':
       return { name: ref.name, arguments: [], annotations: [] };
-    case 'genericRef':
+    case 'applicationRef':
       return {
         name: ref.name,
         arguments: ref.args.map((a) => typeArgument(deps, a)),
         annotations: [],
       };
-    case 'arrayRef':
-    case 'mapRef':
-    case 'tupleRef':
-    case 'choiceRef':
+    case 'siblingRef':
+      throw siblingRefusal(ref.field, 'here');
+    case 'arrayExpr':
+    case 'mapExpr':
+    case 'tupleExpr':
+    case 'choiceExpr':
       throw new TsonNotImplementedError(
         'a container sugar form must be lifted to an entry before resolution (§5.3); this one was not, ' +
           'which means either the desugar phase was skipped or a position inside it is an application, which ' +
@@ -1278,7 +1430,7 @@ function resolveComposition(
   };
 
   for (const rawSupertypeRef of construction.supertypes) {
-    if (rawSupertypeRef.kind === 'genericRef') {
+    if (rawSupertypeRef.kind === 'applicationRef') {
       const head = rawSupertypeRef.name;
       const operand = openOperand(deps, name, rawSupertypeRef, parameters, 'supertype');
       if (operand.body.extension === 'FINAL' && construction.removal === undefined) {
@@ -1327,13 +1479,9 @@ function resolveComposition(
       takeNameType(head, operand.body.nameType);
       continue;
     }
-    const supertypeRef: AstTypeRef = rawSupertypeRef;
-    if (supertypeRef.kind !== 'simpleRef') {
-      throw new TsonSchemaValidationError(
-        `'${name}': a ${supertypeRef.kind === 'choiceRef' ? 'choice' : 'bracketed array/tuple'} cannot be a ` +
-          `supertype -- '&' composes record types, and this form has ` +
-          `${supertypeRef.kind === 'choiceRef' ? 'variants' : 'elements'}, not fields (§5.8)`,
-      );
+    const supertypeRef: AstReference = rawSupertypeRef;
+    if (supertypeRef.kind !== 'nameRef') {
+      throw siblingRefusal(supertypeRef.field, 'a composition operand');
     }
     const supertypeName = supertypeRef.name;
     refuseParameterOperand(name, supertypeName, parameters, 'supertype', '&');
@@ -1562,9 +1710,8 @@ function addIfAbsent(list: string[], seen: Set<string>, name: string): void {
  * `entryKind` (`schema/meta/typedef.ts`), which reaches the identical answer from the value.
  */
 function determineKind(name: string, transitiveSupertypes: readonly string[]): EntryKind {
-  const baseKindsFound = transitiveSupertypes.filter(
-    (s) => s === 'atom' || s === 'product' || s === 'sum' || s === 'namespace',
-  );
+  const baseKinds = [metaName('atom'), metaName('product'), metaName('sum')];
+  const baseKindsFound = transitiveSupertypes.filter((s) => baseKinds.includes(s));
   if (baseKindsFound.length === 0) return 'PRODUCT';
   if (baseKindsFound.length > 1) {
     throw new TsonSchemaValidationError(
@@ -1574,14 +1721,12 @@ function determineKind(name: string, transitiveSupertypes: readonly string[]): E
     );
   }
   switch (baseKindsFound[0]) {
-    case 'atom':
+    case metaName('atom'):
       return 'ATOM';
-    case 'product':
+    case metaName('product'):
       return 'PRODUCT';
-    case 'sum':
+    case metaName('sum'):
       return 'SUM';
-    case 'namespace':
-      return 'NAMESPACE';
     default:
       throw new TsonInternalError(`unreachable base kind '${String(baseKindsFound[0])}'`);
   }
@@ -1620,7 +1765,7 @@ function resolveRefinement(
   refined: RefinedDef,
   parameters: readonly string[],
 ): Draft {
-  if (refined.target.kind === 'genericRef' && namesOwnParameter(refined.target, parameters)) {
+  if (refined.target.kind === 'applicationRef' && namesOwnParameter(refined.target, parameters)) {
     const operand = openOperand(deps, name, refined.target, parameters, 'refinement source');
     const written: TypeRef = {
       name: refined.target.name,
@@ -1637,7 +1782,7 @@ function resolveRefinement(
       operand.body,
     );
   }
-  if (refined.target.kind === 'simpleRef') {
+  if (refined.target.kind === 'nameRef') {
     refuseParameterOperand(name, refined.target.name, parameters, 'refinement source', '^');
   }
   const sourceRef = resolveRefinementSource(deps, name, refined.target);
@@ -1774,6 +1919,9 @@ function refineOnto(
 /** The kernel's default field name type (§5.2), the name an absent `name_type` stands for. */
 const FIELD_NAME = 'field_name';
 
+/** The entry at the end of `field_name`'s alias chain (§8.3). */
+const DEFAULT_NAME_TYPE_TERMINAL = metaName('identifier');
+
 /** §5.8's one name type over a subtype's supertypes: `a` from `aFrom` and `b` from `bFrom`. */
 function requireOneNameType(
   deps: DefinitionResolverDeps,
@@ -1809,31 +1957,31 @@ function sameNameType(
   return ka !== undefined && kb !== undefined ? ka === kb : a === b;
 }
 
-/** `nameType`'s terminal entry, qualified by the namespace it is in, or `undefined` where it is in none. */
+/**
+ * `nameType`'s terminal entry (§8.3), or `undefined` where it names none. The absent default is the
+ * kernel's `field_name`, which is `meta.identifier` through its alias (§5.2); it is stated here, not
+ * looked up, since every record that states no name type asks, and the kernel's own records ask while
+ * its entries are still being made.
+ */
 function nameTypeIdentity(
   deps: DefinitionResolverDeps,
   nameType: string | undefined,
 ): string | undefined {
-  let written = nameType ?? FIELD_NAME;
-  if (nameType !== undefined && deps.namespaceDefinitions(written) !== undefined) {
-    const end = terminal(written, deps.namespaceDefinitions);
-    if (deps.namespaceDefinitions(end) !== undefined) return `schema:${end}`;
-    written = end; // an alias of a structure entry, which the walk below continues
-  }
-  if (deps.metaDefinitions(written) === undefined) return undefined;
-  return `structure:${terminal(written, deps.metaDefinitions)}`;
+  if (nameType === undefined) return DEFAULT_NAME_TYPE_TERMINAL;
+  if (deps.namespaceDefinitions(nameType) === undefined) return undefined;
+  return terminal(nameType, deps.namespaceDefinitions);
 }
 
 /** A refinement's source is always a simple or generic type-ref by grammar. */
 function resolveRefinementSource(
   deps: DefinitionResolverDeps,
   name: string,
-  target: AstTypeRef,
+  target: AstReference,
 ): TypeRef {
-  if (target.kind === 'simpleRef') {
+  if (target.kind === 'nameRef') {
     return { name: target.name, arguments: [], annotations: [] };
   }
-  if (target.kind === 'genericRef') {
+  if (target.kind === 'applicationRef') {
     return {
       name: closedApplication(deps, name, target, 'refinement source'),
       arguments: [],
@@ -1910,11 +2058,11 @@ function refuseParameterOperand(
 }
 
 /** Whether an application is applied to a parameter of the declaration that writes it, and so still open — through nesting (`box<inner<T>>` is as open as `box<T>`). */
-function namesOwnParameter(application: GenericRef, typeParams: readonly string[]): boolean {
+function namesOwnParameter(application: ApplicationRef, typeParams: readonly string[]): boolean {
   return application.args.some((arg) => {
     if (arg.kind !== 'ref') return false;
-    if (arg.ref.kind === 'simpleRef') return typeParams.includes(arg.ref.name);
-    if (arg.ref.kind === 'genericRef') return namesOwnParameter(arg.ref, typeParams);
+    if (arg.ref.kind === 'nameRef') return typeParams.includes(arg.ref.name);
+    if (arg.ref.kind === 'applicationRef') return namesOwnParameter(arg.ref, typeParams);
     return false;
   });
 }
@@ -1942,7 +2090,7 @@ interface OpenOperand {
 function openOperand(
   deps: DefinitionResolverDeps,
   name: string,
-  application: GenericRef,
+  application: ApplicationRef,
   typeParams: readonly string[],
   position: string,
 ): OpenOperand {
@@ -1995,7 +2143,7 @@ function openOperand(
 function closedApplication(
   deps: DefinitionResolverDeps,
   name: string,
-  application: GenericRef,
+  application: ApplicationRef,
   position: string,
 ): string {
   if (deps.applicationCloser === undefined) {
@@ -2356,9 +2504,9 @@ function resolveFieldEntry(
   parameters: readonly string[],
   inherited: NamedField | undefined,
 ): ResolvedField {
-  let type: TypeRef;
+  let type: Reference;
   if (field.type !== undefined) {
-    type = resolveTypeRef(deps, field.type.typeRef);
+    type = resolveFieldType(deps, field.type.typeRef);
   } else if (inherited !== undefined) {
     type = inherited.type;
   } else {
@@ -2448,13 +2596,13 @@ function restatesInheritedGroup(
     );
   }
   for (const member of groupMembers(groupDef)) {
-    const restatedType = resolveTypeRef(deps, member.typeRef);
+    const restatedType = resolveFieldType(deps, member.typeRef);
     const inheritedIndex = requiredGet(inheritedFieldIndex, member.name, 'restatesInheritedGroup');
     const inheritedField = at(fields, inheritedIndex, 'restatesInheritedGroup');
-    if (!typeRefEquals(restatedType, inheritedField.type)) {
+    if (!referenceEquals(restatedType, inheritedField.type)) {
       throw new TsonSchemaValidationError(
-        `${prefix}gives member '${member.name}' the type '${restatedType.name}' where the source declares ` +
-          `'${inheritedField.type.name}' -- member type-refs are restated verbatim (§5.11); narrowing a ` +
+        `${prefix}gives member '${member.name}' the type '${referenceText(restatedType)}' where the source declares ` +
+          `'${referenceText(inheritedField.type)}' -- member type-refs are restated verbatim (§5.11); narrowing a ` +
           "member's type is done by naming it as an ordinary field",
       );
     }
@@ -2482,7 +2630,7 @@ function restatesInheritedGroup(
 function resolveGroupMember(deps: DefinitionResolverDeps, member: GroupMember): NamedField {
   return {
     name: member.name,
-    type: resolveTypeRef(deps, member.typeRef),
+    type: resolveFieldType(deps, member.typeRef),
     optional: true,
     voidable: member.voidable,
     role: 'FREE',

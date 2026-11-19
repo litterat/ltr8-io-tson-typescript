@@ -51,6 +51,7 @@
  * then the per-name mechanisms in order, matching `checkScope`'s own "its own collision relation,
  * then each name's own two rules" — see that function's own doc.
  */
+import { typeNameOf } from '../schema/meta/bodies.js';
 import { diagnosticCodeForMechanism } from '../core/diagnostic.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonNameHygieneRefusedError } from '../core/errors.js';
@@ -300,7 +301,7 @@ function checkFieldValues(
   if (isTemplateBody(body) || body.kind !== 'record') return;
   for (const [fieldName, field] of body.fields.entries) {
     if (field.value === undefined) continue;
-    const family = terminalDefinition(field.type.name, (n) => merged.get(n));
+    const family = terminalDefinition(typeNameOf(field), (n) => merged.get(n));
     if (family === undefined || isTemplateBody(family) || family.kind !== 'identifier_type') {
       continue;
     }

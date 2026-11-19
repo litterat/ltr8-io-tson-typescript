@@ -62,6 +62,7 @@ import {
   type FieldGroup,
   type FieldOmission,
   namedFields,
+  typeNameOf,
   type NamedField,
   type RecordBody,
 } from '../../schema/meta/bodies.js';
@@ -86,6 +87,7 @@ import {
   type AtomForm,
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
+import { notImplementedReader } from './notImplemented.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { memberNameRefuses, nameHygieneRefuses } from './nameHygiene.js';
 import {
@@ -161,7 +163,7 @@ export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): At
   if (isTemplateBody(body)) {
     throw new Error(`'${fieldTypeName}' is an open template, and carries no atom parser`);
   }
-  if (body.kind === 'reference') {
+  if (body.kind === 'alias') {
     throw new Error(
       `'${fieldTypeName}'s reference chain did not collapse -- this is a library bug`,
     );
@@ -276,14 +278,22 @@ function buildRecordPlan(
     names.push(fieldName);
     index.set(matchKey(fieldNames, fieldName), i);
     omitted.push(fieldOmission(field, isGroupMember(body.groups, field.name)));
-    schemaReaders.push(ctx.resolve(field.type.name));
+    const typeName = typeNameOf(field);
+    // A dependent field's type is its sibling's value (§5.2), which a JSON read does not follow yet.
+    schemaReaders.push(
+      field.type.kind === 'sibling'
+        ? notImplementedReader(`${name}.${field.name}`, 'a dependent field')
+        : ctx.resolve(typeName),
+    );
     fixedReaders.push(
       field.role === 'FIXED'
-        ? fixedFieldReader(ctx, field.type.name, ctx.locationOf(field.type.name))
+        ? fixedFieldReader(ctx, typeName, ctx.locationOf(typeName))
         : undefined,
     );
     stated.push(
-      field.value === undefined ? undefined : fieldValueOf(ctx, field.type.name, field.value),
+      field.value === undefined || field.type.kind === 'sibling'
+        ? undefined
+        : fieldValueOf(ctx, typeName, field.value),
     );
   });
 

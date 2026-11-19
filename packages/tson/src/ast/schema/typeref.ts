@@ -2,56 +2,74 @@ import type { TokenValue } from '../value.js';
 import type { SizeSpec } from './fields.js';
 
 /**
- * `type-ref = paren-type / bracket-type / map-type / type-name "<" type-args ">" / type-name`
- * (Part 2 §12.1) — a reference to a type at any position one is legal: a declaration's own
- * body, field types, type arguments, choice variants, elements, composition/refinement targets.
+ * `type-expr = paren-type / bracket-type / map-type / type-ref` (Part 2 §12.1) -- a type expression
+ * at any position one is legal: a declaration's own body, field types, type arguments, choice
+ * variants, elements, composition/refinement targets. It is a {@link Reference} or one of the
+ * four structural forms ({@link ChoiceExpr}, {@link ArrayExpr}, {@link TupleExpr}, {@link MapExpr}),
+ * each of which holds further expressions.
  *
- * One tier, not two: every container form (`ArrayRef`, `TupleRef`, `MapRef`, `ChoiceRef`) is
- * legal at every type-ref position, with no separate declaration-level production. Each of
- * those, and every generic application, is a **syntactic** node — desugaring (a later phase,
- * outside this AST) lifts a concrete one to a closed synthetic entry and a parameter-bearing
- * one to an open synthetic entry; this union represents exactly what was written, never a
- * pre-normalised or pre-desugared form.
+ * One tier, not two: every container form is legal at every type-expression position, with no
+ * separate declaration-level production. Each of those, and every application, is a **syntactic**
+ * node -- desugaring (a later phase, outside this AST) lifts a concrete one to a closed synthetic
+ * entry and a parameter-bearing one to an open synthetic entry; this union represents exactly what
+ * was written, never a pre-normalised or pre-desugared form.
  *
- * Discriminated on `kind`. See {@link GenericRef} for the arguments-present invariant this
- * union's two "named" members (`SimpleRef`, `GenericRef`) exist to distinguish.
+ * Discriminated on `kind`.
  */
-export type TypeRef = SimpleRef | GenericRef | ArrayRef | MapRef | TupleRef | ChoiceRef;
+export type TypeExpr = Reference | ArrayExpr | MapExpr | TupleExpr | ChoiceExpr;
 
-/** `type-name` alone (§12.1) — a bare reference with no type arguments. */
-export interface SimpleRef {
-  readonly kind: 'simpleRef';
+/**
+ * A reference as written: a {@link TypeRef}, naming a type by its qualified name and any arguments, or
+ * a {@link SiblingRef}, naming the field of the same record whose value names the type
+ * ([TSON-DATA] §7.4, Part 2 §12.1). The shape mirrors the resolved model's `Reference`
+ * (`schema/meta`). A reference parses wherever a {@link TypeExpr} does, and wherever the grammar admits a
+ * reference alone: a map's key, a refinement's source, a composition's operand. A sibling reference
+ * stands only at a record field's type; the desugar phase refuses it everywhere else (§5.2).
+ */
+export type Reference = TypeRef | SiblingRef;
+
+/**
+ * `qualified-name ["<" type-args ">"]` (§12.1) -- a reference to a type: a {@link NameRef} or an
+ * {@link ApplicationRef}. The shape of the resolved model's `TypeRef`, the value of `meta.type_ref`.
+ */
+export type TypeRef = NameRef | ApplicationRef;
+
+/** `qualified-name` alone (§12.1) -- a bare reference with no type arguments, `geo.address` included. */
+export interface NameRef {
+  readonly kind: 'nameRef';
   readonly name: string;
 }
 
 /**
- * `type-name "<" type-args ">"` (§12.1, §5.3) — a generic application: `map<text, integer>`, or
- * a template application such as `vector<pixel, 1920>`. Whether `name` resolves to a
- * constructor, a non-constructor template, or is a resolver error is a later, semantic-layer
- * question (§3.3.1, §5.10) — not decided here.
+ * `qualified-name "<" type-args ">"` (§12.1, §5.3) -- an application: `map<text, integer>`, or a
+ * template application such as `vector<pixel, 1920>`. Whether `name` resolves to a constructor, a
+ * non-constructor template, or is a resolver error is a later, semantic-layer question (§3.3.1,
+ * §5.10) -- not decided here.
  *
- * **The arguments-present invariant.** `SimpleRef` (no arguments) and `GenericRef` (one or
- * more) are this AST's direct encoding of the desugarer's central rule, stated one layer up in
- * resolved output (`docs/schema-grammar-and-desugaring.md`): *a reference carrying arguments
- * denotes an open form — a template application whose arguments materialisation later
- * substitutes; a reference carrying none is a bare name.* At this grammar-only layer every
- * `GenericRef` is necessarily non-empty — `type-args` requires at least one `type-arg` by
- * §12.1's grammar, encoded here as a non-empty tuple rather than a plain array, so "no
- * arguments" is exactly the shape that forces `SimpleRef` instead. The distinction that later
- * becomes "closed vs. open" is which of `SimpleRef`/`GenericRef` a use site holds *after*
- * desugaring has run, not before: desugaring rewrites a closed (parameter-free) application to
- * a `SimpleRef` naming its synthetic entry, and leaves an open (parameter-bearing) one as a
- * `GenericRef` whose arguments are exactly what materialisation substitutes. `args` is never
- * rewritten, reordered, or dropped by anything at this layer.
+ * **The arguments-present invariant.** {@link NameRef} (no arguments) and {@link ApplicationRef} (one or
+ * more) encode the desugarer's central rule: *a reference carrying arguments denotes an open form --
+ * a template application whose arguments materialisation later substitutes; a reference carrying none
+ * is a bare name.* `type-args` requires at least one `type-arg` by §12.1's grammar, encoded here as a
+ * non-empty tuple. `args` is never rewritten, reordered, or dropped by anything at this layer.
  */
-export interface GenericRef {
-  readonly kind: 'genericRef';
+export interface ApplicationRef {
+  readonly kind: 'applicationRef';
   readonly name: string;
   readonly args: readonly [TypeArg, ...TypeArg[]];
 }
 
 /**
- * `type-arg = type-ref / value-literal` (§12.1) — one argument inside a generic application's
+ * `sibling-ref = unquoted-token "!"` (§12.1, [TSON-DATA] §7.4) -- the field `field` of the same
+ * record instance, whose value names the type: `kind!`. It parses wherever a {@link Reference} does,
+ * and stands only at a record field's type (§5.2).
+ */
+export interface SiblingRef {
+  readonly kind: 'siblingRef';
+  readonly field: string;
+}
+
+/**
+ * `type-arg = type-expr / value-literal` (§12.1) — one argument inside a generic application's
  * `<...>`.
  *
  * **An unquoted, non-numeric argument token always parses as {@link TypeArgRef}, never
@@ -70,7 +88,7 @@ export type TypeArg = TypeArgRef | TypeArgValue;
 /** A type-reference argument: `box<text>`, `pair<text, uuid>`. */
 export interface TypeArgRef {
   readonly kind: 'ref';
-  readonly ref: TypeRef;
+  readonly ref: TypeExpr;
 }
 
 /** A scalar-literal argument: `vector<pixel, 1920>`'s `1920`. */
@@ -80,20 +98,20 @@ export interface TypeArgValue {
 }
 
 /**
- * `element-type = type-ref ["?"]` (§12.1, §5.3) — one position inside an {@link ArrayRef}, a
- * {@link TupleRef}, or a {@link MapRef}'s value.
+ * `element-type = type-expr ["?"]` (§12.1, §5.3) — one position inside an {@link ArrayExpr}, a
+ * {@link TupleExpr}, or a {@link MapExpr}'s value.
  *
  * The `?` here makes the position `voidable`: the void sentinel `_` may stand in it (§5.3). It is
  * the same fact a field's type `?` states, at a container position. In `xs: [T?]?` the inner `?`
  * is the element's and the outer the field type's; a container's position is never missing, so
  * there is no counterpart of the field name's `?`.
  *
- * Holds a plain {@link TypeRef} and nothing else; nesting needs no case of its own, because a
- * bracket or map form *is* a type-ref — `[[T; 2]; 3]` is an {@link ArrayRef} whose
- * `elementType.typeRef` is itself an `ArrayRef`.
+ * Holds a plain {@link TypeExpr} and nothing else; nesting needs no case of its own, because a
+ * bracket or map form *is* a type-ref — `[[T; 2]; 3]` is an {@link ArrayExpr} whose
+ * `elementType.typeRef` is itself an `ArrayExpr`.
  */
 export interface ElementType {
-  readonly typeRef: TypeRef;
+  readonly typeRef: TypeExpr;
   /** `true` for a trailing `?` — the position may carry the void sentinel `_` in data. */
   readonly voidable: boolean;
 }
@@ -105,12 +123,12 @@ export interface ElementType {
  * form — every position admits a size specifier and an element `?` alike.
  *
  * `size` absent means unconstrained. Nesting is the recursion in {@link ElementType}, which
- * holds a plain `TypeRef`: `[[T; 2]; 3]` is this node twice over, needing no second node
+ * holds a plain `TypeExpr`: `[[T; 2]; 3]` is this node twice over, needing no second node
  * family. This is a syntactic node — desugaring lifts it to a closed or open synthetic
  * `!array { ... }` entry; nothing here pre-normalises it.
  */
-export interface ArrayRef {
-  readonly kind: 'arrayRef';
+export interface ArrayExpr {
+  readonly kind: 'arrayExpr';
   readonly elementType: ElementType;
   readonly size?: SizeSpec;
 }
@@ -118,26 +136,23 @@ export interface ArrayRef {
 /**
  * `"{" ws map-key ws "=>" ws element-type [ws ";" ws size-spec] ws "}"` (§12.1, §5.3) — a map
  * type, legal at every type-ref position, mirroring the data notation's own `{k => v}` the way
- * {@link ArrayRef} mirrors `[a b]`. Syntactic, like every sugar form — desugars to
+ * {@link ArrayExpr} mirrors `[a b]`. Syntactic, like every sugar form — desugars to
  * `!map { key_type: ... value_type: ... }` at resolution, not here.
  *
- * The key is a `type-name`, optionally with type arguments (`map-key = type-name
- * ["<" type-args ">"]`) — never a paren, bracket, or map form: keeping it to a simple or
- * generic reference is what holds the record/map brace dispatch (§12.2) to its stated
- * lookahead budget, and a composite key type earns a named declaration and the explicit
- * `!map { key_type: ... }` form instead. That narrower grammar fact is not encoded in the type
- * of `keyType` (every `TypeRef` variant satisfies the field); a parser building this type is
- * responsible for never constructing it with an `ArrayRef`, `MapRef`, `TupleRef`, or
- * `ChoiceRef` key.
+ * The key is a {@link Reference} (`map-key = type-ref`, a qualified name optionally with type
+ * arguments) and never a bracket, paren or map form: keeping it to a reference is what holds the
+ * record/map brace dispatch (§12.2) to its stated lookahead budget, and a composite key type earns a
+ * named declaration and the explicit `!meta.map { key_type: ... }` form instead. A sibling reference
+ * parses as it does at every reference position and the desugar phase refuses it here (§5.2).
  *
  * The value is an {@link ElementType}: `{K => V?}` marks the value voidable exactly as `[T?]`
  * marks an array element (§5.3), under which an entry's value may be the void sentinel and the
  * entry still counts toward the size bounds. The key side carries no such suffix — a void key
  * is a resolver error ([TSON-DATA] §2.9), and `map-key` has no `?` to write (§12.1).
  */
-export interface MapRef {
-  readonly kind: 'mapRef';
-  readonly keyType: TypeRef;
+export interface MapExpr {
+  readonly kind: 'mapExpr';
+  readonly keyType: Reference;
   readonly valueType: ElementType;
   readonly size?: SizeSpec;
 }
@@ -147,12 +162,12 @@ export interface MapRef {
  * positions, legal at every type-ref position, each carrying its own `?` to make the
  * position voidable. Syntactic — desugars to `!tuple { elements: [...] }` at resolution.
  *
- * Distinguished from {@link ArrayRef} by arity alone — one element (with or without a size) is
+ * Distinguished from {@link ArrayExpr} by arity alone — one element (with or without a size) is
  * an array, two or more a tuple — which is why the minimum arity is encoded structurally here
  * as a non-empty (2+) tuple type rather than checked at runtime.
  */
-export interface TupleRef {
-  readonly kind: 'tupleRef';
+export interface TupleExpr {
+  readonly kind: 'tupleExpr';
   readonly elementTypes: readonly [ElementType, ElementType, ...ElementType[]];
 }
 
@@ -161,7 +176,7 @@ export interface TupleRef {
  * at least two variants. Desugars to `!choice { variants: [...] }` at resolution (§5.4); this
  * layer only records the variants as written, encoding the 2+ arity as a non-empty tuple type.
  */
-export interface ChoiceRef {
-  readonly kind: 'choiceRef';
-  readonly variants: readonly [TypeRef, TypeRef, ...TypeRef[]];
+export interface ChoiceExpr {
+  readonly kind: 'choiceExpr';
+  readonly variants: readonly [TypeExpr, TypeExpr, ...TypeExpr[]];
 }

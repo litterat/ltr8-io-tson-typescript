@@ -42,9 +42,9 @@ import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaR
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
+import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
-import { checkImportLevel, type ImportLevel } from './importLevel.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { computeKindMembers } from './kindMembers.js';
 import { checkFieldNameTypes, type FieldNameType } from './fieldNames.js';
@@ -79,7 +79,6 @@ import { checkValuesByName } from './valuesByName.js';
  */
 export interface LinkedSchema {
   readonly id: string;
-  readonly meta: string;
   readonly imports: readonly string[];
   /** Every entry this schema can see: this schema's own declarations plus every `!!import`'s, transitively. */
   readonly entries: ReadonlyMap<string, Top>;
@@ -116,12 +115,6 @@ export interface LinkedSchema {
    * kernel's `field_name`. Local and imported records alike.
    */
   readonly nameTypes: ReadonlyMap<string, FieldNameType>;
-  /**
-   * Whether the meta-kernel governs this schema -- the one level where an entry holds a value and a
-   * kind slot names a type of a schema it describes rather than of its own closure (§2.2.2, §4.2).
-   * Absent where the linker was not told.
-   */
-  readonly kernelGoverned?: boolean;
 }
 
 /** Dependencies {@link linkSchema} needs beyond the {@link Schema} being linked. */
@@ -134,17 +127,6 @@ export interface LinkDeps {
    * Reuses that module's own {@link ImportResolver} type so both merge stages speak one shape.
    */
   readonly resolveImport?: ImportResolver;
-  /**
-   * The governing meta-schema's own entries (§3.3.1), consulted only as the `source`/composition-
-   * supertype fallback `referenceValidation.ts` documents — never for an ordinary field/element/
-   * variant reference (§3.3.2). Omitted means "no governing meta in scope" (the meta-kernel
-   * bootstrap route), matching `resolveSchema`'s own `deps.metaDefinitions` in spirit; a caller
-   * assembling both stages typically passes the same governing `LinkedSchema.entries` here that it
-   * turned into a `DefinitionGetter` for `resolveSchema`.
-   */
-  readonly structureNamespace?: ReadonlyMap<string, Top>;
-  /** The governing meta's own entry facts, beside {@link structureNamespace} -- where a constructor's head is read. */
-  readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   /**
    * Where a failing entry is reported, letting every other entry still be checked. Omitted means
    * fail-fast: the first {@link TsonSchemaValidationError} propagates, naming the entry that
@@ -168,8 +150,6 @@ export interface LinkDeps {
    * bootstrap route) has no such restriction and may take a caller's own policy.
    */
   readonly identifierPolicy?: IdentifierPolicy;
-  /** Whether the meta-kernel governs the schema being linked ({@link LinkedSchema.kernelGoverned}). */
-  readonly kernelGoverned?: boolean;
 }
 
 /**
@@ -183,28 +163,26 @@ export interface LinkDeps {
  * of this schema checkable against something real).
  */
 export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
-  const { resolveImport, structureNamespace, structureFacts, receiver } = deps;
+  const { resolveImport, receiver } = deps;
   const identifierPolicy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
 
   const origins = new Map<string, string>();
   const enumForms = new Map<string, Normalization>();
   const facts = new Map<string, EntryFacts>();
   const nameTypes = new Map<string, FieldNameType>();
-  let merged = mergeImports(
-    schema.imports,
-    deps.kernelGoverned === undefined
-      ? undefined
-      : { id: schema.id, meta: schema.meta, kernelGoverned: deps.kernelGoverned },
-    resolveImport,
-    origins,
-    enumForms,
-    facts,
-    nameTypes,
-  );
+  let merged = mergeImports(schema.imports, resolveImport, origins, enumForms, facts, nameTypes);
 
   const localNames = new Set<string>();
   const selfId = canonicalizeIdentity(schema.id);
   for (const [name, def] of schema.entries) {
+    // A schema map of one path is open: this document's contribution to an imported one is no collision, its
+    // members colliding by path as any name does (§2.2.3); the union is rebuilt once every entry is in.
+    if (merged.has(name) && isNestedMap(merged.get(name)) && isNestedMap(def)) {
+      origins.set(name, selfId);
+      localNames.add(name);
+      merged.set(name, def);
+      continue;
+    }
     if (merged.has(name)) {
       const message = `'${name}' collides with an entry of the same name brought in by !!import`;
       if (receiver === undefined) {
@@ -226,24 +204,19 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     if (recorded !== undefined) facts.set(name, recorded);
   }
 
+  // Each nested map holds the union of the members its closure declares (§2.2.3).
+  merged = new Map(syncedEntries({ entries: merged, keyAnnotations: new Map() }).entries);
   merged = computeSubtypes(merged, localNames);
-  merged = computeKindMembers(
-    merged,
-    (name) => facts.get(name),
-    (name) => structureNamespace?.get(name),
-  );
+  merged = computeKindMembers(merged, (name) => facts.get(name));
 
   // Before disjointness: an enum whose members are texts is string-class, and only here can its
   // `name_type` be followed into the governing meta, where a constructor's pinned one was written.
   const entryOf = (name: string): Top | undefined => merged.get(name);
-  const structureOf =
-    structureNamespace === undefined
-      ? undefined
-      : (name: string): Top | undefined => structureNamespace.get(name);
+  // One namespace per schema (§3.3): every name, a constructor's included, resolves in `merged`.
+  const structureOf = (name: string): Top | undefined => merged.get(name);
   const enumProfiles = new Map<string, EnumLabelProfile>();
   // The constructor an entry applied, from its facts -- the schema's own or the governing meta's.
-  const headOf = (name: string): string | undefined =>
-    facts.get(name)?.head ?? structureFacts?.get(name)?.head;
+  const headOf = (name: string): string | undefined => facts.get(name)?.head;
   for (const name of localNames) {
     const definition = merged.get(name);
     if (definition === undefined || isTemplateBody(definition) || definition.kind !== 'enum') {
@@ -309,25 +282,22 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     schemaId: schema.id,
     facts,
     enumForms,
-    ...(structureNamespace === undefined ? {} : { structureNamespace }),
+    structureNamespace: merged,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkKindsReferencesAndNamespaceTypes(merged, localNames, {
     schemaId: schema.id,
     facts,
-    ...(structureNamespace === undefined ? {} : { structureNamespace }),
-    ...(deps.kernelGoverned === undefined ? {} : { kernelGoverned: deps.kernelGoverned }),
+    structureNamespace: merged,
     ...(receiver === undefined ? {} : { receiver }),
   });
-  if (structureNamespace !== undefined) {
-    checkValuesByName(merged, localNames, {
-      schemaId: schema.id,
-      facts,
-      structureNamespace,
-      ...(structureFacts === undefined ? {} : { structureFacts }),
-      ...(receiver === undefined ? {} : { receiver }),
-    });
-  }
+  checkValuesByName(merged, localNames, {
+    schemaId: schema.id,
+    facts,
+    structureNamespace: merged,
+    structureFacts: facts,
+    ...(receiver === undefined ? {} : { receiver }),
+  });
   checkEveryEntryIsInhabited(merged, localNames, {
     schemaId: schema.id,
     facts,
@@ -352,7 +322,6 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
 
   return {
     id: schema.id,
-    meta: schema.meta,
     imports: schema.imports,
     entries: merged,
     facts,
@@ -361,7 +330,6 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     origins,
     enumForms,
     nameTypes,
-    ...(deps.kernelGoverned === undefined ? {} : { kernelGoverned: deps.kernelGoverned }),
   };
 }
 
@@ -381,7 +349,6 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
  */
 function mergeImports(
   imports: readonly string[],
-  importer: ImportLevel | undefined,
   resolveImport: ImportResolver | undefined,
   origins: Map<string, string>,
   enumForms: Map<string, Normalization>,
@@ -403,18 +370,22 @@ function mergeImports(
       );
     }
     const imported: ImportedSchema = resolveImport(importUri);
-    checkImportLevel(importer, imported.level);
     for (const [name, form] of imported.enumForms ?? []) enumForms.set(name, form);
     for (const [name, nameType] of imported.nameTypes ?? []) nameTypes.set(name, nameType);
     for (const [name, definition] of imported.entries) {
       const origin = imported.originOf(name);
       const incumbent = origins.get(name);
+      // A schema map of one path declared by several documents is one map, the union of their members,
+      // each merged under its path; the map's entry is derived from them (§2.2.3).
+      if (incumbent !== undefined && isNestedMap(merged.get(name)) && isNestedMap(definition)) {
+        continue;
+      }
       if (incumbent !== undefined) {
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ` +
               `('${incumbent}' and '${origin}') -- distinct types cannot share one name in the ` +
-              `flat namespace; import one of them, or a version of each that agrees on where ` +
+              `one namespace; import one of them, or a version of each that agrees on where ` +
               `'${name}' is declared`,
           );
         }

@@ -39,7 +39,7 @@
  * §11.5 schema-side limits are not independently configurable yet.
  */
 import { DEFAULT_MAX_REFERENCE_CHAIN, referenceChainLimitRefusal } from '../core/limits.js';
-import type { Reference, Scoped, Top } from '../schema/meta/typedef.js';
+import type { Alias, Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 
 /** A single-name lookup -- a finished `Map`'s `get`, or a namespace still being built one declaration at a time (`definitionResolver.ts`'s own `DefinitionGetter`). */
@@ -51,10 +51,10 @@ interface Stop {
   readonly reached: boolean;
 }
 
-// A `Reference` value is REFERENCE-kind by its shape alone (`schema/meta/typedef.ts`'s
-// `entryKind`), with no further lookup needed.
-function isReferenceBody(body: Top): body is Reference {
-  return !isTemplateBody(body) && body.kind === 'reference';
+// An `Alias` value is ALIAS-kind by its shape alone (`schema/meta/typedef.ts`'s `entryKind`), with no
+// further lookup needed.
+function isAliasBody(body: Top): body is Alias {
+  return !isTemplateBody(body) && body.kind === 'alias';
 }
 
 function walk(
@@ -74,7 +74,7 @@ function walk(
       return { name: current, reached: false };
     }
     const body = definition;
-    if (isReferenceBody(body) && body.target.arguments.length === 0) {
+    if (isAliasBody(body) && body.target.arguments.length === 0) {
       current = body.target.name;
       continue;
     }
@@ -116,34 +116,28 @@ export function terminalDefinition(
 
 /**
  * Whether `name`'s reference chain (§8.3) terminates at an instance of the atom constructor
- * `constructor` (`void_type` or `value_type`, §4.2) -- recognised by the body's constructor, never
+ * `constructor` (`void_type`, §4.2) -- recognised by the body's constructor, never
  * by the declared name, so `nothing => void` and a schema's own `!void_type {}` instance are the
  * same type as the kernel's `void`.
  */
 export function resolvesToConstructor(
   name: string,
   entries: EntryLookup,
-  constructor: 'void_type' | 'value_type',
+  constructor: 'void_type',
 ): boolean {
   const definition = terminalDefinition(name, entries);
   return definition !== undefined && !isTemplateBody(definition) && definition.kind === constructor;
 }
 
-function isScopedBody(body: Top): body is Scoped {
-  return !isTemplateBody(body) && body.kind === 'scoped';
-}
-
 /**
- * Whether `name`'s reference chain (§8.3) terminates at a `scoped` instance (§7.8) -- the
- * structural fact a container consults to decide whether a nested `!!schema` may stand at this
- * position at all (`reader/tree/grammar.ts`'s own `refuseUnscopedSchemaRef`). Which cell a scope
- * push actually lands in -- LOCAL, EXTERN, or neither -- is the `scoped` position's own reader's
- * concern once dispatched to; this only answers whether the position is a scoped one in the first
- * place, an undeclared name and a cycle both reading as "no".
+ * Whether `name`'s alias chain (§8.3) terminates at a `declared_type` instance (§7.8) -- the open sum a
+ * value of which names its own type by its tag. An undeclared name and a cycle both read as "no".
  */
-export function resolvesToScoped(name: string, entries: EntryLookup): boolean {
+export function resolvesToDeclared(name: string, entries: EntryLookup): boolean {
   const definition = terminalDefinition(name, entries);
-  return definition !== undefined && isScopedBody(definition);
+  return (
+    definition !== undefined && !isTemplateBody(definition) && definition.kind === 'declared_type'
+  );
 }
 
 // ── §7.2's alias flattening: the written names that mean one declared type ─────────────────────

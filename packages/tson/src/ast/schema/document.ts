@@ -1,12 +1,12 @@
 import type { Annotation } from '../value.js';
 import type { Position } from '../../core/position.js';
 import type { TypeDef } from './typedef.js';
-import type { TypeRef } from './typeref.js';
+import type { TypeExpr } from './typeref.js';
 
 /**
- * A schema document (Part 2 §2.1, §12.1): a fixed-shape header — optional `!!id`, mandatory
- * `!!meta` (exactly once), repeatable `!!import` in declaration order — followed by the
- * {@link SchemaMap} body.
+ * A schema document (Part 2 §2.1, §12.1): the data header — optional `!!id`, then any number of
+ * `!!import`s in declaration order — followed by the {@link SchemaMap} body, the root tagged
+ * `!schema`.
  *
  * Every directive value is a URL string, preserved uninterpreted here (§2.2): resolving them
  * against the schema library (§10) is a later, semantic-layer concern this grammar-only AST
@@ -15,8 +15,6 @@ import type { TypeRef } from './typeref.js';
 export interface SchemaDocument {
   /** The `!!id` directive's value, when the schema states one (§2.2.1). Absent for a development schema. */
   readonly id?: string;
-  /** The `!!meta` directive's value: the governing meta-schema, exactly once, mandatory (§2.2.2). */
-  readonly meta: string;
   /** The `!!import` directives' values, in declaration order (§2.2.3). */
   readonly imports: readonly string[];
   /** The braced declaration map that follows the header. */
@@ -88,6 +86,6 @@ export interface Declaration {
    * desugar rewrite of the type-def keeps the declaration's own list as written. Absent when no
    * parameter wrote a type.
    */
-  readonly parameterTypes?: ReadonlyMap<string, TypeRef>;
+  readonly parameterTypes?: ReadonlyMap<string, TypeExpr>;
   readonly position?: Position;
 }

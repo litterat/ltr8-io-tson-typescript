@@ -4,9 +4,8 @@ import {
   createTemplateMaterialiser,
   type TemplateMaterialiserDeps,
 } from '../src/compiler/templates.js';
-import { createHeldBody } from '../src/compiler/heldBody.js';
+import { createHeldBody, type HeldBody } from '../src/compiler/heldBody.js';
 import { refValue } from '../src/compiler/wireForm.js';
-import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
 import { canonicalApplication } from '../src/compiler/derivedName.js';
 import { inferAll, kinds as parameterKindsOf } from '../src/compiler/parameterTypes.js';
 import {
@@ -14,19 +13,19 @@ import {
   TsonNotImplementedError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
-import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
-import type {
-  ArrayBody,
-  EnumBody,
-  NamedField,
-  RecordBody,
-  RecordField,
-} from '../src/schema/meta/bodies.js';
-import { TYPE_KIND } from '../src/schema/meta/bodies.js';
-import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
-import type { Reference, Top, TypeArgument, TypeRef } from '../src/schema/meta/typedef.js';
+import type { ArrayBody, NamedField, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
+import type { Alias, Top, TypeArgument, TypeRef } from '../src/schema/meta/typedef.js';
+import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
+import { resolvedBundled } from './compiler-schema-fixtures.js';
 import { entryKind } from '../src/schema/meta/typedef.js';
-import { entry, fieldMapOf, fieldOf, fieldsOf } from './model-fixtures.js';
+import {
+  entry,
+  fieldMapOf,
+  fieldOf,
+  fieldsOf,
+  fieldTypeName,
+  recordTemplate,
+} from './model-fixtures.js';
 
 // ── Test fixtures ────────────────────────────────────────────────────────────────────────────
 
@@ -43,15 +42,19 @@ function literal(text: string): TypeArgument {
   return { kind: 'value', value: { text, form: 'UNQUOTED' } };
 }
 
-/** `<params> => { field: type ... }` -- a record template: the record it is, with its parameters (§5.10). */
-function recordTemplate(parameters: readonly string[], body: RecordBody): RecordBody {
-  return {
-    ...body,
-    parameters: parameters.map((name) => ({
-      name,
-      type: { name: TYPE_KIND, arguments: [], annotations: [] },
-    })),
-  };
+/** A held alias (§5.10's partial application): `!meta.alias { target: <application> }` over `parameters`. */
+function heldAlias(target: TypeRef, parameters: readonly string[]): HeldBody {
+  return createHeldBody(
+    {
+      annotations: [],
+      typeRef: 'meta.alias',
+      coreValue: {
+        kind: 'record',
+        fields: [{ name: 'target', value: { annotations: [], coreValue: refValue(target) } }],
+      },
+    },
+    parameters,
+  );
 }
 
 function field(
@@ -69,94 +72,9 @@ function field(
   };
 }
 
-/**
- * A minimal stand-in for a compiled `record`/`array` constructor reader, decoding the same wire
- * shapes `heldBody.ts`'s own `heldRecord`/`metaRefValue` produce -- enough to exercise real
- * substitution and closure end to end rather than mocking the bound body away.
- */
-function readTypeRefField(record: RecordValue, name: string): TypeRef {
-  const value = record.fields.find((f) => f.name === name)?.value.coreValue;
-  if (value === undefined) throw new Error(`missing '${name}'`);
-  if (value.kind === 'token') return { name: value.text, arguments: [], annotations: [] };
-  const nameField = (value as RecordValue).fields.find((f) => f.name === 'name');
-  const argsField = (value as RecordValue).fields.find((f) => f.name === 'arguments');
-  const head = (nameField?.value.coreValue as TokenValue).text;
-  const args: TypeArgument[] = [];
-  if (argsField?.value.coreValue.kind === 'array') {
-    for (const element of argsField.value.coreValue.elements) {
-      const argRecord = element.coreValue as RecordValue;
-      const valueMember = argRecord.fields.find((f) => f.name === 'value');
-      if (valueMember !== undefined) {
-        const token = valueMember.value.coreValue as TokenValue;
-        args.push({
-          kind: 'value',
-          value: { text: token.text, form: metaFormOfLexer(token.form) },
-        });
-      } else {
-        args.push(refTo(readTypeRefField(argRecord, 'name')));
-      }
-    }
-  }
-  return { name: head, arguments: args, annotations: [] };
-}
-
-/** Reads one wire boolean member (`optional`/`voidable`), `false` when absent -- §8.1's own default. */
-function readBooleanField(record: RecordValue, name: string): boolean {
-  const wire = record.fields.find((f) => f.name === name)?.value.coreValue;
-  return wire?.kind === 'token' && wire.text === 'true';
-}
-
-function testMetaReader(type: string, value: DataValue): Top {
-  const record = value.coreValue as RecordValue;
-  if (type === 'record') {
-    const fieldsField = record.fields.find((f) => f.name === 'fields');
-    const fields: NamedField[] = [];
-    if (fieldsField?.value.coreValue.kind === 'map') {
-      for (const mapEntry of fieldsField.value.coreValue.entries) {
-        const fieldRecord = mapEntry.value.coreValue as RecordValue;
-        const fname = (mapEntry.key.coreValue as TokenValue).text;
-        const ftype = readTypeRefField(fieldRecord, 'type');
-        const roleWire = fieldRecord.fields.find((f) => f.name === 'role')?.value.coreValue;
-        const role: RecordField['role'] =
-          roleWire?.kind === 'token' && (roleWire.text === 'DEFAULT' || roleWire.text === 'FIXED')
-            ? roleWire.text
-            : 'FREE';
-        const valueWire = fieldRecord.fields.find((f) => f.name === 'value')?.value.coreValue;
-        const fieldValue =
-          valueWire?.kind === 'token'
-            ? { text: valueWire.text, form: metaFormOfLexer(valueWire.form) }
-            : undefined;
-        fields.push({
-          name: fname,
-          type: ftype,
-          optional: readBooleanField(fieldRecord, 'optional'),
-          voidable: readBooleanField(fieldRecord, 'voidable'),
-          role,
-          ...(fieldValue === undefined ? {} : { value: fieldValue }),
-          annotations: [],
-        });
-      }
-    }
-    const body: RecordBody = {
-      kind: 'record',
-      fields: fieldMapOf(fields),
-      groups: [],
-      extension: 'OPEN',
-    };
-    return body;
-  }
-  if (type === 'array') {
-    const elementType = readTypeRefField(record, 'element_type');
-    return {
-      kind: 'array',
-      elementType,
-      voidable: false,
-      ordered: true,
-      uniqueItems: false,
-    };
-  }
-  throw new Error(`testMetaReader: unhandled constructor '${type}'`);
-}
+/** The real kernel, which the readers below bind against: what a constructor application binds to is the kernel's to say (§4.1). */
+const KERNEL = resolvedBundled('meta');
+const testMetaReader = createDefinitionMetaReader((name) => KERNEL.entries.get(name));
 
 /** A materialiser wired over a growing shared namespace, the way a real caller wires one. */
 interface HarnessOverrides {
@@ -210,7 +128,7 @@ function isArrayBody(body: Top): body is ArrayBody {
   return 'elementType' in body;
 }
 
-function isReferenceBody(body: Top): body is Reference {
+function isReferenceBody(body: Top): body is Alias {
   return 'target' in body;
 }
 
@@ -239,7 +157,7 @@ describe('a use-site record application is its expansion (§8.2)', () => {
     expect(name).toMatch(/^record_value_text_[0-9a-f]{8}$/);
     expect(materialiser.syntheticNames().has(name)).toBe(true);
     expect(materialiser.mintedFacts(name)?.application).toBeUndefined();
-    expect(materialiser.mintedFacts(name)?.head).toBe('record');
+    expect(materialiser.mintedFacts(name)?.head).toBe('meta.record');
     expect(
       materialiser.expansionsByApplication().get(canonicalApplication('box', [ref('text')])),
     ).toBe(name);
@@ -327,7 +245,7 @@ describe('a use-site record application is its expansion (§8.2)', () => {
     );
     namespace.set(
       'user_id',
-      entry({ kind: 'reference', target: { name: 'uuid', arguments: [], annotations: [] } }),
+      entry({ kind: 'alias', target: { name: 'uuid', arguments: [], annotations: [] } }),
     );
     namespace.set(
       'box',
@@ -414,7 +332,7 @@ describe('a use-site record application is its expansion (§8.2)', () => {
     expect(keys.indexOf(innerName)).toBeLessThan(keys.indexOf(outerName));
     const outer = namespace.get(outerName);
     if (outer === undefined || !isRecordBody(outer)) throw new Error('unreachable');
-    expect(fieldsOf(outer)[0]?.type.name).toBe(innerName);
+    expect(fieldTypeName(fieldsOf(outer)[0])).toBe(innerName);
   });
 });
 
@@ -431,7 +349,7 @@ describe('a use-site application of an open-instance template is its expansion (
         createHeldBody(
           {
             annotations: [],
-            typeRef: 'array',
+            typeRef: 'meta.array',
             coreValue: {
               kind: 'record',
               fields: [
@@ -471,7 +389,7 @@ describe('a use-site application of an open-instance template is its expansion (
         createHeldBody(
           {
             annotations: [],
-            typeRef: 'array',
+            typeRef: 'meta.array',
             coreValue: {
               kind: 'record',
               fields: [
@@ -509,7 +427,7 @@ describe('a use-site application of an open-instance template is its expansion (
         createHeldBody(
           {
             annotations: [],
-            typeRef: 'array',
+            typeRef: 'meta.array',
             coreValue: {
               kind: 'record',
               fields: [
@@ -554,85 +472,7 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
     namespace.set(
       'uuid_pair',
       entry(
-        createHeldBody(
-          {
-            annotations: [],
-            typeRef: 'reference',
-            coreValue: {
-              kind: 'record',
-              fields: [
-                {
-                  name: 'target',
-                  value: {
-                    annotations: [],
-                    coreValue: {
-                      kind: 'record',
-                      fields: [
-                        {
-                          name: 'name',
-                          value: {
-                            annotations: [],
-                            coreValue: { kind: 'token', text: 'pair', form: 'unquoted' },
-                          },
-                        },
-                        {
-                          name: 'arguments',
-                          value: {
-                            annotations: [],
-                            coreValue: {
-                              kind: 'array',
-                              elements: [
-                                {
-                                  annotations: [],
-                                  coreValue: {
-                                    kind: 'record',
-                                    fields: [
-                                      {
-                                        name: 'name',
-                                        value: {
-                                          annotations: [],
-                                          coreValue: {
-                                            kind: 'token',
-                                            text: 'uuid',
-                                            form: 'unquoted',
-                                          },
-                                        },
-                                      },
-                                    ],
-                                  },
-                                },
-                                {
-                                  annotations: [],
-                                  coreValue: {
-                                    kind: 'record',
-                                    fields: [
-                                      {
-                                        name: 'name',
-                                        value: {
-                                          annotations: [],
-                                          coreValue: {
-                                            kind: 'token',
-                                            text: 'B',
-                                            form: 'unquoted',
-                                          },
-                                        },
-                                      },
-                                    ],
-                                  },
-                                },
-                              ],
-                            },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              ],
-            },
-          },
-          ['B'],
-        ),
+        heldAlias({ name: 'pair', arguments: [ref('uuid'), ref('B')], annotations: [] }, ['B']),
       ),
     );
     const before = namespace.size;
@@ -658,68 +498,7 @@ describe('a reference template composes and mints nothing (§5.10 partial applic
     const { namespace, materialiser } = harness();
     namespace.set(
       'loop',
-      entry(
-        createHeldBody(
-          {
-            annotations: [],
-            typeRef: 'reference',
-            coreValue: {
-              kind: 'record',
-              fields: [
-                {
-                  name: 'target',
-                  value: {
-                    annotations: [],
-                    coreValue: {
-                      kind: 'record',
-                      fields: [
-                        {
-                          name: 'name',
-                          value: {
-                            annotations: [],
-                            coreValue: { kind: 'token', text: 'loop', form: 'unquoted' },
-                          },
-                        },
-                        {
-                          name: 'arguments',
-                          value: {
-                            annotations: [],
-                            coreValue: {
-                              kind: 'array',
-                              elements: [
-                                {
-                                  annotations: [],
-                                  coreValue: {
-                                    kind: 'record',
-                                    fields: [
-                                      {
-                                        name: 'name',
-                                        value: {
-                                          annotations: [],
-                                          coreValue: {
-                                            kind: 'token',
-                                            text: 'T',
-                                            form: 'unquoted',
-                                          },
-                                        },
-                                      },
-                                    ],
-                                  },
-                                },
-                              ],
-                            },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              ],
-            },
-          },
-          ['T'],
-        ),
-      ),
+      entry(heldAlias({ name: 'loop', arguments: [ref('T')], annotations: [] }, ['T'])),
     );
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'loop', arguments: [ref('text')], annotations: [] }),
@@ -764,7 +543,7 @@ describe('recursion (§5.10)', () => {
     const found = namespace.get(name);
     if (found === undefined || !isRecordBody(found)) throw new Error('unreachable');
     // The self-reference names the very entry it sits inside.
-    expect(fieldOf(found, 'child')?.type.name).toBe(name);
+    expect(fieldTypeName(fieldOf(found, 'child'))).toBe(name);
   });
 
   it('non-regular recursion (the argument grows every level) does not close, and fails as a diagnostic rather than a stack overflow', () => {
@@ -869,7 +648,7 @@ describe('declaration-time checks (§5.10)', () => {
         [
           'ghost',
           /* source: missingApplication */ entry({
-            kind: 'reference' as const,
+            kind: 'alias' as const,
             target: missingApplication,
           }),
         ],
@@ -886,32 +665,13 @@ describe('declaration-time checks (§5.10)', () => {
 // ── §7.4 facet coherence re-runs at materialisation (§8.2) ──────────────────────────────────────
 
 describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
-  /** `testMetaReader` plus `integer_type`, enough to read `min`/`max` bindings as bigints. */
-  function integerAwareMetaReader(type: string, value: DataValue): Top {
-    if (type !== 'integer_type') {
-      return testMetaReader(type, value);
-    }
-    const record = value.coreValue as RecordValue;
-    const readBound = (name: string): bigint | undefined => {
-      const field = record.fields.find((f) => f.name === name)?.value.coreValue;
-      return field === undefined ? undefined : BigInt((field as TokenValue).text);
-    };
-    const min = readBound('min');
-    const max = readBound('max');
-    return {
-      kind: 'integer_type',
-      ...(min === undefined ? {} : { min }),
-      ...(max === undefined ? {} : { max }),
-    } satisfies IntegerType;
-  }
-
   /** `bounded => <N> !integer_type { min: N max: 10 }` -- §7.4's own motivating example. */
   function boundedTemplate(): Top {
     return entry(
       createHeldBody(
         {
           annotations: [],
-          typeRef: 'integer_type',
+          typeRef: 'numeric.integer_type',
           coreValue: {
             kind: 'record',
             fields: [
@@ -938,7 +698,7 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
   }
 
   it('bounded<20> mints a body whose bounds admit no value, and is refused just as the identical literal declaration would be', () => {
-    const { namespace, materialiser } = harness({ definitionMetaReader: integerAwareMetaReader });
+    const { namespace, materialiser } = harness();
     namespace.set('bounded', boundedTemplate());
     const error = thrownBy(() =>
       materialiser.closeApplication({
@@ -952,7 +712,7 @@ describe('facet coherence re-runs at materialisation (§7.4, §8.2)', () => {
   });
 
   it('bounded<5> stays coherent and closes cleanly', () => {
-    const { namespace, materialiser } = harness({ definitionMetaReader: integerAwareMetaReader });
+    const { namespace, materialiser } = harness();
     namespace.set('bounded', boundedTemplate());
     const name = materialiser.closeApplication({
       name: 'bounded',
@@ -981,7 +741,7 @@ describe('materialise (the whole-schema batch pass)', () => {
 
   function boxedTextReference(): Top {
     return /* source: { name: 'box', arguments: [ref('text')], annotations: [] } */ entry({
-      kind: 'reference',
+      kind: 'alias',
       target: { name: 'box', arguments: [ref('text')], annotations: [] },
     });
   }
@@ -1029,9 +789,8 @@ describe('materialise (the whole-schema batch pass)', () => {
     const backwardEntries = new Map([...forwardEntries.entries()].reverse());
     const backwardResult = backward.materialise(backwardEntries);
 
-    const forwardName = (forwardResult.entries.get('boxed_text') as Reference | undefined)?.target
-      .name;
-    const backwardName = (backwardResult.entries.get('boxed_text') as Reference | undefined)?.target
+    const forwardName = (forwardResult.entries.get('boxed_text') as Alias | undefined)?.target.name;
+    const backwardName = (backwardResult.entries.get('boxed_text') as Alias | undefined)?.target
       .name;
     expect(forwardName).toBeDefined();
     expect(forwardName).toBe(backwardName);
@@ -1044,7 +803,7 @@ describe('materialise (the whole-schema batch pass)', () => {
         'bad',
         // `box` takes one parameter; this applies two.
         {
-          kind: 'reference',
+          kind: 'alias',
           target: { name: 'box', arguments: [ref('text'), ref('uuid')], annotations: [] },
         },
       ],
@@ -1070,7 +829,7 @@ describe('materialise (the whole-schema batch pass)', () => {
       [
         'bad',
         entry({
-          kind: 'reference',
+          kind: 'alias',
           target: { name: 'box', arguments: [ref('text'), ref('uuid')], annotations: [] },
         }),
       ],
@@ -1120,22 +879,6 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
     );
   }
 
-  /** `testMetaReader` plus the one constructor these tests close through that it does not bind. */
-  function enumAwareMetaReader(type: string, value: DataValue): Top {
-    if (type !== 'enum') {
-      return testMetaReader(type, value);
-    }
-    const record = value.coreValue as RecordValue;
-    const membersField = record.fields.find((f) => f.name === 'members')?.value.coreValue;
-    const members: string[] = [];
-    if (membersField?.kind === 'array') {
-      for (const element of membersField.elements) {
-        members.push((element.coreValue as TokenValue).text);
-      }
-    }
-    return { kind: 'enum', members, nameType: 'identifier' } satisfies EnumBody;
-  }
-
   /** Just enough of the governing meta's own vocabulary for `enum.members` to resolve to a set of `identifier`. */
   function metaTypesFor(): (name: string) => Top | undefined {
     // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
@@ -1173,7 +916,6 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
 
   it('on demand (no batch pass): closing `e<c>` with `metaTypes` supplied infers the kind itself', () => {
     const { namespace, materialiser } = harness({
-      definitionMetaReader: enumAwareMetaReader,
       metaTypes: metaTypesFor(),
     });
     namespace.set('e', enumTemplate());
@@ -1195,7 +937,6 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
 
   it('the batch pass (`setParameterKinds`) classifies just as the on-demand path does', () => {
     const { namespace, materialiser } = harness({
-      definitionMetaReader: enumAwareMetaReader,
       metaTypes: metaTypesFor(),
     });
     namespace.set('e', enumTemplate());
@@ -1221,7 +962,7 @@ describe('an argument bound to a VALUE parameter is reclassified before the appl
   });
 
   it('with no `metaTypes` and no batch pass, an argument keeps its parsed reference channel (no regression)', () => {
-    const { namespace, materialiser } = harness({ definitionMetaReader: enumAwareMetaReader });
+    const { namespace, materialiser } = harness();
     namespace.set('e', enumTemplate());
     materialiser.closeApplicationAs('e_c', {
       name: 'e',
@@ -1255,7 +996,10 @@ describe('closedFormName', () => {
     // the base case the merge pass falls back to when nothing needs reducing.
     const bindingFields = fields.map((f) => ({
       name: f.name,
-      value: { annotations: [], coreValue: refValue(f.type) },
+      value: {
+        annotations: [],
+        coreValue: refValue({ name: 'text', arguments: [], annotations: [] }),
+      },
     }));
     expect(materialiser.closedFormName('array', bindingFields)).toBe(
       materialiser.closedFormName('array', bindingFields),

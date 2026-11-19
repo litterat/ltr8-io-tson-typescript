@@ -19,12 +19,11 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { DecimalType, FloatType, RationalType } from '../src/schema/meta/atoms-numeric.js';
 
 const HEADER = `!!id:"https://example.com/t.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
 `;
 
 function bodyOf(source: string, name = 'q'): unknown {
-  const linked = resolveUserSchema(`${HEADER}${source}`);
+  const linked = resolveUserSchema(`${HEADER}!schema ${source}`);
   const def = linked.entries.get(name);
   if (def === undefined) throw new Error(`declaration '${name}' missing from resolved schema`);
   return def;

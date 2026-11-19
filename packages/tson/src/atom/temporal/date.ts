@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `date_type` constructor (§5.4's `!date` atom, RFC
+ * Parses and validates against `temporal.date_type` constructor (§5.4's `!date` atom, RFC
  * 3339 `full-date`) -- the port of `atom/DateParser.java`.
  *
  * **No host `Date`, and no JDK to lean on.** The Java original validates the token's shape with

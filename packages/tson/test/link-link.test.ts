@@ -32,7 +32,6 @@ function schema(
 ): Schema {
   return {
     id,
-    meta: 'https://tson.io/2026/39/m/meta-kernel.tn',
     imports,
     entries: new Map(entries),
     keyAnnotations: new Map(),
@@ -174,7 +173,7 @@ describe('linkSchema: local-vs-import collision', () => {
 describe('linkSchema: reference validation runs over the whole merged namespace', () => {
   it('throws for an unresolved reference the local schema itself introduces', () => {
     const s = schema('https://x/s.tn', [
-      ['widget', def({ kind: 'reference', target: ref('nowhere') })],
+      ['widget', def({ kind: 'alias', target: ref('nowhere') })],
     ]);
     expect(() => linkSchema(s)).toThrow(TsonSchemaValidationError);
   });

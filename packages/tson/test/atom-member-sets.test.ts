@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `!!id:"test://m.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
 `;
-const load = (decls: string) => resolveUserSchema(`${HEAD}{ ${decls} }`);
+const load = (decls: string) => resolveUserSchema(`${HEAD}!schema { ${decls} }`);
 
 describe('§7.4 member-set coherence', () => {
   it('refuses 80 and 0x50 as one member written twice', () => {

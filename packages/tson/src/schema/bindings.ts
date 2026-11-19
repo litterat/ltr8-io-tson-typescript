@@ -71,30 +71,34 @@ import {
 } from '../base/numberGrammar.js';
 import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType } from '../base/baseTypeResolver.js';
-import { TsonInternalError, TsonReadError } from '../core/errors.js';
+import { TsonReadError } from '../core/errors.js';
 
-import type { Decimal, Rational, ValueType, VoidType } from './meta/algebra.js';
+import type { Decimal, DeclaredType, Rational, VoidType } from './meta/algebra.js';
 import type {
+  Alias,
   Annotation,
   Annotations,
-  KindBody,
   Namespace,
   Reference,
-  RefBody,
-  Scoped,
-  ScopeKind,
   Token,
   TokenForm,
-  TypeArgument,
-  TypeArgumentRef,
-  TypeArgumentValue,
   TypeBase,
   TypeChain,
   TypeRef,
   Top,
 } from './meta/typedef.js';
 import { EMPTY_CHAIN, isEmptyChain, isTemplateBody, typeChain, withChain } from './meta/typedef.js';
-import { fieldMap } from './meta/bodies.js';
+import { fieldMap, recordTemplateFieldMap } from './meta/bodies.js';
+import { constructorOf as constructorPath } from './meta/typedef.js';
+import {
+  NET_MAP,
+  NUMERIC_MAP,
+  TEMPORAL_MAP,
+  UNICODE_MAP,
+  BINARY_MAP,
+  kernelName,
+  metaName,
+} from './meta/kernel.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import type {
   ChoiceBody,
@@ -102,9 +106,13 @@ import type {
   FieldGroup,
   FieldRole,
   MapBody,
+  NamespaceBody,
   RecordBody,
   RecordExtensionType,
   RecordField,
+  RecordTemplateBody,
+  RecordTemplateField,
+  ReferenceBody,
   TemplateBody,
   TemplateParam,
   TupleBody,
@@ -235,7 +243,7 @@ function typed<T extends TypeBase>(inner: RecordBinding<T>): RecordBinding<T> {
 // -------------------------------------------------------------------------------------------
 
 /**
- * Free/quoted text -- meta-kernel's `text` (§5.7): a `spec`/`pattern`/CIDR-network/duration-bound
+ * Free/quoted text -- the kernel's `text` (§5.7): a `spec`/`pattern`/CIDR-network/duration-bound
  * string, kept exactly as authored. Distinct from {@link identifierBinding}: this position's
  * value is prose or a foreign-document reference, never itself a name resolved against a
  * namespace.
@@ -243,7 +251,7 @@ function typed<T extends TypeBase>(inner: RecordBinding<T>): RecordBinding<T> {
 const textBinding: Binding<string> = atom<string>('text');
 
 /**
- * A bare, unquoted lexeme used as a name -- meta-kernel's `field_name`/`type_name`/`param_name`,
+ * A bare, unquoted lexeme used as a name -- the kernel's `field_name`/`type_name`/`param_name`,
  * every one of which is a `REFERENCE`-kind alias to `identifier` in the resolved output
  * (`SchemaMetaNameBinder.ALIASES` maps all three to `"identifier"` for exactly this reason). The
  * host value is the token's own text; `form` is not carried here (§7.4/§7.7's identifier grammar
@@ -307,12 +315,10 @@ const bigintBinding: Binding<bigint> = atom<bigint>('integer');
 // -------------------------------------------------------------------------------------------
 
 /**
- * These bounds are not typed `number`/`rational` on the wire at all: `decimal_type`/
- * `float_type`/`rational_type` all declare them `value` (`spec/m/meta.tn`), meta-kernel's own
- * universal-atom escape hatch -- the token, uninterpreted, read by the type the position hands it
- * to. §5.2 settles which type that is: "a `value`-typed field is read by the atom the position
- * stands for once that atom is in scope (§7.4)", never by [TSON-DATA] §4 base type resolution,
- * which §7.3 removes from schema scope entirely. An unquoted integer bound
+ * A `decimal_type`/`float_type`/`rational_type` bound is a token the position's own atom reads
+ * (`number`, `rational`, §5.6): the wire form is the token, uninterpreted, and the host form is the
+ * exact value that atom denotes -- never [TSON-DATA] §4 base type resolution, which §7.3 removes from
+ * schema scope entirely. An unquoted integer bound
  * (`min: 1`, `min: 0x10`) resolves to §4.3's `number` case with an `integer`/`based-integer`
  * form; an unquoted non-integer bound (`min: 1.0`, `min: 1e3`) resolves to the same case with a
  * `float` form. Every one of `decimalFromWire`/`rationalFromWire` below parses with the same
@@ -505,12 +511,11 @@ const offsetDateTimeBinding: Binding<OffsetDateTime> = bridge<OffsetDateTime, Pl
 );
 
 /**
- * A raw token, text plus the form that produced it -- the shape {@link RecordField.value} and
- * {@link TypeArgumentValue.value} need for meta-kernel's `value` escape-hatch field (§4.2, §9):
- * unlike {@link identifierBinding}, this position keeps `form` because a fixed/default/argument
- * value is read back exactly as spelled, quoting included. §8's resolved form is a bare scalar
- * (the same escape hatch `void` shares), which is why the Java original registers {@link Token}
- * as an atom rather than binding it as a two-field record (`TsonAtomContext`'s own comment:
+ * A raw token, text plus the form that produced it -- the shape {@link RecordField.value} needs for a
+ * fixed or default value (§5.2, §9): unlike {@link identifierBinding}, this position keeps `form`
+ * because the value is read back exactly as spelled, quoting included. §8's resolved form is a bare
+ * scalar, which is why the Java original registers {@link Token} as an atom rather than binding it
+ * as a two-field record (`TsonAtomContext`'s own comment:
  * "binding it structurally writes it as `{ text: ... form: ... }`... where §8's resolved form has
  * a scalar"). `form`'s casing differs from the lexer's own ({@link TokenForm}'s `UNQUOTED`/... vs.
  * `AtomToken`'s lower-kebab forms); the bridge is exactly that remap.
@@ -531,7 +536,7 @@ const tokenBinding: Binding<Token> = bridge<Token, AtomToken>(
   (w) => ({ text: w.text, form: tokenFormFromWire[w.form] }),
 );
 
-/** meta-kernel's own escape hatch (§4.2): base-type-resolution's result, uninterpreted -- the host value carries no further constraint, hence `unknown`. */
+/** A token at a position whose own atom reads it later, uninterpreted -- the host value carries no further constraint, hence `unknown`. */
 const valueBinding: Binding<unknown> = atom<unknown>('value');
 
 // -------------------------------------------------------------------------------------------
@@ -573,15 +578,7 @@ const sourcePositionBinding: Binding<SourcePosition> = bridge<SourcePosition, st
 // ValueType, VoidType / Annotation
 // -------------------------------------------------------------------------------------------
 
-/** meta-kernel's `value_type => atom & {}` (§4.2): the empty ATOM body backing `value`. */
-const valueTypeBinding: RecordBinding<ValueType> = typed(
-  record<ValueType>({
-    fields: [],
-    construct: () => ({ kind: 'value_type' }),
-  }),
-);
-
-/** meta-kernel's `void_type => atom & {}` (§4.2): the empty ATOM body backing `void`. */
+/** The kernel's `meta.void_type => atom & {}` (§4.2): the empty ATOM body backing `void`. */
 const voidTypeBinding: RecordBinding<VoidType> = typed(
   record<VoidType>({
     fields: [],
@@ -636,7 +633,7 @@ const annotationsBinding: Binding<Annotations> = arrayOf<Annotation>(annotationB
 /**
  * One wire annotation's optional `@name:value` argument, decoded via §4 base type resolution --
  * the same "no declared type in scope" treatment `metaReader.ts`'s own `decodeBaseValue` gives
- * meta-kernel's `value` escape hatch, restated here rather than imported from there since
+ * the token's base value, restated here rather than imported from there since
  * `metaReader.ts` already imports this module (the reverse direction would cycle). A non-token
  * argument (a nested record/array/map) has no §4 base type to resolve to and is not representable
  * at this position yet -- annotation arguments this package's own bundled schemas carry are all
@@ -701,45 +698,29 @@ function annotationsToWire(annotations: Annotations): WireAnnotations {
 }
 
 // -------------------------------------------------------------------------------------------
-// TypeRef / TypeArgument -- the one declaration-order cycle
+// References -- a type reference and a record field's type (§4.2, [TSON-DATA] §7.4)
 // -------------------------------------------------------------------------------------------
 
-// Explicitly typed ahead of its own initializer -- `typeArgumentBinding` (declared below) is
-// referenced from inside this one via `lazy()`, and TypeScript must know this declaration's type
-// before that reference can resolve (`combinators.ts`'s own `lazy()` doc walks through exactly
-// this "ergonomics cliff").
-//
-// **No `annotations` field slot.** The meta-kernel's own `type_ref => { name, arguments }`
-// (`meta-kernel.tn`) declares no such field -- `TypeRef.annotations` is this package's own
-// addition (see that field's own doc) carrying the wire annotations written on the *value*
-// occupying this position, not a sub-field of the record itself. {@link typeRefAnnotatedBinding}
-// is the position every other binding in this module actually uses for a `type_ref`-typed slot;
-// this record binding builds the two real kernel fields alone; `annotations` is a placeholder
-// here, overwritten by that wrapper on read and ignored (this binding writes only its own two
-// declared fields) on write.
-const typeRefBinding: RecordBinding<TypeRef> = record<TypeRef>({
-  fields: [
-    field<TypeRef, 'name'>(0, 'name', 'name', identifierBinding),
-    field<TypeRef, 'arguments'>(
-      1,
-      'arguments',
-      'arguments',
-      arrayOf<TypeArgument>(lazy((): Binding<TypeArgument> => typeArgumentBinding)),
-    ),
-  ],
-  construct: (slots) => {
-    const [name, args] = slots as [string, readonly TypeArgument[]];
-    return { name, arguments: args, annotations: [] };
-  },
-});
+/**
+ * `meta.type_ref`, the position that names a type: a bare qualified name is one token, an application
+ * the structured reference value `pair<uuid B>` ([TSON-DATA] §7.4). The leaf is an atom whose decoder
+ * parses the reference and whose encoder writes it back unquoted (`referenceAtoms.ts`); `TypeRef` is the
+ * host form, an application held as its parsed name and arguments, recursively.
+ */
+const typeRefBinding: Binding<TypeRef> = atom<TypeRef>('type_ref');
 
 /**
- * {@link typeRefBinding} wrapped so a reader/writer at a `type_ref`-typed position recovers the
- * wire annotations written on the reference *value itself* (§3.1) into {@link TypeRef.annotations}
- * -- an annotation an author writes directly in front of a field's type reference attaches to
- * that type value, not to the enclosing `record_field`. Every field slot below that holds a
- * `TypeRef` binds through this wrapper, never through the bare {@link typeRefBinding} directly --
- * see that binding's own doc for why it alone cannot carry this.
+ * `meta.field_type_ref`, a record field's type: a type reference or a sibling reference, `kind!`. Typed
+ * apart from {@link typeRefBinding} because the sibling stands only here (§5.2).
+ */
+const referenceBinding: Binding<Reference> = atom<Reference>('reference');
+
+/**
+ * {@link typeRefBinding} wrapped so a reader/writer at a `type_ref`-typed position recovers the wire
+ * annotations written on the reference *value itself* (§3.1) into {@link TypeRef.annotations} -- an
+ * annotation an author writes directly in front of a field's type reference attaches to that type
+ * value, not to the enclosing `record_field`. Every field slot below that holds a `TypeRef` binds through
+ * this wrapper, never through the bare {@link typeRefBinding} directly.
  */
 const typeRefAnnotatedBinding: AnnotatedBinding<TypeRef> = annotated<TypeRef>({
   value: typeRefBinding,
@@ -751,9 +732,20 @@ const typeRefAnnotatedBinding: AnnotatedBinding<TypeRef> = annotated<TypeRef>({
   annotationsOf: (host) => annotationsToWire(host.annotations),
 });
 
+/** {@link referenceBinding} wrapped as {@link typeRefAnnotatedBinding} wraps a type reference. */
+const referenceAnnotatedBinding: AnnotatedBinding<Reference> = annotated<Reference>({
+  value: referenceBinding,
+  construct: (value, annotations) => ({
+    ...(value as Reference),
+    annotations: annotationsFromWire(annotations),
+  }),
+  unwrap: (host) => host,
+  annotationsOf: (host) => annotationsToWire(host.annotations),
+});
+
 /**
- * The kernel's `type_chain => { parents?: [type_ref]  supertypes?: [type_name]  subtypes?:
- * [type_name] }` (§4.1). Each list is written only where it holds something; `supertypes` and
+ * The kernel's `meta.type_chain => { parents?: [type_ref]  supertypes?: [type_ref]  subtypes?:
+ * [type_ref] }` (§4.1). Each list is written only where it holds something; `supertypes` and
  * `subtypes` are sets, read back in the canonical sorted spelling.
  */
 const typeChainBinding: RecordBinding<TypeChain> = record<TypeChain>({
@@ -799,90 +791,24 @@ const typeChainBinding: RecordBinding<TypeChain> = record<TypeChain>({
   },
 });
 
-/** `type_argument.Ref`'s single component is `@Field("name") TypeRef ref` (`TypeArgument.java`) -- the wire name is `name`, the host key `ref`. */
-const typeArgumentRefBinding: RecordBinding<TypeArgumentRef> = record<TypeArgumentRef>({
-  fields: [field<TypeArgumentRef, 'ref'>(0, 'name', 'ref', typeRefAnnotatedBinding)],
-  construct: (slots) => {
-    const [ref] = slots as [TypeRef];
-    return { kind: 'ref', ref };
-  },
-});
-
-const typeArgumentValueBinding: RecordBinding<TypeArgumentValue> = record<TypeArgumentValue>({
-  fields: [field<TypeArgumentValue, 'value'>(0, 'value', 'value', tokenBinding)],
-  construct: (slots) => {
-    const [value] = slots as [Token];
-    return { kind: 'value', value };
-  },
-});
-
-/**
- * `type_argument`'s field *group*, which must be chosen (§5.11): exactly one of `name`/`value` present, never
- * both. `variant()`'s ordinary member-key convention names a wire *type*; here the two members are
- * a field-group choice, not two named types a `!type-ref` picks between, so the member keys below
- * are this union's own TypeScript discriminant values (`'ref'`/`'value'`) rather than a wire type
- * name -- documented here since it is a real departure from every other `variant()` use in this
- * file, all of which key by the wire's own `!type-ref` name (see {@link topBinding}).
- */
-const typeArgumentBinding: VariantBinding<TypeArgument> = variant(
-  { ref: typeArgumentRefBinding, value: typeArgumentValueBinding },
-  'kind',
-);
-
 // -------------------------------------------------------------------------------------------
-// Reference / Scoped
+// Alias / DeclaredType
 // -------------------------------------------------------------------------------------------
 
-const referenceBinding: RecordBinding<Reference> = record<Reference>({
-  fields: [field<Reference, 'target'>(0, 'target', 'target', typeRefAnnotatedBinding)],
+/** The kernel's `meta.alias => top & { target: type_ref }` (§4.1, §8.3): an alias, a hop that composes `top` and carries no chain. */
+const aliasBinding: RecordBinding<Alias> = record<Alias>({
+  fields: [field<Alias, 'target'>(0, 'target', 'target', typeRefAnnotatedBinding)],
   construct: (slots) => {
     const [target] = slots as [TypeRef];
-    return { kind: 'reference', target };
+    return { kind: 'alias', target };
   },
 });
 
-const scopeKindBinding: Binding<ScopeKind> = atom<ScopeKind>('scope_kind');
-
-/**
- * `scoped.schemas`'s own value type, `[type_name; 1..]?` (§7.8) -- a non-empty list, or the void
- * sentinel meaning "every type this schema declares".
- *
- * The two arrive here as one: `_` at this position reads as the empty list (`bind/decode.ts`'s own
- * array case), on this package's absent-equals-empty convention, and `buildScopedReader`
- * (`compiler/compile.ts`) treats an empty list as "any type this schema declares" -- so the
- * spelling §7.8 describes and the model it produces agree without a separate marker to carry.
- * None of the bundled fixtures exercises it: `declared`, `extern` and `dynamic` all carry `scope`
- * alone.
- */
-const scopedSchemaTypesBinding: Binding<readonly string[]> = arrayOf<string>(identifierBinding);
-
-/** `schema_identity` (meta.tn): an IRI-reference with no fragment, decoded by the meta atom decoder. */
-const schemaIdentityBinding: Binding<string> = atom<string>('schema_identity');
-
-const scopedSchemasBinding: MapBinding<ReadonlyMap<string, readonly string[]>> = map<
-  ReadonlyMap<string, readonly string[]>,
-  string,
-  readonly string[]
->({
-  key: schemaIdentityBinding,
-  value: scopedSchemaTypesBinding,
-  construct: (entries) => new Map(entries),
-  read: (host) => host,
-});
-
-const scopedBinding: RecordBinding<Scoped> = typed(
-  record<Scoped>({
-    fields: [
-      field<Scoped, 'scope'>(0, 'scope', 'scope', arrayOf<ScopeKind>(scopeKindBinding)),
-      optional<Scoped, 'schemas'>(1, 'schemas', 'schemas', scopedSchemasBinding),
-    ],
-    construct: (slots) => {
-      const [scope, schemas] = slots as [
-        readonly ScopeKind[],
-        ReadonlyMap<string, readonly string[]> | undefined,
-      ];
-      return { kind: 'scoped', scope, ...opt('schemas', schemas) };
-    },
+/** The kernel's `meta.declared_type => sum & {}` (§7.8): the open sum over the closure, an empty body. */
+const declaredTypeBinding: RecordBinding<DeclaredType> = typed(
+  record<DeclaredType>({
+    fields: [],
+    construct: () => ({ kind: 'declared_type' }),
   }),
 );
 
@@ -907,7 +833,7 @@ const integerSizeBinding: RecordBinding<IntegerSize> = record<IntegerSize>({
  */
 const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   fields: [
-    field<RecordField, 'type'>(0, 'type', 'type', typeRefAnnotatedBinding),
+    field<RecordField, 'type'>(0, 'type', 'type', referenceAnnotatedBinding),
     field<RecordField, 'optional'>(1, 'optional', 'optional', booleanBinding),
     field<RecordField, 'voidable'>(2, 'voidable', 'voidable', booleanBinding),
     field<RecordField, 'role'>(3, 'role', 'role', fieldRoleBinding),
@@ -916,7 +842,7 @@ const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   ],
   construct: (slots) => {
     const [type, optionalFlag, voidable, role, value, annotations] = slots as [
-      TypeRef,
+      Reference,
       boolean,
       boolean,
       FieldRole,
@@ -947,6 +873,71 @@ const fieldMapBinding: MapBinding<Namespace<RecordField>> = map<
   key: declaredNameBinding,
   value: recordFieldBinding,
   construct: (entries) => fieldMap(entries),
+  read: (host) => host.entries,
+});
+
+/**
+ * The kernel's `record_template_field` (§5.10, §8.1). One of `type`/`type_param` and at most one of
+ * `value`/`value_param`: the kernel's two field groups. A field's name is its key in the template's
+ * `fields`, as on a record.
+ */
+const recordTemplateFieldBinding: RecordBinding<RecordTemplateField> = record<RecordTemplateField>({
+  fields: [
+    optional<RecordTemplateField, 'type'>(0, 'type', 'type', referenceAnnotatedBinding),
+    optional<RecordTemplateField, 'typeParam'>(1, 'type_param', 'typeParam', identifierBinding),
+    field<RecordTemplateField, 'optional'>(2, 'optional', 'optional', booleanBinding),
+    field<RecordTemplateField, 'voidable'>(3, 'voidable', 'voidable', booleanBinding),
+    field<RecordTemplateField, 'role'>(4, 'role', 'role', fieldRoleBinding),
+    optional<RecordTemplateField, 'value'>(5, 'value', 'value', tokenBinding),
+    optional<RecordTemplateField, 'valueParam'>(6, 'value_param', 'valueParam', identifierBinding),
+    field<RecordTemplateField, 'annotations'>(7, 'annotations', 'annotations', annotationsBinding),
+  ],
+  construct: (slots) => {
+    const [type, typeParam, optionalFlag, voidable, role, value, valueParam, annotations] =
+      slots as [
+        Reference | undefined,
+        string | undefined,
+        boolean,
+        boolean,
+        FieldRole,
+        Token | undefined,
+        string | undefined,
+        Annotations,
+      ];
+    if ((type === undefined) === (typeParam === undefined)) {
+      throw new TsonReadError({
+        code: 'TYPE_MISMATCH',
+        message: "a record template field states exactly one of 'type' and 'type_param'",
+      });
+    }
+    if (value !== undefined && valueParam !== undefined) {
+      throw new TsonReadError({
+        code: 'TYPE_MISMATCH',
+        message: "a record template field states at most one of 'value' and 'value_param'",
+      });
+    }
+    return {
+      ...opt('type', type),
+      ...opt('typeParam', typeParam),
+      optional: optionalFlag,
+      voidable,
+      role,
+      ...opt('value', value),
+      ...opt('valueParam', valueParam),
+      annotations,
+    };
+  },
+});
+
+/** The kernel's `record_template_field_map`: a template's fields as the map from each declared name to its facts, in declaration order. */
+const recordTemplateFieldMapBinding: MapBinding<Namespace<RecordTemplateField>> = map<
+  Namespace<RecordTemplateField>,
+  string,
+  RecordTemplateField
+>({
+  key: declaredNameBinding,
+  value: recordTemplateFieldBinding,
+  construct: (entries) => recordTemplateFieldMap(entries),
   read: (host) => host.entries,
 });
 
@@ -1031,21 +1022,14 @@ const recordBodyBinding: RecordBinding<RecordBody> = typed(
         arrayOf<string>(declaredNameBinding),
       ),
       optional<RecordBody, 'nameType'>(4, 'name_type', 'nameType', identifierBinding),
-      optional<RecordBody, 'parameters'>(
-        5,
-        'parameters',
-        'parameters',
-        arrayOf<TemplateParam>(lazy((): Binding<TemplateParam> => templateParamBinding)),
-      ),
     ],
     construct: (slots) => {
-      const [fields, groups, extension, discriminators, nameType, parameters] = slots as [
+      const [fields, groups, extension, discriminators, nameType] = slots as [
         Namespace<RecordField>,
         readonly FieldGroup[],
         RecordExtensionType,
         readonly string[] | undefined,
         string | undefined,
-        readonly TemplateParam[] | undefined,
       ];
       return {
         kind: 'record',
@@ -1054,7 +1038,70 @@ const recordBodyBinding: RecordBinding<RecordBody> = typed(
         extension,
         ...opt('discriminators', nonEmptyDiscriminators(discriminators)),
         ...opt('nameType', nameType),
-        ...(parameters === undefined || parameters.length === 0 ? {} : { parameters }),
+      };
+    },
+  }),
+);
+
+/**
+ * The kernel's `meta.record_template` (§5.10, §8.1): a record body over `parameters`, written last, whose
+ * fields are {@link RecordTemplateField}s. A template declares at least one parameter, which is refused
+ * where it is read -- a record with none is a closed record.
+ */
+const recordTemplateBodyBinding: RecordBinding<RecordTemplateBody> = typed(
+  record<RecordTemplateBody>({
+    fields: [
+      field<RecordTemplateBody, 'fields'>(0, 'fields', 'fields', recordTemplateFieldMapBinding),
+      field<RecordTemplateBody, 'groups'>(
+        1,
+        'groups',
+        'groups',
+        arrayOf<FieldGroup>(fieldGroupBinding),
+      ),
+      field<RecordTemplateBody, 'extension'>(
+        2,
+        'extension',
+        'extension',
+        recordExtensionTypeBinding,
+      ),
+      optional<RecordTemplateBody, 'discriminators'>(
+        3,
+        'discriminators',
+        'discriminators',
+        arrayOf<string>(declaredNameBinding),
+      ),
+      optional<RecordTemplateBody, 'nameType'>(4, 'name_type', 'nameType', identifierBinding),
+      field<RecordTemplateBody, 'parameters'>(
+        5,
+        'parameters',
+        'parameters',
+        arrayOf<TemplateParam>(lazy((): Binding<TemplateParam> => templateParamBinding)),
+      ),
+    ],
+    construct: (slots) => {
+      const [fields, groups, extension, discriminators, nameType, parameters] = slots as [
+        Namespace<RecordTemplateField>,
+        readonly FieldGroup[],
+        RecordExtensionType,
+        readonly string[] | undefined,
+        string | undefined,
+        readonly TemplateParam[],
+      ];
+      if (parameters.length === 0) {
+        throw new TsonReadError({
+          code: 'TYPE_MISMATCH',
+          message:
+            "a record template declares at least one parameter ('parameters' min_items: 1); a record with none is a closed record (§5.10)",
+        });
+      }
+      return {
+        kind: 'record_template',
+        fields,
+        groups,
+        extension,
+        ...opt('discriminators', nonEmptyDiscriminators(discriminators)),
+        ...opt('nameType', nameType),
+        parameters,
       };
     },
   }),
@@ -1077,7 +1124,7 @@ function underSetType(slot: FieldSlot<boolean>, pinned: boolean): FieldSlot<bool
   return {
     ...slot,
     isPresent: (host: unknown) =>
-      !((host as Headed)[APPLIED] === 'set_type' && slot.get(host) === pinned),
+      !((host as Headed)[APPLIED] === metaName('set_type') && slot.get(host) === pinned),
   };
 }
 
@@ -1148,6 +1195,41 @@ const mapBodyBinding: RecordBinding<MapBody> = typed(
   }),
 );
 
+/**
+ * The kernel's `meta.namespace` (§4.1, §8.1): a refinement of `meta.map` whose `key_type` is an
+ * identifier family, `voidable` is pinned false and `access_pattern`/`size_type` are fixed, so none of
+ * those three is written. An instance, `schema => !meta.namespace { key_type: meta.type_name  value_type:
+ * meta.declared }`, is a namespace type.
+ */
+const namespaceBodyBinding: RecordBinding<NamespaceBody> = typed(
+  record<NamespaceBody>({
+    fields: [
+      field<NamespaceBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
+      field<NamespaceBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
+      field<NamespaceBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding),
+      optional<NamespaceBody, 'minItems'>(3, 'min_items', 'minItems', bigintBinding),
+      optional<NamespaceBody, 'maxItems'>(4, 'max_items', 'maxItems', bigintBinding),
+    ],
+    construct: (slots) => {
+      const [keyType, valueType, ordered, minItems, maxItems] = slots as [
+        TypeRef,
+        TypeRef,
+        boolean,
+        bigint | undefined,
+        bigint | undefined,
+      ];
+      return {
+        kind: 'namespace',
+        keyType,
+        valueType,
+        ordered,
+        ...opt('minItems', minItems),
+        ...opt('maxItems', maxItems),
+      };
+    },
+  }),
+);
+
 const tupleBodyBinding: RecordBinding<TupleBody> = typed(
   record<TupleBody>({
     fields: [
@@ -1194,13 +1276,13 @@ const choiceBodyBinding: RecordBinding<ChoiceBody> = typed(
   }),
 );
 
-// `enum` pins its `name_type` to `identifier`, so resolved output omits it under that constructor and
+// `enum` pins its `name_type` to `meta.identifier`, so resolved output omits it under that constructor and
 // writes it under every other, `enum_type` included (§8.1). Which constructor heads the body is the
 // entry's own fact, carried on the body under {@link APPLIED}.
 const nameTypeSlot = {
   ...field<EnumBody, 'nameType'>(0, 'name_type', 'nameType', identifierBinding),
   isPresent: (host: unknown): boolean =>
-    !((host as Headed)[APPLIED] === 'enum' && (host as EnumBody).nameType === 'identifier'),
+    !((host as Headed)[APPLIED] === 'enum' && (host as EnumBody).nameType === 'meta.identifier'),
 };
 
 const enumBodyBinding: RecordBinding<EnumBody> = typed(
@@ -1221,33 +1303,26 @@ const enumBodyBinding: RecordBinding<EnumBody> = typed(
 );
 
 // -------------------------------------------------------------------------------------------
-// kind_type / ref_type -- the atoms whose values are names (§4.2, §5.12)
+// meta.reference_type -- the one atom whose values are names (§4.2, §5.12)
 // -------------------------------------------------------------------------------------------
 
 /**
- * The kernel's `kind_type => atom & { of: type_name  members?: [type_name] }`: `of` names a
- * constructor, held as written; `members` is the linker's derived index, written once linked.
+ * The kernel's `meta.reference_type => atom & { of: type_ref  allow_sibling?: boolean ~ true }`: `of`
+ * names a type or a constructor, held as the reference written; `allow_sibling` is a permission, true
+ * by default and so unwritten at `true`. The linker's derived index is no field.
  */
-const kindBodyBinding: RecordBinding<KindBody> = typed(
-  record<KindBody>({
+const referenceBodyBinding: RecordBinding<ReferenceBody> = typed(
+  record<ReferenceBody>({
     fields: [
-      field<KindBody, 'of'>(0, 'of', 'of', identifierBinding),
-      optional<KindBody, 'members'>(1, 'members', 'members', arrayOf<string>(identifierBinding)),
+      field<ReferenceBody, 'of'>(0, 'of', 'of', typeRefAnnotatedBinding),
+      unwrittenAt(
+        field<ReferenceBody, 'allowSibling'>(1, 'allow_sibling', 'allowSibling', booleanBinding),
+        true,
+      ),
     ],
     construct: (slots) => {
-      const [of, members] = slots as [string, readonly string[] | undefined];
-      return { kind: 'kind_type', of, ...opt('members', members) };
-    },
-  }),
-);
-
-/** The kernel's `ref_type => atom & { of: type_name }`: a reference to a value of `of`. */
-const refBodyBinding: RecordBinding<RefBody> = typed(
-  record<RefBody>({
-    fields: [field<RefBody, 'of'>(0, 'of', 'of', identifierBinding)],
-    construct: (slots) => {
-      const [of] = slots as [string];
-      return { kind: 'ref_type', of };
+      const [of, allowSibling] = slots as [TypeRef, boolean];
+      return { kind: 'reference_type', of, allowSibling };
     },
   }),
 );
@@ -1810,8 +1885,7 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = typed(
 
 /**
  * `duration_type`'s own `min`/`exclusive_min`/`max`/`exclusive_max`/`multiple_of` (§5.5, §9): the
- * kernel's `value` escape hatch, read under `duration`'s own atom once it is in scope (§5.2,
- * §7.4) -- so the resolved value is `duration`'s own value space, a signed count of nanoseconds
+ * a token read under `duration`'s own atom (§5.2, §7.4) -- so the resolved value is `duration`'s own value space, a signed count of nanoseconds
  * (`atoms-temporal.ts`'s own `DurationType` doc), not the raw token. Parses the same way
  * `atom/temporal/isoDuration.ts` does rather than inventing a second reading of the grammar.
  */
@@ -2126,7 +2200,7 @@ const templateParamBinding: RecordBinding<TemplateParam> = record<TemplateParam>
 /**
  * The kernel's `template => top & { parameters: [template_param]  template: text }` (§5.10) -- the
  * value of an open entry over any constructor but `record`. `spec/m/meta-resolved.tn` writes `set`
- * as `!template { parameters: [{ name: T  type: type_kind }]  template: "!set_type { element_type:
+ * as `!template { parameters: [{ name: T  type: meta.type_ref }]  template: "!meta.set_type { element_type:
  * T }" }`.
  *
  * `template` is held as TEXT and this binding treats it as text: the parse belongs to
@@ -2173,48 +2247,47 @@ const templateBodyBinding: RecordBinding<TemplateBody> = record<TemplateBody>({
  */
 const topBinding: VariantBinding<Top> = variant(
   {
-    record: recordBodyBinding,
-    array: arrayBodyBinding,
-    set: arrayBodyBinding,
-    set_type: arrayBodyBinding,
-    map: mapBodyBinding,
-    tuple: tupleBodyBinding,
-    choice: choiceBodyBinding,
+    [metaName('record')]: recordBodyBinding,
+    [metaName('record_template')]: recordTemplateBodyBinding,
+    [metaName('array')]: arrayBodyBinding,
+    [metaName('set_type')]: arrayBodyBinding,
+    [metaName('map')]: mapBodyBinding,
+    [metaName('namespace')]: namespaceBodyBinding,
+    [metaName('tuple')]: tupleBodyBinding,
+    [metaName('choice')]: choiceBodyBinding,
     enum: enumBodyBinding,
-    enum_type: enumBodyBinding,
-    kind_type: kindBodyBinding,
-    ref_type: refBodyBinding,
-    value_type: valueTypeBinding,
-    void_type: voidTypeBinding,
-    reference: referenceBinding,
-    scoped: scopedBinding,
-    integer_type: integerTypeBinding,
-    float_type: floatTypeBinding,
-    decimal_type: decimalTypeBinding,
-    rational_type: rationalTypeBinding,
-    complex_type: complexTypeBinding,
-    text_type: textTypeBinding,
-    identifier_type: identifierTypeBinding,
-    bytes_type: bytesTypeBinding,
-    regex_type: regexTypeBinding,
-    uri_type: uriTypeBinding,
-    iri_type: iriTypeBinding,
-    email_type: emailTypeBinding,
-    uuid_type: uuidTypeBinding,
-    date_type: dateTypeBinding,
-    time_type: timeTypeBinding,
-    datetime_type: dateTimeTypeBinding,
-    duration_type: durationTypeBinding,
-    period_type: periodTypeBinding,
-    ipv4_type: ipv4TypeBinding,
-    ipv6_type: ipv6TypeBinding,
-    cidr4_type: cidr4TypeBinding,
-    cidr6_type: cidr6TypeBinding,
-    mac_type: macTypeBinding,
-    hostname_type: hostnameTypeBinding,
-    host_type: hostTypeBinding,
-    media_type_type: mediaTypeTypeBinding,
-    template: templateBodyBinding,
+    [metaName('enum_type')]: enumBodyBinding,
+    [metaName('reference_type')]: referenceBodyBinding,
+    [metaName('void_type')]: voidTypeBinding,
+    [metaName('declared_type')]: declaredTypeBinding,
+    [metaName('alias')]: aliasBinding,
+    [kernelName(NUMERIC_MAP, 'integer_type')]: integerTypeBinding,
+    [kernelName(NUMERIC_MAP, 'float_type')]: floatTypeBinding,
+    [kernelName(NUMERIC_MAP, 'decimal_type')]: decimalTypeBinding,
+    [kernelName(NUMERIC_MAP, 'rational_type')]: rationalTypeBinding,
+    [kernelName(NUMERIC_MAP, 'complex_type')]: complexTypeBinding,
+    [kernelName(UNICODE_MAP, 'text_type')]: textTypeBinding,
+    [kernelName(UNICODE_MAP, 'identifier_type')]: identifierTypeBinding,
+    [kernelName(UNICODE_MAP, 'regex_type')]: regexTypeBinding,
+    [kernelName(BINARY_MAP, 'bytes_type')]: bytesTypeBinding,
+    [kernelName(NET_MAP, 'iri_type')]: iriTypeBinding,
+    [kernelName(NET_MAP, 'uri_type')]: uriTypeBinding,
+    [kernelName(NET_MAP, 'email_type')]: emailTypeBinding,
+    [kernelName(NET_MAP, 'uuid_type')]: uuidTypeBinding,
+    [kernelName(NET_MAP, 'ipv4_type')]: ipv4TypeBinding,
+    [kernelName(NET_MAP, 'ipv6_type')]: ipv6TypeBinding,
+    [kernelName(NET_MAP, 'cidr4_type')]: cidr4TypeBinding,
+    [kernelName(NET_MAP, 'cidr6_type')]: cidr6TypeBinding,
+    [kernelName(NET_MAP, 'mac_type')]: macTypeBinding,
+    [kernelName(NET_MAP, 'hostname_type')]: hostnameTypeBinding,
+    [kernelName(NET_MAP, 'host_type')]: hostTypeBinding,
+    [kernelName(NET_MAP, 'media_type_type')]: mediaTypeTypeBinding,
+    [kernelName(TEMPORAL_MAP, 'date_type')]: dateTypeBinding,
+    [kernelName(TEMPORAL_MAP, 'time_type')]: timeTypeBinding,
+    [kernelName(TEMPORAL_MAP, 'datetime_type')]: dateTimeTypeBinding,
+    [kernelName(TEMPORAL_MAP, 'duration_type')]: durationTypeBinding,
+    [kernelName(TEMPORAL_MAP, 'period_type')]: periodTypeBinding,
+    [metaName('template')]: templateBodyBinding,
   },
   // Discriminated on the host value's own `kind`. Without a discriminant (and with no per-member
   // test) `memberFor` can only ever return undefined, which bind/binding.ts defines as a write
@@ -2235,19 +2308,19 @@ const topBinding: VariantBinding<Top> = variant(
 // and `memberFor` honours the tag where the named member writes the body's own shape. A body
 // with no recorded head is written under its base constructor: `array` for an array, `enum_type`
 // for an enum.
-const baseMemberFor = topBinding.memberFor.bind(topBinding);
-function baseWireName(value: unknown): string | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  return (value as { kind?: unknown }).kind === 'enum' ? 'enum_type' : undefined;
-}
+const memberByWireName = new Map(topBinding.members.map((member) => [member.wireName, member]));
 Object.assign(topBinding, {
   memberFor: (value: unknown) => {
-    const natural = baseMemberFor(value);
-    if (natural === undefined || typeof value !== 'object' || value === null) return natural;
-    const applied = (value as Headed)[APPLIED];
-    const wanted = applied ?? baseWireName(value);
-    if (wanted === undefined) return natural;
-    const named = topBinding.members.find((member) => member.wireName === wanted);
+    if (typeof value !== 'object' || value === null) return undefined;
+    const held = value as Top & Headed;
+    // The held body has no `kind`; its member answers to its own test.
+    if (isTemplateBody(held)) return memberByWireName.get(metaName('template'));
+    if (!('kind' in held) || held.kind === 'value_entry') return undefined;
+    const applied = held[APPLIED];
+    const natural = memberByWireName.get(constructorPath(held));
+    if (natural === undefined) return undefined;
+    if (applied === undefined) return natural;
+    const named = memberByWireName.get(applied);
     return named?.binding === natural.binding ? named : natural;
   },
 });
@@ -2257,16 +2330,6 @@ function headed(body: Top, head: string | undefined): Top {
   return head === undefined ? body : Object.assign({}, body, { [APPLIED]: head });
 }
 
-// The `template` member's own recognition, attached after construction because `variant`'s shape
-// argument carries bindings alone. Two fields and no tag is exactly what `isTemplateBody`
-// (`schema/meta/typedef.ts`) tests, and it is the one test in this variant: every other member
-// answers to `kind`, so nothing else can match here and no ordering question arises.
-const templateMember = topBinding.members.find((member) => member.wireName === 'template');
-if (templateMember === undefined) {
-  throw new TsonInternalError("the resolved-schema body variant declares no 'template' member");
-}
-Object.assign(templateMember, { test: (value: unknown) => isTemplateBody(value as Top) });
-
 // -------------------------------------------------------------------------------------------
 // Public surface
 // -------------------------------------------------------------------------------------------
@@ -2274,7 +2337,6 @@ Object.assign(templateMember, { test: (value: unknown) => isTemplateBody(value a
 export {
   tokenFormFromWire,
   tokenFormToWire,
-  valueTypeBinding,
   voidTypeBinding,
   rationalBinding,
   decimalBinding,
@@ -2299,23 +2361,26 @@ export {
   annotationsBinding,
   typeRefBinding,
   typeRefAnnotatedBinding,
-  typeArgumentRefBinding,
-  typeArgumentValueBinding,
-  typeArgumentBinding,
   referenceBinding,
-  scopeKindBinding,
-  scopedBinding,
+  referenceAnnotatedBinding,
+  aliasBinding,
+  declaredTypeBinding,
   integerSizeBinding,
   recordFieldBinding,
+  recordTemplateFieldBinding,
+  recordTemplateFieldMapBinding,
   fieldGroupBinding,
   templateParamBinding,
   tupleElementBinding,
   recordBodyBinding,
+  recordTemplateBodyBinding,
   arrayBodyBinding,
   mapBodyBinding,
+  namespaceBodyBinding,
   tupleBodyBinding,
   choiceBodyBinding,
   enumBodyBinding,
+  referenceBodyBinding,
   integerTypeBinding,
   floatTypeBinding,
   decimalTypeBinding,
@@ -2343,8 +2408,6 @@ export {
   typeChainBinding,
   fieldMapBinding,
   declaredNameBinding,
-  kindBodyBinding,
-  refBodyBinding,
   hostnameTypeBinding,
   hostTypeBinding,
   mediaTypeTypeBinding,
@@ -2365,58 +2428,14 @@ export {
  * itself (§8.3: a use site keeps the author's own name and is never rewritten past it).
  */
 export const metaBindings: BindingRegistry = registry({
-  record: recordBodyBinding,
-  array: arrayBodyBinding,
-  set: arrayBodyBinding,
-  // `set_type` (§9): the kernel's own refinement of `array` (`array ^ {...}`, unmarked in the
-  // notation but a constructor all the same, §4.2) -- applied directly by `enum_set => !set_type
-  // { element_type: identifier }`, so a schema reader binding that application needs this name
-  // too, not only the `set<T>` template's own wire name.
-  set_type: arrayBodyBinding,
-  map: mapBodyBinding,
-  tuple: tupleBodyBinding,
-  choice: choiceBodyBinding,
-  enum: enumBodyBinding,
-  enum_type: enumBodyBinding,
-  kind_type: kindBodyBinding,
-  ref_type: refBodyBinding,
-  value_type: valueTypeBinding,
-  void_type: voidTypeBinding,
-  reference: referenceBinding,
-  scoped: scopedBinding,
-  integer_type: integerTypeBinding,
-  float_type: floatTypeBinding,
-  decimal_type: decimalTypeBinding,
-  rational_type: rationalTypeBinding,
-  complex_type: complexTypeBinding,
-  text_type: textTypeBinding,
-  identifier_type: identifierTypeBinding,
-  bytes_type: bytesTypeBinding,
-  regex_type: regexTypeBinding,
-  uri_type: uriTypeBinding,
-  iri_type: iriTypeBinding,
-  email_type: emailTypeBinding,
-  uuid_type: uuidTypeBinding,
-  date_type: dateTypeBinding,
-  time_type: timeTypeBinding,
-  datetime_type: dateTimeTypeBinding,
-  duration_type: durationTypeBinding,
-  period_type: periodTypeBinding,
-  ipv4_type: ipv4TypeBinding,
-  ipv6_type: ipv6TypeBinding,
-  cidr4_type: cidr4TypeBinding,
-  cidr6_type: cidr6TypeBinding,
-  mac_type: macTypeBinding,
-  hostname_type: hostnameTypeBinding,
-  host_type: hostTypeBinding,
-  media_type_type: mediaTypeTypeBinding,
-  template: templateBodyBinding,
-  type_chain: typeChainBinding,
-  integer_size: integerSizeBinding,
-  record_field: recordFieldBinding,
-  field_group: fieldGroupBinding,
-  template_param: templateParamBinding,
-  tuple_element: tupleElementBinding,
-  type_ref: typeRefAnnotatedBinding,
-  type_argument: typeArgumentBinding,
+  ...Object.fromEntries(topBinding.members.map((member) => [member.wireName, member.binding])),
+  [metaName('type_chain')]: typeChainBinding,
+  [kernelName(NUMERIC_MAP, 'integer_size')]: integerSizeBinding,
+  [metaName('record_field')]: recordFieldBinding,
+  [metaName('record_template_field')]: recordTemplateFieldBinding,
+  [metaName('field_group')]: fieldGroupBinding,
+  [metaName('template_param')]: templateParamBinding,
+  [metaName('tuple_element')]: tupleElementBinding,
+  [metaName('type_ref')]: typeRefAnnotatedBinding,
+  [metaName('field_type_ref')]: referenceAnnotatedBinding,
 });

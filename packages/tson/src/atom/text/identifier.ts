@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `identifier_type` constructor -- a UAX #31 identifier
+ * Parses and validates against the kernel's `unicode.identifier_type` constructor -- a UAX #31 identifier
  * profile with `text_type`'s facets inside it (§5.5, §7.7). The kernel's `identifier` instance is
  * the type of every naming position in the series; other instances name an outside system's
  * positions under that system's own profile.

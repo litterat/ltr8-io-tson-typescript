@@ -1,36 +1,32 @@
 /**
- * The members of a `kind_type` instance (Part 2 §4.2): every entry of the governing closure built
- * with the constructor its `of` names -- the derived index `kind_type.members` the linker writes.
- * Ported from the reference implementation's `KindMembers`
- * (`tson-compiler/.../resolver/KindMembers.java`).
+ * The names a reference admits where its `of` is a constructor (Part 2 §4.2, §5.12): every entry of the
+ * closure whose value, past its alias hops (§8.3), is a type built with a constructor that is `of` or IS-A
+ * it -- the derived index `meta.reference_type`'s `index.members` the linker writes.
  *
- * **Membership is one walk** over resolved entries, never over spellings. From an entry, alias
- * hops first (§8.3) reach the type the entry is; that type is no member if it is a reference or a
- * held template (no type). A constructor IS-A `top` and is excluded, its instances being types --
- * except a namespace constructor (the kernel's `namespace`, or one IS-A it), which is a type
- * because its instances are values, maps: it is a member of `type_kind` and of the kind of each
- * namespace constructor it is or IS-A, and of no other kind. For every other type the constructor
- * its value applies -- the tag resolved output writes -- is followed, through a constructor
- * template's held body to the constructor it applies, until a constructor is reached, and the
- * entry is a member when that constructor is `of` or has `of` among its supertypes. A record
- * template is built with `record`, so a kind of `record` holds it; so does the kernel's `top`, a
- * fresh abstract record IS-A nothing.
+ * **Membership is one walk** over resolved entries, never over spellings. From an entry, alias hops first
+ * reach the type the entry is; that value is no member if it is a held template (no type) or a value entry.
+ * A constructor is a type like any other (§4.1): a record written in braces is built with `meta.record`, and
+ * so is `meta.top` itself and a constructor whose declaration is a record, so `meta.ref<meta.record>` holds
+ * all of them. The constructor an entry's value applies -- the tag resolved output writes -- is followed,
+ * through a constructor template's held body to the constructor it applies, until a constructor is reached,
+ * and the entry is a member when that constructor is `of` or has `of` among its supertypes.
  *
- * **A constructor is read from the structure namespace first**, where §3.3.1 puts every
- * constructor role, so a schema's own entry under a constructor's name never captures a hop. A
- * name the structure namespace does not hold is read in the entry's own namespace -- which is
- * where the meta-kernel's own constructors are while it links itself.
- *
- * The rule `of` itself obeys (`of` names `type`, `namespace`, or a constructor below either) is
- * the linker's judgement of the kind's declaration, not this index's.
+ * Every name resolves in the one namespace, so there is no structure namespace to read a constructor from
+ * first. The rule `of` itself obeys is the linker's judgement of the reference's declaration, not this
+ * index's.
  */
-import type { EntryFacts, KindBody, Top } from '../schema/meta/typedef.js';
-import { constructorOf, isTemplateBody, supertypesOf, withChain } from '../schema/meta/typedef.js';
+import type { ReferenceBody } from '../schema/meta/bodies.js';
+import type { EntryFacts, Top } from '../schema/meta/typedef.js';
+import {
+  constructorOf,
+  isConstructor,
+  isTemplateBody,
+  isType,
+  supertypesOf,
+  withChain,
+} from '../schema/meta/typedef.js';
 import { heldOf } from '../compiler/heldBody.js';
 import { terminal, type EntryLookup } from './referenceChain.js';
-
-const TYPE = 'type';
-const NAMESPACE = 'namespace';
 
 /** An entry reached by a walk, under the name it is declared by. */
 interface Found {
@@ -38,114 +34,110 @@ interface Found {
   readonly value: Top;
 }
 
-function isConstructorValue(value: Top): boolean {
-  return supertypesOf(value).includes('top');
-}
-
 /** The entry at the end of `name`'s §8.3 chain in `entries`, or `undefined` where the walk reaches none. */
 function reached(name: string, entries: EntryLookup): Found | undefined {
   const end = terminal(name, entries);
   const value = entries(end);
-  if (value === undefined || (!isTemplateBody(value) && value.kind === 'reference')) {
+  if (value === undefined || (!isTemplateBody(value) && value.kind === 'alias')) {
     return undefined;
   }
   return { name: end, value };
 }
 
+/** Whether `of` names a constructor in `local`: the reference admits types' names where it does, values' names otherwise. */
+export function namesTypes(of: string, local: EntryLookup): boolean {
+  const end = terminal(of, local);
+  const value = local(end);
+  return value !== undefined && isConstructor(value, end);
+}
+
 /**
- * Whether the entry `name` names in `local` is a member of the kind of `of`. `heads` gives the
- * constructor an entry's value applies, from its recorded facts; `structure` is the governing
- * meta's namespace.
+ * Whether the entry `name` names in `local` is a member of the names `of` admits. `heads` gives the
+ * constructor an entry's value applies, from its recorded facts.
  */
 export function isKindMember(
   name: string,
   of: string,
   local: EntryLookup,
   heads: (name: string) => string | undefined,
-  structure: EntryLookup,
 ): boolean {
   const end = terminal(name, local);
   const type = local(end);
-  if (type === undefined) return false;
-  return isMemberValue(end, type, heads(end) ?? constructorOf(type), of, local, structure);
-}
-
-function isMemberValue(
-  name: string,
-  type: Top,
-  head: string,
-  of: string,
-  local: EntryLookup,
-  structure: EntryLookup,
-): boolean {
-  const constructors: EntryLookup = (n) => structure(n) ?? local(n);
-  if (isTemplateBody(type) || type.kind === 'reference') return false;
-  const ofConstructor = terminal(of, constructors);
-  if (isConstructorValue(type)) {
-    const supertypes = supertypesOf(type);
-    if (name !== NAMESPACE && !supertypes.includes(NAMESPACE)) return false;
-    // A value of it is a map and not a record, and it is not built with `map`: its `!record` tag
-    // is not followed. It is a type, and the namespace constructor it is or IS-A.
-    return ofConstructor === TYPE || ofConstructor === name || supertypes.includes(ofConstructor);
-  }
+  if (type === undefined || !isTypeValue(type)) return false;
+  const ofConstructor = terminal(of, local);
   const walked = new Set<string>();
-  let current = head;
+  let current = heads(end) ?? constructorOf(type);
   while (!walked.has(current)) {
     walked.add(current);
-    const next = reached(current, constructors);
+    const next = reached(current, local);
     if (next === undefined) return current === ofConstructor;
     if (isTemplateBody(next.value)) {
-      // A constructor template (`kind => <T> !kind_type { of: T }`): built with what its body applies.
+      // A constructor template (`ref => <T> !meta.reference_type { of: T }`): built with what its body applies.
       const applied = heldOf(next.value)?.application.typeRef;
       if (applied === undefined) return false;
       current = applied;
       continue;
     }
-    return (
-      isConstructorValue(next.value) &&
-      (next.name === ofConstructor || supertypesOf(next.value).includes(ofConstructor))
-    );
+    return next.name === ofConstructor || supertypesOf(next.value).includes(ofConstructor);
   }
   return false;
 }
 
-/** Every entry of `merged` that is a member of `kind`, sorted -- the index `kind_type.members` holds. */
+/** Whether `value` is a type: it carries a chain, being IS-A `meta.type` (§4.1). */
+function isTypeValue(value: Top): boolean {
+  return !isTemplateBody(value) && isType(value);
+}
+
+/** Every entry of `merged` that is a member of `reference`, sorted -- the index `members` holds. */
 export function kindMembers(
-  kind: KindBody,
+  reference: ReferenceBody,
   merged: ReadonlyMap<string, Top>,
   heads: (name: string) => string | undefined,
-  structure: EntryLookup,
 ): readonly string[] {
   const local: EntryLookup = (n) => merged.get(n);
   const members: string[] = [];
   for (const name of merged.keys()) {
-    if (isKindMember(name, kind.of, local, heads, structure)) members.push(name);
+    if (isKindMember(name, reference.of.name, local, heads)) members.push(name);
   }
   return members.sort();
 }
 
 /**
- * `merged` with every kind's `members` index computed over the whole closure (§4.2, §2.2.3): the
- * linker's derived index, as `subtypes` is, discarded and recomputed whenever a schema links. An
- * imported kind is recomputed too -- the closure that links is what its members are drawn from,
- * so a kind the kernel declares lists an identifier family this schema declares.
+ * `merged` with every reference's derived `index` computed over the whole closure (§4.2, §2.2.3): the
+ * linker's derived index, as `subtypes` is, discarded and recomputed whenever a schema links. An imported
+ * reference is recomputed too -- the closure that links is what its members are drawn from, so a reference
+ * the kernel declares lists an entry this schema declares.
  */
 export function computeKindMembers(
   merged: ReadonlyMap<string, Top>,
   facts: (name: string) => EntryFacts | undefined,
-  structure: EntryLookup,
 ): Map<string, Top> {
   const result = new Map(merged);
   const heads = (name: string): string | undefined => facts(name)?.head;
+  const local: EntryLookup = (n) => merged.get(n);
   for (const name of merged.keys()) {
     const value = merged.get(name);
-    if (value === undefined || isTemplateBody(value) || value.kind !== 'kind_type') continue;
-    const members = kindMembers(value, merged, heads, structure);
-    const { members: _previous, ...rest } = value;
+    if (value === undefined || isTemplateBody(value) || value.kind !== 'reference_type') continue;
+    const types = namesTypes(value.of.name, local);
+    const members = types ? kindMembers(value, merged, heads) : [];
+    const { index: _previous, ...rest } = value;
     void _previous;
     result.set(
       name,
-      withChain({ ...rest, members }, value.chain ?? { parents: [], supertypes: [], subtypes: [] }),
+      withChain(
+        {
+          ...rest,
+          index: {
+            namesTypes: types,
+            members,
+            applications: new Map(),
+            aliases: new Map(),
+            entries: new Map(),
+            shown: members,
+          },
+        },
+        value.chain ?? { parents: [], supertypes: [], subtypes: [] },
+      ),
     );
   }
   return result;

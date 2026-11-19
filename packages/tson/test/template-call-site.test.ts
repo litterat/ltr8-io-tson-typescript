@@ -6,9 +6,8 @@ import { namedField, namedFields } from '../src/schema/meta/bodies.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { Top } from '../src/schema/meta/typedef.js';
 import { applicationOf, isTemplateBody } from '../src/schema/meta/typedef.js';
-import { subtypesIn, supertypesIn } from './model-fixtures.js';
+import { fieldTypeName, subtypesIn, supertypesIn } from './model-fixtures.js';
 
-const META = 'https://tson.io/2026/39/m/meta.tn';
 const CORE = 'https://tson.io/2026/39/m/core.tn';
 
 let counter = 0;
@@ -18,7 +17,7 @@ function linked(declarations: string): LinkedSchema {
   counter += 1;
   const source =
     `!!id:"https://example.com/call-site-${String(counter)}.tn"\n` +
-    `!!meta:"${META}"\n!!import:"${CORE}"\n{\n${declarations}\n}\n`;
+    `!!import:"${CORE}"\n!schema {\n${declarations}\n}\n`;
   return standardLibrary().resolveSchema(new TextEncoder().encode(source));
 }
 
@@ -55,7 +54,7 @@ describe('§5.10: an application is checked against the parameter list it binds'
   });
 
   it('a value argument is read as the parameter type: a constructor template reads it in the structure namespace', () => {
-    const vec = 'vec => <N> !array { element_type: text  min_items: N }\n';
+    const vec = 'vec => <N> !meta.array { element_type: text  min_items: N }\n';
     expect(() => resolve(`${vec}holder => { v: vec<2> }`)).not.toThrow();
     expect(() => resolve(`${vec}holder => { v: vec<"two"> }`)).toThrow(
       /binds 'N' to 'two', which is not a value of/,
@@ -101,7 +100,7 @@ describe('§5.10, §8.2: a family member is the application a declaration names'
     expect(supertypesIn(entries.get('bt'))).toContain('box');
     // §8.2: the use site names a closed synthetic record keyed on its content, with no
     // instantiation entry and no `@application`.
-    const kType = namedField(record(entries, 'holder'), 'k')?.type.name ?? '';
+    const kType = fieldTypeName(namedField(record(entries, 'holder'), 'k')) ?? '';
     expect(kType).toMatch(/^record_v_text_[0-9a-f]{8}$/);
     expect(applicationOf(schema.keyAnnotations.get(kType))).toBeUndefined();
     expect(supertypesIn(entries.get(kType))).toEqual([]);
@@ -133,11 +132,11 @@ describe('§5.10, §8.2: a family member is the application a declaration names'
 describe('§8.2: an application nothing declares is its expansion (change log #18)', () => {
   it('a non-record template’s use-site application names the synthetic its sugar spelling names', () => {
     const schema = linked(
-      'rows => <T> !array { element_type: T  min_items: 1 }\npost => { a: rows<text>  b: [text; 1..] }',
+      'rows => <T> !meta.array { element_type: T  min_items: 1 }\npost => { a: rows<text>  b: [text; 1..] }',
     );
     const post = record(schema.entries, 'post');
-    const a = namedField(post, 'a')?.type.name;
-    expect(a).toBe(namedField(post, 'b')?.type.name);
+    const a = fieldTypeName(namedField(post, 'a'));
+    expect(a).toBe(fieldTypeName(namedField(post, 'b')));
     expect(a).toMatch(/^array_text_1_[0-9a-f]{8}$/);
     expect([...schema.entries.keys()].some((name) => name.startsWith('rows_'))).toBe(false);
     expect(applicationOf(schema.keyAnnotations.get(a ?? ''))).toBeUndefined();
@@ -145,7 +144,7 @@ describe('§8.2: an application nothing declares is its expansion (change log #1
 
   it('an expansion naming its own application keeps an instantiation entry recording it', () => {
     const schema = linked('nested => <T> ( T | [nested<T>] )\nu => { v: nested<text> }');
-    const v = namedField(record(schema.entries, 'u'), 'v')?.type.name ?? '';
+    const v = fieldTypeName(namedField(record(schema.entries, 'u'), 'v')) ?? '';
     expect(applicationOf(schema.keyAnnotations.get(v))).toMatchObject({ name: 'nested' });
   });
 
@@ -154,7 +153,7 @@ describe('§8.2: an application nothing declares is its expansion (change log #1
       'box => <T> { v: T }\nvip => <T> box<T> & { level: int32 }\nh => { u: vip<text>  w: box<text> }',
     );
     const h = record(schema.entries, 'h');
-    const u = schema.entries.get(namedField(h, 'u')?.type.name ?? '');
+    const u = schema.entries.get(fieldTypeName(namedField(h, 'u')) ?? '');
     expect(supertypesIn(u)).toEqual([]);
   });
 });
@@ -222,11 +221,11 @@ describe('§5.10: where a record template’s parameter stands (change log #16, 
 
   it('a parameter standing in any slot but a field’s type, value or an argument names the slot', () => {
     expect(
-      loadError('x => <T> !record { fields: { a => { type: int32 } }  extension: T }'),
-    ).toMatch(/parameter 'T' stands at record\.extension/);
-    expect(loadError('x => <T> !record { fields: { a => { type: int32  optional: T } } }')).toMatch(
-      /parameter 'T' stands at record_field\.optional/,
-    );
+      loadError('x => <T> !meta.record { fields: { a => { type: int32 } }  extension: T }'),
+    ).toMatch(/parameter 'T' stands at meta\.record_template\.extension/);
+    expect(
+      loadError('x => <T> !meta.record { fields: { a => { type: int32  optional: T } } }'),
+    ).toMatch(/parameter 'T' stands at meta\.record_template_field\.optional/);
     expect(loadError('x => <T> { a?: int32 ~ T }')).toBeUndefined();
     expect(loadError('box => <T> { v: T }\nx => <T> { a: box<T> }')).toBeUndefined();
   });

@@ -47,7 +47,8 @@ import { collectBodyNames } from './referenceValidation.js';
 import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
-import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
+import type { RecordBody, RecordField, RecordTemplateBody } from '../schema/meta/bodies.js';
+import { typeNameOf } from '../schema/meta/bodies.js';
 import {
   applicationOf,
   isConstructor,
@@ -122,8 +123,8 @@ export function checkRecordExtension(
   // schemas that each link cleanly can each add a member to one imported family, and the schema
   // importing both holds a family neither did.
   for (const [name, def] of merged) {
-    if (!isRecordBody(def) || def.discriminators === undefined) continue;
-    if (!isOpen(def)) {
+    if (!(isRecordBody(def) || isFamilyBase(def)) || def.discriminators === undefined) continue;
+    if (isRecordBody(def) && !isOpen(def)) {
       checkFamily(name, def.discriminators, selectorOf(def), merged, localNames, options, minted);
       continue;
     }
@@ -132,14 +133,13 @@ export function checkRecordExtension(
     // parameter has its type only on each member: a selector's declared type is the one every
     // member carries. A base with no member yet has no pins to judge.
     const members = directMembers(name, merged, minted);
-    const parameters = new Set(typeParameters(def));
-    const own = selectorOf(def);
+    const own = isFamilyBase(def) ? templateSelectorOf(def) : selectorOf(def);
     checkFamily(
       name,
       def.discriminators,
       (fieldName) => {
         const field = own(fieldName);
-        if (field !== undefined && !parameters.has(field.type.name)) return field;
+        if (field !== undefined) return field;
         return members
           .map((member) => member.body.fields.entries.get(fieldName))
           .find((candidate) => candidate !== undefined);
@@ -150,6 +150,29 @@ export function checkRecordExtension(
       minted,
     );
   }
+}
+
+/** A record template's selector field by name, where it states its own type: one labelled by a parameter has its type on each member only (§5.10). */
+function templateSelectorOf(
+  template: RecordTemplateBody,
+): (fieldName: string) => RecordField | undefined {
+  return (fieldName) => {
+    const field = template.fields.entries.get(fieldName);
+    if (field === undefined || field.typeParam !== undefined || field.type === undefined) {
+      return undefined;
+    }
+    const parameters = new Set(typeParameters(template));
+    if (field.type.kind !== 'sibling' && parameters.has(field.type.name)) return undefined;
+    // The selector's own pin rides `value_param` (`kind: text = N`): each member pins it, so only the type is the base's to state.
+    return {
+      type: field.type,
+      optional: field.optional,
+      voidable: field.voidable,
+      role: field.role,
+      ...(field.value === undefined ? {} : { value: field.value }),
+      annotations: field.annotations,
+    };
+  };
 }
 
 // ── A family member is declared (§5.2, §8.2) ─────────────────────────────────────────────────
@@ -475,18 +498,18 @@ function checkSelectorType(
         'such field',
     );
   }
-  const terminalDef = terminalDefinition(field.type.name, (n) => merged.get(n));
+  const terminalDef = terminalDefinition(typeNameOf(field), (n) => merged.get(n));
   if (terminalDef === undefined || isTemplateBody(terminalDef) || !isAtom(terminalDef)) {
     fail(
       options,
-      `'${baseName}': the discriminator '${fieldName}' is typed '${field.type.name}', which is ` +
+      `'${baseName}': the discriminator '${fieldName}' is typed '${typeNameOf(field)}', which is ` +
         'not an atom-family instance or an enum -- a selector MUST resolve, after its reference ' +
         'chain, to one of those (§5.2)',
       baseName,
     );
     return undefined;
   }
-  return buildAtomReader(field.type.name, terminalDef);
+  return buildAtomReader(typeNameOf(field), terminalDef);
 }
 
 function isTemplateBase(name: string, merged: ReadonlyMap<string, Top>): boolean {

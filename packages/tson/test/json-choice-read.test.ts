@@ -27,9 +27,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
  */
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/choice-1.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   scalar_or_list => ( text | int32 | boolean | [text] )
   any_json       => ( text | number | boolean | [any_json?] | {text => any_json?} )
 
@@ -39,7 +38,7 @@ const SCHEMA_SOURCE = `
   unit_circle => circle & { fixed: boolean }
 
   loose  => ( float64 | text )
-  strict => !float_type { format: BINARY64  allow_nan: false  allow_infinity: false }
+  strict => !numeric.float_type { format: BINARY64  allow_nan: false  allow_infinity: false }
   tight  => ( strict | text )
 
   holder => { pick: scalar_or_list }
@@ -228,9 +227,8 @@ describe('§8.3 class stability', () => {
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"https://example.test/choice-sealed.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   pet => abstract {
     pet_type: text =?
     name: text

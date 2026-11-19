@@ -59,18 +59,11 @@ import {
   supertypesOf,
   withoutChain,
 } from '../schema/meta/typedef.js';
+import { metaName } from '../schema/meta/kernel.js';
 import { createHeldBody, heldOf, type HeldBody } from './heldBody.js';
+import type { ApplicationReference, ReferenceArgument } from '../ast/reference.js';
 import type { DefinitionGetter } from './resolverTypes.js';
-import {
-  ARGUMENTS,
-  NAME,
-  RECORD as RECORD_HEAD,
-  TYPE,
-  VALUE,
-  field,
-  isApplication,
-  typeRefOf,
-} from './wireForm.js';
+import { RECORD as RECORD_HEAD, TYPE, VALUE, field, applicationIn } from './wireForm.js';
 
 /** What a parameter's type makes it (§5.10). */
 export type Kind = 'TYPE' | 'VALUE';
@@ -78,19 +71,25 @@ export type Kind = 'TYPE' | 'VALUE';
 /** The kernel's application form, which stands where an application may (§4.2, §9). */
 const TYPE_REF_NAME = 'type_ref';
 
+/** A record field's type slot, where an application or a sibling reference may stand (§5.2, §9). */
+const FIELD_TYPE_REF_NAME = metaName('field_type_ref');
+
 /** The kernel's kind of the types, which types every slot that names the type of a value (§4.2). */
 const TYPE_KIND_NAME = TYPE_KIND;
 
 /** Whether a slot declared `name` names a type: a `type_kind` slot, or one where an application may stand (`type_ref`). */
 function isTypeSlot(name: string): boolean {
-  return name === TYPE_KIND_NAME || name === TYPE_REF_NAME;
+  return name === TYPE_KIND_NAME || name === TYPE_REF_NAME || name === FIELD_TYPE_REF_NAME;
 }
 
 /** The unbounded type parameter's type: `type_kind`, the kind of every type (§5.10). */
 export const TYPE_REF: TypeRef = { name: TYPE_KIND_NAME, arguments: [], annotations: [] };
 
+/** The constructor a labelled record template applies (§5.10). */
+const RECORD_TEMPLATE_HEAD = metaName('record_template');
+
 /** The kernel record whose `value` slot routes a default or fixed value into its sibling's type. */
-const RECORD_FIELD = 'record_field';
+const RECORD_FIELD = metaName('record_field');
 
 /** The kind a parameter's recorded type makes it. */
 export function kindOf(type: TypeRef): Kind {
@@ -113,7 +112,7 @@ export function readsInStructure(
   let current: Top = template;
   for (let hop = 0; hop < 64; hop += 1) {
     const head = heldOf(current)?.application.typeRef;
-    if (head === undefined || head === 'record') return false;
+    if (head === undefined || head === RECORD_HEAD) return false;
     const applied = entries(head);
     if (applied === undefined || !isTemplateBody(applied)) return true;
     current = applied;
@@ -430,6 +429,21 @@ interface WalkContext {
 /** The one slot a parameter token stands in, in a record template, apart from a routed value. */
 const FIELD_TYPE_SLOT = `${RECORD_FIELD}.${TYPE}`;
 
+/** The kernel record a record template's field is (§5.10), whose slots label a parameter standing for a whole type or value. */
+const TEMPLATE_FIELD = metaName('record_template_field');
+
+/** The kernel record that states a parameter: its name, its type and its bound are the parameter itself, not a use of it (§5.10). */
+const TEMPLATE_PARAM = metaName('template_param');
+
+/** The slots a parameter may stand at in a record template: a field's type (as an argument), its labelled whole type or value, or its value. */
+const TEMPLATE_PARAMETER_SLOTS: ReadonlySet<string> = new Set([
+  FIELD_TYPE_SLOT,
+  `${TEMPLATE_FIELD}.${TYPE}`,
+  `${TEMPLATE_FIELD}.type_param`,
+  `${TEMPLATE_FIELD}.value_param`,
+  `${TEMPLATE_FIELD}.${VALUE}`,
+]);
+
 /** One held body walked against the vocabulary of the constructor it applies. */
 function walkBody(held: HeldBody, ctx: WalkContext): void {
   const head = held.application.typeRef;
@@ -438,7 +452,7 @@ function walkBody(held: HeldBody, ctx: WalkContext): void {
   if (vocabulary !== undefined && isRecordBody(vocabulary)) {
     walkPayload(held.application.coreValue, head, vocabulary, {
       ...ctx,
-      recordTemplate: head === RECORD_HEAD,
+      recordTemplate: head === RECORD_HEAD || head === RECORD_TEMPLATE_HEAD,
     });
   }
 }
@@ -478,7 +492,8 @@ function walkPayload(
   const unmarked = namedFields(vocabulary).filter((f) => !f.optional);
   const only = unmarked[0];
   if (unmarked.length === 1 && only !== undefined) {
-    walkValue(payload, only.type, `${constructor}.${only.name}`, ctx);
+    if (only.type.kind !== 'sibling')
+      walkValue(payload, only.type, `${constructor}.${only.name}`, ctx);
   }
 }
 
@@ -501,7 +516,7 @@ function walkRecord(
       continue;
     }
     const slotField = vocabulary.fields.entries.get(written.name);
-    if (slotField !== undefined) {
+    if (slotField !== undefined && slotField.type.kind !== 'sibling') {
       walkValue(value, slotField.type, `${constructor}.${written.name}`, ctx);
     }
   }
@@ -517,8 +532,8 @@ function walkRouted(parameter: string, fieldRecord: RecordValue, ctx: WalkContex
   let type: TypeRef | undefined;
   if (declared?.kind === 'token') {
     type = { name: declared.text, arguments: [], annotations: [] };
-  } else if (declared?.kind === 'record' && isApplication(declared)) {
-    type = typeRefOf(declared);
+  } else if (declared !== undefined) {
+    type = applicationIn(declared);
   }
   if (type === undefined) return; // no type to route into: record_field's own reader refuses the field
   observe(ctx.occurrences, parameter, { type, local: true });
@@ -548,10 +563,11 @@ function walkValue(written: CoreValue, declared: TypeRef, slot: string, ctx: Wal
       }
       return;
     }
+    case 'reference':
+      if (written.reference.kind === 'application') walkApplication(written.reference, ctx);
+      return;
     case 'record':
-      if (isTypeSlot(declared.name)) {
-        walkApplication(written, ctx);
-      } else if (type !== undefined && isRecordBody(type)) {
+      if (!isTypeSlot(declared.name) && type !== undefined && isRecordBody(type)) {
         walkRecord(written, declared.name, type, ctx);
       }
       return;
@@ -593,7 +609,11 @@ function walkToken(
         'parameter to references, so nothing could be applied here',
     );
   }
-  if (ctx.recordTemplate === true && slot !== FIELD_TYPE_SLOT) {
+  if (
+    ctx.recordTemplate === true &&
+    !TEMPLATE_PARAMETER_SLOTS.has(slot) &&
+    !slot.startsWith(`${TEMPLATE_PARAM}.`)
+  ) {
     throw new TsonSchemaValidationError(
       `parameter '${parameter}' stands at ${slot} -- a record template's parameters stand only in a ` +
         "field's type, a field's default or fixed value, or an argument of an application, so that " +
@@ -636,33 +656,29 @@ function walkElements(
  * names here — what an application looks like on the wire is one module's answer, and a walk that
  * re-derives it is a second opinion waiting to disagree.
  */
-function walkApplication(application: RecordValue, ctx: WalkContext): void {
-  const nameValue = field(application, NAME);
-  const head = nameValue?.kind === 'token' ? nameValue.text : undefined;
-  const argumentsValue = field(application, ARGUMENTS);
-  if (head === undefined || argumentsValue?.kind !== 'array') {
-    return;
-  }
-  argumentsValue.elements.forEach((element, index) => {
-    walkArgument(element.coreValue, head, index, ctx);
+function walkApplication(application: ApplicationReference, ctx: WalkContext): void {
+  application.arguments.forEach((argument, index) => {
+    walkArgument(argument, application.name, index, ctx);
   });
 }
 
-/** One `type_argument`: a bare parameter name under `name` defers, everything else does not. */
-function walkArgument(argument: CoreValue, head: string, index: number, ctx: WalkContext): void {
-  if (argument.kind !== 'record') {
+/** One argument of an application: a bare parameter name defers to the head's own parameter, a nested application is walked, a literal says nothing. */
+function walkArgument(
+  argument: ReferenceArgument,
+  head: string,
+  index: number,
+  ctx: WalkContext,
+): void {
+  if (argument.kind !== 'reference') {
+    return; // a literal argument says nothing about this declaration's parameters
+  }
+  const reference = argument.reference;
+  if (reference.kind === 'application') {
+    walkApplication(reference, ctx); // a nested application: `box<inner<T>>`
     return;
   }
-  for (const member of argument.fields) {
-    const memberValue = member.value.coreValue;
-    if (member.name === VALUE) {
-      continue; // a literal argument says nothing about this declaration's parameters
-    }
-    if (memberValue.kind === 'token' && declares(ctx.occurrences, memberValue.text)) {
-      ctx.occurrences.deferred.push({ parameter: memberValue.text, head, index });
-    } else if (memberValue.kind === 'record') {
-      walkApplication(memberValue, ctx); // a nested application: `box<inner<T>>`
-    }
+  if (declares(ctx.occurrences, reference.name)) {
+    ctx.occurrences.deferred.push({ parameter: reference.name, head, index });
   }
 }
 

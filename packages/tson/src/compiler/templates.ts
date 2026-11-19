@@ -91,11 +91,11 @@ import {
 import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '../core/limits.js';
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
 import type { Token, TypeArgument, TypeRef, Top } from '../schema/meta/typedef.js';
+import { namespaceOf } from '../schema/meta/typedef.js';
 import {
   chainOf,
   isConstructor,
   isFamilyBase,
-  isNamespaceValue,
   isOpen,
   isTemplateBody,
   parametersOf,
@@ -109,7 +109,8 @@ import { mapFields, type RecordBody } from '../schema/meta/bodies.js';
 import { checkAtomCoherence, isAtom } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
-import { CHAIN, field, heldRecord, isApplication, rescope, typeRefOf } from './wireForm.js';
+import { metaName } from '../schema/meta/kernel.js';
+import { CHAIN, RECORD, applicationIn, field, heldRecord, rescope } from './wireForm.js';
 import { chainOfParents } from './ancestry.js';
 import { heldOf, withParametersOf, type HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
@@ -354,10 +355,10 @@ export interface TemplateMaterialiser {
 const MAX_CLOSING_DEPTH = DEFAULT_MAX_MATERIALISATION_DEPTH;
 
 /** The constructor a held record template carries — its closure is the instantiation itself. */
-const RECORD_HEAD = 'record';
+const RECORD_HEAD = RECORD;
 
 /** The constructor a held alias carries — §5.10's partial application, which mints no entry. */
-const REFERENCE_HEAD = 'reference';
+const REFERENCE_HEAD = metaName('alias');
 
 export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): TemplateMaterialiser {
   /** The entries produced, keyed by their derived internal name, in creation order. */
@@ -696,8 +697,8 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     if (
       body === undefined ||
       isTemplateBody(body) ||
-      isNamespaceValue(body) ||
-      body.kind === 'reference' ||
+      body.kind === 'value_entry' ||
+      body.kind === 'alias' ||
       !isScalarBody(body)
     ) {
       return; // no scalar reading -- the substituted body's own position judges it
@@ -1147,7 +1148,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * cannot make the answer depend on declaration order.
    */
   function closeApplicationsOutsideChain(value: CoreValue): CoreValue {
-    if (value.kind !== 'record' || isApplication(value)) return closeApplications(value);
+    if (value.kind !== 'record') return closeApplications(value);
     return {
       kind: 'record',
       fields: value.fields.map((field) =>
@@ -1169,15 +1170,17 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function closeApplications(value: CoreValue): CoreValue {
     switch (value.kind) {
+      case 'reference': {
+        const application = applicationIn(value);
+        if (application === undefined) return value;
+        const token: TokenValue = {
+          kind: 'token',
+          text: close(application).name,
+          form: 'unquoted',
+        };
+        return token;
+      }
       case 'record':
-        if (isApplication(value)) {
-          const token: TokenValue = {
-            kind: 'token',
-            text: close(typeRefOf(value)).name,
-            form: 'unquoted',
-          };
-          return token;
-        }
         return {
           kind: 'record',
           fields: value.fields.map((field) => ({
@@ -1202,7 +1205,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           })),
         };
       case 'empty-brace':
-      case 'reference':
       case 'void':
       case 'token':
         return value;
@@ -1417,7 +1419,7 @@ function mentionsParameter(ref: TypeRef, parameters: readonly string[]): boolean
  * it costs nothing at read time.
  */
 function instantiationOf(formName: string): Top {
-  return { kind: 'reference', target: { name: formName, arguments: [], annotations: [] } };
+  return { kind: 'alias', target: { name: formName, arguments: [], annotations: [] } };
 }
 
 /**
@@ -1434,12 +1436,40 @@ export function mapBodyRefs(body: Top, map: (ref: TypeRef) => TypeRef): Top {
     case 'record':
       return {
         ...body,
-        fields: mapFields(body.fields, (field) => ({ ...field, type: map(field.type) })),
+        fields: mapFields(body.fields, (field) => ({
+          ...field,
+          type: field.type.kind === 'sibling' ? field.type : map(field.type),
+        })),
+      };
+    case 'record_template':
+      // A field's type where it names none of the template's own parameters; a parameter standing as a
+      // whole type is a label, and a sibling reference names a field.
+      return {
+        ...body,
+        fields: namespaceOf(
+          body.fields.type,
+          [...body.fields.entries].map(([name, field]) => [
+            name,
+            field.type === undefined ||
+            field.type.kind === 'sibling' ||
+            mentionsParameter(
+              field.type,
+              body.parameters.map((p) => p.name),
+            )
+              ? field
+              : { ...field, type: map(field.type) },
+          ]),
+          body.fields.keyAnnotations,
+        ),
       };
     case 'array':
       return { ...body, elementType: map(body.elementType) };
     case 'map':
       return { ...body, keyType: map(body.keyType), valueType: map(body.valueType) };
+    case 'namespace':
+      return { ...body, keyType: map(body.keyType), valueType: map(body.valueType) };
+    case 'reference_type':
+      return { ...body, of: map(body.of) };
     case 'tuple':
       return {
         ...body,
@@ -1450,10 +1480,10 @@ export function mapBodyRefs(body: Top, map: (ref: TypeRef) => TypeRef): Top {
       };
     case 'choice':
       return { ...body, variants: body.variants.map(map) };
-    case 'reference':
+    case 'alias':
       return { ...body, target: map(body.target) };
     default:
-      return body; // an atom body or a namespace value holds no type reference this walk rewrites
+      return body; // an atom body or a value entry holds no type reference this walk rewrites
   }
 }
 

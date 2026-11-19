@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `decimal_type` constructor (§5.6's `number` atom --
+ * Parses and validates against `numeric.decimal_type` constructor (§5.6's `number` atom --
  * SQL's exact tier, ISO/IEC 11404 `scaled`) -- the port of `atom/DecimalParser.java`.
  *
  * Accepts only `integer`/`float` forms (§7.6) -- unlike {@link createIntegerParser}, no

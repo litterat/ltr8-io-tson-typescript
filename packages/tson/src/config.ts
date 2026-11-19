@@ -8,11 +8,11 @@
  * tree-shakable first... with `createTson(config)` as a config-bound convenience over them, not
  * as the primary way in." A caller with one schema already compiled reaches for `readTree`/
  * `validate` directly, passing `{ schema, root }`; this module exists for a caller managing more
- * than one schema, or resolving `!!import`/`!!meta` against schemas it does not have compiled
+ * than one schema, or resolving `!!import` against schemas it does not have compiled
  * ahead of time.
  *
  * **A fresh {@link Tson} starts with an empty registry**, unlike the reference implementation's
- * `Tson.builder().build()`, which loads `meta-kernel`/`meta.tn`/`core.tn` from packaged classpath
+ * `Tson.builder().build()`, which loads the six bundled schemas from packaged classpath
  * resources before a caller does anything. That is not a gap: this module's import graph is what a
  * browser consumer of `readTree` pays for, and 45 KB of schema text belongs on the other side of a
  * subpath boundary from it. `@ltr8/tson/stdlib` is that boundary, and it is one line to cross:
@@ -20,23 +20,25 @@
  * ```ts
  * import { standardLibrary } from '@ltr8/tson/stdlib';
  *
- * const tson = standardLibrary(); // meta-kernel, meta.tn and core.tn already registered
+ * const tson = standardLibrary(); // the kernel, the three libraries, core.tn and policy.tn registered
  * const catalog = tson.resolveSchema(catalogSchemaText);
  * const value = tson.readTree(documentBytes, { schema: tson.compile(catalog), root: 'reading' });
  * ```
  *
  * A caller who wants the standard library from somewhere else -- a newer revision, a private
- * mirror -- registers it the same way `stdlib/index.ts` does, since meta-kernel's own bootstrap
- * circularity (§1.5: its `!!meta` names itself) needs `schema/bootstrap.ts`'s `bootstrapMetaKernel`
- * regardless, and nothing here can special-case it silently:
+ * mirror -- registers it the same way `stdlib/index.ts` does, since the kernel (§3.4) is pre-loaded:
+ * its declarations wait on one another, so it resolves from its own source through
+ * `schema/bootstrap.ts`'s `bootstrapKernel` and nothing here can special-case it silently:
  *
  * ```ts
- * import { createTson, bootstrapMetaKernel, linkSchema } from '@ltr8/tson';
+ * import { createTson, bootstrapKernel, linkSchema } from '@ltr8/tson';
  *
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
- * tson.register(linkSchema(bootstrapMetaKernel(metaKernelBytes)));
+ * tson.register(linkSchema(bootstrapKernel(kernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/39/m/meta.tn',
+ *   'https://tson.io/2026/39/m/numeric.tn',
+ *   'https://tson.io/2026/39/m/temporal.tn',
+ *   'https://tson.io/2026/39/m/net.tn',
  *   'https://tson.io/2026/39/m/core.tn',
  * ]);
  * ```
@@ -82,6 +84,7 @@ import type { DefinitionGetter } from './compiler/resolverTypes.js';
 import { parseSchemaDocument } from './compiler/schemaParser.js';
 import { compile as compileCore, type CompiledSchema } from './compiler/compile.js';
 import { createDefinitionMetaReader } from './schema/metaReader.js';
+import { createDefinitionValueReader } from './schema/namespaceReader.js';
 import { createAnnotationValueReader } from './schema/annotationReader.js';
 import { topBinding } from './schema/bindings.js';
 import { toCoreValue } from './bind/encode.js';
@@ -94,7 +97,7 @@ import { write, type WriteOptions } from './facade/write.js';
 import type { AsyncByteSource } from './facade/byteSource.js';
 import type { Value } from './tree/nodes.js';
 
-/** Where a schema document's raw bytes come from, given the reference as written in a `!!schema`/`!!import`/`!!meta` directive -- satisfied by `@ltr8/tson/source`'s `httpSchemaSource`/`fileSchemaSource`, by {@link mapSchemaSource}, or by anything else with a matching `fetch` method (a test double). Never imported by this module -- see `source/index.ts`'s own top note on why the two Node-only shipped implementations stay behind that separate subpath. */
+/** Where a schema document's raw bytes come from, given the reference as written in an `!!import` directive -- satisfied by `@ltr8/tson/source`'s `httpSchemaSource`/`fileSchemaSource`, by {@link mapSchemaSource}, or by anything else with a matching `fetch` method (a test double). Never imported by this module -- see `source/index.ts`'s own top note on why the two Node-only shipped implementations stay behind that separate subpath. */
 export interface SchemaSource {
   /**
    * Fetches `reference`'s schema document's raw bytes, or throws {@link TsonSchemaFetchError}.
@@ -237,7 +240,7 @@ export interface Config extends LimitOptions {
    * map's keys, a set's elements -- for every reader {@link Tson.compile} builds, and an annotation
    * value read while a schema resolves.
    *
-   * The meta-kernel's own bootstrap is deliberately outside its reach: that link is pinned to the
+   * The kernel's own bootstrap is deliberately outside its reach: that link is pinned to the
    * default, so relaxing a policy here can never change whether the kernel itself loads.
    */
   readonly identifierPolicy?: IdentifierPolicy;
@@ -339,7 +342,7 @@ function checkPin(reference: string, contentHash: string, identity: string): voi
  * instance itself resolved or fetched always has one recorded ({@link recordContentHash} runs for
  * every one, via `resolveSchemaMethod`/`preload` below), so the only case with nothing recorded is
  * an identity registered directly as an already-linked {@link LinkedSchema} (`register`, e.g. the
- * meta-kernel bootstrap), which carries no source bytes to hash at all.
+ * kernel bootstrap), which carries no source bytes to hash at all.
  */
 function verifyPin(
   contentHashes: ReadonlyMap<string, string>,
@@ -400,24 +403,27 @@ function requireRegistered(
 }
 
 function importedFrom(
-  schemas: ReadonlyMap<string, LinkedSchema>,
   schema: LinkedSchema,
+  identifierPolicy: IdentifierPolicy | undefined,
 ): ImportedSchema {
   return {
-    level: { id: schema.id, meta: schema.meta, kernelGoverned: governedByKernel(schemas, schema) },
     entries: schema.entries,
     facts: schema.facts,
     keyAnnotations: schema.keyAnnotations,
     originOf: (name) => schema.origins.get(name) ?? schema.id,
+    // An annotation's value is read through the compiled readers of the import that declared its type
+    // (§6): compiled once per import, on first use, so a schema that writes no annotation compiles nothing.
+    annotationReader: (type, value) =>
+      createAnnotationValueReader(compiledMetaFor(schema, identifierPolicy))(type, value),
     enumForms: schema.enumForms,
     nameTypes: schema.nameTypes,
   };
 }
 
 /**
- * The governing meta, compiled -- memoized per {@link LinkedSchema}, because every schema governed
- * by one needs the same compiled readers and compiling is not free. Keyed by identity in a
- * `WeakMap`: a linked schema nobody holds any more takes its compiled form with it.
+ * An import's own schema, compiled -- memoized per {@link LinkedSchema}, because every schema importing
+ * it needs the same compiled readers and compiling is not free. Keyed by identity in a `WeakMap`: a linked
+ * schema nobody holds any more takes its compiled form with it.
  */
 const compiledMetas = new WeakMap<
   LinkedSchema,
@@ -437,28 +443,28 @@ function compiledMetaFor(
   compiledMetas.set(meta, byPolicy);
   const already = byPolicy.get(identifierPolicy);
   if (already !== undefined) return already;
-  const compiled = compileCore(meta, identifierPolicy === undefined ? {} : { identifierPolicy });
+  const compiled = compileCore(meta, {
+    judgesReferenceMembers: false,
+    ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
+  });
   byPolicy.set(identifierPolicy, compiled);
   return compiled;
 }
 
-/** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
 /**
- * [TSON-SCHEMA] §11.5's "import closure" limit: every schema document reachable from `meta`/
- * `imports` transitively through its own `!!meta`/`!!import`, counted by distinct canonical
- * identity. Every reference in the walk must already be registered by the time this runs --
- * {@link Tson.resolveSchema}'s own contract, and the same one `requireRegistered` enforces a few
- * lines below this walk -- so an unregistered reference here is left alone rather than refused a
- * second time under a different message; that walk reports it properly once the closure question
- * is out of the way.
+ * [TSON-SCHEMA] §11.5's "import closure" limit: every schema document reachable from `imports`
+ * transitively through its own `!!import`, counted by distinct canonical identity. Every reference in the
+ * walk must already be registered by the time this runs -- {@link Tson.resolveSchema}'s own contract, and
+ * the same one `requireRegistered` enforces a few lines below this walk -- so an unregistered reference
+ * here is left alone rather than refused a second time under a different message; that walk reports it
+ * properly once the closure question is out of the way.
  */
 function importClosureSize(
   schemas: ReadonlyMap<string, LinkedSchema>,
-  meta: string,
   imports: readonly string[],
 ): number {
   const seen = new Set<string>();
-  const pending: string[] = [meta, ...imports];
+  const pending: string[] = [...imports];
   while (pending.length > 0) {
     const next = pending.pop();
     if (next === undefined) continue;
@@ -467,11 +473,12 @@ function importClosureSize(
     seen.add(canonical);
     const schema = schemas.get(canonical);
     if (schema === undefined) continue; // unregistered -- requireRegistered reports this, not this walk
-    pending.push(schema.meta, ...schema.imports);
+    pending.push(...schema.imports);
   }
   return seen.size;
 }
 
+/** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
   contentHashes: ReadonlyMap<string, string>,
@@ -483,32 +490,23 @@ function resolveAgainstRegistry(
   const document = runSync(parseSchemaDocument(fromBytes(bytes), limit));
   const id = document.id;
   if (id === undefined) {
-    throw new TsonSchemaValidationError(
-      `'!!meta:"${document.meta}"': !!id is required to resolve this schema (§2.2.1)`,
-    );
+    throw new TsonSchemaValidationError('!!id is required to resolve this schema (§2.2.1)');
   }
-  const closureSize = importClosureSize(schemas, document.meta, document.imports);
+  const closureSize = importClosureSize(schemas, document.imports);
   if (closureSize > limits.maxImportClosure) {
     throw importClosureLimitRefusal(limits.maxImportClosure, id);
   }
-  const governingMeta = requireRegistered(schemas, contentHashes, document.meta, id);
-  const metaDefinitions: DefinitionGetter = (name) => governingMeta.entries.get(name);
   const resolveImport: ImportResolver = (importUri) =>
-    importedFrom(schemas, requireRegistered(schemas, contentHashes, importUri, id));
+    importedFrom(requireRegistered(schemas, contentHashes, importUri, id), identifierPolicy);
   const resolved = resolveSchemaCore(document, {
-    definitionMetaReader: createDefinitionMetaReader(metaDefinitions, undefined, identifierPolicy),
-    // §6/§3.3.3: a declaration's key annotations (`@doc` and anything else a meta-schema defines)
-    // name ordinary entries of the governing meta, and their values are read through that
-    // schema's own compiled readers. Without this every key annotation resolved name-only, so a
-    // resolved schema lost the documentation the author wrote on it.
-    annotationValueReader: createAnnotationValueReader(
-      compiledMetaFor(governingMeta, identifierPolicy),
-    ),
-    metaDefinitions,
-    metaFacts: (name) => governingMeta.facts.get(name),
+    // The readers consult the namespace being built: a constructor's own declaration supplies its
+    // fields' defaults, and a value entry's type its record's shape (§4.1, §5.5).
+    readers: (lookup: DefinitionGetter) => ({
+      meta: createDefinitionMetaReader(lookup),
+      value: createDefinitionValueReader(lookup, identifierPolicy),
+    }),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
-    kernelGoverned: isSelfGoverned(governingMeta),
   });
   // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
   // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
@@ -517,34 +515,9 @@ function resolveAgainstRegistry(
     throw schemaEntriesLimitRefusal(limits.maxSchemaEntries, id);
   }
   return linkSchema(resolved, {
-    structureNamespace: governingMeta.entries,
-    structureFacts: governingMeta.facts,
     resolveImport,
     ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
-    kernelGoverned: isSelfGoverned(governingMeta),
   });
-}
-
-/**
- * Whether `meta` is the meta-kernel: the one schema naming itself as its own `!!meta` (§1.5), so a
- * schema it governs is a meta layer, where an entry may hold a value (§2.2.2).
- */
-function isSelfGoverned(meta: LinkedSchema): boolean {
-  return meta.bootstrap || canonicalizeIdentity(meta.meta) === canonicalizeIdentity(meta.id);
-}
-
-/**
- * Whether the meta-kernel governs the registered `schema`: its own `!!meta` is self-governed. The
- * kernel itself is (its `!!meta` is its own identity); a schema whose `!!meta` is not registered
- * falls back to what its linker was told.
- */
-function governedByKernel(
-  schemas: ReadonlyMap<string, LinkedSchema>,
-  schema: LinkedSchema,
-): boolean {
-  if (schema.bootstrap) return true;
-  const meta = schemas.get(canonicalizeIdentity(schema.meta));
-  return meta === undefined ? schema.kernelGoverned === true : isSelfGoverned(meta);
 }
 
 /**
@@ -588,21 +561,19 @@ export interface Tson {
   readonly config: Config;
   /** Every registered schema, keyed by canonical identity -- read-only; use {@link register}/{@link resolveSchema}/{@link preload} to add to it. */
   readonly schemas: ReadonlyMap<string, LinkedSchema>;
-  /** Registers an already-resolved-and-linked schema directly under its own canonical identity -- for one built without going through this instance (`bootstrapMetaKernel`, or a schema resolved against a different registry entirely). */
+  /** Registers an already-resolved-and-linked schema directly under its own canonical identity -- for one built without going through this instance (`bootstrapKernel`, or a schema resolved against a different registry entirely). */
   register(schema: LinkedSchema): void;
   /**
    * Resolves and links `source` (schema text, or its already-UTF-8-encoded bytes) against this
-   * instance's own registry, registers the result, and returns it. `source`'s own `!!meta` and
-   * every `!!import` it declares must already be registered -- see this module's own top note on
+   * instance's own registry, registers the result, and returns it. Every `!!import` `source`
+   * declares must already be registered -- see this module's own top note on
    * why this never fetches, even with a {@link Config.schemaSource} configured.
    */
   resolveSchema(source: string | Uint8Array): LinkedSchema;
   /**
    * Builds a {@link CompiledSchema} for `schema` -- `compiler/compile.ts`'s own `compile`, so the
    * whole resolve-link-compile sequence is reachable off one instance. Bound to this instance's
-   * own registry as the `scoped` position's foreign-schema lookup (§7.8): a scope push a read
-   * against the result reaches resolves against whatever this instance holds registered at read
-   * time, `preload`/`resolveSchema`/`register` included.
+   * own registry.
    */
   compile(schema: LinkedSchema): CompiledSchema;
   /** Fetches `reference`'s raw schema bytes through {@link Config.schemaSource} -- throws {@link TsonSchemaFetchError} (`'not-permitted'`) when none is configured. Does not resolve, link, or register; {@link preload} does all three. */
@@ -612,7 +583,7 @@ export interface Tson {
    * depending on an earlier one in this same call (or on anything already registered) finds it
    * in place by the time its own turn comes. A `?sha256=` pin declared on a reference is verified
    * against what was fetched, this identity's own content hash is recorded either way so a later
-   * pinned `!!import`/`!!meta` reference to it is verified too (`config.ts`'s own
+   * pinned `!!import` reference to it is verified too (`config.ts`'s own
    * `recordContentHash`, [TSON-SCHEMA] §10.2's MUST), and the fetched document's own `!!id` is
    * cross-checked against the identity that was asked for -- all regardless of whether
    * {@link HttpSchemaSourceOptions.requireContentHashPin}-style policy required a pin to be
@@ -664,23 +635,8 @@ export function createTson(config: Config = {}): Tson {
     schemas.set(canonicalizeIdentity(schema.id), schema);
   }
 
-  // §7.8's own lookup seam: a `scoped` position's EXTERN cell resolves the schema a value names
-  // for itself against this instance's own registry -- never fetching, exactly like {@link
-  // resolveSchemaMethod} above, so a foreign schema a read reaches must already be registered
-  // (directly, or preloaded) before the document that names it is read. `compileMethod` hands the
-  // lookup to `compileCore` itself, so a scope push resolves through the same registry, whatever
-  // entry a caller started compiling from.
-  function foreignSchema(uri: string): LinkedSchema | undefined {
-    try {
-      return schemas.get(canonicalizeIdentity(uri));
-    } catch {
-      return undefined; // not a legal schema identity -- a miss either way
-    }
-  }
-
   function compileMethod(schema: LinkedSchema): CompiledSchema {
     return compileCore(schema, {
-      foreignSchemas: foreignSchema,
       ...(config.identifierPolicy === undefined
         ? {}
         : { identifierPolicy: config.identifierPolicy }),

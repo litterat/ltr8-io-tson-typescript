@@ -349,6 +349,39 @@ Optionality is `readonly x?: T` (CLAUDE.md). A switch over the entry union is ex
   is gone (the scope push, `!!meta`, the import-level rule, `kind<T>`) is deleted with its subject and
   listed in the report.
 
+### WP2A outcome
+
+Gate met. All six bundled schemas bootstrap and register, and all five fixtures match, both bound and
+in written form (`schema/resolvedOutput.ts`). Class 1 is 316/316, schema 230/264, link 118/133 and
+validate 195/231 (881 of 967 counting `synthetic.test.ts`). Unit tests: 4039 of 4042 pass; the three
+failures are the JSON `meta.declared` position tests, which are Stage 3's.
+
+The model the next packages build on:
+
+- `Top` is `Type | Alias | TemplateBody | ValueEntry`. An entry is a type exactly when its
+  constructor IS-A `meta.type`.
+- `Alias{target}` is `meta.alias`. `Reference = TypeRef | SiblingRef` appears only at a record
+  field's `type`.
+- `RecordTemplateBody{parameters}` has fields labelled `type`/`typeParam` and `value`/`valueParam`.
+  `heldRecord` converts it to the held wire form that closing uses.
+- `NamespaceBody` is `meta.namespace`. `ReferenceBody{of, allowSibling, index?}` is
+  `meta.reference_type`, and the linker derives its `index`.
+- A nested map is a `ValueEntry` of `meta.schema` holding a `schema_map`. A schema's `entries` is
+  one map keyed by path, and `syncedEntries` rebuilds the map's own entry.
+- Qualified names are spelled only through `schema/meta/kernel.ts`.
+- Dependent-field reading, in the tree and in JSON, is a `NOT_IMPLEMENTED` gap.
+
+Two harness items go to WP2B:
+
+- **The validate layer synthesizes a namespace for a subject with several imports.** It wraps them
+  in a placeholder schema holding one empty record. The Java instead reads the data document with
+  its tree reader, under the document's own `!!import`s. WP2B ports that facade path, reading a data
+  document under the namespace its imports merge into (§2.2.3), and removes the placeholder.
+- **`class2Tson.ts` pre-resolves every corpus schema the subject reaches.** That throws on
+  `fixtures/a-data-document.tn` before `a-schema-imports-a-data-document` can run. The bug is in the
+  harness, which never reaches the vector. RUNNER.md says that file is there "to be refused as an
+  import". The fix is to resolve on demand through the schema source.
+
 ### WP2B: references, values, aliases, refinement and wait order (#4, #5, #6, #9–#12, #16–#18; Part 2 §2.2.3, §3.3.1, §3.4, §4.1, §4.2, §5.2, §5.5, §5.7, §5.8, §5.12, §6, §7.4, §7.8, §8.3, §11.5)
 
 Java: `TypeInhabitance`, `ValuesByName`, `HeldValues` (new), `RecordExtension`, `ChoiceDisjointness`,
@@ -475,8 +508,24 @@ Runs as Stage 3 does, beside WP2C, for the parts that need no Stage 2 rule; fini
 Collected from the stage reports. Each entry states the section, the reading this port chose, and why;
 a corpus item names the file.
 
-- **§8.1 (Part 2), resolved-output writing.** Carried from Revision 37: whether the reference still
-  writes `!array { … }` for a body headed by `set_type` is WP2A's to check.
+- **§8.1 (Part 2), resolved-output writing.** Carried from Revision 37 and confirmed at Revision 39.
+  The reference binds `ArrayBody` by class and so records no `meta.set_type`. It writes
+  `!meta.array` and restates `voidable`, `ordered` and `unique_items` at their defaults.
+  `ResolvedFixtureTest` compares bound objects, so it cannot see either difference.
+- **§2.1 and §4.1 (Part 2), a nested `!schema` entry's tag.** The root tag names the pre-loaded
+  kernel's `schema`, but nothing says what a nested map's own tag resolves against. This port reads
+  it as a spelling and does not validate the head.
+- **§4.2 and §5.12 (Part 2), whose closure judges a name read through an annotation's type.** This
+  port judges membership on data reads and only the spelling on annotation reads.
+- **§5.9 rule 8 against §4.1 (Part 2).** `x => !plain {}` over a non-constructor `plain` is a value
+  entry, so "may not be applied" cannot be observed. The reference's BACKLOG records the same gap.
+- **Kernel name type during bootstrap.** The kernel's records ask for `meta.field_name` while its
+  entries are still being made, which closes a wait cycle. This port states the terminal
+  (`meta.identifier`) instead.
+- **Fixture header, "fields at their default values are omitted".** The reference's writer writes
+  them anyway, so the port normalises both sides.
+- **§6 (Part 2), the host form of the kernel's own annotations.** At bootstrap there is no compiled
+  reader for `doc`, so the kernel's `@doc` is held as plain text. A library's `@doc` is a tree atom.
 - **§5.5 and §1.5 (Part 1), `!regex`.** The library column lists `!regex` as a kernel row a Class 1
   processor recognises; the reference's built-in vocabulary has no entry for it and no vector tests it.
   This port matches the reference, so a schemaless `!regex` is an unknown type annotation.

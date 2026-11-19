@@ -24,6 +24,7 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
+  ReferenceValue,
   TokenValue,
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
@@ -37,7 +38,10 @@ import type { AtomBinding, Binding, BindingRef } from './binding.js';
  * wire formatting (quoting, escaping, base-type-specific text) at every atom leaf without this
  * module ever importing `atom/` itself.
  */
-export type AtomEncoder = (binding: AtomBinding<unknown>, value: unknown) => TokenValue;
+export type AtomEncoder = (
+  binding: AtomBinding<unknown>,
+  value: unknown,
+) => TokenValue | ReferenceValue;
 
 /**
  * The default {@link AtomEncoder}, used when a caller supplies none: `String(value)`, unquoted.

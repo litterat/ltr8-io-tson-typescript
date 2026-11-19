@@ -26,8 +26,17 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
+  ReferenceValue,
   TokenValue,
 } from '../ast/value.js';
+import {
+  marksSibling,
+  opensArguments,
+  parseTypeRefName,
+  referenceArguments,
+  requireQualifiedName,
+  siblingReference,
+} from '../stream/dataStream.js';
 import {
   advance,
   check,
@@ -56,7 +65,7 @@ export function* parseAnnotationList(state: CursorState): Task<Annotation[]> {
 }
 
 /**
- * `"@" unquoted-token [ ":" data-value ]` (§3.1).
+ * `"@" qualified-name-token [ ":" data-value ]` (§3.1).
  *
  * Bounded (§9.1) even though an annotation is not structural nesting: its value is a data value in
  * its own right, so `@a:@a:@a:...` re-enters this production once per annotation with no braces or
@@ -74,6 +83,7 @@ export function* parseAnnotation(state: CursorState): Task<Annotation> {
       "'@' must be immediately adjacent to the annotation name (no whitespace)",
     );
   }
+  requireQualifiedName(name, 'annotation', '§3.1');
   yield* advance(state); // name
 
   const afterName = yield* peekToken(state);
@@ -98,7 +108,7 @@ export function* parseDataValue(state: CursorState): Task<DataValue> {
   const annotations = yield* parseAnnotationList(state);
   let typeRef: string | undefined;
   if (yield* check(state, 'bang')) {
-    typeRef = yield* parseDataTypeRefName(state);
+    typeRef = yield* parseTypeRefName(state);
   }
   const coreValue = yield* parseCoreValue(state);
   return {
@@ -106,71 +116,6 @@ export function* parseDataValue(state: CursorState): Task<DataValue> {
     ...(typeRef !== undefined ? { typeRef } : {}),
     coreValue,
   };
-}
-
-/**
- * `"!" unquoted-token` (§3.2) -- a *data*-value type-ref, rejecting the schema-only type
- * expression forms (array brackets, `<...>`, `?`) that have no role here: the payload this
- * module builds is a nested value inside a schema's own `instance` production, but that value
- * is ordinary data-grammar content once inside it, not more schema syntax.
- */
-function* parseDataTypeRefName(state: CursorState): Task<string> {
-  const bang = yield* advance(state);
-  const name = yield* peekToken(state);
-  if (name.type !== 'unquoted-token') {
-    if (name.type === 'lbracket' && adjacentTo(bang, name)) {
-      throw parseError(
-        name,
-        "'![...]' writes an array type, which is schema syntax and not available in a data value " +
-          "(§3.2); write the array itself, or name the type in the schema ('my_type => [...]') and " +
-          "write '!my_type' here",
-      );
-    }
-    throw parseError(name, `expected a type name after '!', found ${describe(name)}`);
-  }
-  if (!adjacentTo(bang, name)) {
-    throw parseError(name, "'!' must be immediately adjacent to the type name (no whitespace)");
-  }
-  yield* advance(state); // name
-
-  const next = yield* peekToken(state);
-  if (next.type === 'less-than') {
-    throw parseError(
-      next,
-      `'!${name.text}<...>' applies type arguments, which is schema syntax and not available in a ` +
-        `data value (§3.2): a data type-ref is a bare name. Name the application in the schema ` +
-        `('my_type => ${name.text}<...>') and write '!my_type' here`,
-    );
-  }
-  if (next.type === 'question' && adjacentTo(name, next)) {
-    throw parseError(
-      next,
-      `'!${name.text}?' uses the optional suffix, which is schema syntax and not available in a ` +
-        `data value (§3.2): optionality is a field's state where the schema declares it, and a ` +
-        `value that is void is written '_' (§2.9)`,
-    );
-  }
-  if (!isStructuralDelimiter(next.type) && adjacentTo(name, next)) {
-    throw parseError(
-      next,
-      `expected whitespace after type name '${name.text}' before ${describe(next)}`,
-    );
-  }
-  return name.text;
-}
-
-function isStructuralDelimiter(type: string): boolean {
-  switch (type) {
-    case 'lbrace':
-    case 'rbrace':
-    case 'lbracket':
-    case 'rbracket':
-    case 'colon':
-    case 'comma':
-      return true;
-    default:
-      return false;
-  }
 }
 
 /** `record / map / array / empty-brace / absent / token` (§2.3, §7.4). */
@@ -196,6 +141,20 @@ export function* parseCoreValue(state: CursorState): Task<CoreValue> {
     case 'single-line-token':
     case 'multi-line-token':
       yield* advance(state);
+      // §7.4: a token followed by an adjacent `<` heads a reference with arguments, and one
+      // followed by an adjacent `!` is a sibling reference -- the productions the data stream reads.
+      if (yield* opensArguments(state, t)) {
+        return {
+          kind: 'reference',
+          reference: yield* referenceArguments(state, t),
+        } satisfies ReferenceValue;
+      }
+      if (yield* marksSibling(state, t)) {
+        return {
+          kind: 'reference',
+          reference: yield* siblingReference(state, t),
+        } satisfies ReferenceValue;
+      }
       return { kind: 'token', text: t.text, form: tokenFormOf(t.type) } satisfies TokenValue;
     default:
       throw parseError(

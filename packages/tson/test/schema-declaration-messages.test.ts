@@ -20,7 +20,7 @@ describe('declaration messages', () => {
 
   it('a moved fixed facet says it is fixed at construction, and reads grammatically', () => {
     const message = loadError(
-      `k => !identifier_type { exclude: "x" }\nk2 => !k ^ { exclude: "y" }`,
+      `k => !unicode.identifier_type { exclude: "x" }\nk2 => !k ^ { exclude: "y" }`,
     );
     expect(message).toMatch(/fixed at construction/);
     expect(message).not.toMatch(/\ba exclude\b/);

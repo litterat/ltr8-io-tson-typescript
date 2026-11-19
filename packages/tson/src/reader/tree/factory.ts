@@ -13,6 +13,7 @@
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import { isTemplateBody, type Top } from '../../schema/meta/typedef.js';
 import type { ArrayBody, MapBody, RecordBody, TupleBody } from '../../schema/meta/bodies.js';
+import { typeNameOf } from '../../schema/meta/bodies.js';
 import type { ValueReaderFactory } from '../contracts.js';
 import { recordTreeReader } from './record.js';
 import { mapTreeReader } from './map.js';
@@ -61,7 +62,7 @@ export const recordReaderFactory: ValueReaderFactory<Top, TreeReaderContext> = {
       name,
       name,
       definition,
-      (field) => context.resolve(field.type.name),
+      (field) => context.resolve(typeNameOf(field)),
       context.locationOf(name, definition),
     );
   },

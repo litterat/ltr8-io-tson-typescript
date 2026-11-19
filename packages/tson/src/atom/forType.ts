@@ -23,7 +23,7 @@
 import type { AtomToken } from './contract.js';
 import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { Product, Sum } from '../schema/meta/algebra.js';
-import type { Atom, Reference } from '../schema/meta/typedef.js';
+import type { Alias, Atom, ValueEntry } from '../schema/meta/typedef.js';
 
 import { createIntegerParser } from './numeric/integer.js';
 import { createDecimalParser } from './numeric/decimal.js';
@@ -34,7 +34,7 @@ import { createBinaryParser } from './numeric/binary.js';
 import { createTextParser } from './text/text.js';
 import { createIdentifierParser } from './text/identifier.js';
 import { createEnumParser } from './enum.js';
-import { createKindParser, createQualifiedNameParser } from './reference.js';
+import { createQualifiedNameParser } from './reference.js';
 import { createUuidParser } from './network/uuid.js';
 import { createUriParser } from './network/uri.js';
 import { createEmailParser } from './network/email.js';
@@ -58,7 +58,7 @@ import { createPeriodParser } from './temporal/period.js';
  * reaching here. `link/referenceValidation.ts`'s own `checkFieldValue` does exactly that (via
  * `bodyKind.ts`'s `isDataBody`) before calling either function below.
  */
-type ScalarCandidate = Atom | Product | Sum | Reference;
+type ScalarCandidate = Atom | Product | Sum | Alias | ValueEntry;
 
 /** The half of {@link AtomType} a bare "does this token satisfy this type" check needs -- see this module's own top note on why `write` never enters into it. */
 export interface ScalarParser {
@@ -76,7 +76,6 @@ export function isScalarBody(body: ScalarCandidate): boolean {
   switch (body.kind) {
     case 'void_type':
       return false;
-    case 'value_type':
     case 'enum':
     case 'integer_type':
     case 'text_type':
@@ -101,14 +100,13 @@ export function isScalarBody(body: ScalarCandidate): boolean {
     case 'ipv4_type':
     case 'ipv6_type':
     case 'complex_type':
-    case 'kind_type':
-    case 'ref_type':
+    case 'reference_type':
     case 'hostname_type':
     case 'host_type':
     case 'media_type_type':
       return true;
     default:
-      return false; // record, array, map, tuple, choice, reference, scoped, and Data
+      return false; // record, record template, array, map, namespace, tuple, choice, declared type, alias, value entry
   }
 }
 
@@ -195,12 +193,9 @@ export function atomParserFor(
       return createIpv6Parser(declaredName, body);
     case 'complex_type':
       return createComplexParser(declaredName);
-    case 'kind_type':
-      // A kind's value is a type name (§4.2): read here by the name grammar, and judged a member
-      // of the kind against the linked closure, which a bare-token parser cannot see.
-      return createKindParser(declaredName, body, false);
-    case 'ref_type':
-      // A reference's value is a qualified name (§5.12), judged against the linked closure.
+    case 'reference_type':
+      // A reference's value is a qualified name (§4.2, §5.12): read here by the name grammar, and
+      // judged against the linked closure, which a bare-token parser cannot see.
       return createQualifiedNameParser(declaredName);
     case 'hostname_type':
       return createHostnameParser(declaredName, body);
@@ -209,6 +204,6 @@ export function atomParserFor(
     case 'media_type_type':
       return createMediaTypeParser(declaredName, body);
     default:
-      return undefined; // value_type, void_type, containers, choice, reference, scoped
+      return undefined; // void_type, containers, choice, declared type, alias, value entry
   }
 }

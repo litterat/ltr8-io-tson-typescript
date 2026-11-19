@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SchemaLocation } from '../src/core/diagnostic.js';
 import type { FieldRole, NamedField, RecordBody } from '../src/schema/meta/bodies.js';
-import { fieldMapOf } from '../src/schema/meta/bodies.js';
+import { fieldMapOf, typeNameOf } from '../src/schema/meta/bodies.js';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
 import { recordTreeReader } from '../src/reader/tree/record.js';
 import type { TypeReader } from '../src/reader/contracts.js';
@@ -62,7 +62,7 @@ function reader(fields: NamedField[], groups: RecordBody['groups'] = []): TypeRe
     groups,
     extension: 'OPEN',
   };
-  return recordTreeReader('person', 'person', body, (f) => resolve(f.type.name), LOCATION);
+  return recordTreeReader('person', 'person', body, (f) => resolve(typeNameOf(f)), LOCATION);
 }
 
 describe('recordTreeReader -- shape (§5.2, §5.6)', () => {

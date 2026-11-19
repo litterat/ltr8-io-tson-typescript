@@ -29,15 +29,14 @@ const CYRILLIC_PASS = 'раѕѕ';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-names-1.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
-  identifier => !identifier_type { continue_add: "-" }
+!schema {
+  identifier => !unicode.identifier_type { continue_add: "-" }
   handlers => { identifier => text }
   labels => { text => text }
   route => { name: identifier }
   team => { roles: set<identifier> }
-  unique_ids => !array { element_type: identifier  unique_items: true }
+  unique_ids => !meta.array { element_type: identifier  unique_items: true }
   uniq => { roles: unique_ids }
   repeats => { roles: [identifier] }
   words => { roles: set<text> }

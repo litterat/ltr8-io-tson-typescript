@@ -9,16 +9,16 @@ describe.each([
   ['text', textCodes, (t: string, _j: string) => t],
   ['JSON', jsonCodes, (_t: string, j: string) => j],
 ] as const)('`ordered` is part of value identity (§5.3, §7.5), %s reader', (_name, run, pick) => {
-  const linked = load(`tags => !array { element_type: text ordered: false }
+  const linked = load(`tags => !meta.array { element_type: text ordered: false }
 otags => [text]
-om => !map { key_type: text value_type: int32 ordered: true }
+om => !meta.map { key_type: text value_type: int32 ordered: true }
 um => { text => int32 }
 st => set<int32>
-ss => !array { element_type: tags unique_items: true }
-so => !array { element_type: otags unique_items: true }
-smo => !array { element_type: om unique_items: true }
-smu => !array { element_type: um unique_items: true }
-sst => !array { element_type: st unique_items: true }
+ss => !meta.array { element_type: tags unique_items: true }
+so => !meta.array { element_type: otags unique_items: true }
+smo => !meta.array { element_type: om unique_items: true }
+smu => !meta.array { element_type: um unique_items: true }
+sst => !meta.array { element_type: st unique_items: true }
 sets => set<otags>`);
 
   it('a unique array of unordered arrays refuses a reordering as a repeat', () => {

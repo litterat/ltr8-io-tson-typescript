@@ -53,7 +53,7 @@ describe('recordReaderFactory', () => {
   });
 
   it('throws when the definition is not record-shaped -- an authoring bug in the caller, not a document problem', () => {
-    const definition: Top = entry({ kind: 'value_type' });
+    const definition: Top = entry({ kind: 'void_type' });
     const context: TreeReaderContext = {
       resolve: () => atomTreeReader(atomTypeReader(stubTextType(), 'text'), 'text'),
       locationOf: (): SchemaLocation => ({ schemaId: 'test://s.tn' }),

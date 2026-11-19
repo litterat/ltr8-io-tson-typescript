@@ -25,9 +25,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-dispatch.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   pet => abstract { pet_type: text =?  name: text  nickname?: text? }
   cat => pet & { pet_type: = cat  hunting_skill?: text ~ lazy }
   dog => pet & { pet_type: = dog  pack_size: positive_integer }
@@ -469,9 +468,8 @@ describe('cross-encoding parity: same schema, same verdict', () => {
 describe('a record-bodied template family base', () => {
   const TEMPLATE_SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-dispatch-template.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   box => abstract <T> { kind: text =?  value: T }
   int_box => box<int32> & { kind: = int_box }
   text_box => box<text> & { kind: = text_box }

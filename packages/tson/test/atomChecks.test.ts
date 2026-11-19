@@ -1398,8 +1398,8 @@ describe('period_type', () => {
 // ── Families with no orderable facet at all ─────────────────────────────────────────────────
 
 describe('families with nothing to narrow or contradict', () => {
-  it('value_type/void_type/uuid_type always report clean', () => {
-    const cases: Atom[] = [{ kind: 'value_type' }, { kind: 'void_type' }, { kind: 'uuid_type' }];
+  it('void_type/uuid_type always report clean', () => {
+    const cases: Atom[] = [{ kind: 'void_type' }, { kind: 'uuid_type' }];
     for (const atom of cases) {
       expect(checkAtomNarrows(atom, atom)).toEqual([]);
       expect(checkAtomCoherence(atom)).toEqual([]);
@@ -1412,7 +1412,6 @@ describe('families with nothing to narrow or contradict', () => {
 describe('isAtom', () => {
   it('recognises every Atom member and rejects every other Top shape', () => {
     expect(isAtom({ kind: 'integer_type' })).toBe(true);
-    expect(isAtom({ kind: 'value_type' })).toBe(true);
     expect(isAtom({ kind: 'void_type' })).toBe(true);
     expect(
       isAtom({
@@ -1435,9 +1434,9 @@ describe('isAtom', () => {
     expect(isAtom({ kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' })).toBe(
       false,
     );
-    expect(
-      isAtom({ kind: 'reference', target: { name: 'x', arguments: [], annotations: [] } }),
-    ).toBe(false);
+    expect(isAtom({ kind: 'alias', target: { name: 'x', arguments: [], annotations: [] } })).toBe(
+      false,
+    );
     // A held template body: no `kind` tag at all (schema/meta's own contract).
     expect(
       isAtom({

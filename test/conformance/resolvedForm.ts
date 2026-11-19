@@ -31,7 +31,9 @@ import { createDefinitionMetaReader } from '../../packages/tson/src/schema/metaR
 import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
 import type { Annotation, Top } from '../../packages/tson/src/schema/meta/typedef.js';
-import { isTemplateBody } from '../../packages/tson/src/schema/meta/typedef.js';
+import { isConstructor, isTemplateBody } from '../../packages/tson/src/schema/meta/typedef.js';
+import { createDefinitionValueReader } from '../../packages/tson/src/schema/namespaceReader.js';
+import { isNestedMap } from '../../packages/tson/src/schema/meta/schemaPaths.js';
 import { normalizeSyntheticName, normalizeSyntheticNamesAnywhere } from './synthetic.js';
 
 /** `dv`'s decoded token text -- the resolved schema-map's own keys, always a bare identifier. */
@@ -51,44 +53,62 @@ export interface ResolvedEntry {
 }
 
 /**
- * Reads a `class2/schema/` `valid` vector's `resolved` text -- a bare `!schema { name => value }`
- * namespace, each entry its value (`!record {...}`, `!reference {...}`, `!template {...}`), always
- * governed by meta.tn (`schema-sidecar.tn`'s own doc) -- into the entries it denotes.
+ * Reads a `class2/schema/` `valid` vector's `resolved` text -- a `!schema { name => value }` document,
+ * each entry its value (`!meta.record {...}`, `!meta.alias {...}`, `!meta.template {...}`) and each
+ * schema map an entry nested as `!meta.schema { ... }` -- into the entries it denotes, keyed by path.
  *
- * Each value is read through its own top-level call of the meta reader, keyed by the constructor
- * its `!type-ref` names, exactly as `definitionResolver.ts` reads a constructor application in a
- * schema source: that is what gives every nested constructor's declared field defaults and §5.6's
- * positional form a source to be read from. `governingMeta` is meta.tn's own linked entries.
+ * Each value is read through its own top-level call of the meta reader, keyed by the constructor its
+ * `!type-ref` names, exactly as `definitionResolver.ts` reads a constructor application in a schema
+ * source: that is what gives every nested constructor's declared field defaults and §5.6's positional
+ * form a source to be read from. A nested map's members are keyed under their path (`geo.address`), as
+ * one namespace holds them at every depth (§2.2.3). `lookup` resolves a constructor's definition: the
+ * subject's own imports, and the pre-loaded kernel alone when it has none (RUNNER.md).
  */
 export function readResolved(
   resolvedText: string,
-  governingMeta: ReadonlyMap<string, Top>,
+  lookup: DefinitionGetter,
 ): Map<string, ResolvedEntry> {
-  const { document } = runSync(parseDocument(fromBytes(encodeUtf8(resolvedText))));
+  const { document } = runSync(
+    parseDocument(fromBytes(encodeUtf8(resolvedText)), { resolvedForm: true }),
+  );
   const root = document.root.coreValue;
   if (root.kind !== 'map') {
     throw new Error(
       `expected a '!schema {...}' map at a resolved-schema vector's root, found core-value kind '${root.kind}'`,
     );
   }
-  const lookup: DefinitionGetter = (name) => governingMeta.get(name);
   const reader = createDefinitionMetaReader(lookup);
+  const valueReader = createDefinitionValueReader(lookup);
   const result = new Map<string, ResolvedEntry>();
-  for (const entry of root.entries) {
-    const value = entry.value;
-    if (value.typeRef === undefined) {
-      throw new Error(
-        `resolved entry '${tokenTextOf(entry.key)}' must carry its constructor as a !type-ref`,
-      );
+  const add = (prefix: string, entries: readonly { key: DataValue; value: DataValue }[]): void => {
+    for (const entry of entries) {
+      const value = entry.value;
+      const path = `${prefix}${tokenTextOf(entry.key)}`;
+      if (value.typeRef === 'meta.schema') {
+        const nested = value.coreValue;
+        if (nested.kind === 'map') add(`${path}.`, nested.entries);
+        continue;
+      }
+      if (value.typeRef === undefined) {
+        throw new Error(`resolved entry '${path}' must carry its constructor as a !type-ref`);
+      }
+      // A tag that names no constructor builds a value entry, an instance of an ordinary type (§4.1):
+      // read against that type as a data value is, and held as the value it is.
+      const definition = lookup(value.typeRef);
+      const built: Top =
+        definition !== undefined && !isConstructor(definition, value.typeRef)
+          ? { kind: 'value_entry', type: value.typeRef, value: valueReader(value.typeRef, value) }
+          : reader(value.typeRef, value);
+      result.set(path, {
+        value: built,
+        annotations: value.annotations.map((annotation) => ({
+          name: annotation.name,
+          ...(annotation.value === undefined ? {} : { value: annotation.value }),
+        })),
+      });
     }
-    result.set(tokenTextOf(entry.key), {
-      value: reader(value.typeRef, value),
-      annotations: value.annotations.map((annotation) => ({
-        name: annotation.name,
-        ...(annotation.value === undefined ? {} : { value: annotation.value }),
-      })),
-    });
-  }
+  };
+  add('', root.entries);
   return result;
 }
 
@@ -117,6 +137,8 @@ function canonicalJson(value: unknown): string {
     const parts: string[] = [];
     for (const key of Object.keys(record).sort()) {
       if (key === 'position') continue; // no §8 output counterpart -- see this module's own doc
+      // A reference's `index` is derived by the linker and written by no document (§4.2, §8.1).
+      if (key === 'index' && (record as { kind?: unknown }).kind === 'reference_type') continue;
       const fieldValue = record[key];
       if (fieldValue === undefined) continue; // "absent" in this model's own convention
       parts.push(`${JSON.stringify(key)}:${canonicalJson(fieldValue)}`);
@@ -163,7 +185,7 @@ export function renderDefinition(entry: ResolvedEntry): string {
   const { value } = entry;
   const compared = {
     annotations: entry.annotations
-      .filter((annotation) => annotation.name !== 'doc' && annotation.name !== 'synthetic')
+      .filter((annotation) => annotation.name !== 'doc' && annotation.name !== 'meta.synthetic')
       .map((annotation) => ({
         name: annotation.name,
         value: annotationValueText(annotation.value),
@@ -183,7 +205,7 @@ export function ownEntries(linked: LinkedSchema): Map<string, ResolvedEntry> {
   const selfId = canonicalizeIdentity(linked.id);
   const own = new Map<string, ResolvedEntry>();
   for (const [name, value] of linked.entries) {
-    if (linked.origins.get(name) === selfId) {
+    if (linked.origins.get(name) === selfId && !isNestedMap(value)) {
       own.set(normalizeSyntheticName(name), {
         value,
         annotations: linked.facts.get(name)?.annotations ?? [],
@@ -204,14 +226,14 @@ export function ourSynthetics(linked: LinkedSchema): Set<string> {
   for (const name of linked.entries.keys()) {
     if (linked.origins.get(name) !== selfId) continue;
     const annotations = linked.keyAnnotations.get(name);
-    if (annotations?.some((annotation) => annotation.name === 'synthetic') === true) {
+    if (annotations?.some((annotation) => annotation.name === 'meta.synthetic') === true) {
       marked.add(normalizeSyntheticName(name));
     }
   }
   return marked;
 }
 
-const SYNTHETIC_KEY_MARKER = /@synthetic\s+([A-Za-z0-9_]+)\s*=>/g;
+const SYNTHETIC_KEY_MARKER = /@meta\.synthetic\s+([A-Za-z0-9_]+)\s*=>/g;
 
 /**
  * The names a §8 resolved-schema document's own *text* marks `@synthetic` at a schema-map key --

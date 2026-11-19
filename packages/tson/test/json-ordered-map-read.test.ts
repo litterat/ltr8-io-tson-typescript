@@ -16,13 +16,12 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-ordered-1.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
-  ranked    => !map { key_type: text  value_type: int32  ordered: true }
+!schema {
+  ranked    => !meta.map { key_type: text  value_type: int32  ordered: true }
   loose     => { text => int32 }
   point     => { x: int32  y: int32 }
-  ranked_by_point => !map { key_type: point  value_type: text  ordered: true }
+  ranked_by_point => !meta.map { key_type: point  value_type: text  ordered: true }
   loose_by_point  => { point => text }
   rankings  => set<ranked>
   groupings => set<loose>

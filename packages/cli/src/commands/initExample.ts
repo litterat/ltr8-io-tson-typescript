@@ -12,16 +12,16 @@
  * handed to `write()`, this work package's own "own writer, not string concatenation" requirement
  * for anything this CLI emits as TSON.
  *
- * `person.tn`'s `!!meta`/`!!import` reference meta.tn/core.tn by the *exact* canonical id the
- * bundled copies this CLI embeds declare (read back via `idDirective.ts`'s own `readIdDirective`
- * rather than hand-copied), so `tson validate --schema <dir>/person.tn --root person
+ * `person.tn`'s `!!import` references core.tn by the *exact* canonical id the bundled copy this CLI
+ * embeds declares (read back via `idDirective.ts`'s own `readIdDirective` rather than hand-copied),
+ * so `tson validate --schema <dir>/person.tn --root person
  * <dir>/person-data.tn` resolves against this CLI's own bootstrapped standard library
  * (`../stdlib.ts`) with nothing further to configure.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomNode, recordNode, write, type Value } from '@ltr8/tson';
-import { CORE_TN, META_TN } from '@ltr8/tson/stdlib';
+import { CORE_TN } from '@ltr8/tson/stdlib';
 import { readIdDirective } from '../idDirective.js';
 
 const PERSON_SCHEMA_ID = 'https://example.com/tson-cli/examples/person.tn';
@@ -37,13 +37,11 @@ function idOf(schemaText: string, label: string): string {
 }
 
 function personSchemaText(): string {
-  const metaId = idOf(META_TN, 'meta.tn');
   const coreId = idOf(CORE_TN, 'core.tn');
   return `!!id:"${PERSON_SCHEMA_ID}"
-!!meta:"${metaId}"
 !!import:"${coreId}"
 @doc:"An example schema for the tson CLI's own init-example command."
-{
+!schema {
   person => {
     name:   text
     age:    uint8

@@ -32,7 +32,6 @@ import { TsonParseError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { adjacentTo, type TokenForm } from '../lexer/token.js';
-import { tryParseNumber } from '../base/numberGrammar.js';
 import type { Annotation, DataValue, TokenValue } from '../ast/value.js';
 import type { Declaration, SchemaDocument, SchemaMap } from '../ast/schema/document.js';
 import type {
@@ -51,19 +50,19 @@ import type {
   ConstructionDef,
   RecordDef,
   ReferenceTypeDef,
+  SchemaMapDef,
   StructuralTypeDef,
   TypeDef,
 } from '../ast/schema/typedef.js';
 import type {
-  ArrayRef,
-  ChoiceRef,
+  ArrayExpr,
+  ChoiceExpr,
   ElementType,
-  GenericRef,
-  MapRef,
-  SimpleRef,
-  TupleRef,
+  MapExpr,
+  Reference,
+  TupleExpr,
   TypeArg,
-  TypeRef,
+  TypeExpr,
 } from '../ast/schema/typeref.js';
 import {
   advance,
@@ -77,14 +76,21 @@ import {
   mismatch,
   parseError,
   nested,
-  parseNamedDirective,
-  peekDirectiveName,
   peekSecond,
   peekToken,
   tokenFormOf,
 } from './cursor.js';
 import type { NestingLimitOptions } from '../core/limits.js';
 import { parseAnnotationList, parseCoreValue } from './dataValueGrammar.js';
+import {
+  marksSibling,
+  parseHeader,
+  parseTypeRefName,
+  requireQualifiedName,
+  siblingReference,
+} from '../stream/dataStream.js';
+import { isQualifiedName } from '../atom/referenceGrammar.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
 
 /**
  * Parses a whole schema document (§2.1-§2.2, §12.1) from `input`, fail-fast: the first syntax
@@ -100,37 +106,25 @@ export function* parseSchemaDocument(
   return yield* parseDocumentBody(state);
 }
 
+/**
+ * The kernel root's `schema`, the tag of a schema document's root and of a schema map nested as an
+ * entry, and its target by path (§2.1, §4.1). Matched as a spelling: which grammar the payload takes
+ * is settled before any name is looked up, so no declaration of the document can capture it.
+ */
+const SCHEMA_TAG = 'schema';
+const SCHEMA_TARGET = 'meta.schema';
+
+/** What one parse threads through its declarations: the document's one declaration map, and the path prefix of the map being read. */
+interface SchemaParse {
+  readonly declarations: Map<string, Declaration>;
+  /** The path of the schema map whose members are being read, with its trailing dot; `''` at the root. */
+  prefix: string;
+}
+
 function* parseDocumentBody(state: CursorState): Task<SchemaDocument> {
-  let id: string | undefined;
-  if ((yield* check(state, 'directive-token')) && (yield* peekDirectiveName(state)) === 'id') {
-    id = yield* parseNamedDirective(state, 'id');
-  }
-
-  if (!(yield* check(state, 'directive-token')) || (yield* peekDirectiveName(state)) !== 'meta') {
-    const here = yield* peekToken(state);
-    throw parseError(
-      here,
-      "expected '!!meta' (a schema document requires exactly one, immediately after '!!id' if present)",
-    );
-  }
-  const meta = yield* parseNamedDirective(state, 'meta');
-
-  const imports: string[] = [];
-  while (
-    (yield* check(state, 'directive-token')) &&
-    (yield* peekDirectiveName(state)) === 'import'
-  ) {
-    imports.push(yield* parseNamedDirective(state, 'import'));
-  }
-  if (yield* check(state, 'directive-token')) {
-    const name = yield* peekDirectiveName(state);
-    const here = yield* peekToken(state);
-    throw parseError(
-      here,
-      `directive '!!${name ?? describe(here)}' is not permitted here (expected '!!import' or ` +
-        "the schema map's opening '{')",
-    );
-  }
+  // §2.2's header is the data grammar's, one production for both kinds of document. What differs is
+  // the verdict, which is this parser's: a schema document's root is tagged `!schema`.
+  const { id, imports } = yield* parseHeader(state);
 
   const body = yield* parseSchemaMap(state);
 
@@ -138,13 +132,49 @@ function* parseDocumentBody(state: CursorState): Task<SchemaDocument> {
     const here = yield* peekToken(state);
     throw parseError(here, `unexpected content after the schema map: ${describe(here)}`);
   }
-  return { ...(id !== undefined ? { id } : {}), meta, imports, body };
+  return { ...(id !== undefined ? { id } : {}), imports, body };
 }
 
 // ── Schema Map (§2.1, §12.1) ────────────────────────────────────────────
 
 function* parseSchemaMap(state: CursorState): Task<SchemaMap> {
   const annotations = yield* parseAnnotationList(state);
+  yield* expectSchemaTag(state);
+  const parse: SchemaParse = { declarations: new Map<string, Declaration>(), prefix: '' };
+  yield* parseMembers(state, parse);
+  return { annotations, declarations: parse.declarations };
+}
+
+/**
+ * The root's `!schema` tag ([TSON-DATA] §2.2): what makes the document a schema. A document without it
+ * is data, and handing one to the schema parser is a syntax error naming the rule.
+ */
+function* expectSchemaTag(state: CursorState): Task<void> {
+  if (!(yield* check(state, 'bang'))) {
+    const here = yield* peekToken(state);
+    throw parseError(
+      here,
+      `a schema document's root is tagged '!${SCHEMA_TAG}' ([TSON-DATA] §2.2); this document's root ` +
+        'is not, which makes it a data document',
+    );
+  }
+  const here = yield* peekToken(state);
+  const name = yield* parseTypeRefName(state);
+  if (name !== SCHEMA_TAG) {
+    throw parseError(
+      here,
+      `a schema document's root is tagged '!${SCHEMA_TAG}' ([TSON-DATA] §2.2), found '!${name}'`,
+    );
+  }
+}
+
+/**
+ * A schema map's braced members, from its opening `'{'` to its closing `'}'`, each put into the
+ * document's one declaration map under the current prefix plus its own name: the root's under their
+ * names, a nested map's under their paths ({@link SchemaMapDef}). Returns the members' own names in the
+ * order written.
+ */
+function* parseMembers(state: CursorState, parse: SchemaParse): Task<[string, ...string[]]> {
   yield* expect(state, 'lbrace', "a schema map's opening '{'");
   if (yield* check(state, 'rbrace')) {
     const here = yield* peekToken(state);
@@ -153,29 +183,34 @@ function* parseSchemaMap(state: CursorState): Task<SchemaMap> {
       "a schema map requires at least one declaration; '{}' is not permitted here (§2.1)",
     );
   }
-  const declarations = new Map<string, Declaration>();
-  const first = yield* parseDeclaration(state);
-  declarations.set(first.name, first);
+  const prefix = parse.prefix;
+  const first = yield* parseDeclaration(state, parse);
+  const members: [string, ...string[]] = [first.name.slice(prefix.length)];
+  parse.declarations.set(first.name, first);
   while (yield* consumeSeparatorOrCloseCheck(state, 'rbrace')) {
-    const next = yield* parseDeclaration(state);
-    declarations.set(next.name, next);
+    const next = yield* parseDeclaration(state, parse);
+    parse.declarations.set(next.name, next);
+    members.push(next.name.slice(prefix.length));
   }
   yield* expect(state, 'rbrace', "a schema map's closing '}'");
-  return { annotations, declarations };
+  return members;
 }
 
-function* parseDeclaration(state: CursorState): Task<Declaration> {
+function* parseDeclaration(state: CursorState, parse: SchemaParse): Task<Declaration> {
   const nameAnnotations = yield* parseAnnotationList(state);
   // Inlines `expectTypeName` (rather than calling it) so this site alone keeps the name token's
   // own `.start` -- the declaration's `position` (`ast/schema/document.ts`'s own note on why).
   const nameToken = yield* expect(state, 'unquoted-token', 'a declaration name');
-  rejectNumericTypeName(nameToken.text, nameToken.start);
-  const name = nameToken.text;
+  requireIdentifierName(nameToken.text, nameToken.start);
+  const prefix = parse.prefix;
+  const name = prefix + nameToken.text;
   yield* expect(state, 'map-arrow-token', "a declaration's '=>'");
   const typeDefAnnotations = yield* parseAnnotationList(state);
   const mark = yield* parseDefinitionMarkOpt(state);
-  const parameterTypes = new Map<string, TypeRef>();
-  const typeDef = yield* parseTypeDef(state, parameterTypes);
+  const parameterTypes = new Map<string, TypeExpr>();
+  parse.prefix = `${name}.`;
+  const typeDef = yield* parseTypeDef(state, parameterTypes, parse);
+  parse.prefix = prefix;
   return {
     nameAnnotations,
     name,
@@ -207,14 +242,18 @@ function* parseDefinitionMarkOpt(state: CursorState): Task<'abstract' | 'final' 
 
 // ── Type Definitions (§5, §12.1) ────────────────────────────────────────
 
-function* parseTypeDef(state: CursorState, parameterTypes: Map<string, TypeRef>): Task<TypeDef> {
+function* parseTypeDef(
+  state: CursorState,
+  parameterTypes: Map<string, TypeExpr>,
+  parse: SchemaParse,
+): Task<TypeDef> {
   // The parameter list comes first, so one token then decides the alternative: `!` with no
   // parameters is an instance or an atom refinement, `!` with parameters an instance-template
   // (§12.1). `<` only ever starts a parameter list, so consuming it costs no lookahead.
   const typeParams = yield* parseTypeParamsOpt(state, parameterTypes);
 
   if (yield* check(state, 'bang')) {
-    return yield* parseAtomRefinementOrInstance(state, typeParams);
+    return yield* parseAtomRefinementOrInstance(state, typeParams, parse);
   }
   if (yield* check(state, 'tilde')) {
     // §12.1: "there is no constructor marker: an entry is a constructor by being IS-A `top`
@@ -237,7 +276,7 @@ function* parseTypeDef(state: CursorState, parameterTypes: Map<string, TypeRef>)
     return {
       kind: 'referenceTypeDef',
       typeParams,
-      ref: yield* parseTypeRef(state),
+      ref: yield* parseTypeExpr(state),
     } satisfies ReferenceTypeDef;
   }
   if (yield* check(state, 'lbracket')) {
@@ -299,8 +338,14 @@ function* braceTypeDef(state: CursorState, typeParams: readonly string[]): Task<
 /** The dispatch decision itself, with the `'{'` already consumed -- see {@link braceTypeDef}. */
 function* braceOpensMap(state: CursorState): Task<boolean> {
   if (!(yield* check(state, 'unquoted-token'))) return false;
+  const first = yield* peekToken(state);
   const second = yield* peekSecond(state);
-  return second.type === 'map-arrow-token' || second.type === 'less-than';
+  // A sibling reference is a map's key like any reference: `{kind! => V}` (§12.2).
+  return (
+    second.type === 'map-arrow-token' ||
+    second.type === 'less-than' ||
+    (second.type === 'bang' && adjacentTo(first, second))
+  );
 }
 
 /** Everywhere except a type-def position, `'{'` opens the map sugar and nothing else (§5.2). */
@@ -315,9 +360,15 @@ function* requireMapBrace(state: CursorState): Task<void> {
   }
 }
 
+/**
+ * `"!" qualified-name` and what follows it: a nested schema map (`"!schema" ws schema-map`), an atom
+ * refinement (`^`) or a constructor application (a core-value). The `!` is adjacent to the name, which
+ * is a qualified name (§3.2); a tag is `"!" qualified-name` and never a reference to a field.
+ */
 function* parseAtomRefinementOrInstance(
   state: CursorState,
   typeParams: readonly string[],
+  parse: SchemaParse,
 ): Task<TypeDef> {
   const bang = yield* expect(
     state,
@@ -333,8 +384,29 @@ function* parseAtomRefinementOrInstance(
     throw parseError(here, "'!' must be immediately adjacent to the type name (no whitespace)");
   }
   yield* advance(state);
-  rejectNumericTypeName(name.text, name.start);
+  requireQualifiedName(name, 'type', '§12.1');
   const target = name.text;
+  const afterName = yield* peekToken(state);
+  if (afterName.type === 'bang' && adjacentTo(name, afterName)) {
+    throw parseError(
+      afterName,
+      `'!${target}!' marks a type's name as a sibling reference, and a tag names a type ` +
+        "([TSON-DATA] §7.4): a tag is '!' and a qualified name, never a reference to a field",
+    );
+  }
+
+  // A nested schema map is tagged `!schema`, the kernel root's alias the root's tag names, or by
+  // its target's path, `!meta.schema`, as resolved output writes it: one grammar for both.
+  if ((target === SCHEMA_TAG || target === SCHEMA_TARGET) && (yield* check(state, 'lbrace'))) {
+    if (typeParams.length > 0) {
+      throw parseError(
+        afterName,
+        `'!${SCHEMA_TAG} { ... }' is a schema map nested as an entry, a value, and takes no type parameters`,
+      );
+    }
+    const members = yield* parseMembers(state, parse);
+    return { kind: 'schemaMapDef', members } satisfies SchemaMapDef;
+  }
 
   if (yield* check(state, 'caret')) {
     // §12.1 gives `atom-refinement` no parameter list: a refinement of an atom instance has no
@@ -403,9 +475,9 @@ function* parseAtomRefinementOrInstance(
  */
 function* parseConstructionDefContinuation(
   state: CursorState,
-  first: TypeRef,
+  first: Reference,
 ): Task<ConstructionDef> {
-  const supertypes: TypeRef[] = [first];
+  const supertypes: Reference[] = [first];
   let body: RecordDef | undefined;
   while (yield* check(state, 'ampersand')) {
     yield* advance(state);
@@ -435,7 +507,7 @@ function* parseConstructionDefContinuation(
   }
   return {
     kind: 'constructionDef',
-    supertypes: supertypes as [TypeRef, ...TypeRef[]],
+    supertypes: supertypes as [Reference, ...Reference[]],
     ...(body !== undefined ? { body } : {}),
     ...(removal !== undefined ? { removal } : {}),
   } satisfies ConstructionDef;
@@ -498,7 +570,7 @@ function* parseFieldDef(state: CursorState, annotations: readonly Annotation[]):
   if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
     modifier = yield* parseFieldModifier(state);
   } else {
-    const ref = yield* parseTypeRef(state);
+    const ref = yield* parseTypeExpr(state);
     const voidable = yield* consumeAdjacentQuestion(state);
     type = { typeRef: ref, voidable };
     if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
@@ -675,7 +747,7 @@ function* parseGroupMember(state: CursorState): Task<GroupMember> {
   // Optional once the member's option is chosen: the option, not the record, is what the mark is about.
   const omittable = yield* consumeAdjacentQuestion(state);
   yield* expect(state, 'colon', "a field group member's ':'");
-  const typeRef = yield* parseTypeRef(state);
+  const typeRef = yield* parseTypeExpr(state);
   const voidable = yield* consumeAdjacentQuestion(state);
   if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
     // §5.11: a member's presence is the group's and a group never injects, so `~`, `=` and `=?`
@@ -698,7 +770,7 @@ function* parseGroupMember(state: CursorState): Task<GroupMember> {
  * and the grammar's answer (hoist it to its own declaration, reference it by name) is a
  * one-line fix an author cannot guess from a token-level complaint.
  */
-function* parseTypeRef(state: CursorState): Task<TypeRef> {
+function* parseTypeExpr(state: CursorState): Task<TypeExpr> {
   // Every cycle in this grammar passes through here: a choice's variants, a bracket's element
   // types, a map's key and value, and a generic's type arguments all come back to `parseTypeRef`.
   // One guard at this point therefore bounds the whole type-expression grammar (§9.1), where
@@ -725,31 +797,50 @@ function* parseTypeRef(state: CursorState): Task<TypeRef> {
   return yield* parseTypeRefHead(state);
 }
 
-/** `type-name ["<" type-args ">"]` -- the type-name-based tail shared by every type-ref position and by refinement/construction heads. */
-function* parseTypeRefHead(state: CursorState): Task<SimpleRef | GenericRef> {
-  const name = yield* expectTypeName(state, 'a type reference');
+/**
+ * `sibling-ref / qualified-name ["<" type-args ">"]` -- the name-based tail shared by every type-expr
+ * position and by refinement/construction heads. One token of lookahead after the name picks the
+ * alternative: an adjacent `!` a sibling reference, an adjacent `<` an application, neither a bare
+ * name. Where a sibling reference may stand is §5.2's position rule, stated by the desugar phase and
+ * never by the parser.
+ */
+function* parseTypeRefHead(state: CursorState): Task<Reference> {
+  const head = yield* expect(state, 'unquoted-token', 'a type reference');
+  if (yield* marksSibling(state, head)) {
+    const sibling = yield* siblingReference(state, head);
+    return { kind: 'siblingRef', field: sibling.field };
+  }
+  requireQualifiedName(head, 'type', '§12.1');
+  const name = head.text;
   if (yield* check(state, 'less-than')) {
+    const less = yield* peekToken(state);
+    if (!adjacentTo(head, less)) {
+      throw parseError(
+        less,
+        `'<' applies '${name}' only adjacent to it (§12.3): write '${name}<...>' with no whitespace before '<'`,
+      );
+    }
     yield* advance(state);
     const args = yield* parseTypeArgs(state);
     yield* expect(state, 'greater-than', "a type argument list's closing '>'");
-    return { kind: 'genericRef', name, args };
+    return { kind: 'applicationRef', name, args };
   }
-  return { kind: 'simpleRef', name };
+  return { kind: 'nameRef', name };
 }
 
 /**
- * `supertype-ref = type-name [ws "<" type-args ">"]` (§12.1, §5.8) -- a composition/subtraction
- * operand: the same shape {@link parseTypeRefHead} builds, named separately so every call site
- * that must not admit a paren/bracket/map operand says so.
+ * `supertype-ref = type-ref` (§12.1, §5.8) -- a composition/subtraction operand: the same shape
+ * {@link parseTypeRefHead} builds, named separately so every call site that must not admit a
+ * paren/bracket/map operand says so.
  */
-function* parseSupertypeRef(state: CursorState): Task<SimpleRef | GenericRef> {
+function* parseSupertypeRef(state: CursorState): Task<Reference> {
   return yield* parseTypeRefHead(state);
 }
 
-function* parseChoiceRef(state: CursorState): Task<ChoiceRef> {
+function* parseChoiceRef(state: CursorState): Task<ChoiceExpr> {
   const start = (yield* peekToken(state)).start;
   yield* expect(state, 'lparen', "a choice type's opening '('");
-  const variants: TypeRef[] = [yield* parseTypeRef(state)];
+  const variants: TypeExpr[] = [yield* parseTypeExpr(state)];
   if (!(yield* check(state, 'pipe'))) {
     throw new TsonParseError(
       "a choice type requires at least two variants separated by '|' (§5.4)",
@@ -758,10 +849,10 @@ function* parseChoiceRef(state: CursorState): Task<ChoiceRef> {
   }
   while (yield* check(state, 'pipe')) {
     yield* advance(state);
-    variants.push(yield* parseTypeRef(state));
+    variants.push(yield* parseTypeExpr(state));
   }
   yield* expect(state, 'rparen', "a choice type's closing ')'");
-  return { kind: 'choiceRef', variants: variants as [TypeRef, TypeRef, ...TypeRef[]] };
+  return { kind: 'choiceExpr', variants: variants as [TypeExpr, TypeExpr, ...TypeExpr[]] };
 }
 
 /**
@@ -769,14 +860,14 @@ function* parseChoiceRef(state: CursorState): Task<ChoiceRef> {
  * with an optional size specifier is an {@link ArrayRef}; two or more are a {@link TupleRef}.
  * Arity is all that distinguishes them, which is why both alternatives share a first element.
  */
-function* parseBracket(state: CursorState): Task<ArrayRef | TupleRef> {
+function* parseBracket(state: CursorState): Task<ArrayExpr | TupleExpr> {
   yield* expect(state, 'lbracket', "an array or tuple type's opening '['");
   const first = yield* parseElementType(state);
   if (yield* check(state, 'semicolon')) {
     yield* advance(state);
     const size = yield* parseSizeSpec(state, 'rbracket');
     yield* expect(state, 'rbracket', "an array type's closing ']'");
-    return { kind: 'arrayRef', elementType: first, size };
+    return { kind: 'arrayExpr', elementType: first, size };
   }
   const elements: ElementType[] = [first];
   while (yield* consumeSeparatorOrCloseCheck(state, 'rbracket')) {
@@ -784,19 +875,19 @@ function* parseBracket(state: CursorState): Task<ArrayRef | TupleRef> {
   }
   yield* expect(state, 'rbracket', "an array or tuple type's closing ']'");
   return elements.length === 1
-    ? { kind: 'arrayRef', elementType: first }
-    : { kind: 'tupleRef', elementTypes: elements as [ElementType, ElementType, ...ElementType[]] };
+    ? { kind: 'arrayExpr', elementType: first }
+    : { kind: 'tupleExpr', elementTypes: elements as [ElementType, ElementType, ...ElementType[]] };
 }
 
 /** `map-type` (§12.1) including its opening brace -- {@link braceTypeDef} reaches the body directly, having consumed one already. */
-function* parseMap(state: CursorState): Task<MapRef> {
+function* parseMap(state: CursorState): Task<MapExpr> {
   yield* expect(state, 'lbrace', "a map type's opening '{'");
   yield* requireMapBrace(state);
   return yield* parseMapBody(state);
 }
 
-/** `map-key = type-name ["<" type-args ">"]` (§12.1) -- a plain reference, optionally carrying type arguments, never a bracket or paren form. */
-function* parseMapKey(state: CursorState): Task<TypeRef> {
+/** `map-key = type-ref` (§12.1) -- a plain reference, optionally carrying type arguments, never a bracket or paren form. */
+function* parseMapKey(state: CursorState): Task<Reference> {
   const key = yield* parseTypeRefHead(state);
   yield* rejectMapQuestion(state, 'key');
   return key;
@@ -839,6 +930,12 @@ function* parseTypeArgs(state: CursorState): Task<[TypeArg, ...TypeArg[]]> {
  * -- §12.1's own prose defers that classification to the semantic layer, which has the applied
  * signature's parameter kinds to consult.
  */
+function* tokenMarksSibling(state: CursorState): Task<boolean> {
+  const head = yield* peekToken(state);
+  const next = yield* peekSecond(state);
+  return next.type === 'bang' && adjacentTo(head, next);
+}
+
 function* parseTypeArg(state: CursorState): Task<TypeArg> {
   const t = yield* peekToken(state);
   if (t.type === 'single-line-token' || t.type === 'multi-line-token') {
@@ -846,11 +943,20 @@ function* parseTypeArg(state: CursorState): Task<TypeArg> {
     return { kind: 'value', value: { kind: 'token', text: t.text, form: tokenFormOf(t.type) } };
   }
   if (t.type === 'unquoted-token') {
-    if (tryParseNumber(t.text) !== undefined) {
+    // A token that is no qualified name (a number) is unambiguously a value; one that is stays a
+    // reference until the applied signature's parameter kinds classify it (§5.10).
+    if (!isQualifiedName(t.text) && !(yield* tokenMarksSibling(state))) {
       yield* advance(state);
       return { kind: 'value', value: { kind: 'token', text: t.text, form: 'unquoted' } };
     }
-    return { kind: 'ref', ref: yield* parseTypeRefHead(state) };
+    const reference = yield* parseTypeRefHead(state);
+    if (reference.kind === 'siblingRef') {
+      throw parseError(
+        t,
+        `a sibling reference ('${reference.field}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not at a type argument`,
+      );
+    }
+    return { kind: 'ref', ref: reference };
   }
   if (t.type === 'lparen') {
     return { kind: 'ref', ref: yield* parseChoiceRef(state) };
@@ -870,7 +976,7 @@ function* parseTypeArg(state: CursorState): Task<TypeArg> {
 // ── Declaration-Level Container Forms (§5.3, §12.1) ─────────────────────
 
 /** `map-type` past its opening `'{'` (§12.1): one `key => value` entry, an optional size specifier after `';'`, and the closing brace. */
-function* parseMapBody(state: CursorState): Task<MapRef> {
+function* parseMapBody(state: CursorState): Task<MapExpr> {
   const key = yield* parseMapKey(state);
   yield* expect(state, 'map-arrow-token', "a map type's '=>'");
   const value = yield* parseElementType(state);
@@ -882,16 +988,16 @@ function* parseMapBody(state: CursorState): Task<MapRef> {
   yield* requireMapClose(state);
   yield* expect(state, 'rbrace', "a map type's closing '}'");
   return {
-    kind: 'mapRef',
+    kind: 'mapExpr',
     keyType: key,
     valueType: value,
     ...(size !== undefined ? { size } : {}),
   };
 }
 
-/** `element-type = type-ref ["?"]` (§12.1). Nesting needs no case of its own: a bracket or map form *is* a type-ref. */
+/** `element-type = type-expr ["?"]` (§12.1). Nesting needs no case of its own: a bracket or map form *is* a type-expr. */
 function* parseElementType(state: CursorState): Task<ElementType> {
-  const ref = yield* parseTypeRef(state);
+  const ref = yield* parseTypeExpr(state);
   return { typeRef: ref, voidable: yield* consumeAdjacentQuestion(state) };
 }
 
@@ -924,7 +1030,7 @@ function* expectSizeBound(state: CursorState): Task<string> {
  * written type is collected into `written` for the declaration being parsed, since it narrows what
  * resolution derives rather than shaping the type-def.
  */
-function* parseTypeParamsOpt(state: CursorState, written: Map<string, TypeRef>): Task<string[]> {
+function* parseTypeParamsOpt(state: CursorState, written: Map<string, TypeExpr>): Task<string[]> {
   if (!(yield* check(state, 'less-than'))) {
     return [];
   }
@@ -937,27 +1043,34 @@ function* parseTypeParamsOpt(state: CursorState, written: Map<string, TypeRef>):
   return params;
 }
 
-function* parseTypeParam(state: CursorState, written: Map<string, TypeRef>): Task<string> {
+function* parseTypeParam(state: CursorState, written: Map<string, TypeExpr>): Task<string> {
   const name = yield* expectTypeName(state, 'a type parameter');
   if (yield* check(state, 'colon')) {
     yield* advance(state);
-    written.set(name, yield* parseTypeRef(state));
+    written.set(name, yield* parseTypeExpr(state));
   }
   return name;
 }
 
-/** `type-name = unquoted-token` (§12.1), with the added restriction that its text MUST NOT match [TSON-DATA] §7.6's `number` production -- "numbers are not declarable names" (`param-name` shares the rule). */
+/**
+ * `type-name = identifier` (§12.1, through the kernel's `meta.type_name` role; `param-name` shares it
+ * verbatim). The token is matched in full against the kernel's `meta.identifier` profile, which
+ * subsumes §12.1's separate "numbers are not declarable names" rule: identifier-Start is `XID_Start`, and
+ * every spelling the number grammar admits begins with a digit, a sign or a dot, all of which sit in
+ * token-Start only so a number can be an unquoted token.
+ */
 function* expectTypeName(state: CursorState, context: string): Task<string> {
   const t = yield* expect(state, 'unquoted-token', context);
-  rejectNumericTypeName(t.text, t.start);
+  requireIdentifierName(t.text, t.start);
   return t.text;
 }
 
-function rejectNumericTypeName(text: string, start: Position): void {
-  if (tryParseNumber(text) !== undefined) {
+function requireIdentifierName(text: string, start: Position): void {
+  if (!isIdentifierText(text)) {
     throw new TsonParseError(
-      `'${text}' is not a valid type name -- names that match the number grammar are not ` +
-        'declarable (§12.1)',
+      `'${text}' is not a valid type name -- a name is an identifier: it starts with an XID_Start ` +
+        "character and continues with XID_Continue or '-', so a name that matches the number grammar " +
+        'is not declarable (§12.1)',
       start,
     );
   }

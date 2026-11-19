@@ -206,11 +206,11 @@ describe('compile', () => {
     expect(io.stdout()).toContain('compiles');
   });
 
-  it('a schema naming an unregistered !!meta does not compile, exit 1', async () => {
+  it('a schema importing an unregistered schema does not compile, exit 1', async () => {
     const file = join(dir, 'bad.tn');
     await writeFile(
       file,
-      '!!id:"https://example.com/bad.tn"\n!!meta:"https://nonexistent.example/meta.tn"\n{ foo => bar }\n',
+      '!!id:"https://example.com/bad.tn"\n!!import:"https://nonexistent.example/meta.tn"\n!schema { foo => bar }\n',
       'utf8',
     );
     const io = captureOutput();
@@ -827,9 +827,8 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
 describe('strip', () => {
   const SCHEMA = [
     '!!id:"https://example.test/thing-1.tn"',
-    '!!meta:"https://tson.io/2026/39/m/meta.tn"',
     '!!import:"https://tson.io/2026/39/m/core.tn"',
-    '{',
+    '!schema {',
     '  @doc:"A thing."',
     '  thing => int32',
     '}',
@@ -842,7 +841,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!meta:"38/meta"\n!!import:"38/core"\n{\nthing => int32\n}\n');
+    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\nthing => int32\n}\n');
     expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
   });
 
@@ -852,9 +851,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', '--keep-docs', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe(
-      '!!meta:"38/meta"\n!!import:"38/core"\n{\n@doc:"A thing." thing => int32\n}\n',
-    );
+    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\n@doc:"A thing." thing => int32\n}\n');
   });
 
   it('an unknown option, a missing file argument and a second file are usage errors, exit 2', async () => {
@@ -870,7 +867,11 @@ describe('strip', () => {
 
   it('a malformed schema is rejected where it breaks, as file:line:col: message, exit 1', async () => {
     const file = join(dir, 'broken.tn');
-    await writeFile(file, '!!meta:"https://tson.io/2026/39/m/meta.tn"\n{ thing => }\n', 'utf8');
+    await writeFile(
+      file,
+      '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n',
+      'utf8',
+    );
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.INVALID);

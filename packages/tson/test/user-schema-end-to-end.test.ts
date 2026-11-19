@@ -43,9 +43,8 @@ import { entry } from './model-fixtures.js';
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/core.tn"
-{
+!schema {
   reading => {
     id: uuid
     label: non_empty_text
@@ -108,6 +107,8 @@ function fieldTypeName(typeName: string, field: string): string {
   if (record === undefined) throw new Error(`'${typeName}' is not a record in the linked schema`);
   const declared = record.fields.entries.get(field);
   if (declared === undefined) throw new Error(`'${typeName}' declares no field '${field}'`);
+  if (declared.type.kind === 'sibling')
+    throw new Error(`'${typeName}.${field}' is a dependent field`);
   return declared.type.name;
 }
 
@@ -210,54 +211,64 @@ const EXPECTED_TREE = {
 
 // ── 1. The chain ─────────────────────────────────────────────────────────────────────────────
 
-describe('the governing chain is three schemas deep', () => {
-  it('links the user schema over core.tn, which is governed by meta.tn, which is governed by meta-kernel.tn', () => {
+describe('the import chain is three schemas deep', () => {
+  it('links the user schema over core.tn, which imports the libraries, which import the kernel (§2.2.3, §9)', () => {
     const core = resolvedBundled('core');
-    const meta = resolvedBundled('meta');
-    const kernel = resolvedBundled('meta-kernel');
+    const numeric = resolvedBundled('numeric');
+    const kernel = resolvedBundled('meta');
 
     expect(linked.imports).toEqual([core.id.split('?')[0]]);
-    expect(linked.meta).toBe(meta.id.split('?')[0]);
-    expect(core.meta).toBe(meta.id);
-    expect(meta.imports).toEqual([kernel.id]);
-    expect(meta.meta).toBe(kernel.id);
-    expect(kernel.meta).toBe(kernel.id.split('?')[0]); // the one deliberate circularity (§2.2)
+    expect(core.imports.map((id) => id.split('?')[0])).toEqual(
+      ['numeric', 'temporal', 'net'].map((library) => `https://tson.io/2026/39/m/${library}.tn`),
+    );
+    expect(numeric.imports.map((id) => id.split('?')[0])).toEqual([kernel.id.split('?')[0]]);
+    expect(kernel.imports).toEqual([]); // the kernel imports nothing (§3.4)
   });
 
   it("merges core.tn's whole namespace into the user schema's own (§2.2.3), origins recorded per entry", () => {
     const core = resolvedBundled('core');
     for (const name of core.entries.keys()) {
       expect(linked.entries.has(name)).toBe(true);
-      expect(linked.origins.get(name)).toBe(core.id);
+      expect(linked.origins.get(name)).toBe(core.origins.get(name));
     }
     expect(linked.origins.get('reading')).toBe('catalog.tn'); // §2.2.1's canonical identity
   });
 
   it('resolves a core type through a constructor two schemas further down', () => {
-    // core.tn spells `int32 => !integer ^ { size: { bits: 32  signed: true } }`, a refinement of
-    // its own `integer => !integer_type {}`, whose constructor is meta-kernel.tn's `integer_type`.
+    // numeric.tn spells `int32 => !integer ^ { size: { bits: 32  signed: true } }`, a refinement of
+    // the kernel's `integer => !numeric.integer_type {}`.
     const int32 = linked.entries.get('int32');
     if (int32 === undefined) throw new Error('unreachable');
-    const meta = resolvedBundled('meta');
-    const kernel = resolvedBundled('meta-kernel');
+    const kernel = resolvedBundled('meta');
     expect(entryKind(int32)).toBe('ATOM');
     expect(int32).toMatchObject(
       entry({ kind: 'integer_type', size: { bits: 32n, signed: true } }, ['integer']),
     );
-    // `boolean => !enum [true false]` -- the kernel's `enum` constructor, applied in core.
+    // `boolean => !enum [true false]` -- the kernel's `enum` constructor, applied there.
     expect(linked.entries.get('boolean')).toMatchObject(
-      entry({ kind: 'enum', nameType: 'identifier', members: ['true', 'false'] }),
+      entry({ kind: 'enum', nameType: 'meta.identifier', members: ['true', 'false'] }),
     );
-    // The two layers the constructors actually come from: `integer_type` and `enum` are the
-    // kernel's, `uuid_type` and `datetime_type` are meta's, and the document below is validated
-    // by all of them at once.
-    expect(linked.facts.get('uuid')?.head).toBe('uuid_type');
-    expect(linked.facts.get('datetime')?.head).toBe('datetime_type');
-    for (const constructorName of ['uuid_type', 'datetime_type', 'float_type']) {
-      expect(meta.entries.has(constructorName)).toBe(true);
+    // The layers the constructors actually come from: `numeric.integer_type`, `unicode.text_type`
+    // and `enum` are the kernel's, `net.uuid_type`, `temporal.datetime_type` and
+    // `numeric.float_type` are the libraries' own, and the document below is validated by all of
+    // them at once.
+    expect(linked.facts.get('uuid')?.head).toBe('net.uuid_type');
+    expect(linked.facts.get('datetime')?.head).toBe('temporal.datetime_type');
+    for (const constructorName of [
+      'net.uuid_type',
+      'temporal.datetime_type',
+      'numeric.float_type',
+    ]) {
+      expect(linked.entries.has(constructorName)).toBe(true);
       expect(kernel.entries.has(constructorName)).toBe(false);
     }
-    for (const constructorName of ['integer_type', 'text_type', 'enum', 'record', 'choice']) {
+    for (const constructorName of [
+      'numeric.integer_type',
+      'unicode.text_type',
+      'enum',
+      'meta.record',
+      'meta.choice',
+    ]) {
       expect(kernel.entries.has(constructorName)).toBe(true);
     }
   });
@@ -321,7 +332,7 @@ describe('a non-conforming document is rejected with a located, named diagnostic
         // `label`'s own declaration inside `reading` -- `compiler/schemaParser.ts` stamps a
         // declaration's position at its name token, and `schemaResolver.ts` now falls back to it
         // whenever a caller supplies no side-table of its own (this end-to-end pipeline does not).
-        schemaPosition: { line: 6, column: 3, offset: 118 },
+        schemaPosition: { line: 5, column: 3, offset: 83 },
       },
       {
         code: 'ATOM_CONSTRAINT_VIOLATION',
@@ -333,7 +344,7 @@ describe('a non-conforming document is rejected with a located, named diagnostic
         expected: '>= -2147483648 and <= 2147483647',
         actual: '99999999999',
         dataPosition: { line: 8, column: 38, offset: 209 },
-        schemaPosition: { line: 15, column: 3, offset: 281 },
+        schemaPosition: { line: 14, column: 3, offset: 246 },
       },
     ]);
   });
