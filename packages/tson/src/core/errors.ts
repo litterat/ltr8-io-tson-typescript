@@ -79,8 +79,8 @@ export class TsonParseError extends TsonPositionedError {
 /**
  * A well-formed document this processor will not handle.
  *
- * Raised by a Class 1 (data-only) path when handed a schema document — a header whose first
- * directive past any `!!id` is `!!meta` (§1.5, §2.2).
+ * Raised by a Class 1 (data-only) path when handed a schema document — one whose root is tagged
+ * `!schema`, read past the root's leading annotations (§1.5, §2.2).
  */
 export class TsonUnsupportedDocumentError extends TsonPositionedError {
   override readonly name = 'TsonUnsupportedDocumentError';
@@ -246,7 +246,7 @@ export class TsonSchemaFetchError extends TsonError {
 
 /**
  * A schema's bytes do not hash to the `?sha256=` pin some reference to it carries (§2.2.1) --
- * whether that reference was fetched, or is a `!!import`/`!!meta` line inside another schema
+ * whether that reference was fetched, or is an `!!import` line inside another schema
  * this process already holds registered (§10.2's "a later pinned reference is verified against
  * the identity's own recorded hash").
  *

@@ -168,6 +168,32 @@ Part 1 §8.2, §9.1; Part 2 §11.5; change log #4, #6, #10, #16, §1's `policy.s
 format:check`, the package's own unit tests, and `npm run smoke:cli`'s policy cases where they do not
 need the kernel. Stage 1 ends when WP1B is merged onto WP1A and the combined gate holds.
 
+### Stage 1 outcome
+
+WP1A (`Revision 39 WP1A` commit) and WP1B merged; the combined gate holds. Class 1 316/316, Class 2
+0/628, 944 discovered; 237 unit tests fail, every one on the kernel or a Stage 2 rule. What Stage 2
+inherits:
+
+- **The schema parser's own copy of the data grammar** (`compiler/cursor.ts`,
+  `compiler/dataValueGrammar.ts`) has no reference, sibling reference or qualified name yet, so a
+  schema payload holding `set<text>` does not parse. WP2A's grammar work covers it; prefer moving the
+  schema parser onto the data stream's productions over a second copy.
+- **The reference value model is `ast/reference.ts`** (an application reference or a sibling
+  reference; a bare name stays a token), because `ast/` and `tree/` may import only `core`, `lexer`
+  and each other. `schema/meta`'s `meta.type_ref` value is WP2A's; unify with this one or state why
+  they differ.
+- **`validate.ts` reads a subject under its first `!!import` only.** A data document's several imports
+  read under one namespace (#8) — WP2A's, with one namespace per schema.
+- **`SCOPE_NOT_ADMITTED`** now means what the reference's code means: `$import` at a JSON value
+  position (Part 3 §3.4). Its TSON-text uses went with the scope push; the JSON reader's are Stage 3's.
+- **Limits:** `tson.processorPolicy.limits.maxWaitDepth` and `.maxAliasChain`, refused with
+  `waitDepthLimitRefusal` and `aliasChainLimitRefusal` (`core/limits.ts`). `link/referenceChain.ts`
+  still compiles through two aliases there (`referenceChainLimitRefusal`,
+  `DEFAULT_MAX_REFERENCE_CHAIN`); delete both when that file becomes the alias chain and takes
+  `maxAliasChain` from the policy.
+- **The three dependent-field refusals** (`writtenBeforeItsSibling`, `writtenWithoutItsSibling`,
+  `siblingNamesNoType`, the reference's `RecordDiagnostics`) are WP2C's.
+
 ## Stage 2: the kernel and one namespace
 
 Three packages, run **in sequence** because they share the schema model, the resolver, the linker and
@@ -451,3 +477,16 @@ a corpus item names the file.
 
 - **§8.1 (Part 2), resolved-output writing.** Carried from Revision 37: whether the reference still
   writes `!array { … }` for a body headed by `set_type` is WP2A's to check.
+- **§5.5 and §1.5 (Part 1), `!regex`.** The library column lists `!regex` as a kernel row a Class 1
+  processor recognises; the reference's built-in vocabulary has no entry for it and no vector tests it.
+  This port matches the reference, so a schemaless `!regex` is an unknown type annotation.
+- **§9.1 (Part 1), a limit wider than the host's integers.** `policy.limit` is an `int64`; a
+  JavaScript processor holds limits as safe integers and caps at 2^53−1, as §9.1's narrower-host rule
+  allows, so a policy report cannot echo a stated limit above that.
+- **§7.4 (Part 1), a sibling reference after a multi-line token.** The token's end position falls on
+  a later line, so adjacency of a following `!` is decided by the reference's special case rather
+  than by the text, which is silent. Ported as the reference runs it.
+- **Corpus, `schemas/parser-sidecar.tn`.** `reference_core` has no member for a sibling reference;
+  no Class 1 vector states one, and the harness reduces one to a reference named `kind!`.
+- **Change log §1, `policy.script_policy`.** A reader of `policy.tn` alone does not connect the record
+  to Part 1 §8.2's "token policy"; a `@doc` sentence would.
