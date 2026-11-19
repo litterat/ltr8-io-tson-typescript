@@ -19,7 +19,7 @@ import { stripSchema, stripSchemaKeepingDocs } from '../src/compiler/strip.js';
 const PIN = `?sha256=${'0123456789abcdef'.repeat(4)}`;
 
 describe('stripSchema', () => {
-  it('drops the !!id, pins and prose (§2.2.1, §3.1) and shortens the spec library', () => {
+  it('drops the !!id, pins and @doc (§2.2.1, §3.1), keeps every other annotation, and shortens the spec library', () => {
     const schema = `!!id:"https://example.test/thing-1.tn${PIN}"
 !!import:"https://tson.io/2026/39/m/core.tn"
 !!import:"https://example.test/shapes-1.tn${PIN}"
@@ -47,12 +47,12 @@ describe('stripSchema', () => {
 !!import:"https://example.test/shapes-1.tn"
 !schema {
 thing => int32
-@deprecated point => { x: float64 y?: float64 ~ 0.0 }
+@title:"Point" @comment:"Kept in step with shapes-1." @deprecated point => { @examples:[1.0 2.5] x: float64 y?: float64 ~ 0.0 }
 }
 `);
   });
 
-  it('keeping docs drops only @comment (§3.1)', () => {
+  it('keeping docs keeps every annotation (§3.1)', () => {
     const schema = `@doc:"Shapes."
 !schema {
   @doc:"A point." @title:"Point" @comment:"Kept in step with shapes-1."
@@ -60,7 +60,7 @@ thing => int32
 }
 `;
     expect(stripSchemaKeepingDocs(schema)).toBe(`@doc:"Shapes." !schema {
-@doc:"A point." @title:"Point" point => { @examples:[1.0 2.5] x: float64 }
+@doc:"A point." @title:"Point" @comment:"Kept in step with shapes-1." point => { @examples:[1.0 2.5] x: float64 }
 }
 `);
   });
@@ -85,7 +85,7 @@ thing => int32
     );
   });
 
-  it('shortens only the six bundled schemas under tson.io/<year>/<revision>/m/ (§2.2.1)', () => {
+  it('shortens only the five libraries a schema builds on under tson.io/<year>/<revision>/m/ (§2.2.1)', () => {
     const schema = `!!import:"https://tson.io/2026/39/m/meta.tn"
 !!import:"https://tson.io/2026/39/m/meta-kernel.tn"
 !!import:"https://tson.io/2026/39/x/core.tn"
@@ -99,7 +99,7 @@ thing => int32
 !!import:"https://tson.io/2026/39/x/core.tn"
 !!import:"https://example.test/2026/39/m/core.tn"
 !!import:"39/net"
-!!import:"39/policy"
+!!import:"https://tson.io/2026/39/m/policy.tn"
 !schema {
 thing => int32
 }
@@ -120,10 +120,10 @@ thing => int32
     ['net', NET_TN],
     ['core', CORE_TN],
     ['policy', POLICY_TN],
-  ])('strips the bundled %s schema to valid syntax with no prose', (_name, source) => {
+  ])('strips the bundled %s schema to valid syntax with no @doc', (_name, source) => {
     const stripped = stripSchema(source);
     expect(stripped.length).toBeLessThan(source.length / 2);
-    for (const marker of ['@doc', '@comment', '@title', '@examples', 'sha256']) {
+    for (const marker of ['@doc', 'sha256']) {
       expect(stripped).not.toContain(marker);
     }
     expect(
@@ -136,9 +136,9 @@ thing => int32
   @doc:"Last." last => { @examples:{ a => 1 } m?: int32 } }
 `;
     expect(stripSchema(schema)).toBe(`!schema {
-pair => <A, B> { first: A second: B }
+@title:"Pair" pair => <A, B> { first: A second: B }
 @deprecated old => int32
-last => { m?: int32 }
+last => { @examples:{ a => 1 } m?: int32 }
 }
 `);
   });
