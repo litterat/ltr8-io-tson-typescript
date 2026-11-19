@@ -5,7 +5,8 @@ import {
   TsonUnsupportedDocumentError,
 } from '../src/core/errors.js';
 import { chunkInput, fromString, runAsync, runSync } from '../src/io/bytes.js';
-import { createDataStream } from '../src/stream/dataStream.js';
+import { createDataStream, requireDataDocument } from '../src/stream/dataStream.js';
+import { referenceText } from '../src/ast/reference.js';
 import type { TsonEvent } from '../src/stream/event.js';
 
 /** Drives an {@link EventSource} to completion over already-complete input. */
@@ -23,7 +24,7 @@ function events(text: string): TsonEvent[] {
 function describeEvent(e: TsonEvent): string {
   switch (e.kind) {
     case 'document-start':
-      return `DocumentStart(${e.id ?? ''}|${e.schema ?? ''})`;
+      return `DocumentStart(${e.id ?? ''}|${e.imports.join(',')})`;
     case 'document-end':
       return 'DocumentEnd';
     case 'record-start':
@@ -48,8 +49,8 @@ function describeEvent(e: TsonEvent): string {
       return 'AnnotationEnd';
     case 'type-ref':
       return `TypeRef(${e.name})`;
-    case 'schema-ref':
-      return `SchemaRef(${e.uri})`;
+    case 'reference':
+      return `Reference(${referenceText(e.reference)})`;
     case 'token':
       return `Token(${e.text},${e.form})`;
     case 'void':
@@ -99,81 +100,169 @@ describe('a data value at the document root (§2.3, §7.4)', () => {
 
 // ── Document header (§2.2) ───────────────────────────────────────────────
 
-describe('the document header (§2.2)', () => {
+describe('the document header (§2.2, §3.3)', () => {
   it('carries an !!id directive, uninterpreted, on DocumentStart', () => {
     const es = events('!!id:"https://example.com/x.tn"\n_');
     const start = es[0];
     expect(start?.kind).toBe('document-start');
-    expect(start).toMatchObject({ id: 'https://example.com/x.tn' });
-    expect((start as { schema?: string }).schema).toBeUndefined();
+    expect(start).toMatchObject({ id: 'https://example.com/x.tn', imports: [] });
   });
 
-  it('carries !!id then !!schema, both uninterpreted, in one DocumentStart', () => {
+  it('carries !!id then !!import, both uninterpreted, in one DocumentStart', () => {
     const es = events(
       '!!id:"https://example.com/orders/1042.tn"\n' +
-        '!!schema:"https://example.com/order.tn"\n' +
+        '!!import:"https://example.com/order.tn"\n' +
         'Alice\n',
     );
     expect(es[0]).toMatchObject({
       kind: 'document-start',
       id: 'https://example.com/orders/1042.tn',
-      schema: 'https://example.com/order.tn',
+      imports: ['https://example.com/order.tn'],
     });
     expect(es[1]).toEqual(expect.objectContaining({ kind: 'token', text: 'Alice' }));
   });
 
-  it('!!schema is legal without a preceding !!id', () => {
-    const es = events('!!schema:"https://example.com/order.tn" Alice');
+  it('carries several !!import directives in header order (§2.2: several imports read under one namespace)', () => {
+    const es = events(
+      '!!import:"https://example.com/a.tn"\n!!import:"https://example.com/b.tn"\nAlice',
+    );
     expect(es[0]).toMatchObject({
-      kind: 'document-start',
-      schema: 'https://example.com/order.tn',
+      imports: ['https://example.com/a.tn', 'https://example.com/b.tn'],
     });
     expect((es[0] as { id?: string }).id).toBeUndefined();
   });
 
-  it('syntax-checks the id/schema argument as a URI (§3.3)', () => {
-    // The shared conformance vector parser/invalid/directive-argument-not-a-uri files this under
-    // category: parser, so the check belongs at this tier and not a later one. Java validates
-    // here too, via its atom-layer UriParser; this port has an atom layer to lean on and no zone
-    // rule against reaching it, so it uses the same RFC 3986 grammar the !uri atom does.
-    expect(() => events('!!schema:"not a uri at all" Alice')).toThrow(TsonParseError);
-  });
-
-  it('preserves a valid id/schema argument raw, uninterpreted', () => {
-    // event.ts documents id/schema as "the raw URI arguments, uninterpreted". Checking that text
-    // is a URI is not interpreting it: nothing is resolved, normalised, or rewritten, and the
-    // event still carries exactly what was written.
-    const es = events('!!schema:"HTTPS://Example.COM/../m.tn" Alice');
+  it('!!import is legal without a preceding !!id', () => {
+    const es = events('!!import:"https://example.com/order.tn" Alice');
     expect(es[0]).toMatchObject({
       kind: 'document-start',
-      schema: 'HTTPS://Example.COM/../m.tn',
+      imports: ['https://example.com/order.tn'],
+    });
+    expect((es[0] as { id?: string }).id).toBeUndefined();
+  });
+
+  it('syntax-checks the id/import argument as a URI (§3.3)', () => {
+    // The shared conformance vector parser/invalid/directive-argument-not-a-uri files this under
+    // category: parser, so the check belongs at this tier and not a later one.
+    expect(() => events('!!import:"not a uri at all" Alice')).toThrow(TsonParseError);
+  });
+
+  it('preserves a valid id/import argument raw, uninterpreted', () => {
+    // Checking that text is a URI is not interpreting it: nothing is resolved, normalised, or
+    // rewritten, and the event still carries exactly what was written.
+    const es = events('!!import:"HTTPS://Example.COM/../m.tn" Alice');
+    expect(es[0]).toMatchObject({
+      kind: 'document-start',
+      imports: ['HTTPS://Example.COM/../m.tn'],
     });
   });
 
-  it('!!meta rejects the document as unsupported, not as malformed (§1.5, §2.2)', () => {
-    expect(() => events('!!meta:"https://example.com/m.tn" { }')).toThrow(
-      TsonUnsupportedDocumentError,
-    );
+  it("a retired '!!meta' or '!!schema' in the header is a parse error naming '!!import' (§2.2, §3.3)", () => {
+    for (const retired of ['meta', 'schema']) {
+      const error = thrownBy(`!!${retired}:"https://example.com/m.tn" { }`);
+      expect(error).toBeInstanceOf(TsonParseError);
+      expect((error as Error).message).toContain('!!import');
+      expect((error as Error).message).toContain(`'!!${retired}'`);
+    }
   });
 
-  it('!!id then !!meta is still rejected as a schema document', () => {
+  it("'!!id' after an '!!import', or twice, is a parse error: it is the header's first directive, once (§2.2)", () => {
     expect(() =>
-      events('!!id:"https://example.com/x.tn"\n!!meta:"https://example.com/m.tn" { }'),
-    ).toThrow(TsonUnsupportedDocumentError);
+      events('!!import:"https://example.com/a.tn"\n!!id:"https://example.com/x.tn"\n_'),
+    ).toThrow(TsonParseError);
+    expect(() =>
+      events('!!id:"https://example.com/x.tn"\n!!id:"https://example.com/y.tn"\n_'),
+    ).toThrow(TsonParseError);
   });
 
   it('a directive name outside its closed positional set is a parse error, not "null" (§3.3)', () => {
-    // Deliberate divergence from the Java reference: when the token after "!!" is not even a
-    // directive-name shape, Java's peekDirectiveName() returns null and the message embeds the
-    // literal string "null". This port names the actual offending token instead.
+    // When the token after "!!" is not even a directive-name shape, the message names the actual
+    // offending token rather than embedding a placeholder.
     const error = thrownBy('!!"x":"y"');
     expect(error).toBeInstanceOf(TsonParseError);
     expect((error as Error).message).not.toContain('null');
     expect((error as Error).message).toContain("the quoted token 'x'");
   });
 
-  it('a directive name that is not "id"/"schema"/"meta" in header position is a parse error', () => {
-    expect(() => events('!!import:"https://example.com/x.tn" Alice')).toThrow(TsonParseError);
+  it('an unknown directive name is a parse error naming the header grammar', () => {
+    const error = thrownBy('!!extend:"https://example.com/x.tn" Alice');
+    expect(error).toBeInstanceOf(TsonParseError);
+    expect((error as Error).message).toContain("'!!extend'");
+  });
+
+  it('a directive past the header is a parse error at every value position (§2.2, §3.3)', () => {
+    for (const text of [
+      '{ a: !!import:"https://example.com/x.tn" 1 }',
+      '{ k => !!import:"https://example.com/x.tn" 1 }',
+      '[ !!import:"https://example.com/x.tn" 1 ]',
+      'Alice !!import:"https://example.com/x.tn"',
+    ]) {
+      const error = thrownBy(text);
+      expect(error).toBeInstanceOf(TsonParseError);
+    }
+    expect((thrownBy('[ !!import:"https://example.com/x.tn" 1 ]') as Error).message).toContain(
+      'only in the document header',
+    );
+  });
+});
+
+describe('classifying a document by its root tag (§2.2)', () => {
+  /** Reads the root's tag without consuming, then drains the stream to its end. */
+  function tagThenEvents(text: string): { tag: string | undefined; shape: string[] } {
+    const source = createDataStream(fromString(text));
+    const tag = runSync(source.rootTag());
+    const list: TsonEvent[] = [];
+    for (;;) {
+      const event = runSync(source.next());
+      list.push(event);
+      if (event.kind === 'document-end') break;
+    }
+    return { tag, shape: list.map(describeEvent) };
+  }
+
+  it("a root tagged '!schema' is a schema document, and nothing was consumed to say so", () => {
+    const { tag, shape: seen } = tagThenEvents('!!id:"https://example.com/s.tn"\n!schema { }');
+    expect(tag).toBe('schema');
+    expect(seen).toEqual(shape('!!id:"https://example.com/s.tn"\n!schema { }'));
+  });
+
+  it("is read past the root's leading annotations, values included (§2.2)", () => {
+    expect(tagThenEvents('@doc:"a schema" @note !schema { }').tag).toBe('schema');
+    expect(tagThenEvents('@doc:{ k: v } !schema { }').tag).toBe('schema');
+  });
+
+  it("never reads the root's value: a schema map's sugar is not data grammar", () => {
+    expect(
+      runSync(createDataStream(fromString('!schema { a => (b | c) & { d: e } }')).rootTag()),
+    ).toBe('schema');
+  });
+
+  it("'!meta.schema' does not classify -- the tag names the kernel's root 'schema' alone", () => {
+    expect(tagThenEvents('!meta.schema { }').tag).toBe('meta.schema');
+  });
+
+  it('an untagged root, and a root of any other tag, are data documents', () => {
+    expect(tagThenEvents('{ a: 1 }').tag).toBeUndefined();
+    expect(tagThenEvents('@doc:"x" { a: 1 }').tag).toBeUndefined();
+    expect(tagThenEvents('!person { a: 1 }').tag).toBe('person');
+    expect(tagThenEvents('_').tag).toBeUndefined();
+  });
+
+  it('requireDataDocument refuses a schema document and passes a data document', () => {
+    const refuse = (text: string): void => {
+      const source = createDataStream(fromString(text));
+      const start = runSync(source.next());
+      runSync(requireDataDocument(source, start.position));
+    };
+    expect(() => {
+      refuse('!schema { }');
+    }).toThrow(TsonUnsupportedDocumentError);
+    expect(() => {
+      refuse('@doc:"x" !schema { }');
+    }).toThrow(TsonUnsupportedDocumentError);
+    expect(() => {
+      refuse('!person { a: 1 }');
+    }).not.toThrow();
   });
 });
 
@@ -503,19 +592,8 @@ describe('arrays (§2.7)', () => {
     expect(() => events('[{a:1}{b:2}]')).toThrow(TsonParseError);
   });
 
-  it('an element may carry its own !!schema directive, scoped to that element alone (§2.7, §3.3)', () => {
-    expect(shape('[ !!schema:"https://example.com/s.tn" 1 2 ]')).toEqual([
-      'DocumentStart(|)',
-      'ArrayStart',
-      'SchemaRef(https://example.com/s.tn)',
-      'Token(1,unquoted)',
-      'Token(2,unquoted)',
-      'ArrayEnd',
-      'DocumentEnd',
-    ]);
-  });
-
-  it('a directive other than !!schema is not permitted at an element position (§3.3)', () => {
+  it('no directive is permitted at an element position, !!schema and !!import alike (§3.3)', () => {
+    expect(() => events('[ !!schema:"https://example.com/s.tn" 1 ]')).toThrow(TsonParseError);
     expect(() => events('[ !!import:"https://example.com/x.tn" 1 ]')).toThrow(TsonParseError);
   });
 });
@@ -798,8 +876,25 @@ describe('naming positions take the identifier grammar (§3.1, §3.2, §7.7)', (
     expect(() => events('@my-note 1')).not.toThrow();
   });
 
-  it("refuses '.', which the profile reserves as a future separator", () => {
-    expect(() => events('!my.type 1')).toThrow(TsonParseError);
+  it("admits a qualified name, segments joined by '.', each an identifier (§3.2, §7.4)", () => {
+    expect(shape('!geo.address { }')).toContain('TypeRef(geo.address)');
+    expect(shape('@atom.ordering:TOTAL 1')).toContain('AnnotationStart(atom.ordering)');
+  });
+
+  it("refuses an empty segment: a leading, trailing or doubled '.' (§7.4)", () => {
+    for (const text of ['!my..type 1', '!.type 1', '!type. 1', '@a..b 1', '@a. 1']) {
+      expect(() => events(text)).toThrow(TsonParseError);
+    }
+  });
+
+  it('refuses a segment that is no identifier, wherever in the name it stands', () => {
+    expect(() => events('!geo.42x 1')).toThrow(/not an identifier/);
+    expect(() => events('@a.42x 1')).toThrow(/not an identifier/);
+  });
+
+  it('refuses a tag that carries an argument list or the sibling mark (§3.2, §7.4)', () => {
+    expect(() => events('!box<text> 1')).toThrow(TsonParseError);
+    expect(() => events('!int32! 1')).toThrow(/sibling/);
   });
 });
 
@@ -868,5 +963,172 @@ describe('the §2.8 brace dispatch reads the separator, never the name (§2.5, �
       'MapEnd',
       'DocumentEnd',
     ]);
+  });
+});
+
+// ── References in data (§4, §7.4, §7.5) ──────────────────────────────────
+
+describe('a reference with arguments is one core value (§7.4)', () => {
+  it('an application at a field value', () => {
+    expect(shape('{ t: set<text> }')).toEqual([
+      'DocumentStart(|)',
+      'RecordStart',
+      'FieldName(t)',
+      'Reference(set<text>)',
+      'RecordEnd',
+      'DocumentEnd',
+    ]);
+  });
+
+  it('whitespace and a comma inside the list are free, and a nested application is a reference of its own', () => {
+    expect(shape('{ t: map< text, list<int32> > }')[3]).toBe('Reference(map<text list<int32>>)');
+    expect(shape('{ t: map<text list<int32>> }')[3]).toBe('Reference(map<text list<int32>>)');
+  });
+
+  it("'>>' is two tokens, so nested lists close one at a time (§7.2.5)", () => {
+    expect(shape('a<b<c<d>>>')).toEqual([
+      'DocumentStart(|)',
+      'Reference(a<b<c<d>>>)',
+      'DocumentEnd',
+    ]);
+  });
+
+  it('a qualified head and a value argument of any token form parse (§7.4)', () => {
+    expect(shape('geo.address<T 201 "a b">')[1]).toBe('Reference(geo.address<T 201 "a b">)');
+  });
+
+  it('is a value wherever a value stands: a root, an element, a map key and a map value', () => {
+    expect(shape('box<text>')[1]).toBe('Reference(box<text>)');
+    expect(shape('[ box<text> pair<a b> ]').slice(2, 4)).toEqual([
+      'Reference(box<text>)',
+      'Reference(pair<a b>)',
+    ]);
+    expect(shape('{ box<text> => 1 }')).toEqual([
+      'DocumentStart(|)',
+      'MapStart',
+      'Reference(box<text>)',
+      'MapArrow',
+      'Token(1,unquoted)',
+      'MapEnd',
+      'DocumentEnd',
+    ]);
+    expect(shape('{ k => box<text> }')[4]).toBe('Reference(box<text>)');
+  });
+
+  it('may carry annotations and a tag like any value', () => {
+    expect(shape('@doc:"x" !meta.alias box<text>')).toEqual([
+      'DocumentStart(|)',
+      'AnnotationStart(doc)',
+      'Token(x,single-line)',
+      'AnnotationEnd',
+      'TypeRef(meta.alias)',
+      'Reference(box<text>)',
+      'DocumentEnd',
+    ]);
+  });
+
+  it('a qualified name without arguments is a token, read as a reference only where a type says so (§7.4)', () => {
+    expect(shape('{ t: set }')[3]).toBe('Token(set,unquoted)');
+  });
+
+  it("'<' must be adjacent to the name: 'box <text>' is a parse error (§7.5)", () => {
+    const error = thrownBy('box <text>');
+    expect(error).toBeInstanceOf(TsonParseError);
+    expect((error as Error).message).toContain('adjacent');
+  });
+
+  it('a quoted token is never a reference (§7.4)', () => {
+    expect(() => events('"box"<text>')).toThrow(/quoted token is never a reference/);
+  });
+
+  it('an unclosed argument list, an empty one, and structure inside one are parse errors', () => {
+    expect(() => events('box<text')).toThrow(TsonParseError);
+    expect(() => events('box<>')).toThrow(/at least one argument/);
+    expect(() => events('box<[a]>')).toThrow(TsonParseError);
+    expect(() => events('box<{ a: 1 }>')).toThrow(TsonParseError);
+  });
+
+  it('a head that is no qualified name takes no argument list', () => {
+    expect(() => events('42x<text>')).toThrow(/no qualified name/);
+  });
+
+  it('an unquoted argument that is no name is a value argument, never refused (§7.4)', () => {
+    expect(shape('pair<201 -5>')[1]).toBe('Reference(pair<201 -5>)');
+  });
+
+  it('survives chunked input at every byte boundary', async () => {
+    const text = '{ t: map< text, list<int32> > q: !x { } }';
+    const expected = shape('{ t: map< text, list<int32> > q: !x { } }');
+    const bytes = new TextEncoder().encode(text);
+    const input = chunkInput();
+    const source = createDataStream(input);
+    const feeding = (async (): Promise<void> => {
+      for (const byte of bytes) {
+        input.push(Uint8Array.of(byte));
+        await Promise.resolve();
+      }
+      input.end();
+    })();
+    const seen: TsonEvent[] = [];
+    for (;;) {
+      const event = await runAsync(source.next(), input);
+      seen.push(event);
+      if (event.kind === 'document-end') break;
+    }
+    await feeding;
+    expect(seen.map(describeEvent)).toEqual(expected);
+  });
+});
+
+describe('a sibling reference is one core value (§2.5, §7.4, §7.5)', () => {
+  it('an unquoted token and an adjacent "!" followed by whitespace', () => {
+    expect(shape('{ value: kind! }')).toEqual([
+      'DocumentStart(|)',
+      'RecordStart',
+      'FieldName(value)',
+      'Reference(kind!)',
+      'RecordEnd',
+      'DocumentEnd',
+    ]);
+  });
+
+  it('the end of the document counts as the following whitespace', () => {
+    expect(shape('kind!')).toEqual(['DocumentStart(|)', 'Reference(kind!)', 'DocumentEnd']);
+    expect(shape('kind!\n')[1]).toBe('Reference(kind!)');
+  });
+
+  it('it stands as an element and as a first map key', () => {
+    expect(shape('[ kind! x ]').slice(2, 4)).toEqual(['Reference(kind!)', 'Token(x,unquoted)']);
+    expect(shape('{ kind! => 1 }')[2]).toBe('Reference(kind!)');
+  });
+
+  it("'!' not followed by whitespace is a parse error: 'a!b', 'kind!}', 'kind!,', 'kind!]' (§7.5)", () => {
+    for (const text of ['a!b', '{ v: kind!}', '{ v: kind!, }', '[ kind!]', '{ v: kind!? }']) {
+      expect(() => events(text)).toThrow(TsonParseError);
+    }
+  });
+
+  it('a quoted token is never a sibling reference (§7.4)', () => {
+    expect(() => events('"name"!')).toThrow(/quoted token is never a reference/);
+  });
+
+  it('the field is one identifier, a single segment: a dotted name is no sibling reference', () => {
+    expect(() => events('a.b! ')).toThrow(/single segment/);
+  });
+
+  it("a prefix '!' after whitespace is a tag, so 'x !y 1' is a tag and never a sibling (§7.5)", () => {
+    expect(shape('[ x !int32 1 ]')).toEqual([
+      'DocumentStart(|)',
+      'ArrayStart',
+      'Token(x,unquoted)',
+      'TypeRef(int32)',
+      'Token(1,unquoted)',
+      'ArrayEnd',
+      'DocumentEnd',
+    ]);
+  });
+
+  it('a sibling reference is never an argument (§7.4)', () => {
+    expect(() => events('box<kind! >')).toThrow(/sibling reference/);
   });
 });

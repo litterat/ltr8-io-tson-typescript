@@ -47,10 +47,8 @@ describe('substitute (§5.10)', () => {
     const held: CoreValue = {
       kind: 'array',
       elements: [
-        { value: { annotations: [], coreValue: { kind: 'token', text: 'T', form: 'unquoted' } } },
-        {
-          value: { annotations: [], coreValue: { kind: 'token', text: 'error', form: 'unquoted' } },
-        },
+        { annotations: [], coreValue: { kind: 'token', text: 'T', form: 'unquoted' } },
+        { annotations: [], coreValue: { kind: 'token', text: 'error', form: 'unquoted' } },
       ],
     };
     const result = substitute(
@@ -60,13 +58,13 @@ describe('substitute (§5.10)', () => {
       bindings({ T: { kind: 'ref', ref: { name: 'uuid', arguments: [], annotations: [] } } }),
     );
     if (result.kind !== 'array') throw new Error('unreachable');
-    expect(result.elements[0]?.value.coreValue).toEqual({
+    expect(result.elements[0]?.coreValue).toEqual({
       kind: 'token',
       text: 'uuid',
       form: 'unquoted',
     });
     // `error` names no parameter, so it passes through unchanged.
-    expect(result.elements[1]?.value.coreValue).toEqual({
+    expect(result.elements[1]?.coreValue).toEqual({
       kind: 'token',
       text: 'error',
       form: 'unquoted',
@@ -79,9 +77,7 @@ describe('substitute (§5.10)', () => {
       fields: [
         {
           name: 'name',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: 'N', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: 'N', form: 'unquoted' } },
         },
       ],
     };
@@ -95,9 +91,7 @@ describe('substitute (§5.10)', () => {
     expect(result.fields).toEqual([
       {
         name: 'value',
-        value: {
-          value: { annotations: [], coreValue: { kind: 'token', text: '1920', form: 'unquoted' } },
-        },
+        value: { annotations: [], coreValue: { kind: 'token', text: '1920', form: 'unquoted' } },
       },
     ]);
   });
@@ -108,9 +102,7 @@ describe('substitute (§5.10)', () => {
       fields: [
         {
           name: 'name',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: 'T', form: 'unquoted' } },
-          },
+          value: { annotations: [], coreValue: { kind: 'token', text: 'T', form: 'unquoted' } },
         },
       ],
     };
@@ -122,7 +114,7 @@ describe('substitute (§5.10)', () => {
     );
     if (result.kind !== 'record') throw new Error('unreachable');
     expect(result.fields[0]?.name).toBe('name');
-    expect(result.fields[0]?.value.value.coreValue).toEqual({
+    expect(result.fields[0]?.value.coreValue).toEqual({
       kind: 'token',
       text: 'uuid',
       form: 'unquoted',

@@ -14,6 +14,7 @@ import type { Task } from '../../io/bytes.js';
 import { TsonAtomTypeError } from '../../core/errors.js';
 import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import type { AtomType } from '../../atom/contract.js';
+import { referenceText } from '../../ast/reference.js';
 import type { ReadContext, TypeReader } from '../contracts.js';
 import type { AtomValue, Value } from '../../tree/nodes.js';
 import { atomNode } from '../../tree/nodes.js';
@@ -31,11 +32,15 @@ import { abandonedValue } from './support.js';
  * `refuses`, when given, judges the value `atomType` read and answers whether the processor
  * declines it -- reporting the refusal itself -- as an identifier family's value is judged under
  * the name-hygiene policy (§8.2). A refused value yields `undefined`, like any other soft failure.
+ *
+ * `admitsReference` says the position is a reference's (§4.2): a reference event, an application or a
+ * sibling reference ([TSON-DATA] §7.4), is then read as the one text it spells.
  */
 export function atomTypeReader<T>(
   atomType: AtomType<T>,
   displayName: string,
   refuses?: (ctx: ReadContext, value: T) => boolean,
+  admitsReference = false,
 ): TypeReader<T | undefined> {
   return {
     *read(ctx: ReadContext): Task<T | undefined> {
@@ -45,6 +50,22 @@ export function atomTypeReader<T>(
       // reader positioned inside a container it never entered — a desynchronised cursor, which in
       // collecting mode turns one diagnostic into a cascade of unrelated ones.
       const e = yield* ctx.peek();
+      // A reference position (§4.2) also reads the structured reference value an application or a sibling
+      // reference parses to ([TSON-DATA] §7.4), as the one text it spells.
+      if (admitsReference && e.kind === 'reference') {
+        yield* ctx.next();
+        const text = referenceText(e.reference);
+        try {
+          const value = atomType.read({ text, form: 'unquoted' });
+          return refuses?.(ctx, value) === true ? undefined : value;
+        } catch (error) {
+          if (error instanceof TsonAtomTypeError) {
+            ctx.report(diagnosticCodeForAtomError(error), error.message, error.expected, text);
+            return undefined;
+          }
+          throw error;
+        }
+      }
       if (e.kind !== 'token') {
         ctx.report(
           'TYPE_MISMATCH',

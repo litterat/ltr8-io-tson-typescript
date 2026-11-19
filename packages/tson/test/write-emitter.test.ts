@@ -178,12 +178,45 @@ describe('§2.2/§3.3 header directives', () => {
     expect(text).toBe('!!id:"https://example.com/doc.tn"\nnull');
   });
 
-  it('schemaRef writes !!schema:"<uri>" terminated by a newline', () => {
+  it('importRef writes !!import:"<uri>" terminated by a newline, once per import', () => {
     const text = emit((out) => {
-      out.schemaRef('https://example.com/schema.tn');
+      out.importRef('https://example.com/schema.tn');
+      out.importRef('https://example.com/other.tn');
       out.unquotedToken('null');
     });
-    expect(text).toBe('!!schema:"https://example.com/schema.tn"\nnull');
+    expect(text).toBe(
+      '!!import:"https://example.com/schema.tn"\n!!import:"https://example.com/other.tn"\nnull',
+    );
+  });
+
+  it('reference writes an application unquoted, canonical: one space between arguments, a value argument in its token form (§7.4)', () => {
+    const text = emit((out) => {
+      out.reference({
+        kind: 'application',
+        name: 'map',
+        arguments: [
+          { kind: 'reference', reference: { kind: 'name', name: 'text' } },
+          {
+            kind: 'reference',
+            reference: {
+              kind: 'application',
+              name: 'list',
+              arguments: [{ kind: 'value', text: '201', form: 'unquoted' }],
+            },
+          },
+          { kind: 'value', text: 'a "b"', form: 'single-line' },
+        ],
+      });
+    });
+    expect(text).toBe('map<text list<201> "a \\"b\\"">');
+  });
+
+  it('reference writes a sibling reference as its field and the mark (§7.4)', () => {
+    expect(
+      emit((out) => {
+        out.reference({ kind: 'sibling', field: 'kind' });
+      }),
+    ).toBe('kind!');
   });
 
   it('a directive argument that is not a valid URI is refused rather than written unreadably', () => {

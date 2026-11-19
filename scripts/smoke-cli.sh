@@ -72,7 +72,7 @@ set -e
 [ "$json_invalid" -eq 1 ] || fail ".json missing a required field exited $json_invalid, expected 1"
 [ "$json_unbound" -eq 2 ] || fail "a .json input with no --schema/--root exited $json_unbound, expected 2"
 
-echo "==> validate: standard input is TSON by default, --input forces the encoding (WP4E)"
+echo "==> validate: standard input is TSON by default, --input forces the encoding"
 stdin_default="$(printf '{ name: "Ada"  age: 36  active: true }\n' | "$TSON" validate --schema ./demo/person.tn --root person -)" \
   || fail "TSON piped to stdin with a binding given did not exit 0"
 case "$stdin_default" in *"valid"*) ;; *) fail "stdin default did not read as TSON: $stdin_default" ;; esac
@@ -86,10 +86,10 @@ echo "==> hash and compile produce output"
 [ -n "$("$TSON" compile ./demo/person.tn)" ] || fail "compile printed nothing"
 
 echo "==> strip: exit codes and the reading form"
-printf '!!id:"https://example.test/t-1.tn"\n!!meta:"https://tson.io/2026/38/m/meta.tn?sha256=00"\n{\n  @doc:"A thing."\n  thing => int32\n}\n' > ./thing.tn
+printf '!!id:"https://example.test/t-1.tn"\n!!import:"https://tson.io/2026/39/m/core.tn?sha256=00"\n!schema {\n  @doc:"A thing."\n  thing => int32\n}\n' > ./thing.tn
 stripped="$("$TSON" strip ./thing.tn)" || fail "strip of a well-formed schema did not exit 0"
-[ "$stripped" = "$(printf '!!meta:"38/meta"\n{\nthing => int32\n}')" ] || fail "strip printed an unexpected reading form: $stripped"
-printf '!!meta:"https://tson.io/2026/38/m/meta.tn"\n{ thing => }\n' > ./broken.tn
+[ "$stripped" = "$(printf '!!import:"39/core"\n!schema {\nthing => int32\n}')" ] || fail "strip printed an unexpected reading form: $stripped"
+printf '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n' > ./broken.tn
 set +e
 "$TSON" strip ./broken.tn >/dev/null 2>&1
 strip_malformed=$?

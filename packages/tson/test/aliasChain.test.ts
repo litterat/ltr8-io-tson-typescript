@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { terminal, terminalDefinition } from '../src/link/referenceChain.js';
+import { terminal, terminalDefinition } from '../src/link/aliasChain.js';
 import { TsonLimitRefusedError } from '../src/core/errors.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
-import type { Reference, Top, TypeRef } from '../src/schema/meta/typedef.js';
+import type { Alias, Top, TypeRef } from '../src/schema/meta/typedef.js';
 import { fieldMapOf } from './model-fixtures.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ function recordEntry(): Top {
 
 /** A REFERENCE entry -- an alias to `target`. */
 function aliasOf(target: TypeRef): Top {
-  const body: Reference = { kind: 'reference', target };
+  const body: Alias = { kind: 'alias', target };
   return body;
 }
 
@@ -98,7 +98,7 @@ describe('the reference-chain walk (§8.3)', () => {
   });
 });
 
-// ── [TSON-SCHEMA] §11.5's "reference chain" limit ───────────────────────────────────────────────
+// ── [TSON-SCHEMA] §11.5's "alias chain" limit ───────────────────────────────────────────────
 
 /** A straight-line alias chain `a0 -> a1 -> ... -> aN -> text`, N hops long. */
 function chainOf(hops: number): Map<string, Top> {
@@ -109,7 +109,7 @@ function chainOf(hops: number): Map<string, Top> {
   return namespace;
 }
 
-describe('§11.5\'s "reference chain" limit', () => {
+describe('§11.5\'s "alias chain" limit', () => {
   it('a chain exactly at the default (64 hops) resolves cleanly', () => {
     const namespace = chainOf(64);
     expect(terminal('a0', lookup(namespace))).toBe('text');
@@ -126,7 +126,7 @@ describe('§11.5\'s "reference chain" limit', () => {
       throw new Error('expected to throw');
     })();
     expect(error).toBeInstanceOf(TsonLimitRefusedError);
-    expect((error as TsonLimitRefusedError).limit).toBe('reference-chain');
+    expect((error as TsonLimitRefusedError).limit).toBe('alias-chain');
     expect((error as TsonLimitRefusedError).configuredThreshold).toBe(64);
   });
 

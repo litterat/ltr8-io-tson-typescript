@@ -14,6 +14,7 @@ import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonBindMismatchError,
+  TsonContentHashMismatchError,
   TsonLexError,
   TsonNameHygieneRefusedError,
   TsonNotImplementedError,
@@ -29,9 +30,12 @@ import {
   type DiagnosticCode,
 } from '../../packages/tson/src/core/diagnostic.js';
 import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
+import type { Tson } from '../../packages/tson/src/config.js';
+import type { DefinitionGetter } from '../../packages/tson/src/compiler/resolverTypes.js';
+import type { Top } from '../../packages/tson/src/schema/meta/typedef.js';
 
 import { BUNDLED_SCHEMA_IDS } from './bundled-ids.js';
-import { newClass2Tson } from './class2Tson.js';
+import { loadSchema, newClass2Tson } from './class2Tson.js';
 import {
   markedSynthetics,
   ourSynthetics,
@@ -43,6 +47,13 @@ import type { Category, ExpectedRefusal, SchemaSidecar } from './sidecar.js';
 import type { Class2Layer, Vector } from './vectors.js';
 
 const META_TN_ID = BUNDLED_SCHEMA_IDS['meta.tn'];
+
+/** The pre-loaded kernel's entries on `tson`, which every schema is read under (§3.4). */
+function kernelEntries(tson: Tson): ReadonlyMap<string, Top> {
+  const kernel = tson.schemas.get(canonicalizeIdentity(META_TN_ID));
+  if (kernel === undefined) throw new Error('the pre-loaded kernel is not registered');
+  return kernel.entries;
+}
 
 /**
  * Whichever error `Tson.resolveSchema` threw, as the {@link DiagnosticCode} an equivalent
@@ -68,6 +79,9 @@ function schemaFailureCode(error: unknown): DiagnosticCode {
   if (error instanceof TsonSchemaFetchError) return diagnosticCodeForFetch(error.reason);
   if (
     error instanceof TsonSchemaValidationError ||
+    // [TSON-DATA] §2.2.1's integrity failure: the bytes a source returned are not the bytes the reference
+    // pinned. A verdict on the reference, coded like the schema it names failing to load.
+    error instanceof TsonContentHashMismatchError ||
     error instanceof TsonLexError ||
     error instanceof TsonParseError ||
     error instanceof TsonUnsupportedDocumentError ||
@@ -85,9 +99,12 @@ function schemaFailureCode(error: unknown): DiagnosticCode {
 }
 
 /** Runs `action`, returning what it threw -- fails the vector (via `expect`) if it did not throw at all. */
-function catchThrow(vector: Vector<Class2Layer>, action: () => void): unknown {
+async function catchThrow(
+  vector: Vector<Class2Layer>,
+  action: () => Promise<unknown>,
+): Promise<unknown> {
   try {
-    action();
+    await action();
   } catch (error) {
     return error;
   }
@@ -158,34 +175,27 @@ export function assertSchemaRefused(
  * (`resolvedForm.ts`'s `readResolved`) into the same `schema.meta` values the resolver itself
  * produces, and the two are compared structurally.
  */
-export function checkSchemaVector(
+export async function checkSchemaVector(
   vector: Vector<Class2Layer>,
   subject: Uint8Array,
   sidecar: SchemaSidecar,
-): void {
-  const tson = newClass2Tson(subject);
+): Promise<void> {
+  const tson = newClass2Tson();
   switch (sidecar.outcome) {
     case 'valid': {
-      const linked = tson.resolveSchema(subject);
+      const linked = await loadSchema(tson, subject);
       if (sidecar.resolved === undefined) {
         throw new Error(
           `${vector.name}: a 'valid' class2/schema vector must state its resolved output`,
         );
       }
-      // The expected side is read under the subject's own governing meta: a fixture meta layer
-      // imports meta.tn and adds constructors, and a namespace entry is typed there (RUNNER.md).
-      // RUNNER.md's "A meta layer's own records" asks a binding runner for a host class per record
-      // a fixture meta's namespace types hold; this port binds none -- the schema model holds a
-      // meta layer's records as generic values (`schema/meta`'s `MetaValue`), so the runner
-      // supplies nothing and the rule is met by construction.
-      const metaLinked =
-        tson.schemas.get(canonicalizeIdentity(linked.meta)) ??
-        tson.schemas.get(canonicalizeIdentity(META_TN_ID));
-      if (metaLinked === undefined) {
-        throw new Error(`${vector.name}: the subject's governing meta is not registered`);
-      }
+      // The expected side is read under the subject's own imports, and under the pre-loaded kernel
+      // alone when it has none (RUNNER.md, "A fixture schema's own records"): a constructor resolves
+      // in the subject's own namespace, whose entries carry every import's.
+      const lookup: DefinitionGetter = (name) =>
+        linked.entries.get(name) ?? kernelEntries(tson).get(name);
       const ours = ownEntries(linked);
-      const expected = readResolved(sidecar.resolved, metaLinked.entries);
+      const expected = readResolved(sidecar.resolved, lookup);
       expect(new Set(ours.keys())).toEqual(new Set(expected.keys()));
       for (const [name, expectedDefinition] of expected) {
         const ourDefinition = ours.get(name);
@@ -198,12 +208,12 @@ export function checkSchemaVector(
       return;
     }
     case 'error': {
-      const error = catchThrow(vector, () => tson.resolveSchema(subject));
+      const error = await catchThrow(vector, () => loadSchema(tson, subject));
       assertSchemaOrLinkLoadFailed(vector, sidecar.category, error);
       return;
     }
     case 'refused': {
-      const error = catchThrow(vector, () => tson.resolveSchema(subject));
+      const error = await catchThrow(vector, () => loadSchema(tson, subject));
       assertSchemaRefused(vector, sidecar.refused, error);
       return;
     }

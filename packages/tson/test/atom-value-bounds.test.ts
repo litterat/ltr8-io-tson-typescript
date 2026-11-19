@@ -19,12 +19,11 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { DecimalType, FloatType, RationalType } from '../src/schema/meta/atoms-numeric.js';
 
 const HEADER = `!!id:"https://example.com/t.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
+!!import:"https://tson.io/2026/39/m/core.tn"
 `;
 
 function bodyOf(source: string, name = 'q'): unknown {
-  const linked = resolveUserSchema(`${HEADER}${source}`);
+  const linked = resolveUserSchema(`${HEADER}!schema ${source}`);
   const def = linked.entries.get(name);
   if (def === undefined) throw new Error(`declaration '${name}' missing from resolved schema`);
   return def;
@@ -66,14 +65,10 @@ describe("decimal_type ('!number ^ { ... }') -- min/max no longer NaN out compar
     expect(t.multipleOf).toEqual({ unscaledValue: 25n, scale: 2 });
   });
 
-  it('every §4.3 numeric spelling narrows to the same exact value', () => {
+  it('every §4.3 integer and float spelling of a `number` bound narrows to the same exact value, and a based integer is no `number` (§5.6)', () => {
     expect(decimalTypeOf('{ q => !number ^ { min: 1.0 } }').min).toEqual({
       unscaledValue: 10n,
       scale: 1,
-    });
-    expect(decimalTypeOf('{ q => !number ^ { min: 0x10 } }').min).toEqual({
-      unscaledValue: 16n,
-      scale: 0,
     });
     expect(decimalTypeOf('{ q => !number ^ { min: 1e3 } }').min).toEqual({
       unscaledValue: 1n,
@@ -83,6 +78,7 @@ describe("decimal_type ('!number ^ { ... }') -- min/max no longer NaN out compar
       unscaledValue: -90n,
       scale: 0,
     });
+    expect(() => bodyOf('{ q => !number ^ { min: 0x10 } }')).toThrow(TsonSchemaValidationError);
   });
 
   it('min: 2 max: 1 is still refused as incoherent (§7.2), not silently accepted', () => {
@@ -169,11 +165,13 @@ describe('a chained refinement re-encodes an already-bound Decimal/Rational boun
 
 describe("decimalBinding/rationalBinding read direction is total, per this file's own top doc", () => {
   it('decimalBinding.fromWire accepts a bigint (the shape an integer §4 bound could narrow to), raw token text, and an already-shaped TsonDecimal', () => {
-    if (decimalBinding.kind !== 'bridge') throw new Error('expected a bridge');
-    expect(decimalBinding.fromWire(5n)).toEqual({ unscaledValue: 5n, scale: 0 });
-    expect(decimalBinding.fromWire('1.25')).toEqual({ unscaledValue: 125n, scale: 2 });
-    expect(decimalBinding.fromWire('0x10')).toEqual({ unscaledValue: 16n, scale: 0 });
-    expect(decimalBinding.fromWire({ unscaled: 3n, exponent: -1 })).toEqual({
+    const binding = decimalBinding;
+    if (binding.kind !== 'bridge') throw new Error('expected a bridge');
+    expect(binding.fromWire(5n)).toEqual({ unscaledValue: 5n, scale: 0 });
+    expect(binding.fromWire('1.25')).toEqual({ unscaledValue: 125n, scale: 2 });
+    // `number` admits no based integer (§5.6).
+    expect(() => binding.fromWire('0x10')).toThrow();
+    expect(binding.fromWire({ unscaled: 3n, exponent: -1 })).toEqual({
       unscaledValue: 3n,
       scale: 1,
     });

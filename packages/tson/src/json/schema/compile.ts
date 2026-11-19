@@ -16,15 +16,14 @@
  * here, at compile time, so a redundant `$type` restating the position's own type (or an alias of
  * it) is the only form §7.2 subsumption admits there.
  *
- * **Scoped positions (§8.5)** compile to `json/schema/scoped.ts`'s reader: LOCAL routes are wired
- * here, and an EXTERN value's foreign schema is looked up as it arrives through
- * {@link JsonCompileDeps.foreignSchemas}.
+ * **A declared position (§7.8)**, the open sum of `meta.declared_type`, compiles to
+ * `json/schema/declared.ts`'s reader: the value names its own type in the JSON annotation object,
+ * from every entry the governing closure holds (§8.5). A dependent field (§5.6) is read through
+ * its record (`json/schema/dependent.ts`).
  *
  * **A namespace type reads as its map** ([TSON-SCHEMA] §4.1): a field typed `headers`, where
- * `headers => namespace & { key_type: = header_name  value_type: = text }`, takes a JSON object
- * read as `{header_name => text}` and never as a record of the three facets ({@link namespaceMap}).
- * Such a field stands only in a schema the meta-kernel governs, since an import stands at the
- * importer's governing level (§2.2.3).
+ * `headers => !meta.namespace { key_type: header_name  value_type: text }`, takes a JSON object
+ * read as `{header_name => text}` and never as a record of the facets.
  *
  * **What it does not.** A template that is no family base (a genuine open template, never applied
  * bare, §5.10) and an entry holding a namespace *value* (`defaults => !headers { ... }`, a value
@@ -45,22 +44,16 @@ import { TsonInternalError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
 import type { NonHeldTop } from '../../link/bodyKind.js';
 import type { LinkedSchema } from '../../link/link.js';
-import type { MapBody, RecordBody } from '../../schema/meta/bodies.js';
-import { isNamespaceType } from '../../schema/meta/namespaces.js';
-import {
-  isFamilyBase,
-  isTemplateBody,
-  subtypesOf,
-  type Top,
-  type TypeRef,
-} from '../../schema/meta/typedef.js';
+import type { RecordField } from '../../schema/meta/bodies.js';
+import type { Namespace } from '../../schema/meta/typedef.js';
+import { namespaceAsMap } from '../../schema/meta/namespaces.js';
+import { isFamilyBase, isTemplateBody, subtypesOf, type Top } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import {
   atomReader,
   enumReader,
   enumFormOf,
   treeAtomReader,
-  valuePositionReader,
   voidReader,
   withAnnotationObject,
   type AtomReader,
@@ -69,22 +62,15 @@ import { buildArrayReader } from './array.js';
 import { buildChoiceReader } from './dispatchChoice.js';
 import { buildMemberDispatcher } from './dispatchMember.js';
 import { buildTagDispatcher } from './dispatchTag.js';
-import { skipNextValue } from './eventSkip.js';
+import { notImplementedReader } from './notImplemented.js';
 import { buildMapReader } from './map.js';
 import { buildRecordReader } from './record.js';
-import { createForeignLookup, type ForeignLookup, type ForeignSchemas } from './foreign.js';
-import { buildScopedReader } from './scoped.js';
+import { buildDeclaredReader } from './declared.js';
 import { buildTupleReader } from './tuple.js';
 import type { JsonTypeReader } from './types.js';
 
+export { notImplementedReader } from './notImplemented.js';
 export type { JsonTypeReader } from './types.js';
-export type { ForeignSchemas } from './foreign.js';
-
-/** {@link compileJsonSchema}'s dependencies: the one seam a scoped position needs ([TSON-JSON] §8.5). */
-export interface JsonCompileDeps {
-  /** Where a value's own `$schema` is looked up as it arrives. Omitted, a scope push reports `SCHEMA_NOT_PERMITTED`. */
-  readonly foreignSchemas?: ForeignSchemas;
-}
 
 /** What a factory needs beyond the entry it is building — one held per compile, never mutated after it finishes. */
 export interface CompileContext {
@@ -105,28 +91,6 @@ export interface CompileContext {
    * reader that produces that decoded value.
    */
   rawAtomReader(name: string): AtomReader | undefined;
-  /** The lookup a scoped position reaches a document-named schema through (§8.5). */
-  readonly foreign: ForeignLookup;
-}
-
-/**
- * A reader reporting `NOT_IMPLEMENTED` for a position this package cannot read yet -- see this
- * module's own top note for exactly which ones. **Still consumes the whole value it
- * cannot read** ({@link skipNextValue}): a gap must leave the event stream exactly where a reader
- * that understood this position would have left it, or the sibling field/element read next would
- * desynchronise against events this reader never pulled.
- */
-export function notImplementedReader(displayName: string, reason: string): JsonTypeReader {
-  return {
-    *read(ctx: JsonReadContext): Task<undefined> {
-      ctx.report(
-        'NOT_IMPLEMENTED',
-        `'${displayName}' is ${reason}, which this package does not read yet`,
-      );
-      yield* skipNextValue(ctx);
-      return undefined;
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -148,41 +112,6 @@ export interface JsonCompiledSchema {
   rootDeclaration(name: string): import('../../core/diagnostic.js').SchemaLocation | undefined;
 }
 
-/** What a namespace key of a host-supplied family is read as before the host judges it: its spelling. */
-const HOST_KEYS = 'text';
-
-/**
- * The map a value of the namespace type `name` is read as ([TSON-SCHEMA] §4.1): keys of its
- * `key_type`, values of its `value_type`, ordered as its `ordered` says, values never void and no
- * size bounds -- never a record of those facets, which describe the map and are not written in it.
- * `value_type` is pinned (`value_type: = T`); `key_type` is pinned, or stated by default (`key_type?:
- * ~ F`) where the family the keys are names of is the one the value's host supplies -- a record's
- * `field_map`, keyed by the record's `name_type` -- and such a key is read by its spelling alone,
- * as `text`, the host judging it once its family is resolved. `undefined` for a record that is no
- * namespace type, and for one leaving either facet open, which describes no map: the abstract
- * `namespace` itself, and a namespace type leaving a facet to a subtype.
- */
-function namespaceMap(name: string, body: RecordBody): MapBody | undefined {
-  if (!isNamespaceType(body, name)) return undefined;
-  const key = body.fields.entries.get('key_type');
-  const value = body.fields.entries.get('value_type');
-  if (key?.value === undefined || key.role === 'FREE') return undefined;
-  if (value?.value === undefined || value.role !== 'FIXED') return undefined;
-  const ordered = body.fields.entries.get('ordered')?.value?.text === 'true';
-  const typeRef = (typeName: string): TypeRef => ({
-    name: typeName,
-    arguments: [],
-    annotations: [],
-  });
-  return {
-    kind: 'map',
-    keyType: typeRef(key.role === 'FIXED' ? key.value.text : HOST_KEYS),
-    valueType: typeRef(value.value.text),
-    voidable: false,
-    ordered,
-  };
-}
-
 function locationOf(
   linked: LinkedSchema,
   name: string,
@@ -198,17 +127,8 @@ function locationOf(
 
 /**
  * Compiles `linkedSchema` in tree mode: one {@link JsonTypeReader} per entry, eagerly.
- * `foreign` is the lookup shared with the schema that admitted this one, so a scope push
- * compiles each foreign identity once.
  */
-export function compileJsonSchema(
-  linkedSchema: LinkedSchema,
-  deps: JsonCompileDeps = {},
-  foreign?: ForeignLookup,
-): JsonCompiledSchema {
-  const lookup: ForeignLookup =
-    foreign ??
-    createForeignLookup(deps.foreignSchemas, (linked) => compileJsonSchema(linked, deps, lookup));
+export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchema {
   const finished = new Map<string, JsonTypeReader>();
   const atomReaders = new Map<string, AtomReader>();
   const building = new Set<string>();
@@ -257,7 +177,6 @@ export function compileJsonSchema(
     locationOf: (name: string) => locationOf(linkedSchema, name),
     isAtomReader: (name: string) => atomReaders.has(name),
     rawAtomReader: (name: string) => atomReaders.get(name),
-    foreign: lookup,
   };
 
   function build(name: string, def: Top): JsonTypeReader {
@@ -273,7 +192,8 @@ export function compileJsonSchema(
             name,
             displayName: name,
             discriminators,
-            baseFields: body.fields,
+            // A template's fields name their types, which is all dispatch reads of them.
+            baseFields: body.fields as Namespace<RecordField>,
             entries: linkedSchema.entries,
             schemaLocation: location,
             ctx: context,
@@ -294,12 +214,18 @@ export function compileJsonSchema(
       // dedicated "not a type" refusal yet -- reported as a gap rather than misdiagnosed.
       return notImplementedReader(name, 'an open template');
     }
+    if (body.kind === 'value_entry') {
+      return notImplementedReader(name, "a value of a meta layer's vocabulary and no type");
+    }
     if (body.kind === 'namespace') {
-      return notImplementedReader(name, "a namespace value, a meta layer's vocabulary and no type");
+      return buildMapReader(name, namespaceAsMap(body), location, context);
+    }
+    if (body.kind === 'declared_type') {
+      return buildDeclaredReader(name, location, context);
     }
     const nonData: NonHeldTop = body;
 
-    if (nonData.kind === 'reference') {
+    if (nonData.kind === 'alias') {
       if (nonData.target.arguments.length > 0) {
         return notImplementedReader(name, 'an unmaterialised generic application');
       }
@@ -316,25 +242,12 @@ export function compileJsonSchema(
     switch (constructorBody.kind) {
       case 'void_type':
         return withAnnotationObject(name, linkedSchema.entries, voidReader(name, location));
-      case 'value_type':
-        // Tree-mode-wrapped like every other atom position, so a `value`-typed record field
-        // or container element stores the `JsonValue` node this package's containers expect
-        // rather than the bare host scalar `valuePositionReader` itself produces (its own
-        // classification is still what validates the position -- `treeAtomReader` discards
-        // the classified value and keeps the node, exactly as it does for every other atom).
-        return withAnnotationObject(
-          name,
-          linkedSchema.entries,
-          treeAtomReader(valuePositionReader(name, location)),
-        );
       case 'enum': {
         const raw = enumReader(name, constructorBody, location, enumFormOf(linkedSchema, name));
         atomReaders.set(name, raw);
         return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));
       }
       case 'record': {
-        const map = namespaceMap(name, constructorBody);
-        if (map !== undefined) return buildMapReader(name, map, location, context);
         if (constructorBody.extension === 'ABSTRACT') {
           return constructorBody.discriminators !== undefined
             ? buildMemberDispatcher({
@@ -385,19 +298,10 @@ export function compileJsonSchema(
         return buildMapReader(name, constructorBody, location, context);
       case 'choice':
         return buildChoiceReader(name, constructorBody, location, context);
-      case 'scoped':
-        return buildScopedReader({
-          displayName: name,
-          body: constructorBody,
-          entries: linkedSchema.entries,
-          schemaLocation: location,
-          resolve,
-          foreign: lookup,
-        });
       default: {
         const raw = atomReader(name, constructorBody, location, {
-          // A meta layer's documents name the types of the schema they describe (§4.2).
-          judgesKindMembers: linkedSchema.kernelGoverned !== true && !linkedSchema.bootstrap,
+          // A JSON read is of data, whose names resolve in the closure the schema linked over (§4.2, §5.12).
+          judgesKindMembers: true,
         });
         atomReaders.set(name, raw);
         return withAnnotationObject(name, linkedSchema.entries, treeAtomReader(raw));

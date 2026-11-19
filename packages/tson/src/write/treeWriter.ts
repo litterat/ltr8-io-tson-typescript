@@ -26,7 +26,14 @@
  */
 import type { Annotations } from '../annotations/index.js';
 import { TsonWriteError } from '../core/errors.js';
-import type { AtomNode, MapNode, RecordNode, TsonDocument, Value } from '../tree/nodes.js';
+import type {
+  ApplicationReferenceNode,
+  AtomNode,
+  MapNode,
+  RecordNode,
+  TsonDocument,
+  Value,
+} from '../tree/nodes.js';
 import { writeDataValueTo } from './astWriter.js';
 import { formatDefaultAtom, formatKnownAtom, type AtomText } from './atomFraming.js';
 import type { Emitter, TextSink } from './emitter.js';
@@ -38,23 +45,24 @@ function rootTypeRef(value: Value): string | undefined {
 }
 
 /**
- * Writes `document`'s header (`!!id`/`!!schema`, §2.2) and its root value into `out`.
+ * Writes `document`'s header (`!!id` then each `!!import`, §2.2) and its root value into `out`.
  *
- * A document declaring `!!schema` needs a root type-ref to select a type against it -- a root
- * with none (a hand-built node, or one from a schemaless read of an untagged document) would make
- * a document that declares a schema and then gives a reader no type to dispatch on, so this
- * refuses rather than half-writing it. Mirrors `TsonTreeWriter.write`'s own check, run before any
- * header text is emitted so a caller sees the failure with nothing partially written.
+ * A document importing a schema names its root's type (§2.2), so a root carrying no type-ref (a
+ * hand-built node, or one from a schemaless read of an untagged document) would make a document
+ * that imports a schema and then gives a reader no type to dispatch on: this refuses rather than
+ * half-writing it. Mirrors `TsonTreeWriter.write`'s own check, run before any header text is
+ * emitted so a caller sees the failure with nothing partially written.
  */
 export function writeTreeTo(document: TsonDocument, out: Emitter): void {
-  if (document.schema !== undefined && rootTypeRef(document.root) === undefined) {
+  if (document.imports.length > 0 && rootTypeRef(document.root) === undefined) {
     throw new TsonWriteError(
-      `a document declaring !!schema "${document.schema}" needs a root type-ref to select a ` +
-        'type, and this root value carries none -- set one on the root before writing',
+      `a document importing ${document.imports.map((uri) => `"${uri}"`).join(', ')} needs a root ` +
+        'type-ref to select a type, and this root value carries none -- set one on the root ' +
+        'before writing',
     );
   }
   if (document.id !== undefined) out.documentId(document.id);
-  if (document.schema !== undefined) out.schemaRef(document.schema);
+  for (const uri of document.imports) out.importRef(uri);
   writeValueTo(document.root, out);
 }
 
@@ -70,7 +78,7 @@ export function writeTreeToSink(document: TsonDocument, sink: TextSink): void {
   writeTreeTo(document, createEmitter(sink));
 }
 
-/** Writes `value` alone, with no document header -- {@link writeTreeTo} without the `!!id`/`!!schema` framing. */
+/** Writes `value` alone, with no document header -- {@link writeTreeTo} without the `!!id`/`!!import` framing. */
 export function writeTreeValueTo(value: Value, out: Emitter): void {
   writeValueTo(value, out);
 }
@@ -106,11 +114,28 @@ function writeValueTo(value: Value, out: Emitter): void {
     case 'atom':
       writeAtomTo(value, out);
       break;
+    case 'application-reference':
+      writeApplicationTo(value, out);
+      break;
+    case 'sibling-reference':
+      if (value.typeRef !== undefined) out.typeRef(value.typeRef);
+      out.reference({ kind: 'sibling', field: value.field });
+      break;
     case 'void':
       if (value.typeRef !== undefined) out.typeRef(value.typeRef);
       out.voidValue();
       break;
   }
+}
+
+/**
+ * A schemaless application written back unquoted (§7.4). The node holds the canonical `text` it
+ * reads as -- name, adjacent `<`, arguments one space apart, `>` -- which is exactly the spelling
+ * written, so a tree read from one writes the reference it was read from.
+ */
+function writeApplicationTo(node: ApplicationReferenceNode, out: Emitter): void {
+  if (node.typeRef !== undefined) out.typeRef(node.typeRef);
+  out.unquotedToken(node.text);
 }
 
 /**

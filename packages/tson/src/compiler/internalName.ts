@@ -28,7 +28,8 @@
  * that identity depends on either way: that is carried by the structural hash `derivedName.ts`
  * computes over the binding itself, never over this text.
  */
-import { isXidContinue } from '../unicode/xid.js';
+import { isXidContinue, isXidStart } from '../unicode/xid.js';
+import { metaMember } from '../schema/meta/kernel.js';
 
 /**
  * The longest one part of a derived name may be, hash included.
@@ -67,11 +68,31 @@ const HYPHEN = 0x2d;
  * `XID_Continue` rather than `XID_Start` for the admitted set: a head is a constructor or template
  * name and so already starts legally, and everything spliced after it sits at a continue position.
  */
-export function part(text: string): string {
+export function part(written: string): string {
+  // A member of `meta` reads as its own name, `meta.array` as `array`; a path under the kernel's other
+  // maps keeps its first segment, `unicode.text_type` reading `unicode_text_type`.
+  const text = metaMember(written);
+  if (isQualifiedAscii(text) && text.length <= MAX_PART) {
+    return text.split('.').join('_');
+  }
   if (isAdmittedAscii(text) && text.length <= MAX_PART) {
     return text;
   }
   return isAscii(text) ? joined(truncated(admittedOf(text)), hash(text)) : hash(text);
+}
+
+/**
+ * A qualified name, its segments joined by `.`, each an ASCII identifier -- `text`, `geo.address` --
+ * which a part spells with each dot written `_`. Its own path is no part of identity, which the
+ * structural hash carries, so no hash of the text is needed to keep two paths apart.
+ */
+function isQualifiedAscii(text: string): boolean {
+  for (const segment of text.split('.')) {
+    if (segment.length === 0 || !isAdmittedAscii(segment) || !isXidStart(segment.charCodeAt(0))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Every character ASCII and admitted by §7.7 — the case that needs no rewriting at all. */

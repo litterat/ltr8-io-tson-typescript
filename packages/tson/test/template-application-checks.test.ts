@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { loadError } from './schema-read-helpers.js';
 
 describe('a template application is checked at the call site (§5.10)', () => {
-  const v = `v => <N> !array { element_type: text  min_items: N }`;
+  const v = `v => <N> !meta.array { element_type: text  min_items: N }`;
 
   it('a declaration naming a constructor-template application is checked before materialising', () => {
     expect(loadError(`${v}\nx => v<"two">`)).toMatch(/binds 'N' to 'two'/);

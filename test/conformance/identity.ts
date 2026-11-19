@@ -4,12 +4,12 @@
  *
  * The subject is a header and an empty body, and the vector is about the **first directive's
  * argument alone** -- nothing is fetched or resolved. A document's first directive is its `!!id`
- * when it has one, and otherwise its `!!schema`:
+ * when it has one, and otherwise its first `!!import`:
  *
  * - `!!id` is a document's own name, so it must already be written in canonical form
  *   (`validateIdentity`); a `valid` vector's `identity` is then the canonical identity of what it
  *   wrote.
- * - `!!schema` is a reference, read in any spelling of its identity (`canonicalizeIdentity`).
+ * - `!!import` is a reference, read in any spelling of its identity (`canonicalizeIdentity`).
  *
  * A `valid` vector's `identity` is compared byte for byte with the one computed. An `error`
  * vector's category is `resolver` (§8.1): a reference that names no identity, or an `!!id` written
@@ -34,10 +34,11 @@ function identityOfFirstDirective(vector: Vector, subject: Uint8Array): string {
     validateIdentity(document.id);
     return canonicalizeIdentity(document.id);
   }
-  if (document.schema !== undefined) {
-    return canonicalizeIdentity(document.schema);
+  const [first] = document.imports;
+  if (first !== undefined) {
+    return canonicalizeIdentity(first);
   }
-  throw new Error(`${vector.name}: an identity-layer subject must open with !!id or !!schema`);
+  throw new Error(`${vector.name}: an identity-layer subject must open with !!id or !!import`);
 }
 
 /** Judges one identity-layer vector against its sidecar. */

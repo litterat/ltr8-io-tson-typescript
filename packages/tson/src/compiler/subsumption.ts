@@ -1,7 +1,7 @@
 /**
  * §7.2's rule that a value's own type annotation must be admitted by the position it stands in:
  * "at a position whose declared type is `T`, a value annotated `!S` is valid if and only if,
- * after following the reference chain of both (§8.3) to its terminal, `S` is `T` or `T` appears
+ * after following the alias chain of both (§8.3) to its terminal, `S` is `T` or `T` appears
  * in `S`'s closed chain (`type_chain.supertypes`)". Ported from the reference implementation's
  * `Subsumption` (`tson-compiler/.../reader/Subsumption.java`) and the dispatch half of its
  * `VariantSchemaReader`; see those files' own module docs for the exhaustive rationale.
@@ -41,7 +41,7 @@
  *   a second lookahead mechanism. **Memory there is bounded by one record's own size, not by
  *   depth**: the lookahead consumes and rewinds exactly the fields of the one record a
  *   member-dispatched position governs, never descending into a nested container's own contents
- *   (an unrelated field's value is discarded whole via {@link skipScopedValue}, not read into).
+ *   (an unrelated field's value is discarded whole via {@link skipDataValue}, not read into).
  *   Every discriminator token the lookahead finds is captured raw, then decoded, outside the
  *   lookahead, through the BASE's own declared type for that field -- "the pin and the member's
  *   value are decoded by the same parser before either is compared" (§4.3), which is what lets
@@ -69,10 +69,10 @@ import {
   skipAnnotationsAndTypeRef,
   skipCoreValue,
   skipDataValue,
-  skipScopedValue,
   typeRefAhead,
 } from '../reader/tree/grammar.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
+import { typeNameOf } from '../schema/meta/bodies.js';
 import type { Namespace, Token, Top } from '../schema/meta/typedef.js';
 import { isFamilyBase, isTemplateBody, subtypesOf } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
@@ -80,12 +80,19 @@ import { valuesEqual } from '../reader/tree/equality.js';
 import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
 import { isAtom } from './atomChecks.js';
 import { directMembers, type Member } from '../link/recordExtension.js';
-import { selfNames, terminal } from '../link/referenceChain.js';
+import { selfNames, terminal } from '../link/aliasChain.js';
 import { metaFormOfLexer } from './tokenForms.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import { applyNormalization } from '../unicode/normalization.js';
 
-const PRODUCT_KINDS: ReadonlySet<string> = new Set(['record', 'array', 'map', 'tuple']);
+const PRODUCT_KINDS: ReadonlySet<string> = new Set([
+  'record',
+  'record_template',
+  'namespace',
+  'array',
+  'map',
+  'tuple',
+]);
 
 /**
  * Whether `body` is `Atom`- or `Product`-shaped -- the bodies §7.2's rule governs. A record
@@ -151,9 +158,9 @@ export function guardSubsumption(
     subtypeNames.map((subtype) => [terminal(subtype, (n) => entries.get(n)), subtype] as const),
   );
   const subtypeList = subtypeNames.join(', ');
-  const recordBody = isRecordBody(definition) ? definition : undefined;
   // §5.10: a record template is a family base, ABSTRACT by construction whatever its own
-  // `extension` (each application's) says.
+  // `extension` (each application's) says; its selector fields live on its members.
+  const recordBody = isRecordBody(definition) || isFamilyBase(definition) ? definition : undefined;
   const isAbstract = recordBody?.extension === 'ABSTRACT' || isFamilyBase(recordBody);
   const discriminators = recordBody?.discriminators ?? [];
 
@@ -161,7 +168,7 @@ export function guardSubsumption(
     return buildMemberDispatchReader(
       name,
       discriminators,
-      recordBody?.fields,
+      isRecordBody(definition) ? definition.fields : undefined,
       entries,
       own,
       resolve,
@@ -366,7 +373,7 @@ function buildMemberDispatchReader(
             'any member of it declares such a field',
         );
       }
-      return [fieldName, resolve(typedField.type.name)] as const;
+      return [fieldName, resolve(typeNameOf(typedField))] as const;
     }),
   );
   const candidates: DispatchCandidate[] = [];
@@ -420,33 +427,27 @@ function buildMemberDispatchReader(
           applyNormalization(fieldNameForm, fieldNameEvent.name),
         );
         if (discriminator !== undefined && !tokens.has(discriminator)) {
-          const scopedPeek = yield* aheadCtx.peek();
-          // No `!!schema` directive: a selector is never scoped (§5.2's own base-level checks
-          // rule that out structurally), so a `schema-ref` here always belongs to some other
-          // field's framing and this field is read the ordinary way, below. Otherwise a
-          // discriminator's own leading `annotation* type-ref?` (§2.3-§2.4) is skipped before
+          // A discriminator's own leading `annotation* type-ref?` (§2.3-§2.4) is skipped before
           // looking for its plain token -- a self-annotation or a redundant `!type` on the
           // value (§7.2's "S is T") carries the same lexeme either way, and the pin comparison
           // below reads that lexeme through the BASE's own declared type regardless of how the
           // document happened to decorate it.
-          if (scopedPeek.kind !== 'schema-ref') {
-            yield* skipAnnotationsAndTypeRef(aheadCtx);
-            const valuePeek = yield* aheadCtx.peek();
-            if (valuePeek.kind === 'token') {
-              yield* aheadCtx.next();
-              tokens.set(discriminator, {
-                text: valuePeek.text,
-                form: metaFormOfLexer(valuePeek.form),
-              });
-              continue;
-            }
-            // Not a plain token even past its own framing (nested, `_`, `{}`) -- discard the
-            // rest of its core-value; the framing already consumed is not re-skipped.
-            yield* skipCoreValue(aheadCtx);
+          yield* skipAnnotationsAndTypeRef(aheadCtx);
+          const valuePeek = yield* aheadCtx.peek();
+          if (valuePeek.kind === 'token') {
+            yield* aheadCtx.next();
+            tokens.set(discriminator, {
+              text: valuePeek.text,
+              form: metaFormOfLexer(valuePeek.form),
+            });
             continue;
           }
+          // Not a plain token even past its own framing (nested, `_`, `{}`) -- discard the
+          // rest of its core-value; the framing already consumed is not re-skipped.
+          yield* skipCoreValue(aheadCtx);
+          continue;
         }
-        yield* skipScopedValue(aheadCtx);
+        yield* skipDataValue(aheadCtx);
       }
       yield* aheadCtx.next(); // record-end
       return { tag, tokens };

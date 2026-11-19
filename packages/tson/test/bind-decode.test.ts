@@ -80,7 +80,7 @@ describe('fromCoreValue -- record (§2.5)', () => {
       kind: 'record',
       fields: Object.entries(fields).map(([name, text]) => ({
         name,
-        value: { value: dataToken(text) },
+        value: dataToken(text),
       })),
     };
   }
@@ -161,13 +161,13 @@ describe('fromCoreValue -- tuple (§2.7)', () => {
   it('reads elements positionally', () => {
     const wire: CoreValue = {
       kind: 'array',
-      elements: [{ value: dataToken('1') }, { value: dataToken('two') }],
+      elements: [dataToken('1'), dataToken('two')],
     };
     expect(fromCoreValue(pairBinding, wire, intDecoder)).toEqual([1, 'two']);
   });
 
   it('rejects the wrong arity', () => {
-    const wire: CoreValue = { kind: 'array', elements: [{ value: dataToken('1') }] };
+    const wire: CoreValue = { kind: 'array', elements: [dataToken('1')] };
     expect(() => fromCoreValue(pairBinding, wire, intDecoder)).toThrow(TsonReadError);
   });
 
@@ -188,7 +188,7 @@ describe('fromCoreValue -- array (§2.7)', () => {
   it('reads every element in order', () => {
     const wire: CoreValue = {
       kind: 'array',
-      elements: [{ value: dataToken('1') }, { value: dataToken('2') }],
+      elements: [dataToken('1'), dataToken('2')],
     };
     expect(fromCoreValue(listBinding, wire, intDecoder)).toEqual([1, 2]);
   });
@@ -209,7 +209,7 @@ describe('fromCoreValue -- map (§2.6)', () => {
   it('reads every entry', () => {
     const wire: CoreValue = {
       kind: 'map',
-      entries: [{ key: dataToken('a'), value: { value: dataToken('1') } }],
+      entries: [{ key: dataToken('a'), value: dataToken('1') }],
     };
     const result = fromCoreValue(mapBinding, wire, intDecoder);
     expect([...result.entries()]).toEqual([['a', 1]]);
@@ -270,7 +270,7 @@ describe('fromDataValue -- variant dispatch on !type-ref (§3.2)', () => {
     const wire: DataValue = {
       annotations: [],
       typeRef: 'b',
-      coreValue: { kind: 'record', fields: [{ name: 'text', value: { value: dataToken('hi') } }] },
+      coreValue: { kind: 'record', fields: [{ name: 'text', value: dataToken('hi') }] },
     };
     expect(fromDataValue(unionBinding, wire, intDecoder)).toEqual({ tag: 'b', text: 'hi' });
   });
@@ -285,7 +285,7 @@ describe('fromDataValue -- variant dispatch on !type-ref (§3.2)', () => {
   it('with no !type-ref, selects the one member whose record owns a field the value writes (§5.11)', () => {
     const wire: DataValue = {
       annotations: [],
-      coreValue: { kind: 'record', fields: [{ name: 'text', value: { value: dataToken('hi') } }] },
+      coreValue: { kind: 'record', fields: [{ name: 'text', value: dataToken('hi') }] },
     };
     expect(fromDataValue(unionBinding, wire, intDecoder)).toEqual({ tag: 'b', text: 'hi' });
   });
@@ -293,7 +293,7 @@ describe('fromDataValue -- variant dispatch on !type-ref (§3.2)', () => {
   it('with no !type-ref, a record writing no field of any member, or fields of several, selects nothing', () => {
     const neither: DataValue = {
       annotations: [],
-      coreValue: { kind: 'record', fields: [{ name: 'other', value: { value: dataToken('1') } }] },
+      coreValue: { kind: 'record', fields: [{ name: 'other', value: dataToken('1') }] },
     };
     expect(() => fromDataValue(unionBinding, neither, intDecoder)).toThrow(TsonReadError);
     const both: DataValue = {
@@ -301,8 +301,8 @@ describe('fromDataValue -- variant dispatch on !type-ref (§3.2)', () => {
       coreValue: {
         kind: 'record',
         fields: [
-          { name: 'x', value: { value: dataToken('1') } },
-          { name: 'text', value: { value: dataToken('hi') } },
+          { name: 'x', value: dataToken('1') },
+          { name: 'text', value: dataToken('hi') },
         ],
       },
     };
@@ -369,7 +369,7 @@ describe('fromDataValue -- non-variant/annotated bindings ignore their own frami
     const wire: DataValue = {
       annotations: [],
       typeRef: 'record_field', // decoration, not discrimination -- see bundled-schemas-resolve.test.ts's MONOMORPHIC set
-      coreValue: { kind: 'record', fields: [{ name: 'x', value: { value: dataToken('1') } }] },
+      coreValue: { kind: 'record', fields: [{ name: 'x', value: dataToken('1') }] },
     };
     expect(fromDataValue(soloBinding, wire, intDecoder)).toEqual({ x: 1 });
   });

@@ -1,7 +1,7 @@
 /**
  * `idDirective.ts` ([TSON-DATA] §2.2, §7.2.2), plus the `@ltr8/tson/identity` subpath the CLI now
  * takes its hashing from -- checked against the real, vendored bundled schemas rather than
- * synthetic fixtures alone: each of `spec/m/{meta-kernel,meta,core}.tn` already carries a real
+ * synthetic fixtures alone: each of `spec/m/*.tn` already carries a real
  * `?sha256=` pin over its own bytes (`CLAUDE.md`: "Hash pins here are real digests over the bytes
  * of this copy"), so recomputing it and comparing is a correctness check this gets for free, and a
  * much stronger one than anything hand-written could be. It is also the end-to-end proof that the
@@ -21,12 +21,12 @@ function bytesOf(text: string): Uint8Array {
 
 describe('readIdDirective ([TSON-DATA] §2.2)', () => {
   it('reads a plain !!id line', () => {
-    const result = readIdDirective(bytesOf('!!id:"https://example.com/s.tn"\n!!meta:"x"\n'));
+    const result = readIdDirective(bytesOf('!!id:"https://example.com/s.tn"\n!!import:"x"\n'));
     expect(result?.id).toBe('https://example.com/s.tn');
   });
 
   it('is undefined when the document has no !!id line', () => {
-    expect(readIdDirective(bytesOf('!!meta:"x"\n{}\n'))).toBeUndefined();
+    expect(readIdDirective(bytesOf('!!import:"x"\n!schema {}\n'))).toBeUndefined();
   });
 
   it('decodes the single-character escape table (§7.2.2)', () => {
@@ -53,7 +53,7 @@ describe('readIdDirective ([TSON-DATA] §2.2)', () => {
 });
 
 describe('against the real vendored schemas, through @ltr8/tson/identity', () => {
-  const files = ['meta-kernel.tn', 'meta.tn', 'core.tn'];
+  const files = ['meta.tn', 'numeric.tn', 'temporal.tn', 'net.tn', 'core.tn', 'policy.tn'];
 
   it.each(files)('%s’s own !!id pin matches its recomputed content hash', async (file) => {
     const bytes = readFileSync(join(SPEC_M, file));

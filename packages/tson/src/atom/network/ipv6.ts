@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `ipv6_type` constructor (§5.5's `!ipv6` atom, RFC
+ * Parses and validates against `net.ipv6_type` constructor (§5.5's `!ipv6` atom, RFC
  * 4291 §2.2's text representation) -- the port of `atom/Ipv6Parser.java`.
  *
  * **Parses the full RFC 4291 §2.2 grammar itself, for the same reason `ipv4.ts` does.** Handing

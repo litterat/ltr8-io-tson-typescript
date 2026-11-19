@@ -2,16 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { createHeldBody } from '../src/compiler/heldBody.js';
 import {
-  argumentOf,
+  applicationIn,
   defaultAnnotationValueEncoder,
   heldEmptyRecord,
   heldRecord,
-  isApplication,
   refValue as metaRefValue,
-  typeRefOf,
 } from '../src/compiler/wireForm.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
-import type { RecordValue } from '../src/ast/value.js';
 import { fieldMapOf } from './model-fixtures.js';
 
 describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", () => {
@@ -23,7 +20,7 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
     });
   });
 
-  it('an application is the { name arguments } record form, round-tripping through typeRefOf', () => {
+  it('an application is the structured reference value of the data grammar (§7.4), round-tripping through applicationIn', () => {
     const ref = {
       name: 'box',
       arguments: [
@@ -33,9 +30,8 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
       annotations: [],
     };
     const wire = metaRefValue(ref);
-    expect(wire.kind).toBe('record');
-    expect(isApplication(wire as RecordValue)).toBe(true);
-    expect(typeRefOf(wire as RecordValue)).toEqual({
+    expect(wire.kind).toBe('reference');
+    expect(applicationIn(wire)).toEqual({
       name: 'box',
       arguments: [
         { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
@@ -56,61 +52,22 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
       arguments: [{ kind: 'ref' as const, ref: inner }],
       annotations: [],
     };
-    const wire = metaRefValue(outer) as RecordValue;
-    const back = typeRefOf(wire);
-    expect(back.name).toBe('box');
-    expect(back.arguments[0]).toEqual({ kind: 'ref', ref: inner });
-  });
-});
-
-describe('argumentOf', () => {
-  it('a `value` member is a literal argument', () => {
-    const record: RecordValue = {
-      kind: 'record',
-      fields: [
-        {
-          name: 'value',
-          value: {
-            value: { annotations: [], coreValue: { kind: 'token', text: '42', form: 'unquoted' } },
-          },
-        },
-      ],
-    };
-    expect(argumentOf(record)).toEqual({ kind: 'value', value: { text: '42', form: 'UNQUOTED' } });
-  });
-
-  it('a `name` member naming a bare token is a reference argument', () => {
-    const record: RecordValue = {
-      kind: 'record',
-      fields: [
-        {
-          name: 'name',
-          value: {
-            value: {
-              annotations: [],
-              coreValue: { kind: 'token', text: 'uuid', form: 'unquoted' },
-            },
-          },
-        },
-      ],
-    };
-    expect(argumentOf(record)).toEqual({
-      kind: 'ref',
-      ref: { name: 'uuid', arguments: [], annotations: [] },
-    });
+    const back = applicationIn(metaRefValue(outer));
+    expect(back?.name).toBe('box');
+    expect(back?.arguments[0]).toEqual({ kind: 'ref', ref: inner });
   });
 });
 
 describe('heldEmptyRecord', () => {
-  it('is `!record { fields: {} }` -- an empty field map (§5.2)', () => {
+  it('is `!meta.record { fields: {} }` -- an empty field map (§5.2)', () => {
     const held = heldEmptyRecord();
-    expect(held.typeRef).toBe('record');
+    expect(held.typeRef).toBe('meta.record');
     expect(held.coreValue).toEqual({
       kind: 'record',
       fields: [
         {
           name: 'fields',
-          value: { value: { annotations: [], coreValue: { kind: 'empty-brace' } } },
+          value: { annotations: [], coreValue: { kind: 'empty-brace' } },
         },
       ],
     });
@@ -150,28 +107,24 @@ describe('heldRecord', () => {
       extension: 'OPEN',
     };
     const held = heldRecord(body);
-    expect(held.typeRef).toBe('record');
+    expect(held.typeRef).toBe('meta.record');
     if (held.coreValue.kind !== 'record') throw new Error('unreachable');
     const chainField = held.coreValue.fields.find((f) => f.name === 'chain');
-    expect(chainField?.value.value.coreValue).toEqual({
+    expect(chainField?.value.coreValue).toEqual({
       kind: 'record',
       fields: [
         {
           name: 'parents',
           value: {
-            value: {
-              annotations: [],
-              coreValue: {
-                kind: 'array',
-                elements: [
-                  {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'base', form: 'unquoted' },
-                    },
-                  },
-                ],
-              },
+            annotations: [],
+            coreValue: {
+              kind: 'array',
+              elements: [
+                {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'base', form: 'unquoted' },
+                },
+              ],
             },
           },
         },
@@ -179,14 +132,14 @@ describe('heldRecord', () => {
     });
     // `fields` is a map keyed by name (§5.2): each value a `record_field`, which has no name.
     const fieldsField = held.coreValue.fields.find((f) => f.name === 'fields');
-    if (fieldsField?.value.value.coreValue.kind !== 'map') throw new Error('unreachable');
-    const [plain, fixed] = fieldsField.value.value.coreValue.entries;
+    if (fieldsField?.value.coreValue.kind !== 'map') throw new Error('unreachable');
+    const [plain, fixed] = fieldsField.value.coreValue.entries;
     expect(plain?.key.coreValue).toMatchObject({ kind: 'token', text: 'plain' });
-    const plainRecord = plain?.value.value.coreValue;
+    const plainRecord = plain?.value.coreValue;
     if (plainRecord?.kind !== 'record') throw new Error('unreachable');
     // `optional`/`voidable`/`role`/`value` are omitted for a field at its nominal FREE default.
     expect(plainRecord.fields.map((f) => f.name)).toEqual(['type']);
-    const fixedRecord = fixed?.value.value.coreValue;
+    const fixedRecord = fixed?.value.coreValue;
     if (fixedRecord?.kind !== 'record') throw new Error('unreachable');
     expect(fixedRecord.fields.map((f) => f.name)).toEqual(['type', 'role', 'value']);
   });
@@ -215,29 +168,23 @@ describe('createHeldBody', () => {
           {
             name: 'variants',
             value: {
-              value: {
-                annotations: [],
-                coreValue: {
-                  kind: 'array' as const,
-                  elements: [
-                    {
-                      value: {
-                        annotations: [],
-                        coreValue: { kind: 'token' as const, text: 'T', form: 'unquoted' as const },
-                      },
+              annotations: [],
+              coreValue: {
+                kind: 'array' as const,
+                elements: [
+                  {
+                    annotations: [],
+                    coreValue: { kind: 'token' as const, text: 'T', form: 'unquoted' as const },
+                  },
+                  {
+                    annotations: [],
+                    coreValue: {
+                      kind: 'token' as const,
+                      text: 'literal text',
+                      form: 'single-line' as const,
                     },
-                    {
-                      value: {
-                        annotations: [],
-                        coreValue: {
-                          kind: 'token' as const,
-                          text: 'literal text',
-                          form: 'single-line' as const,
-                        },
-                      },
-                    },
-                  ],
-                },
+                  },
+                ],
               },
             },
           },
@@ -248,7 +195,7 @@ describe('createHeldBody', () => {
     expect(held.names()).toEqual(new Set(['T']));
     expect(held.parameterNames).toEqual(['T']);
     expect(held.parameters).toEqual([
-      { name: 'T', type: { name: 'type_kind', arguments: [], annotations: [] } },
+      { name: 'T', type: { name: 'meta.type_ref', arguments: [], annotations: [] } },
     ]);
   });
 
@@ -262,16 +209,12 @@ describe('createHeldBody', () => {
           {
             name: 'element_type',
             value: {
-              value: {
+              annotations: [],
+              coreValue: metaRefValue({
+                name: 'box',
+                arguments: [{ kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } }],
                 annotations: [],
-                coreValue: metaRefValue({
-                  name: 'box',
-                  arguments: [
-                    { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
-                  ],
-                  annotations: [],
-                }),
-              },
+              }),
             },
           },
         ],

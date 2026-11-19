@@ -79,8 +79,8 @@ export class TsonParseError extends TsonPositionedError {
 /**
  * A well-formed document this processor will not handle.
  *
- * Raised by a Class 1 (data-only) path when handed a schema document — a header whose first
- * directive past any `!!id` is `!!meta` (§1.5, §2.2).
+ * Raised by a Class 1 (data-only) path when handed a schema document — one whose root is tagged
+ * `!schema`, read past the root's leading annotations (§1.5, §2.2).
  */
 export class TsonUnsupportedDocumentError extends TsonPositionedError {
   override readonly name = 'TsonUnsupportedDocumentError';
@@ -246,7 +246,7 @@ export class TsonSchemaFetchError extends TsonError {
 
 /**
  * A schema's bytes do not hash to the `?sha256=` pin some reference to it carries (§2.2.1) --
- * whether that reference was fetched, or is a `!!import`/`!!meta` line inside another schema
+ * whether that reference was fetched, or is an `!!import` line inside another schema
  * this process already holds registered (§10.2's "a later pinned reference is verified against
  * the identity's own recorded hash").
  *
@@ -389,20 +389,22 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
 }
 
 /**
- * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}. Six
- * members: [TSON-DATA] §9.1's `'nesting-depth'` (a document limit, applying to a schema document
- * as a document too, §11.5) plus [TSON-SCHEMA] §11.5's own five schema-side counters --
- * `'import-closure'`, `'schema-entries'`, `'reference-chain'`, `'supertype-chain'`, and
- * `'materialisation-depth'`, each named in §11.5's own table alongside its default. `STATUS.md`'s
- * known gaps names the other eleven §9.1 document-side limits this type is not raised for.
+ * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}.
+ * [TSON-DATA] §9.1's `'nesting-depth'` (a document limit, applying to a schema document as a
+ * document too, §11.5) and [TSON-SCHEMA] §11.5's own six schema-side counters --
+ * `'import-closure'`, `'schema-entries'`, `'alias-chain'`, `'supertype-chain'`,
+ * `'materialisation-depth'` and `'wait-depth'`, each named in §11.5's table alongside its default.
+ * The other ten §9.1 document-side limits are stated and reported by `LimitsPolicy` but not yet
+ * counted, so no refusal names them.
  */
 export type ResourceLimitName =
   | 'nesting-depth'
   | 'import-closure'
   | 'schema-entries'
-  | 'reference-chain'
+  | 'alias-chain'
   | 'supertype-chain'
-  | 'materialisation-depth';
+  | 'materialisation-depth'
+  | 'wait-depth';
 
 /**
  * A document refused under [TSON-DATA] §9.1's resource-limits policy ([TSON-SCHEMA] §11.5 for the
@@ -420,7 +422,7 @@ export type ResourceLimitName =
  * nothing further below that level to collect, and a schema that names a sixty-fifth import has
  * nothing further along that import chain to resolve), so every site that raises this class
  * throws it directly, under a fail-fast read and a collecting one alike -- see the throw sites
- * themselves (`core/limits.ts`'s own `nestingLimitRefusal` and its five schema-side siblings).
+ * themselves (`core/limits.ts`'s own `nestingLimitRefusal` and its six schema-side siblings).
  */
 export class TsonLimitRefusedError extends TsonRefusedError {
   override readonly name: string = 'TsonLimitRefusedError';

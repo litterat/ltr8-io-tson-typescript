@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `integer_type` constructor (§5.6's integer atoms:
+ * Parses and validates against the kernel's `numeric.integer_type` constructor (§5.6's integer atoms:
  * the fixed-width `int8`..`int256`/`uint8`..`uint256` ladder and the four sign-bounded,
  * unbounded-precision refinements) -- the port of `atom/IntegerParser.java`.
  *
@@ -26,19 +26,35 @@
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import { toExactInteger } from '../../base/numberNarrowing.js';
 import { tryParseNumber } from '../../base/numberGrammar.js';
-import type { IntegerSize, IntegerType } from '../../schema/meta/atoms-numeric.js';
+import {
+  describeSize,
+  sizeAdmits,
+  type IntegerSize,
+  type IntegerType,
+} from '../../schema/meta/atoms-numeric.js';
 import type { AtomToken, AtomType } from '../contract.js';
 
 /** The host representation an {@link IntegerType} instance's own `size` selects. See this module's own TSDoc. */
 export type IntegerHost = number | bigint;
 
-/** `{ min, max }` for a fixed-width, two's-complement `size` -- exact at any width, via `bigint` shifts. */
-function integerBounds(size: IntegerSize): { min: bigint; max: bigint } {
-  if (size.signed) {
-    const half = 1n << (size.bits - 1n);
-    return { min: -half, max: half - 1n };
+/** The widest width {@link rangeOf} spells digit by digit: 256 bits is 78 digits. */
+const SPELLED_BITS = 256n;
+
+/**
+ * `size`'s `[floor, ceiling]` as a refusal states them. A value's range is judged by
+ * {@link sizeAdmits}, never by these: a width up to {@link SPELLED_BITS} is spelled out, a wider one by
+ * its power of two, so a refusal under any `bits` costs no more than its message.
+ */
+function rangeOf(size: IntegerSize): readonly [string, string] {
+  const bits = size.bits;
+  if (bits <= SPELLED_BITS) {
+    return size.signed
+      ? [String(-(1n << (bits - 1n))), String((1n << (bits - 1n)) - 1n)]
+      : ['0', String((1n << bits) - 1n)];
   }
-  return { min: 0n, max: (1n << size.bits) - 1n };
+  return size.signed
+    ? [`-2^${String(bits - 1n)}`, `2^${String(bits - 1n)} - 1`]
+    : ['0', `2^${String(bits)} - 1`];
 }
 
 /**
@@ -77,17 +93,13 @@ export function createIntegerParser(
 
   function validate(value: bigint, text: string): void {
     const { size, min, exclusiveMin, max, exclusiveMax, multipleOf, members } = constraints;
-    if (size !== undefined) {
-      const bounds = integerBounds(size);
-      if (value < bounds.min || value > bounds.max) {
-        const min2 = String(bounds.min);
-        const max2 = String(bounds.max);
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' is out of range for a ${size.signed ? 'signed' : 'unsigned'} ${String(size.bits)}-bit integer [${min2}, ${max2}]`,
-          `>= ${min2} and <= ${max2}`,
-        );
-      }
+    if (size !== undefined && !sizeAdmits(size, value)) {
+      const [floor, ceiling] = rangeOf(size);
+      throw new TsonAtomValidationError(
+        typeRef,
+        `'${text}' is out of range for a ${describeSize(size)} integer [${floor}, ${ceiling}]`,
+        `>= ${floor} and <= ${ceiling}`,
+      );
     }
     if (min !== undefined && value < min) {
       const bound = String(min);

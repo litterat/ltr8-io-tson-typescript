@@ -30,17 +30,9 @@ import type { AtomToken, AtomType } from '../atom/contract.js';
 import type { Atom } from '../schema/meta/typedef.js';
 import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { AtomValue, Value } from '../tree/nodes.js';
-import { atomNode } from '../tree/nodes.js';
-import type { Task } from '../io/bytes.js';
-import type { ReadContext, TypeReader } from '../reader/contracts.js';
+import type { TypeReader } from '../reader/contracts.js';
 import { atomTreeReader, atomTypeReader } from '../reader/tree/atom.js';
 import { voidTreeReader } from '../reader/tree/void.js';
-import { captureAnnotations } from '../reader/tree/annotations.js';
-import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from '../reader/tree/grammar.js';
-import { abandonedValue } from '../reader/tree/support.js';
-import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
-import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
-import type { NumberForm } from '../base/numberGrammar.js';
 
 import { createIntegerParser } from '../atom/numeric/integer.js';
 import { createDecimalParser } from '../atom/numeric/decimal.js';
@@ -51,12 +43,9 @@ import { createBinaryParser } from '../atom/numeric/binary.js';
 import { createMembershipCheck, createPatternCheck, createTextParser } from '../atom/text/text.js';
 import { createIdentifierParser } from '../atom/text/identifier.js';
 import { createEnumParser } from '../atom/enum.js';
-import {
-  createKindParser,
-  createQualifiedNameParser,
-  TYPE_NAME_GRAMMAR,
-} from '../atom/reference.js';
+import { createReferenceParser, TYPE_NAME_GRAMMAR } from '../atom/reference.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
+import { parseReference, referenceNames } from '../atom/referenceGrammar.js';
 import { DEFAULT_IDENTIFIER_POLICY, judgeName, type IdentifierPolicy } from '../unicode/policy.js';
 import { reportNameViolations } from '../reader/tree/refusal.js';
 import { createUuidParser } from '../atom/network/uuid.js';
@@ -78,71 +67,9 @@ import { createDateTimeParser } from '../atom/temporal/datetime.js';
 import { createDurationParser } from '../atom/temporal/duration.js';
 import { createPeriodParser } from '../atom/temporal/period.js';
 
-/** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every atom family but `void` and `value`. */
+/** Wraps a concrete {@link AtomType} as a `TypeReader<Value>` -- the port of `reader/tree/atom.ts`'s own two-function pipeline, applied uniformly to every atom family but `void`. */
 function wrap<T extends AtomValue>(atomType: AtomType<T>, typeRef: string): TypeReader<Value> {
   return atomTreeReader(atomTypeReader(atomType, typeRef), typeRef);
-}
-
-// ── value, void ──────────────────────────────────────────────────────────────────────────────
-
-/** §4's base value narrowed to the natural host value it implies -- this module's own copy of `reader/schemaless/tree.ts`'s `narrowBaseValue`/`narrowNumberForm`, duplicated rather than imported for the same reason that module states its own duplication: a small structural rule, nothing library-specific, and sub-agents share no context to import across. */
-function narrowBaseValue(value: BaseValue): AtomValue {
-  switch (value.kind) {
-    case 'boolean':
-      return value.value;
-    case 'string':
-      return value.text;
-    case 'number':
-      return narrowNumberForm(value.form);
-  }
-}
-
-function narrowNumberForm(form: NumberForm): AtomValue {
-  switch (form.kind) {
-    case 'special-value':
-      return form.special === 'nan' ? NaN : form.sign === 'minus' ? -Infinity : Infinity;
-    case 'integer':
-    case 'based-integer':
-      return toExactInteger(form);
-    case 'float':
-      return toExactDecimal(form);
-  }
-}
-
-/**
- * `value`'s own reading contract (meta-kernel.tn: "the token, uninterpreted, read by the type the
- * position hands it to"). Not routed through {@link wrap} since its host inhabitants span three of
- * `AtomValue`'s cases rather than being fixed to one -- this is the one type whose contract is
- * "carry the token and let the position decide". There is no void outcome here, since `_` is a
- * distinct event kind this reader never sees as a `token`.
- *
- * The escape hatch is a *carrier*, not a resolution step: base type resolution applies only in
- * schemaless documents ([TSON-DATA] §4.1), and under a schema every value is typed by its position
- * or by its tag. A `value`-typed facet is therefore read under the atom the slot stands for, once
- * that atom is in scope ([TSON-SCHEMA] §5.2, §7.4) -- which is why `decimal_type.min`'s `1` and
- * `1.0` are one number rather than an integer beside a float.
- */
-function valueTreeReader(displayName: string): TypeReader<Value> {
-  return {
-    *read(ctx: ReadContext): Task<Value> {
-      const annotations = yield* captureAnnotations(ctx);
-      yield* skipAnnotationsAndTypeRef(ctx); // no-op past the capture above; consumes an optional type-ref, matching atomTypeReader's own pattern
-      const e = yield* ctx.peek();
-      if (e.kind !== 'token') {
-        ctx.report(
-          'TYPE_MISMATCH',
-          `'${displayName}' expects a scalar value`,
-          `a scalar for '${displayName}'`,
-          describeEvent(e),
-        );
-        yield* skipCoreValue(ctx);
-        return abandonedValue();
-      }
-      yield* ctx.next();
-      const narrowed = narrowBaseValue(resolveBaseType({ text: e.text, form: e.form }));
-      return atomNode(narrowed, undefined, annotations);
-    },
-  };
 }
 
 // ── regex_type ───────────────────────────────────────────────────────────────────────────────
@@ -228,8 +155,6 @@ export function buildAtomReader(
   options: AtomReaderOptions = {},
 ): TypeReader<Value> {
   switch (atom.kind) {
-    case 'value_type':
-      return valueTreeReader(name);
     case 'void_type':
       return voidTreeReader(name);
     case 'enum':
@@ -301,35 +226,48 @@ export function buildAtomReader(
       return wrap(createIpv6Parser(name, atom), name);
     case 'complex_type':
       return wrap(createComplexParser(name), name);
-    case 'kind_type': {
-      // A kind's value is a type name (§4.2): read by the name grammar, a name under §8.2's policy,
-      // and a member of the kind where the document's names resolve in the closure it was linked
-      // over.
+    case 'reference_type': {
+      // A reference's value is a name (§4.2, §5.12): read by the name grammar, a name under §8.2's
+      // policy, and -- where it names types -- a member of the reference's linked members where the
+      // document's names resolve in the closure it was linked over. What a name reaches is judged
+      // when the schema holding it links.
       const profile = identifierProfileOf(TYPE_NAME_GRAMMAR);
       const policy = options.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
       return atomTreeReader(
         atomTypeReader(
-          createKindParser(name, atom, options.judgesKindMembers ?? false),
+          createReferenceParser(name, atom, options.judgesKindMembers ?? false),
           name,
           (ctx, value) => {
-            const violations = judgeName(value, profile, policy);
-            if (violations.length === 0) return false;
-            reportNameViolations(ctx, value, violations);
-            return true;
+            // Name hygiene judges each name an application writes, as it judges a bare name (§8.2).
+            let refused = false;
+            for (const written of namesWritten(value)) {
+              const violations = judgeName(written, profile, policy);
+              if (violations.length === 0) continue;
+              reportNameViolations(ctx, written, violations);
+              refused = true;
+            }
+            return refused;
           },
+          true,
         ),
         name,
       );
     }
-    case 'ref_type':
-      // A reference's value is a qualified name (§5.12), its referent judged when the schema
-      // holding it links: only a kernel-governed document holds one.
-      return wrap(createQualifiedNameParser(name), name);
     case 'hostname_type':
       return wrap(createHostnameParser(name, atom), name);
     case 'host_type':
       return wrap(createHostParser(name), name);
     case 'media_type_type':
       return wrap(createMediaTypeParser(name, atom), name);
+  }
+}
+
+/** The names a reference's canonical text writes: its head and every reference among its arguments. A sibling reference writes a field, no name. */
+function namesWritten(text: string): readonly string[] {
+  try {
+    const reference = parseReference(text);
+    return reference.kind === 'sibling' ? [] : referenceNames(reference);
+  } catch {
+    return [text];
   }
 }

@@ -12,3 +12,7 @@ export * from './meta/atoms-text.js';
 export * from './meta/atoms-temporal.js';
 export * from './meta/atoms-network.js';
 export * from './meta/position.js';
+export * from './meta/kernel.js';
+export * from './meta/namespaces.js';
+export * from './meta/schemaPaths.js';
+export * from './resolvedOutput.js';

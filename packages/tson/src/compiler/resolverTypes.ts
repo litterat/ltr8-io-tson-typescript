@@ -6,7 +6,7 @@
  * for the Java's `TsonObjectWriter` field (see this file's own note on it below).
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
-import type { EntryFacts, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
+import type { EntryFacts, MetaValue, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
 
 /**
  * A single-name entry lookup -- the entry's value (§8.1: an entry is its value), `undefined` when
@@ -57,6 +57,24 @@ export type EntryFactsTable = Map<string, EntryFacts>;
  * classification; anything else is wrapped as `TsonNotImplementedError`.
  */
 export type DefinitionMetaReader = (type: string, value: DataValue) => Top;
+
+/**
+ * Reads the payload of a value entry, `name => !T { ... }` with `T` an ordinary type (§4.1), against `T`'s
+ * own declaration -- a record's fields, a namespace type's keys -- into the generic value model this port
+ * holds a value in (`schema/meta`'s `MetaValue`): this model binds nothing to host classes. `type` is the
+ * type's name in the schema's one namespace and `value` the payload, already tagged with it.
+ *
+ * Throws to report a read failure, as {@link DefinitionMetaReader} does.
+ */
+export type DefinitionValueReader = (
+  type: string,
+  value: DataValue,
+  /**
+   * Closes an application a field the value is read against is typed by, to the entry it denotes: a record
+   * type resolved before the schema materialises holds such a type as written (§5.10).
+   */
+  close?: (application: TypeRef) => string,
+) => MetaValue;
 
 /**
  * Reads an annotation's value through the type its name refers to (Part 2 §6: "an annotation

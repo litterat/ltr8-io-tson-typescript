@@ -20,11 +20,11 @@ describe('write', () => {
     expect(write(value, { id: 'https://example.com/a' })).toBe('!!id:"https://example.com/a"\n1');
   });
 
-  it('writes the !!schema header when options.schema is given, over a root value carrying its own type-ref', () => {
+  it('writes one !!import header per options.imports entry, in order, over a root value carrying its own type-ref (§2.2)', () => {
     const value = readTree(bytesOf('!x 1'), { preserveUnknownTypeRefs: true });
-    expect(write(value, { schema: 'https://example.com/a.tn' })).toBe(
-      '!!schema:"https://example.com/a.tn"\n!x 1',
-    );
+    expect(
+      write(value, { imports: ['https://example.com/a.tn', 'https://example.com/b.tn'] }),
+    ).toBe('!!import:"https://example.com/a.tn"\n!!import:"https://example.com/b.tn"\n!x 1');
   });
 
   it('round-trips through readTree a second time', () => {

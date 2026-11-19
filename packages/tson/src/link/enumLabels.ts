@@ -34,7 +34,7 @@ import { isTemplateBody } from '../schema/meta/typedef.js';
 import { identifierProfileOf, type IdentifierProfile } from '../unicode/identifier-profile.js';
 import { nfcFloor } from '../unicode/normalization.js';
 import { nameTypeFormRefusal } from './nameType.js';
-import { terminal } from './referenceChain.js';
+import { terminal } from './aliasChain.js';
 
 /** Looks an entry up by name; `undefined` for a name that resolves nowhere. */
 export type EntryGetter = (name: string) => Top | undefined;

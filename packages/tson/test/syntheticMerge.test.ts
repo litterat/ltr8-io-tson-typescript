@@ -7,7 +7,7 @@ import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { Declaration } from '../src/ast/schema/document.js';
 import type { RecordField, RecordValue } from '../src/ast/value.js';
 import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
-import { fieldMapOf } from './model-fixtures.js';
+import { fieldMapOf, fieldTypeName } from './model-fixtures.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
 
@@ -56,6 +56,9 @@ function stubMaterialiser(
     },
     expansionsByApplication() {
       return new Map();
+    },
+    closedApplications() {
+      return [];
     },
     setParameterKinds(): void {
       // not exercised by this test
@@ -242,7 +245,7 @@ describe('rewrite', () => {
     if (a === undefined || b === undefined || !('fields' in a) || !('elementType' in b)) {
       throw new Error('unreachable');
     }
-    expect(a.fields.entries.get('v')?.type.name).toBe('closed');
+    expect(fieldTypeName(a.fields.entries.get('v'))).toBe('closed');
     expect(b.elementType.name).toBe('closed');
   });
 
@@ -270,6 +273,6 @@ describe('rewrite', () => {
     rewrite(entries, new Map([['eager', 'closed']]));
     const a = entries.get('a');
     if (a === undefined || !('fields' in a)) throw new Error('unreachable');
-    expect(a.fields.entries.get('v')?.type.name).toBe('untouched');
+    expect(fieldTypeName(a.fields.entries.get('v'))).toBe('untouched');
   });
 });

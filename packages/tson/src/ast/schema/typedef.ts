@@ -1,5 +1,6 @@
+import type { DataValue } from '../value.js';
 import type { AtomRefinement, Instance, RecordEntry, RemovalSet } from './fields.js';
-import type { TypeRef } from './typeref.js';
+import type { Reference, TypeExpr } from './typeref.js';
 
 /**
  * `type-def` (Part 2 §12.1) — the right-hand side of a declaration (§5.1). Every
@@ -13,9 +14,11 @@ import type { TypeRef } from './typeref.js';
  *   open entry's body is held rather than read against its constructor's vocabulary until
  *   materialisation substitutes, so a collection payload is as ordinary as a scalar one)
  * - {@link StructuralTypeDef} — `[type-params] structural-def` (§5.7–§5.9)
- * - {@link ReferenceTypeDef} — `[type-params] type-ref` (§8.3): a plain reference, or any
- *   container form, since a declaration-level container reaches this union through `type-ref`
+ * - {@link ReferenceTypeDef} — `[type-params] type-expr` (§8.3): a plain reference, or any
+ *   container form, since a declaration-level container reaches this union through `type-expr`
  *   like every other position
+ * - {@link SchemaMapDef} — `"!schema" ws schema-map`: a schema map nested as an entry (§4.1)
+ * - {@link RecordTemplateDef} — a record template as the desugar phase normalises it; no parser builds one
  *
  * Every member has an ABNF alternative behind it — none is synthesised at this layer. §5.3's
  * sized sugar (`[T; 1..2]`) is no exception: it parses as a {@link ReferenceTypeDef} wrapping
@@ -31,7 +34,54 @@ import type { TypeRef } from './typeref.js';
  *
  * Discriminated on `kind` via each member's own `kind` field.
  */
-export type TypeDef = AtomRefinement | Instance | StructuralTypeDef | ReferenceTypeDef;
+export type TypeDef =
+  | AtomRefinement
+  | Instance
+  | StructuralTypeDef
+  | ReferenceTypeDef
+  | SchemaMapDef
+  | RecordTemplateDef;
+
+/**
+ * `"!schema" ws schema-map` as a declaration's value (§12.1, §4.1): a schema map nested as an entry,
+ * `geo => !schema { address => { ... } }`. It is a value of the kernel's `schema` namespace type, and
+ * every value of `schema` declares as the document's root does: its members are declarations, which
+ * lift, mint, link and compile as root entries do. The `!schema` tag is read as a spelling, as the
+ * root's is.
+ *
+ * **The members are not held here.** The parser puts each into the document's one declaration map
+ * under its path from the root (`geo.address`), which is the member's identity and the name every later
+ * phase addresses it by; a further nested map's members are keyed the same way, one segment deeper.
+ * This node is what the entry itself declares: the names of its members, unqualified, in the order
+ * written.
+ */
+export interface SchemaMapDef {
+  readonly kind: 'schemaMapDef';
+  /** The members' own names, in source order; never empty, a schema map declaring at least one entry. */
+  readonly members: readonly [string, ...string[]];
+}
+
+/**
+ * A record template as the desugar phase normalises it (§5.2, §5.10): the declaration's parameters
+ * and the `!meta.record_template { ... }` payload its body denotes, each field labelled where the
+ * parameters are in scope -- a bare parameter name in a field's type is its `type_param`, an unquoted
+ * parameter token in its value its `value_param` -- and the parameters stated last, each provisionally a
+ * type parameter.
+ *
+ * **The one variant no parser builds.** Both spellings of a record template reach it -- the sugar body
+ * `<T> { x: T }` and the explicit `<T> !meta.record { ... }` -- and nothing an author writes does: a
+ * written `!meta.record_template { ... }` is an {@link Instance}, which the resolver refuses as resolver
+ * vocabulary (§8.1). So the type, not a flag, is what tells the desugarer's own output from a
+ * construction an author wrote.
+ *
+ * Every slot but the labels and the parameter list is carried as written, so the resolver still answers
+ * the author's spelling in the author's terms.
+ */
+export interface RecordTemplateDef {
+  readonly kind: 'recordTemplateDef';
+  readonly typeParams: readonly string[];
+  readonly payload: DataValue;
+}
 
 /**
  * `[type-params] structural-def` (§12.1, §5.7–§5.9) — a refinement, composition or subtraction,
@@ -62,7 +112,7 @@ export interface StructuralTypeDef {
 export interface ReferenceTypeDef {
   readonly kind: 'referenceTypeDef';
   readonly typeParams: readonly string[];
-  readonly ref: TypeRef;
+  readonly ref: TypeExpr;
 }
 
 /**
@@ -72,7 +122,7 @@ export interface ReferenceTypeDef {
 export type StructuralDef = RefinedDef | ConstructionDef | RecordDef;
 
 /**
- * `refined-def = type-name [ws "<" type-args ">"] ws "^" ws record-def` (§12.1, §5.7) —
+ * `refined-def = type-ref ws "^" ws record-def` (§12.1, §5.7) —
  * record, map/array-head, or (with a preceding `~`) constructor refinement.
  *
  * `target` is restricted by grammar to a bare type-name, optionally with type-args — inline
@@ -87,7 +137,7 @@ export type StructuralDef = RefinedDef | ConstructionDef | RecordDef;
  */
 export interface RefinedDef {
   readonly kind: 'refinedDef';
-  readonly target: TypeRef;
+  readonly target: Reference;
   readonly body: RecordDef;
 }
 
@@ -106,7 +156,7 @@ export interface RefinedDef {
  */
 export interface ConstructionDef {
   readonly kind: 'constructionDef';
-  readonly supertypes: readonly [TypeRef, ...TypeRef[]];
+  readonly supertypes: readonly [Reference, ...Reference[]];
   readonly body?: RecordDef;
   readonly removal?: RemovalSet;
 }

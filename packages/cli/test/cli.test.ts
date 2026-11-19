@@ -197,6 +197,132 @@ describe('init-example + schema-governed validate, end to end', () => {
   });
 });
 
+describe('validate: a data document is read under its own !!import ([TSON-DATA] §2.2)', () => {
+  const CORE = '!!import:"https://tson.io/2026/39/m/core.tn"';
+  const ABSENT = '!!import:"https://example.test/not-provided.tn"\n!claim { id: 1 }\n';
+
+  it('a header naming the bundled library validates, the root type taken from its root tag', async () => {
+    const file = join(dir, 'age.tn');
+    await writeFile(file, `${CORE}\n!uint8 42\n`, 'utf8');
+    const io = captureOutput();
+    expect(await main(['validate', file])).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('accepted');
+  });
+
+  it('a value the imported type refuses is rejected, exit 1', async () => {
+    const file = join(dir, 'age.tn');
+    await writeFile(file, `${CORE}\n!uint8 300\n`, 'utf8');
+    const io = captureOutput();
+    expect(await main(['validate', file])).toBe(EXIT.INVALID);
+    expect(io.stdout()).toContain('rejected');
+  });
+
+  it('a schema the run was not given is unavailable rather than a verdict, exit 69, and never fetched', async () => {
+    const file = join(dir, 'claim.tn');
+    await writeFile(file, ABSENT, 'utf8');
+    const io = captureOutput();
+    expect(await main(['validate', file])).toBe(69);
+    expect(io.stdout()).toContain('SCHEMA_NOT_PERMITTED');
+    expect(io.stdout()).toContain('not-provided.tn');
+    expect(io.stdout().split('\n')).not.toContain('accepted');
+    expect(io.stderr()).toContain('could not be checked');
+  });
+
+  it('a non-verdict costs its own document a verdict and nothing else, in either order', async () => {
+    const claim = join(dir, 'claim.tn');
+    await writeFile(claim, ABSENT, 'utf8');
+    const invalid = join(dir, 'age.tn');
+    await writeFile(invalid, `${CORE}\n!uint8 300\n`, 'utf8');
+    for (const files of [
+      [claim, invalid],
+      [invalid, claim],
+    ]) {
+      vi.restoreAllMocks();
+      const io = captureOutput();
+      expect(await main(['validate', '--format', 'json', ...files])).toBe(69);
+      const report = JSON.parse(io.stdout()) as {
+        files: { file: string; diagnostics: { code: string }[] }[];
+      };
+      // Each document keeps its own verdict: the refused schema is a refusal (§8.1), not an error
+      // category, and the other document is still judged and found invalid.
+      expect(
+        Object.fromEntries(report.files.map((f) => [f.file, f.diagnostics.map((d) => d.code)])),
+      ).toEqual({
+        [claim]: ['SCHEMA_NOT_PERMITTED'],
+        [invalid]: ['ATOM_CONSTRAINT_VIOLATION'],
+      });
+    }
+  });
+});
+
+describe('--max-depth and --max-wait-depth', () => {
+  it('Part 1 §9.1: a lowered --max-depth refuses a document the default admits, exit 1', async () => {
+    const file = join(dir, 'nest.tn');
+    await writeFile(file, '[[[[]]]]\n', 'utf8');
+    const ok = captureOutput();
+    expect(await main(['validate', file])).toBe(EXIT.OK);
+    expect(ok.stdout()).toContain('accepted');
+    vi.restoreAllMocks();
+    const io = captureOutput();
+    expect(await main(['validate', '--max-depth', '2', file])).toBe(EXIT.INVALID);
+    expect(io.stdout()).toContain('LIMIT_REFUSED');
+  });
+
+  it('Part 2 §11.5: a chain of three waits compiles at the default and is refused under a limit of two', async () => {
+    const schema = join(dir, 'chain.tn');
+    await writeFile(
+      schema,
+      [
+        '!!id:"https://example.test/chain.tn"',
+        '!!import:"https://tson.io/2026/39/m/core.tn"',
+        '!schema {',
+        '  w0 => w1 & { a: text }',
+        '  w1 => w2 & { b: text }',
+        '  w2 => w3 & { c: text }',
+        '  w3 => { d: text }',
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const ok = captureOutput();
+    expect(await main(['compile', schema])).toBe(EXIT.OK);
+    expect(ok.stdout()).toContain('compiles');
+    vi.restoreAllMocks();
+
+    const io = captureOutput();
+    expect(await main(['compile', '--format', 'json', '--max-wait-depth', '2', schema])).toBe(
+      EXIT.INVALID,
+    );
+    const report = JSON.parse(io.stdout()) as {
+      outcome: string;
+      policy: { limits: { max_wait_depth: number } };
+    };
+    expect(report.outcome).toBe('REJECTED');
+    expect(report.policy.limits.max_wait_depth).toBe(2);
+  });
+
+  it('a limit below one is a usage error, exit 2', async () => {
+    const io = captureOutput();
+    expect(await main(['policy', '--max-wait-depth', '0'])).toBe(EXIT.USAGE);
+    expect(io.stderr()).toContain('--max-wait-depth must be at least 1');
+    vi.restoreAllMocks();
+    const depth = captureOutput();
+    expect(await main(['policy', '--max-depth', '0'])).toBe(EXIT.USAGE);
+    expect(depth.stderr()).toContain('--max-depth must be at least 1');
+  });
+
+  it('every command that takes policy flags documents both', async () => {
+    for (const command of ['validate', 'compile', 'policy']) {
+      vi.restoreAllMocks();
+      const io = captureOutput();
+      await main([command, '--help']);
+      expect(io.stdout()).toContain('--max-depth <n>');
+      expect(io.stdout()).toContain('--max-wait-depth <n>');
+    }
+  });
+});
+
 describe('compile', () => {
   it('a schema that resolves and links against the bundled standard library compiles, exit 0', async () => {
     await runInitExample(dir);
@@ -206,11 +332,11 @@ describe('compile', () => {
     expect(io.stdout()).toContain('compiles');
   });
 
-  it('a schema naming an unregistered !!meta does not compile, exit 1', async () => {
+  it('a schema importing an unregistered schema does not compile, exit 1', async () => {
     const file = join(dir, 'bad.tn');
     await writeFile(
       file,
-      '!!id:"https://example.com/bad.tn"\n!!meta:"https://nonexistent.example/meta.tn"\n{ foo => bar }\n',
+      '!!id:"https://example.com/bad.tn"\n!!import:"https://nonexistent.example/meta.tn"\n!schema { foo => bar }\n',
       'utf8',
     );
     const io = captureOutput();
@@ -391,9 +517,14 @@ describe('policy command', () => {
     expect(code).toBe(EXIT.OK);
     const parsed = JSON.parse(io.stdout()) as {
       identifier_policy: { skeleton_distinctness: boolean };
-      limits: { max_depth: number };
+      limits: Record<string, number>;
     };
-    expect(parsed.limits).toEqual({ max_depth: 64 });
+    // The whole of `policy.limits` (§9.1, [TSON-SCHEMA] §11.5), every member at its default.
+    expect(Object.keys(parsed.limits)).toHaveLength(17);
+    expect(parsed.limits.max_depth).toBe(64);
+    expect(parsed.limits.max_wait_depth).toBe(64);
+    expect(parsed.limits.max_alias_chain).toBe(64);
+    expect(parsed.limits).not.toHaveProperty('max_reference_chain');
     expect(parsed.identifier_policy.skeleton_distinctness).toBe(true);
     expect(parsed).not.toHaveProperty('limits_policy');
   });
@@ -406,7 +537,16 @@ describe('policy command', () => {
 
     const text = captureOutput();
     await main(['policy']);
-    expect(text.stdout()).toContain('max depth:');
+    expect(text.stdout()).toContain('max depth:                  64');
+    expect(text.stdout()).toContain('max wait depth:             64');
+  });
+
+  it('policy prints the processor policy this build applies, aligned, and a stated bound', async () => {
+    const io = captureOutput();
+    expect(await main(['policy', '--max-depth', '8'])).toBe(EXIT.OK);
+    expect(io.stdout()).toContain('identifier policy:          HIGHLY_RESTRICTIVE');
+    expect(io.stdout()).toContain('token policy:               UNRESTRICTED');
+    expect(io.stdout()).toContain('max depth:                  8');
   });
 
   it('--identifier-allow-look-alikes turns skeleton distinctness off, and the text says so', async () => {
@@ -822,9 +962,8 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
 describe('strip', () => {
   const SCHEMA = [
     '!!id:"https://example.test/thing-1.tn"',
-    '!!meta:"https://tson.io/2026/38/m/meta.tn"',
-    '!!import:"https://tson.io/2026/38/m/core.tn"',
-    '{',
+    '!!import:"https://tson.io/2026/39/m/core.tn"',
+    '!schema {',
     '  @doc:"A thing."',
     '  thing => int32',
     '}',
@@ -837,7 +976,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!meta:"38/meta"\n!!import:"38/core"\n{\nthing => int32\n}\n');
+    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\nthing => int32\n}\n');
     expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
   });
 
@@ -847,9 +986,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', '--keep-docs', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe(
-      '!!meta:"38/meta"\n!!import:"38/core"\n{\n@doc:"A thing." thing => int32\n}\n',
-    );
+    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\n@doc:"A thing." thing => int32\n}\n');
   });
 
   it('an unknown option, a missing file argument and a second file are usage errors, exit 2', async () => {
@@ -865,7 +1002,11 @@ describe('strip', () => {
 
   it('a malformed schema is rejected where it breaks, as file:line:col: message, exit 1', async () => {
     const file = join(dir, 'broken.tn');
-    await writeFile(file, '!!meta:"https://tson.io/2026/38/m/meta.tn"\n{ thing => }\n', 'utf8');
+    await writeFile(
+      file,
+      '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n',
+      'utf8',
+    );
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.INVALID);

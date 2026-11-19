@@ -33,8 +33,9 @@ import type { Task } from '../../io/bytes.js';
 import { FIELD_NAME_RULE, fieldNameRule, matchKey } from '../../link/fieldNameRule.js';
 import { directMembers, type Member } from '../../link/recordExtension.js';
 import type { RecordField } from '../../schema/meta/bodies.js';
+import { typeNameOf } from '../../schema/meta/bodies.js';
 import { subtypesOf, type Namespace, type Top } from '../../schema/meta/typedef.js';
-import { admitting, selfNames } from '../../link/referenceChain.js';
+import { admitting, selfNames } from '../../link/aliasChain.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { lookingAhead, type JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -43,7 +44,8 @@ import type { CompileContext } from './compile.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
 import { fieldValueOf, resolveFieldBody } from './record.js';
-import { lead as leadOf, SCHEMA, TYPE, type Lead } from './tagMembers.js';
+import { lead as leadOf, NO_LEAD, TYPE, type Lead } from './tagMembers.js';
+import { RECORD, refusesScope } from './tags.js';
 import { routeTo, type ChoiceSelfTagReadable, type ExactReader, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost } from './valueIdentity.js';
@@ -72,10 +74,10 @@ function fieldTypeOf(
   members: readonly Member[],
 ): string {
   const own = baseFields?.entries.get(fieldName);
-  if (own !== undefined) return own.type.name;
+  if (own !== undefined) return typeNameOf(own);
   for (const member of members) {
     const field = member.body.fields.entries.get(fieldName);
-    if (field !== undefined) return field.type.name;
+    if (field !== undefined) return typeNameOf(field);
   }
   throw new Error(
     `'${fieldName}' names a discriminator but neither the base nor any of its members declares such a field`,
@@ -113,7 +115,7 @@ function pinsOf(
     )?.[1];
     if (field?.role !== 'FIXED' || field.value === undefined) return undefined;
     try {
-      key.push(identityOfHost(fieldValueOf(ctx, field.type.name, field.value).hostValue));
+      key.push(identityOfHost(fieldValueOf(ctx, typeNameOf(field), field.value).hostValue));
     } catch {
       return undefined;
     }
@@ -222,21 +224,8 @@ export function buildMemberDispatcher(
   }
 
   function* dispatch(rctx: JsonReadContext, lead: Lead, opened: boolean): Task<unknown> {
-    if (lead.schema) {
-      // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `tagMembers.ts`'s top
-      // note.
-      rctx
-        .field(SCHEMA)
-        .report(
-          'SCOPE_NOT_ADMITTED',
-          `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
-            `position -- '${displayName}' is a record`,
-          'no $schema at this position',
-          SCHEMA,
-        );
-      yield* skipNextValue(rctx);
-      return undefined;
-    }
+    // §3.3: `$import` stands at the top of the document alone, so a family position refuses it.
+    if (yield* refusesScope(rctx, lead, displayName, RECORD)) return undefined;
     if (lead.wrapper) {
       // §3.3's wrapper puts the record inside `$value`, so the discriminators are not at this
       // level to read and the tag is the only thing that can place it -- the ordinary wrapper
@@ -368,14 +357,7 @@ export function buildMemberDispatcher(
     // annotation member remains to recognize, so only the discriminators are read, from wherever
     // the stream now sits.
     const selectors = yield* leadingSelectors(rctx, selectorNames, nameKey);
-    const lead: Lead = {
-      schema: false,
-      schemaRef: undefined,
-      typed: false,
-      type: undefined,
-      wrapper: false,
-      selectors,
-    };
+    const lead: Lead = { ...NO_LEAD, selectors };
     return yield* dispatch(rctx, lead, true);
   }
 

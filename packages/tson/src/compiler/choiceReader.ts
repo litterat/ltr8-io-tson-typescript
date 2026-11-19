@@ -35,7 +35,7 @@
  * another name" holds for a variant reference exactly as it does everywhere else, and §5.4's own
  * "Resolution" paragraph already reads a variant by what it *resolves to* ("the resolver validates
  * that each variant resolves to a distinct type"), not by its written spelling -- so `variants`
- * (below) is flattened through `link/referenceChain.ts`'s own `admitting`, the same alias-flattening
+ * (below) is flattened through `link/aliasChain.ts`'s own `admitting`, the same alias-flattening
  * `compiler/subsumption.ts` uses for record subsumption. A `!type-ref` naming a proper *subtype* of
  * a variant is not admitted, deliberately: §7.2 carves choice positions out of the subtype-inclusive
  * subsumption rule it states for "every other typed position" ("Choice-typed positions discriminate
@@ -58,7 +58,7 @@ import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/gr
 import { abandonedValue, type TreeTypeResolver } from '../reader/tree/support.js';
 import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
 import { discriminationClassOf, type DiscriminationClass } from '../link/disjointness.js';
-import { admitting, terminal } from '../link/referenceChain.js';
+import { admitting, terminal } from '../link/aliasChain.js';
 import { hasChoiceSelfTag } from './subsumption.js';
 import type { TsonEvent } from '../stream/event.js';
 

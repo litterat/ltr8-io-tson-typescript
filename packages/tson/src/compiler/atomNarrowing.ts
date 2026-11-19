@@ -47,7 +47,8 @@ export interface Bound<T> {
   readonly facet: string;
 }
 
-function describe<T>(bound: Bound<T>): string {
+/** A bound as a violation names it: its facet and its value. */
+export function describeBound<T>(bound: Bound<T>): string {
   return `${bound.facet} ${renderBoundValue(bound.value)}`;
 }
 
@@ -176,7 +177,7 @@ export function checkLower<T>(
   compare: (a: T, b: T) => number,
 ): void {
   if (source !== undefined && refined !== undefined && !lowerTightens(source, refined, compare)) {
-    out.push(`${describe(refined)} is below the source's own ${describe(source)}`);
+    out.push(`${describeBound(refined)} is below the source's own ${describeBound(source)}`);
   }
 }
 
@@ -188,7 +189,7 @@ export function checkUpper<T>(
   compare: (a: T, b: T) => number,
 ): void {
   if (source !== undefined && refined !== undefined && !upperTightens(source, refined, compare)) {
-    out.push(`${describe(refined)} is above the source's own ${describe(source)}`);
+    out.push(`${describeBound(refined)} is above the source's own ${describeBound(source)}`);
   }
 }
 

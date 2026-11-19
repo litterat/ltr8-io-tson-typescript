@@ -21,6 +21,7 @@
  * module's own doc for why one spelling matters.
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
+import type { ApplicationReference } from '../ast/reference.js';
 import { fromBytes, runSync } from '../io/bytes.js';
 import { encodeUtf8 } from '../io/utf8.js';
 import type { TemplateBody, TemplateParam } from '../schema/meta/bodies.js';
@@ -29,7 +30,7 @@ import type { Top, TypeRef } from '../schema/meta/typedef.js';
 import { isFamilyBase, isTemplateBody } from '../schema/meta/typedef.js';
 import { writeDataValue } from '../write/astWriter.js';
 import { parseDocument } from './dataParser.js';
-import { heldRecord, isApplication, typeRefOf } from './wireForm.js';
+import { applicationIn, heldRecord } from './wireForm.js';
 
 /**
  * A held application (§5.10) with the parameters it binds: the `TemplateBody` `schema/meta`
@@ -93,9 +94,9 @@ export function heldOf(value: Top | undefined): HeldBody | undefined {
     return heldBodyOf(parseHeldText(value.template), value.parameters);
   }
   if (isFamilyBase(value)) {
-    const { discriminators: _selectors, parameters, ...record } = value;
+    const { discriminators: _selectors, ...template } = value;
     void _selectors;
-    return heldBodyOf(heldRecord({ ...record }), parameters);
+    return heldBodyOf(heldRecord(template), value.parameters);
   }
   return undefined;
 }
@@ -136,10 +137,10 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       if (value.form === 'unquoted') into.add(value.text);
       return;
     case 'array':
-      for (const element of value.elements) collectNames(element.value.coreValue, into);
+      for (const element of value.elements) collectNames(element.coreValue, into);
       return;
     case 'record':
-      for (const field of value.fields) collectNames(field.value.value.coreValue, into);
+      for (const field of value.fields) collectNames(field.value.coreValue, into);
       return;
     case 'map':
       // A parameter stands wherever a token stands, map keys and values alike --
@@ -148,8 +149,12 @@ function collectNames(value: CoreValue, into: Set<string>): void {
       // declared-but-unused parameter (§5.10's own error, wrongly raised).
       for (const entry of value.entries) {
         collectNames(entry.key.coreValue, into);
-        collectNames(entry.value.value.coreValue, into);
+        collectNames(entry.value.coreValue, into);
       }
+      return;
+    case 'reference':
+      // A parameter may stand as an application's head or as one of its arguments (§5.10).
+      if (value.reference.kind === 'application') collectApplicationNames(value.reference, into);
       return;
     case 'empty-brace':
     case 'void':
@@ -157,24 +162,37 @@ function collectNames(value: CoreValue, into: Set<string>): void {
   }
 }
 
+function collectApplicationNames(application: ApplicationReference, into: Set<string>): void {
+  into.add(application.name);
+  for (const argument of application.arguments) {
+    if (argument.kind === 'reference') {
+      if (argument.reference.kind === 'name') into.add(argument.reference.name);
+      else collectApplicationNames(argument.reference, into);
+    } else if (argument.form === 'unquoted') {
+      into.add(argument.text);
+    }
+  }
+}
+
 function collectApplications(value: CoreValue, into: TypeRef[]): void {
   switch (value.kind) {
+    case 'reference': {
+      const application = applicationIn(value);
+      if (application !== undefined) into.push(application);
+      return;
+    }
     case 'record':
-      if (isApplication(value)) {
-        into.push(typeRefOf(value));
-        return;
-      }
-      for (const field of value.fields) collectApplications(field.value.value.coreValue, into);
+      for (const field of value.fields) collectApplications(field.value.coreValue, into);
       return;
     case 'array':
-      for (const element of value.elements) collectApplications(element.value.coreValue, into);
+      for (const element of value.elements) collectApplications(element.coreValue, into);
       return;
     case 'map':
       // A map is exactly as legitimate a container to find a nested application inside as an
       // array or a record field is -- both the key and value side of each entry are walked.
       for (const entry of value.entries) {
         collectApplications(entry.key.coreValue, into);
-        collectApplications(entry.value.value.coreValue, into);
+        collectApplications(entry.value.coreValue, into);
       }
       return;
     case 'token':

@@ -1,128 +1,62 @@
 /**
  * Test-only fixtures for `compiler/compile.ts`'s own integration tests -- not itself a `*.test.ts`
- * file, so vitest never tries to run it. Resolves and links three of the real, vendored bundled
- * schemas (`spec/m/*.tn`) the same way `bundled-schemas-resolve.test.ts` does, and resolves a
- * caller-supplied user schema text against `core.tn`'s own governing chain -- the "a user schema
- * importing core.tn" shape Wave 5's own gate is measured against, reused here at unit-test scale.
+ * file, so vitest never tries to run it. Registers the six real, vendored bundled schemas
+ * (`spec/m/*.tn`) on one {@link Tson} the way `stdlib/index.ts` does, and resolves a caller-supplied
+ * user schema text against that registry -- the "a user schema importing core.tn" shape Wave 5's own
+ * gate is measured against, reused here at unit-test scale.
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-import { fromBytes, fromString, runSync } from '../src/io/bytes.js';
-import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
-import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
-import { resolveSchema, type ImportedSchema, type Schema } from '../src/compiler/schemaResolver.js';
-import { compile } from '../src/compiler/compile.js';
-import { createAnnotationValueReader } from '../src/schema/annotationReader.js';
+import { createTson, type Tson } from '../src/config.js';
+import { standardLibrary } from '../src/stdlib/index.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
-import type { DefinitionGetter } from '../src/compiler/resolverTypes.js';
-import { toCoreValue } from '../src/bind/encode.js';
-import { defaultAtomEncoder } from '../src/write/bindingWriter.js';
-import { topBinding } from '../src/schema/bindings.js';
-import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
+import { bootstrapKernel } from '../src/schema/bootstrap.js';
+import { encodeUtf8 } from '../src/io/utf8.js';
+import {
+  CORE_TN,
+  META_TN,
+  NET_TN,
+  NUMERIC_TN,
+  POLICY_TN,
+  TEMPORAL_TN,
+} from '../src/stdlib/schemas.generated.js';
 
-const SPEC = fileURLToPath(new URL('../../../spec/m/', import.meta.url));
+/** The bundled schemas by name; the kernel is `meta`. */
+export type BundledName = 'meta' | 'numeric' | 'temporal' | 'net' | 'core' | 'policy';
 
-function bundledSource(file: string): Uint8Array {
-  return new Uint8Array(readFileSync(SPEC + file));
+const bundled = new Map<BundledName, LinkedSchema>();
+
+function loadBundled(): void {
+  if (bundled.size > 0) return;
+  const tson = createTson({});
+  const kernel = linkSchema(bootstrapKernel(encodeUtf8(META_TN)));
+  tson.register(kernel);
+  bundled.set('meta', kernel);
+  for (const [name, text] of [
+    ['numeric', NUMERIC_TN],
+    ['temporal', TEMPORAL_TN],
+    ['net', NET_TN],
+    ['core', CORE_TN],
+    ['policy', POLICY_TN],
+  ] as const) {
+    bundled.set(name, tson.resolveSchema(text));
+  }
 }
 
-type BundledName = 'meta-kernel' | 'meta' | 'core';
-const CHAIN: Record<BundledName, readonly BundledName[]> = {
-  'meta-kernel': [],
-  meta: ['meta-kernel'],
-  core: ['meta-kernel', 'meta'],
-};
-
-const cache = new Map<BundledName, LinkedSchema>();
-
-/** `linked` as one of the schemas another imports: its entries with their facts and key annotations. */
-function importedFrom(linked: LinkedSchema): ImportedSchema {
-  return {
-    entries: linked.entries,
-    facts: linked.facts,
-    keyAnnotations: linked.keyAnnotations,
-    originOf: () => linked.id,
-    enumForms: linked.enumForms,
-  };
-}
-
-function structureNamespaceFor(name: BundledName): DefinitionGetter {
-  const chain = [...CHAIN[name]].reverse().map(resolvedBundled); // nearest first
-  return (typeName) => {
-    for (const schema of chain) {
-      const found = schema.entries.get(typeName);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  };
-}
-
-function resolveBundled(name: BundledName, meta: LinkedSchema): Schema {
-  const document = runSync(parseSchemaDocument(fromBytes(bundledSource(`${name}.tn`))));
-  const metaDefinitions = structureNamespaceFor(name);
-  return resolveSchema(document, {
-    definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
-    // §6/§3.3.3: a key annotation's value is read through the *governing meta's* own compiled
-    // reader for the annotation's name. Without one every key annotation resolves name-only, and
-    // the `@doc` on each declaration is lost from the resolved output.
-    annotationValueReader: createAnnotationValueReader(compile(meta)),
-    metaDefinitions,
-    metaFacts: (entry) => meta.facts.get(entry),
-    encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
-    resolveImport: () => importedFrom(meta),
-  });
-}
-
-/** The real, vendored `<name>.tn` (`meta-kernel`/`meta`/`core`), resolved against its own governing chain and linked -- cached, since `core` depends on `meta` depends on `meta-kernel`. */
+/** The real, vendored `<name>.tn`, resolved and linked once -- the kernel is `meta`. */
 export function resolvedBundled(name: BundledName): LinkedSchema {
-  const already = cache.get(name);
-  if (already !== undefined) return already;
-  const chain = CHAIN[name];
-  const last = chain.at(-1);
-  const governingMeta = last === undefined ? undefined : resolvedBundled(last);
-  const unlinked =
-    governingMeta === undefined
-      ? bootstrapMetaKernel(bundledSource('meta-kernel.tn'))
-      : resolveBundled(name, governingMeta);
-  const linked = linkSchema(unlinked, {
-    ...(governingMeta === undefined
-      ? {}
-      : {
-          structureNamespace: governingMeta.entries,
-          structureFacts: governingMeta.facts,
-          resolveImport: () => importedFrom(governingMeta),
-        }),
-  });
-  cache.set(name, linked);
-  return linked;
+  loadBundled();
+  const found = bundled.get(name);
+  if (found === undefined) throw new Error(`no bundled schema '${name}'`);
+  return found;
 }
+
+const shared: { tson?: Tson } = {};
 
 /**
- * Resolves and links `source` (real TSON schema text) as a user schema governed by `meta.tn` and
- * importing `core.tn` -- the "a user schema importing core.tn" shape Wave 5's own gate is measured
- * against. `source`'s own `!!meta`/`!!import` URIs are never matched against a real fetch: both
- * resolvers here are stubs that hand back `meta`'s/`core`'s own real, already-linked namespace
- * regardless of the URI text asked for, since nothing in this test suite fetches schemas over the
- * network (`CLAUDE.md`'s zero-runtime-dependency rule extends to test-time fetches too).
+ * Resolves and links `source` (real TSON schema text, a `!schema` document) against the standard
+ * library. `!!import` of a bundled identity finds it already registered, since nothing in this suite
+ * reaches the network (`CLAUDE.md`'s zero-runtime-dependency rule extends to test-time fetches too).
  */
 export function resolveUserSchema(source: string): LinkedSchema {
-  const meta = resolvedBundled('meta');
-  const core = resolvedBundled('core');
-  const document = runSync(parseSchemaDocument(fromString(source)));
-  const metaDefinitions: DefinitionGetter = (typeName) =>
-    meta.entries.get(typeName) ?? resolvedBundled('meta-kernel').entries.get(typeName);
-  const unlinked = resolveSchema(document, {
-    definitionMetaReader: createDefinitionMetaReader(metaDefinitions),
-    annotationValueReader: createAnnotationValueReader(compile(meta)),
-    metaDefinitions,
-    metaFacts: (entry) => meta.facts.get(entry),
-    encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
-    resolveImport: () => importedFrom(core),
-  });
-  return linkSchema(unlinked, {
-    structureNamespace: meta.entries,
-    structureFacts: meta.facts,
-    resolveImport: () => importedFrom(core),
-  });
+  shared.tson ??= standardLibrary();
+  return shared.tson.resolveSchema(source);
 }

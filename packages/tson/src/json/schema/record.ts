@@ -17,7 +17,7 @@
  * only whether the leading members it meets are placed and spelled correctly.
  *
  * - **`$type` at the object's first member** MAY restate this record's own type (itself, or an
- *   alias whose reference chain terminates at it, `link/referenceChain.ts`'s `selfNames`) — never
+ *   alias whose alias chain terminates at it, `link/aliasChain.ts`'s `selfNames`) — never
  *   anything else, since a value reaching this reader has already been placed at exactly this
  *   type by whichever dispatcher (if any) sits in front of it. Admitted, the read continues to
  *   this record's own fields (the inline form) or, immediately following, to a lone `$value` (the
@@ -29,8 +29,8 @@
  *   value inside may itself carry a tag selecting a subtype, which only `wrapped` (not this
  *   record's own, subtype-blind fields) knows how to place. This record's own fields are never
  *   read in this branch: a wrapper is apparatus, not a record (§3.3).
- * - **Any other placement of the three** — `$schema` at any position (never admitted: no record
- *   position is scoped, §7.8), `$type` anywhere but first, `$value` with no leading, admitted
+ * - **Any other placement of the three** — `$import` at any position (never admitted: it stands at
+ *   the top of the document alone, §3.3), `$type` anywhere but first, `$value` with no leading, admitted
  *   `$type` before it — is a resolver error, and the whole record is abandoned: reading past it
  *   as ordinary fields would report false verdicts against a shape a misplaced selector has
  *   already made unreadable. Every other member name, `$`-initial or not, is a field name (§3.2).
@@ -54,7 +54,7 @@ import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Position } from '../../core/position.js';
 import type { Task } from '../../io/bytes.js';
 import { fieldNameRule, matchKey, type FieldNameRule } from '../../link/fieldNameRule.js';
-import { selfNames, terminalDefinition } from '../../link/referenceChain.js';
+import { selfNames, terminalDefinition } from '../../link/aliasChain.js';
 import {
   fieldOmission,
   groupRefusals,
@@ -62,10 +62,12 @@ import {
   type FieldGroup,
   type FieldOmission,
   namedFields,
+  typeNameOf,
   type NamedField,
   type RecordBody,
 } from '../../schema/meta/bodies.js';
-import { isTemplateBody, type Atom, type Top } from '../../schema/meta/typedef.js';
+import { isTemplateBody, type Atom, type Reference, type Top } from '../../schema/meta/typedef.js';
+import type { ReferenceBody } from '../../schema/meta/bodies.js';
 import { toNfc } from '../../unicode/nfc.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -86,16 +88,23 @@ import {
   type AtomForm,
 } from './atoms.js';
 import type { CompileContext } from './compile.js';
+import { buildDependentReader, isDependentReader } from './dependent.js';
+import {
+  referenceIn,
+  writtenBeforeItsSibling,
+  writtenWithoutItsSibling,
+} from '../../link/dependentFields.js';
 import { skipNextValue, skipRestOfObject, skipValue } from './eventSkip.js';
 import { memberNameRefuses, nameHygieneRefuses } from './nameHygiene.js';
 import {
   isTagMember,
   readWrappedValue,
   refuseMisplaced,
-  SCHEMA,
+  IMPORT,
   TYPE,
   VALUE,
 } from './tagMembers.js';
+import { RECORD, refuseScope } from './tags.js';
 import type { ExactReader } from './route.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost } from './valueIdentity.js';
@@ -143,7 +152,7 @@ function fieldValueNode(form: AtomForm, hostValue: unknown, tokenText: string): 
 }
 
 /**
- * `fieldTypeName`'s reference chain walked to the atom body it terminates at (§8.3) — the one step
+ * `fieldTypeName`'s alias chain walked to the atom body it terminates at (§8.3) — the one step
  * {@link fieldValueOf} and {@link fixedFieldReader} share. Exported for
  * `json/schema/dispatchMember.ts`'s own use: a sealed family's discriminator fields are read at
  * the BASE's own declared type ([TSON-JSON] §6.1.5, "the one set of types known before dispatch"),
@@ -161,16 +170,14 @@ export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): At
   if (isTemplateBody(body)) {
     throw new Error(`'${fieldTypeName}' is an open template, and carries no atom parser`);
   }
-  if (body.kind === 'reference') {
-    throw new Error(
-      `'${fieldTypeName}'s reference chain did not collapse -- this is a library bug`,
-    );
+  if (body.kind === 'alias') {
+    throw new Error(`'${fieldTypeName}'s alias chain did not collapse -- this is a library bug`);
   }
   return body as Atom;
 }
 
 /**
- * `fieldTypeName`'s reference chain walked to an atom (§8.3), and its stated `token` resolved
+ * `fieldTypeName`'s alias chain walked to an atom (§8.3), and its stated `token` resolved
  * against it — the port of the Java reference's `FieldValue.of`. Exported for
  * `json/schema/dispatchMember.ts`'s own use: a sealed member's own pin for a discriminator field is
  * exactly this, applied to that field's stated `~`/`=` token at the base's own declared type.
@@ -225,7 +232,7 @@ function fixedFieldReader(
 
 interface RecordPlan {
   readonly displayName: string;
-  /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose reference chain terminates at it (`link/referenceChain.ts`'s `selfNames`). */
+  /** Every written name a leading `$type` may restate here — this record's own name, plus every alias whose alias chain terminates at it (`link/aliasChain.ts`'s `selfNames`). */
   readonly own: ReadonlySet<string>;
   /** The whole linked schema's namespace, for {@link admissibleTag}'s own two-step resolution question ("does the name resolve at all"). */
   readonly entries: ReadonlyMap<string, Top>;
@@ -237,6 +244,12 @@ interface RecordPlan {
   /** A FIXED field's own decoding reader ({@link fixedFieldReader}); `undefined` at every other field's slot. */
   readonly fixedReaders: readonly (JsonTypeReader | undefined)[];
   readonly stated: readonly (FieldValue | undefined)[];
+  /** Each dependent field's sibling slot ([TSON-SCHEMA] §5.6), -1 at every other field; a dependent field's `schemaReaders` entry is its `DependentReader`. */
+  readonly siblingOf: readonly number[];
+  /** Whether each field is the sibling of some dependent field, so a read keeps the reference it wrote. */
+  readonly typesADependent: readonly boolean[];
+  /** Whether any field is a dependent one. */
+  readonly hasDependents: boolean;
   /** Each field's slot, keyed by its NFC name in the name type's form ({@link nameKey}). */
   readonly index: ReadonlyMap<string, number>;
   readonly groups: readonly FieldGroup[];
@@ -246,6 +259,17 @@ interface RecordPlan {
   readonly folds: boolean;
   /** Every declared field, for an unrecognised member's message and `expected`. */
   readonly declaredFields: string;
+}
+
+/** The reference body typing a dependent field's `sibling`, past its alias hops, or `undefined` where it is none. */
+function siblingTypeOf(
+  sibling: NamedField | undefined,
+  ctx: CompileContext,
+): ReferenceBody | undefined {
+  if (sibling === undefined || sibling.type.kind === 'sibling') return undefined;
+  const definition = terminalDefinition(sibling.type.name, (n) => ctx.linkedSchema.entries.get(n));
+  if (definition === undefined || isTemplateBody(definition)) return undefined;
+  return definition.kind === 'reference_type' ? definition : undefined;
 }
 
 /** An NFC member name in the name type's form: the key a declared field and a document's name share. */
@@ -265,6 +289,9 @@ function buildRecordPlan(
   const schemaReaders: JsonTypeReader[] = [];
   const fixedReaders: (JsonTypeReader | undefined)[] = [];
   const stated: (FieldValue | undefined)[] = [];
+  const siblingOf: number[] = [];
+  const typesADependent: boolean[] = fields.map(() => false);
+  let hasDependents = false;
   const index = new Map<string, number>();
   // §6.1.1: member names are NFC-normalized before matching, per [TSON-DATA] §7.2.1's resolver
   // rule, and then put into the record's name type's form ([TSON-SCHEMA] §5.5), so a name the type
@@ -276,14 +303,36 @@ function buildRecordPlan(
     names.push(fieldName);
     index.set(matchKey(fieldNames, fieldName), i);
     omitted.push(fieldOmission(field, isGroupMember(body.groups, field.name)));
-    schemaReaders.push(ctx.resolve(field.type.name));
+    const typeName = typeNameOf(field);
+    // A dependent field's type is chosen per instance by its sibling's value (§5.6), which the
+    // record hands its reader.
+    siblingOf.push(-1);
+    if (field.type.kind === 'sibling') {
+      const siblingField = field.type.field;
+      const at = fields.findIndex((candidate) => candidate.name === siblingField);
+      if (at < 0) {
+        throw new Error(
+          `'${name}': dependent field '${field.name}' names no field '${siblingField}'; the linker refuses one`,
+        );
+      }
+      siblingOf[i] = at;
+      typesADependent[at] = true;
+      hasDependents = true;
+      schemaReaders.push(
+        buildDependentReader(name, field.name, siblingField, ctx, siblingTypeOf(fields[at], ctx)),
+      );
+    } else {
+      schemaReaders.push(ctx.resolve(typeName));
+    }
     fixedReaders.push(
       field.role === 'FIXED'
-        ? fixedFieldReader(ctx, field.type.name, ctx.locationOf(field.type.name))
+        ? fixedFieldReader(ctx, typeName, ctx.locationOf(typeName))
         : undefined,
     );
     stated.push(
-      field.value === undefined ? undefined : fieldValueOf(ctx, field.type.name, field.value),
+      field.value === undefined || field.type.kind === 'sibling'
+        ? undefined
+        : fieldValueOf(ctx, typeName, field.value),
     );
   });
 
@@ -298,6 +347,9 @@ function buildRecordPlan(
     schemaReaders,
     fixedReaders,
     stated,
+    siblingOf,
+    typesADependent,
+    hasDependents,
     index,
     groups: body.groups,
     fieldNames,
@@ -361,28 +413,18 @@ function admissibleTag(ctx: JsonReadContext, plan: RecordPlan, content: JsonEven
 }
 
 /**
- * One of §3.2's three where none may stand (§3.3), at a record position: `$schema` is never
- * admitted (no record position is scoped, [TSON-SCHEMA] §7.8), and `$type` or `$value` out of its
+ * One of §3.2's three where none may stand (§3.3), at a record position: `$import` is never
+ * admitted (it stands at the top of the document alone, §3.3), and `$type` or `$value` out of its
  * leading place are `tagMembers.ts`'s own leading-member rules restated at whichever member this
  * loop actually met. Always a resolver error, and always abandons the whole record: reading past
  * a misplaced selector as ordinary fields would report false verdicts against a shape it has
  * already made unreadable.
  */
 function refuseTagMember(ctx: JsonReadContext, name: string, displayName: string): void {
-  if (name === SCHEMA) {
-    // §3.3's closing paragraph states this directly: `$schema` "is a resolver error at any
-    // position whose effective type is not a `scoped` instance" -- §9.4 file drawer, not
-    // `UNRECOGNIZED_FIELD`'s validation category, even though it does not appear itemised in
-    // §9.4's table row by row.
-    ctx
-      .field(SCHEMA)
-      .report(
-        'SCOPE_NOT_ADMITTED',
-        `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
-          `position -- '${displayName}' is a record`,
-        'no $schema at this position',
-        SCHEMA,
-      );
+  if (name === IMPORT) {
+    // §3.3: `$import` stands at the top of the document alone, so a record position refuses it
+    // as a resolver error, never as `UNRECOGNIZED_FIELD`'s validation category.
+    refuseScope(ctx, displayName, RECORD);
   } else if (name === TYPE) {
     refuseMisplaced(ctx, TYPE);
   } else {
@@ -448,6 +490,15 @@ export function buildRecordReader(
       const seen = new Map<string, FirstGiven>();
       let position = 0;
       let tagged = false;
+      // A dependent field's state, kept only where the record has one: each sibling's reference as written.
+      const named: (Reference | undefined)[] | undefined = plan.hasDependents
+        ? new Array<Reference | undefined>(plan.names.length).fill(undefined)
+        : undefined;
+      // Each dependent member reached before its sibling was written, by the name written and where it stands.
+      const waiting: Waiting = {
+        member: new Array<string | undefined>(plan.names.length).fill(undefined),
+        at: new Array<JsonReadContext | undefined>(plan.names.length).fill(undefined),
+      };
 
       for (;;) {
         const event = yield* outer.next();
@@ -493,9 +544,13 @@ export function buildRecordReader(
           continue;
         }
         seen.set(key, { name: memberName, position: event.position });
-        slots[at] = yield* readField(outer, plan, at, memberName);
+        slots[at] =
+          named === undefined
+            ? yield* readField(outer, plan, at, memberName)
+            : yield* readTracked(outer, plan, at, memberName, slots, named, waiting);
       }
 
+      if (plan.hasDependents) refuseAbsentSiblings(plan, slots, waiting);
       if (plan.groups.length > 0) {
         validateGroups(outer, plan, slots);
       }
@@ -598,6 +653,144 @@ function* unmatched(
   }
   yield* skipNextValue(at);
   return refused;
+}
+
+/**
+ * One stated member of a record that has a dependent field: a sibling is read as any member is and
+ * its reference kept as written, so long as its own read reported nothing; a dependent member is
+ * read against the reference its sibling names ({@link readDependent}); any other member is read
+ * as usual.
+ */
+function* readTracked(
+  ctx: JsonReadContext,
+  plan: RecordPlan,
+  at: number,
+  memberName: string,
+  slots: readonly Slot[],
+  named: (Reference | undefined)[],
+  waiting: Waiting,
+): Task<Slot> {
+  if (plan.typesADependent[at] === true) {
+    siblingArrives(plan, at, waiting);
+    const peeked = yield* ctx.peek();
+    const text = peeked.kind === 'string' ? peeked.value : undefined;
+    const before = ctx.reported();
+    const slot = yield* readField(ctx, plan, at, memberName);
+    named[at] = ctx.reported() > before ? undefined : referenceIn(text);
+    return slot;
+  }
+  if ((plan.siblingOf[at] ?? -1) >= 0 && (yield* ctx.peek()).kind !== 'null') {
+    return yield* readDependent(ctx, plan, at, memberName, slots, named, waiting);
+  }
+  return yield* readField(ctx, plan, at, memberName);
+}
+
+/**
+ * A dependent member, read against the type its sibling names in this object: the pin, the
+ * sibling as written before it, or the sibling's default where it is not written ([TSON-SCHEMA]
+ * §5.6). A free sibling with no default that is not yet written leaves the member with no type,
+ * §6.1.6's order exception; `DependentReader.readAgainst` is where that member is judged
+ * (`json/schema/dependent.ts`).
+ */
+function* readDependent(
+  ctx: JsonReadContext,
+  plan: RecordPlan,
+  at: number,
+  memberName: string,
+  slots: readonly Slot[],
+  named: readonly (Reference | undefined)[],
+  waiting: Waiting,
+): Task<Slot> {
+  const sibling = plan.siblingOf[at];
+  const reader = plan.schemaReaders[at];
+  const siblingField = sibling === undefined ? undefined : plan.fields[sibling];
+  if (sibling === undefined || siblingField === undefined || reader === undefined) {
+    throw new Error('unreachable: a dependent field with no sibling slot');
+  }
+  if (!isDependentReader(reader)) {
+    throw new Error('unreachable: a dependent field with no dependent reader');
+  }
+  const statedText = (): string | undefined => {
+    const hostValue = plan.stated[sibling]?.hostValue;
+    return typeof hostValue === 'string' ? hostValue : undefined;
+  };
+  let reference: Reference | undefined;
+  const fieldCtx = fieldContext(ctx, plan, at, memberName);
+  if (siblingField.role === 'FIXED' && plan.stated[sibling] !== undefined) {
+    reference = referenceIn(statedText());
+  } else if (slots[sibling] !== undefined) {
+    reference = named[sibling];
+  } else if (plan.omitted[sibling] === 'INJECTED' && plan.stated[sibling] !== undefined) {
+    reference = referenceIn(statedText());
+    waiting.member[at] = memberName;
+    waiting.at[at] = fieldCtx;
+  } else {
+    // Not yet typed: skipped unjudged, and refused when the sibling arrives (the order rule) or when
+    // the object closes without it.
+    waiting.member[at] = memberName;
+    waiting.at[at] = fieldCtx;
+    yield* skipNextValue(fieldCtx);
+    return REFUSED;
+  }
+  const siblingCtx = fieldContext(ctx, plan, sibling, plan.names[sibling] ?? siblingField.name);
+  const value = yield* reader.readAgainst(
+    fieldContext(ctx, plan, at, memberName),
+    reference,
+    siblingCtx,
+  );
+  return value === undefined ? REFUSED : (value as JsonValue);
+}
+
+/** Each dependent member reached before its sibling was written ([TSON-JSON] §6.1.6): the name written and where it stands. */
+interface Waiting {
+  readonly member: (string | undefined)[];
+  readonly at: (JsonReadContext | undefined)[];
+}
+
+/**
+ * Sibling `sibling` is written: a free one after a dependent member reached before it is the order
+ * rule broken, reported at that member. A pinned sibling orders nothing, its pin typing the member.
+ */
+function siblingArrives(plan: RecordPlan, sibling: number, waiting: Waiting): void {
+  if (plan.fields[sibling]?.role === 'FIXED') return;
+  for (let d = 0; d < waiting.member.length; d += 1) {
+    const written = waiting.member[d];
+    if (written !== undefined && plan.siblingOf[d] === sibling) {
+      const refusal = writtenBeforeItsSibling(
+        plan.displayName,
+        written,
+        plan.fields[sibling]?.name ?? '',
+      );
+      waiting.at[d]?.report(refusal.code, refusal.message, refusal.expected, refusal.found);
+      waiting.member[d] = undefined;
+    }
+  }
+}
+
+/**
+ * The object has closed: each dependent member still waiting on a sibling that never arrived, a field
+ * group's member, is refused where it was written, nothing having typed it. A sibling with a default
+ * typed the member, and a required one is the missing-field error.
+ */
+function refuseAbsentSiblings(plan: RecordPlan, slots: readonly Slot[], waiting: Waiting): void {
+  for (let d = 0; d < waiting.member.length; d += 1) {
+    const written = waiting.member[d];
+    const sibling = plan.siblingOf[d];
+    if (
+      written !== undefined &&
+      sibling !== undefined &&
+      sibling >= 0 &&
+      slots[sibling] === undefined &&
+      plan.omitted[sibling] === 'ABSENT'
+    ) {
+      const refusal = writtenWithoutItsSibling(
+        plan.displayName,
+        written,
+        plan.fields[sibling]?.name ?? '',
+      );
+      waiting.at[d]?.report(refusal.code, refusal.message, refusal.expected, refusal.found);
+    }
+  }
 }
 
 function* readField(

@@ -14,30 +14,32 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-field-names.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
-  json_name => !identifier_type { start_add: "@$" }
-  node => !record { name_type: json_name  fields: {
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
+  json_name => !unicode.identifier_type { start_add: "@$" }
+  node => !meta.record { name_type: json_name  fields: {
     "@id" => { type: text }  label => { type: text } } }
-  json_ref => !record { name_type: json_name  fields: {
+  json_ref => !meta.record { name_type: json_name  fields: {
     "$ref" => { type: text }  "$id" => { type: text  optional: true } } }
-  typed => !record { name_type: json_name  fields: { "$type" => { type: text } } }
+  typed => !meta.record { name_type: json_name  fields: { "$type" => { type: text } } }
   address => json_record & { city: text }
   located => ld_node & address
-  folded => !identifier_type { normalization: NFKC_CASEFOLD }
-  frow => !record { name_type: folded  fields: { name => { type: text } } }
-  fbase => !record { name_type: folded  extension: ABSTRACT  fields: {} }
+  folded => !unicode.identifier_type { normalization: NFKC_CASEFOLD }
+  frow => !meta.record { name_type: folded  fields: { name => { type: text } } }
+  fbase => !meta.record { name_type: folded  extension: ABSTRACT  fields: {} }
   pet => abstract fbase & { kind: text =?  name: text }
   dog => pet & { kind?: = "dog"  breed: text }
   kennel => { p: pet }
-  words => !identifier_type { continue_add: "-"  medial: " " }
-  row => !record { name_type: words  fields: { "first name" => { type: text } } }
-  json_record => !record { name_type: json_name  extension: ABSTRACT  fields: {} }
+  tpet => <B> fbase & { kind: text =?  name: text  extra?: B }
+  tdog => tpet<text> & { kind?: = "dog" }
+  tkennel => { p: tpet }
+  words => !unicode.identifier_type { continue_add: "-"  medial: " " }
+  row => !meta.record { name_type: words  fields: { "first name" => { type: text } } }
+  json_record => !meta.record { name_type: json_name  extension: ABSTRACT  fields: {} }
   ld_node => json_record & { "@id": text  label: text }
   ld_holder => { n: ld_node }
-  ld_name => !identifier_type { start_add: "@" }
-  ld_only => !record { name_type: ld_name  fields: { "@id" => { type: text } } }
+  ld_name => !unicode.identifier_type { start_add: "@" }
+  ld_only => !meta.record { name_type: ld_name  fields: { "@id" => { type: text } } }
   plain => { a: text }
 }
 `;
@@ -81,6 +83,8 @@ describe('§6.1.1 a member name is a value of its record’s name type', () => {
   it('§6.1.1, §6.1.5: a member name is matched in its name type’s form, and so is a family’s selector', () => {
     expect(read('frow', '{"NAME": "x"}')).toEqual([]);
     expect(read('kennel', '{"p": {"KIND": "dog", "name": "Rex", "Breed": "c"}}')).toEqual([]);
+    // A record template base's members take its name type too.
+    expect(read('tkennel', '{"p": {"KIND": "dog", "name": "Rex"}}')).toEqual([]);
   });
 
   /**

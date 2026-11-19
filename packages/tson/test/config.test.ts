@@ -19,7 +19,7 @@ import {
   withRestrictionLevel,
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
-import { bootstrapMetaKernel } from '../src/schema/bootstrap.js';
+import { bootstrapKernel } from '../src/schema/bootstrap.js';
 import { linkSchema, type LinkedSchema } from '../src/link/link.js';
 import type { Annotations, Top } from '../src/schema/meta/typedef.js';
 import {
@@ -47,29 +47,44 @@ function ownId(bytes: Uint8Array): string {
   return match[1];
 }
 
-const KERNEL_BYTES = bundledSource('meta-kernel.tn');
-const META_BYTES = bundledSource('meta.tn');
+const KERNEL_BYTES = bundledSource('meta.tn');
+const NUMERIC_BYTES = bundledSource('numeric.tn');
+const NUMERIC_TEXT = new TextDecoder().decode(NUMERIC_BYTES);
+const TEMPORAL_BYTES = bundledSource('temporal.tn');
+const NET_BYTES = bundledSource('net.tn');
 const CORE_BYTES = bundledSource('core.tn');
 
 const KERNEL_ID = ownId(KERNEL_BYTES);
-const META_ID = ownId(META_BYTES);
+const NUMERIC_ID = ownId(NUMERIC_BYTES);
+const TEMPORAL_ID = ownId(TEMPORAL_BYTES);
+const NET_ID = ownId(NET_BYTES);
 const CORE_ID = ownId(CORE_BYTES);
 
-const META_TEXT = new TextDecoder().decode(META_BYTES);
+/** The libraries `core.tn` imports, in the order the registry needs them (§9). */
+const LIBRARIES: readonly Uint8Array[] = [NUMERIC_BYTES, TEMPORAL_BYTES, NET_BYTES];
 
 const CATALOG_SCHEMA = `
 !!id:"test://catalog.tn"
-!!meta:"${META_ID}"
 !!import:"${CORE_ID}"
-{
+!schema {
   reading => { id: uuid label: non_empty_text }
   non_empty_text => !text ^ { min_length: 1 }
 }
 `;
 
+/** `tson` with the pre-loaded kernel, the three libraries and `core.tn` registered. */
+function withStdlib(tson: ReturnType<typeof createTson>): ReturnType<typeof createTson> {
+  tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
+  for (const library of LIBRARIES) tson.resolveSchema(library);
+  tson.resolveSchema(CORE_BYTES);
+  return tson;
+}
+
 function bundledOnlySource(): SchemaSource {
   const byReference = new Map<string, Uint8Array>([
-    [META_ID, META_BYTES],
+    [NUMERIC_ID, NUMERIC_BYTES],
+    [TEMPORAL_ID, TEMPORAL_BYTES],
+    [NET_ID, NET_BYTES],
     [CORE_ID, CORE_BYTES],
   ]);
   return {
@@ -104,23 +119,25 @@ describe('createTson: registry primitives', () => {
 
   it('register adds an already-linked schema under its own canonical identity', () => {
     const tson = createTson();
-    const kernel = linkSchema(bootstrapMetaKernel(KERNEL_BYTES));
+    const kernel = linkSchema(bootstrapKernel(KERNEL_BYTES));
     expect(kernel.id).toBe(KERNEL_ID);
     tson.register(kernel);
-    expect(tson.schemas.get('tson.io/2026/38/m/meta-kernel.tn')).toBe(kernel);
+    expect(tson.schemas.get('tson.io/2026/39/m/meta.tn')).toBe(kernel);
   });
 
-  it('resolveSchema refuses a schema whose governing !!meta is not registered', () => {
+  it('resolveSchema refuses a schema whose !!import is not registered', () => {
     const tson = createTson();
-    expect(() => tson.resolveSchema(META_BYTES)).toThrow(TsonSchemaValidationError);
+    expect(() => tson.resolveSchema(NUMERIC_BYTES)).toThrow(TsonSchemaValidationError);
   });
 
-  it('resolveSchema, once the governing chain is registered, resolves/links/registers and returns the result', () => {
+  it('resolveSchema, once its imports are registered, resolves/links/registers and returns the result', () => {
     const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    const meta = tson.resolveSchema(META_BYTES);
-    expect(meta.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/38/m/meta.tn')).toBe(meta);
+    tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
+    const numeric = tson.resolveSchema(NUMERIC_BYTES);
+    expect(numeric.id).toBe(NUMERIC_ID);
+    expect(tson.schemas.get('tson.io/2026/39/m/numeric.tn')).toBe(numeric);
+    tson.resolveSchema(TEMPORAL_BYTES);
+    tson.resolveSchema(NET_BYTES);
 
     const core = tson.resolveSchema(CORE_BYTES);
     expect(core.id).toBe(CORE_ID);
@@ -132,10 +149,7 @@ describe('createTson: registry primitives', () => {
   });
 
   it('compile + readTree/validate work end to end against a real conforming document', () => {
-    const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    tson.resolveSchema(META_BYTES);
-    tson.resolveSchema(CORE_BYTES);
+    const tson = withStdlib(createTson());
     const catalog = tson.resolveSchema(CATALOG_SCHEMA);
     const compiled = tson.compile(catalog);
 
@@ -179,22 +193,22 @@ describe('createTson: fetch/preload without a schemaSource', () => {
 describe('createTson: preload against a configured schemaSource', () => {
   it('fetches, resolves, links, registers and content-hash-verifies each reference in order', async () => {
     const tson = createTson({ schemaSource: bundledOnlySource() });
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
 
-    await tson.preload([META_ID, CORE_ID]);
+    await tson.preload([NUMERIC_ID, TEMPORAL_ID, NET_ID, CORE_ID]);
 
-    expect(tson.schemas.get('tson.io/2026/38/m/meta.tn')?.id).toBe(META_ID);
-    expect(tson.schemas.get('tson.io/2026/38/m/core.tn')?.id).toBe(CORE_ID);
+    expect(tson.schemas.get('tson.io/2026/39/m/numeric.tn')?.id).toBe(NUMERIC_ID);
+    expect(tson.schemas.get('tson.io/2026/39/m/core.tn')?.id).toBe(CORE_ID);
 
     // Idempotent: a second preload of the same references touches the source again but adds
     // nothing new and does not throw (already registered, so resolution is skipped entirely).
-    await tson.preload([META_ID, CORE_ID]);
+    await tson.preload([NUMERIC_ID, TEMPORAL_ID, NET_ID, CORE_ID]);
   });
 
   it('rejects a reference whose fetched content does not hash to its own declared ?sha256= pin', async () => {
-    const tamperedId = META_ID; // carries a real pin
+    const tamperedId = NUMERIC_ID; // carries a real pin
     const source: SchemaSource = {
-      fetch: () => Promise.resolve(bytesOf('!!id:"x"\n!!meta:"x"\n{}\n')), // wrong content
+      fetch: () => Promise.resolve(bytesOf('!!id:"x"\n!schema {}\n')), // wrong content
     };
     const tson = createTson({ schemaSource: source });
     await expect(tson.preload([tamperedId])).rejects.toThrow();
@@ -202,8 +216,8 @@ describe('createTson: preload against a configured schemaSource', () => {
 
   it('records each preloaded identity its own content hash, verified against a later pinned !!import to it ([TSON-SCHEMA] §10.2, WP3B)', async () => {
     const tson = createTson({ schemaSource: bundledOnlySource() });
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    await tson.preload([META_ID, CORE_ID]); // records core.tn's real hash, not only meta.tn's own pin on it
+    tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
+    await tson.preload([NUMERIC_ID, TEMPORAL_ID, NET_ID, CORE_ID]); // records core.tn's real hash, not only its libraries' own pin on it
 
     // CATALOG_SCHEMA's own `!!import:"${CORE_ID}"` already carries core.tn's correct pin -- this
     // now actually verifies it against the recorded hash, rather than silently trusting it.
@@ -213,9 +227,8 @@ describe('createTson: preload against a configured schemaSource', () => {
     const badPin = CORE_ID.replace(/sha256=[0-9a-f]{64}/u, `sha256=${wrongHash}`);
     const badImport = `
 !!id:"test://catalog-bad.tn"
-!!meta:"${META_ID}"
 !!import:"${badPin}"
-{
+!schema {
   reading => { id: uuid }
 }
 `;
@@ -223,47 +236,43 @@ describe('createTson: preload against a configured schemaSource', () => {
   });
 
   it('never verifies a pin against an identity registered directly as a LinkedSchema, with no source text to hash ([TSON-SCHEMA] §10.2)', () => {
-    // meta-kernel here is `register`ed directly (a LinkedSchema built by `bootstrapMetaKernel`,
-    // never resolved from bytes through this instance), so it is never hashed -- meta.tn's own
-    // `!!meta` line pins it, and that pin goes unverified, exactly as `verifyPin`'s own doc
+    // The kernel here is `register`ed directly (a LinkedSchema built by `bootstrapKernel`, never
+    // resolved from bytes through this instance), so it is never hashed -- numeric.tn's own
+    // `!!import` line pins it, and that pin goes unverified, exactly as `verifyPin`'s own doc
     // states. This is the one route `recordContentHash` cannot reach: `register`'s whole point is
     // accepting a schema this instance did not resolve for itself, and there is no source text
-    // to hash. `registerStandardLibrary` (`stdlib/index.ts`) avoids the gap for its own bootstrap
-    // by re-resolving meta-kernel's own source a second time right after -- the next test.
+    // to hash.
     const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    expect(() => tson.resolveSchema(META_BYTES)).not.toThrow();
+    tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
+    expect(() => tson.resolveSchema(NUMERIC_BYTES)).not.toThrow();
   });
 
   it('a schema resolved from source text (not only a preloaded one) has its own content hash recorded and verified against its own !!id pin ([TSON-SCHEMA] §10.2, WP3B)', () => {
-    // The gap above closes once meta-kernel is *resolved* rather than merely registered --
-    // exactly what `registerStandardLibrary` does for its own bootstrap (`stdlib/index.ts`'s own
-    // doc: "meta-kernel again, ordinarily, governed by the bootstrap output just registered").
+    // The gap above closes once the kernel is *resolved* rather than merely registered.
     const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    tson.resolveSchema(KERNEL_BYTES); // records meta-kernel's own real hash this time
-    expect(() => tson.resolveSchema(META_BYTES)).not.toThrow(); // meta.tn's real pin on it verifies clean
+    tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
+    tson.resolveSchema(KERNEL_BYTES); // records the kernel's own real hash this time
+    expect(() => tson.resolveSchema(NUMERIC_BYTES)).not.toThrow(); // numeric.tn's real pin on it verifies clean
 
     const wrongPin = KERNEL_ID.replace(/sha256=[0-9a-f]{64}/u, `sha256=${'0'.repeat(64)}`);
-    const tamperedMeta = META_TEXT.replace(/!!meta:"[^"]+"/u, `!!meta:"${wrongPin}"`);
+    const tamperedNumeric = NUMERIC_TEXT.replace(/!!import:"[^"]+"/u, `!!import:"${wrongPin}"`);
     const badTson = createTson();
-    badTson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    badTson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
     badTson.resolveSchema(KERNEL_BYTES);
-    expect(() => badTson.resolveSchema(tamperedMeta)).toThrow(TsonContentHashMismatchError);
+    expect(() => badTson.resolveSchema(tamperedNumeric)).toThrow(TsonContentHashMismatchError);
   });
 
   it('refuses to register a schema whose own !!id declares a ?sha256= pin that does not match its own content ([TSON-SCHEMA] §10.2)', () => {
     const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
+    tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
     tson.resolveSchema(KERNEL_BYTES);
-    tson.resolveSchema(META_BYTES);
+    for (const library of LIBRARIES) tson.resolveSchema(library);
     tson.resolveSchema(CORE_BYTES);
 
     const selfMispinned = `
 !!id:"test://self-mispinned.tn?sha256=${'f'.repeat(64)}"
-!!meta:"${META_ID}"
 !!import:"${CORE_ID}"
-{ thing => {} }
+!schema { thing => {} }
 `;
     expect(() => tson.resolveSchema(selfMispinned)).toThrow(TsonContentHashMismatchError);
   });
@@ -271,29 +280,24 @@ describe('createTson: preload against a configured schemaSource', () => {
 
 describe('createTson: a schema registered from source text is pin-checked like a fetched one ([TSON-SCHEMA] §10.2, WP3B)', () => {
   function tsonWithStdlib(): ReturnType<typeof createTson> {
-    const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    tson.resolveSchema(META_BYTES);
-    tson.resolveSchema(CORE_BYTES);
-    return tson;
+    return withStdlib(createTson());
   }
 
   it('a single-line schema (no !!id-line terminator) loads', () => {
     const tson = tsonWithStdlib();
-    const oneLiner = `!!id:"test://oneliner.tn" !!meta:"${META_ID}" !!import:"${CORE_ID}" { thing => { label: text } }`;
+    const oneLiner = `!!id:"test://oneliner.tn" !!import:"${CORE_ID}" !schema { thing => { label: text } }`;
     expect(() => tson.resolveSchema(oneLiner)).not.toThrow();
   });
 
   it('but no reference may pin a single-line schema -- a pinned !!import to it is refused, an unpinned one still resolves', () => {
     const tson = tsonWithStdlib();
-    const oneLiner = `!!id:"test://oneliner.tn" !!meta:"${META_ID}" !!import:"${CORE_ID}" { thing => { label: text } }`;
+    const oneLiner = `!!id:"test://oneliner.tn" !!import:"${CORE_ID}" !schema { thing => { label: text } }`;
     tson.resolveSchema(oneLiner);
 
     const pinned = `
 !!id:"test://pins-oneliner.tn"
-!!meta:"${META_ID}"
 !!import:"test://oneliner.tn?sha256=${'a'.repeat(64)}"
-{
+!schema {
   holder => { t: thing }
 }
 `;
@@ -301,9 +305,8 @@ describe('createTson: a schema registered from source text is pin-checked like a
 
     const unpinned = `
 !!id:"test://uses-oneliner.tn"
-!!meta:"${META_ID}"
 !!import:"test://oneliner.tn"
-{
+!schema {
   holder => { t: thing }
 }
 `;
@@ -431,11 +434,10 @@ describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
 });
 
 describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => {
-  /** A minimal, hand-registered `LinkedSchema` stub -- `!!meta`/`!!import` are what the closure walk follows, and neither needs to be a real, resolvable schema for that walk alone to be exercised (`register` accepts any `LinkedSchema`, real parse or not). */
-  function stubSchema(id: string, meta: string, imports: readonly string[]): LinkedSchema {
+  /** A minimal, hand-registered `LinkedSchema` stub -- `!!import` is what the closure walk follows, and it needs no real, resolvable schema for that walk alone to be exercised (`register` accepts any `LinkedSchema`, real parse or not). */
+  function stubSchema(id: string, imports: readonly string[]): LinkedSchema {
     return {
       id,
-      meta,
       imports,
       entries: new Map<string, Top>(),
       keyAnnotations: new Map<string, Annotations>(),
@@ -447,15 +449,13 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
     };
   }
 
-  const PLACEHOLDER_META = 'test://placeholder-meta.tn';
-
-  /** Registers a straight `!!import` chain `s0 <- s1 <- ... <- s{depth-1}`, each governed by the same unregistered `PLACEHOLDER_META` (so the closure counts it once, however many chain links reach it). Returns the id of the last link, the one a caller's own document should `!!import`. */
+  /** Registers a straight `!!import` chain `s0 <- s1 <- ... <- s{depth-1}`. Returns the id of the last link, the one a caller's own document should `!!import`. */
   function registerChain(tson: ReturnType<typeof createTson>, depth: number): string {
     let previous: string | undefined;
     let last = '';
     for (let i = 0; i < depth; i++) {
       const id = `test://s${String(i)}.tn`;
-      tson.register(stubSchema(id, PLACEHOLDER_META, previous === undefined ? [] : [previous]));
+      tson.register(stubSchema(id, previous === undefined ? [] : [previous]));
       previous = id;
       last = id;
     }
@@ -464,14 +464,13 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
 
   function documentImporting(chainTail: string): Uint8Array {
     return new TextEncoder().encode(
-      `!!id:"test://top.tn"\n!!meta:"${PLACEHOLDER_META}"\n!!import:"${chainTail}"\n{ t => {} }`,
+      `!!id:"test://top.tn"\n!!import:"${chainTail}"\n!schema { t => {} }`,
     );
   }
 
   it('a closure of exactly 64 distinct schema documents (the default) is not refused on that ground', () => {
     const tson = createTson();
-    // 63 chain links + the shared placeholder meta = 64.
-    const tail = registerChain(tson, 63);
+    const tail = registerChain(tson, 64);
     const error = (() => {
       try {
         tson.resolveSchema(documentImporting(tail));
@@ -480,15 +479,14 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
         return e;
       }
     })();
-    // The placeholder meta is never registered, so resolution still fails downstream -- just not
-    // for reaching too many schema documents, which is the one thing this test checks.
+    // Resolution may still fail downstream -- just not for reaching too many schema documents,
+    // which is the one thing this test checks.
     expect(error).not.toBeInstanceOf(TsonLimitRefusedError);
   });
 
   it('a closure of 65 distinct schema documents is a limit refusal, not a resolver error', () => {
     const tson = createTson();
-    // 64 chain links + the shared placeholder meta = 65.
-    const tail = registerChain(tson, 64);
+    const tail = registerChain(tson, 65);
     const error = thrownBy(() => tson.resolveSchema(documentImporting(tail)));
     expect(error).toBeInstanceOf(TsonLimitRefusedError);
     expect((error as TsonLimitRefusedError).limit).toBe('import-closure');
@@ -498,13 +496,10 @@ describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "import closure" limit', () => 
 
 describe('resolveSchema: [TSON-SCHEMA] §11.5\'s "entries" limit', () => {
   it('a schema resolving to more than the default (65,536) declarations is a limit refusal, not a resolver error', () => {
-    const tson = createTson();
-    tson.register(linkSchema(bootstrapMetaKernel(KERNEL_BYTES)));
-    tson.register(tson.resolveSchema(META_BYTES));
-    tson.register(tson.resolveSchema(CORE_BYTES));
+    const tson = withStdlib(createTson());
     // One more declaration than the default admits -- every one a bare, fieldless record, the
     // cheapest possible entry to resolve, since only the count is under test here.
-    const lines = ['!!id:"test://huge.tn"', `!!meta:"${META_ID}"`, `!!import:"${CORE_ID}"`, '{'];
+    const lines = ['!!id:"test://huge.tn"', `!!import:"${CORE_ID}"`, '!schema {'];
     for (let i = 0; i <= 65_536; i++) lines.push(`d${String(i)} => {}`);
     lines.push('}');
     const bytes = new TextEncoder().encode(lines.join('\n'));

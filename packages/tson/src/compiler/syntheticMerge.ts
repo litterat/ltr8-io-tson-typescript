@@ -27,7 +27,7 @@ import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/erro
 import type { CoreValue, RecordField } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
 import type { Top, TypeRef } from '../schema/meta/typedef.js';
-import { isApplication } from './wireForm.js';
+import { applicationIn } from './wireForm.js';
 import { mapBodyRefs, type TemplateMaterialiser } from './templates.js';
 
 /**
@@ -119,15 +119,15 @@ function closedName(
  */
 function holdsApplication(value: CoreValue): boolean {
   switch (value.kind) {
+    case 'reference':
+      return applicationIn(value) !== undefined;
     case 'record':
-      return (
-        isApplication(value) || value.fields.some((f) => holdsApplication(f.value.value.coreValue))
-      );
+      return value.fields.some((f) => holdsApplication(f.value.coreValue));
     case 'array':
-      return value.elements.some((e) => holdsApplication(e.value.coreValue));
+      return value.elements.some((e) => holdsApplication(e.coreValue));
     case 'map':
       // A record's `fields` is a map keyed by name (§5.2): each field's slot is a value here.
-      return value.entries.some((e) => holdsApplication(e.value.value.coreValue));
+      return value.entries.some((e) => holdsApplication(e.value.coreValue));
     case 'empty-brace':
     case 'void':
     case 'token':

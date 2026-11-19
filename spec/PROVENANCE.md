@@ -2,23 +2,25 @@
 
 Everything else in this directory is **vendored verbatim** from the reference implementation at
 https://github.com/litterat/ltr8-io-tson-java, pinned to commit
-`d4bba8f3f0e6cc1ce75fa59e9b6212aca6595b93` (the same commit `scripts/fetch-references.sh` pins).
+`c48b744707128531e82cfe87b0fd584a2e26bc8f` (the same commit `scripts/fetch-references.sh` pins).
 
 | File | What it is |
 | --- | --- |
-| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 38, Working Draft. |
-| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 38, Working Draft. |
-| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 38. |
-| `tson-rev38-changelog.md` | The Revision 38 change log: every adjudicated change against Revision 37, by section. |
-| `m/meta-kernel.tn`, `m/meta.tn`, `m/core.tn`, `m/net.tn` | The four live bundled schemas. |
-| `m/*-resolved.tn` | Resolver-output fixtures for the four above. |
-| `m/policy.tn` | The processor policy's vocabulary (Part 1 §8.2), a companion artifact pinned to meta and core. |
+| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 39, Working Draft. |
+| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 39, Working Draft. |
+| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 39. |
+| `tson-rev39-changelog.md` | The Revision 39 change log: every adjudicated change against Revision 38, by section. |
+| `m/meta.tn` | The kernel, pre-loaded: the root vocabulary and the six nested maps (`meta`, `atom`, `numeric`, `unicode`, `net`, `binary`). |
+| `m/numeric.tn`, `m/temporal.tn`, `m/net.tn` | The three data-format libraries, each importing the kernel alone. |
+| `m/core.tn` | Imports the three libraries and declares the author annotations. |
+| `m/policy.tn` | The processor policy's vocabulary (Part 1 §8.2), importing the kernel alone. |
+| `fixtures/*-resolved.tn` | Resolver-output fixtures for the kernel, the three libraries and core. |
 
 ## Do not edit these files
 
 They are copies, not sources. Two things depend on that:
 
-- The `*-resolved.tn` fixtures are compared against resolver output. They apply unchanged only
+- The `fixtures/*-resolved.tn` fixtures are compared against resolver output. They apply unchanged only
   because the `.tn` inputs they were produced from are unchanged — content digests included.
 - The spec snapshots are the revision this port was written against. Editing one would make the
   code disagree with the document that justifies it, silently.

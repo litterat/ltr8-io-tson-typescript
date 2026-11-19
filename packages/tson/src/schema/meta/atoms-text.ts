@@ -21,7 +21,7 @@ export type Normalization = 'NONE' | 'NFC' | 'NFKC' | 'NFKC_CASEFOLD' | 'ASCII_C
 export type IdentifierBase = 'XID' | 'ID' | 'ASCII' | 'NONE';
 
 /**
- * The meta-kernel's `text_type` constructor — the Unicode code point sequence type every
+ * the kernel's `unicode.text_type` constructor — the Unicode code point sequence type every
  * other text-shaped atom composes with (§5.5, §5.7).
  *
  * `pattern` is the regex's own source text, not a compiled pattern object: kept a pure,
@@ -51,7 +51,7 @@ export interface TextType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `identifier_type` constructor (§5.5, §7.7): `text_type & atom_specification &
+ * the kernel's `unicode.identifier_type` constructor (§5.5, §7.7): `text_type & atom_specification &
  * { ... }` — a UAX #31 identifier profile as data, with `text_type`'s facets applied inside it.
  *
  * The profile is built from `start` and `continue` (the Unicode property each set is drawn from)
@@ -82,7 +82,7 @@ export interface IdentifierType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `regex_type` constructor (§5.7: `regex_type => text_type &
+ * the kernel's `unicode.regex_type` constructor (§5.7: `regex_type => text_type &
  * atom_specification & { normalization: = NONE  spec: = "https://www.rfc-editor.org/rfc/rfc9485" }`)
  * — `text_type`'s length and pattern facets plus `atom_specification`'s `spec`, pinned to RFC 9485,
  * the I-Regexp specification.
@@ -133,7 +133,7 @@ export interface UriType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `iri_type` constructor (§5.5): {@link UriType}'s facets with `spec` pinned to
+ * the kernel's `net.iri_type` constructor (§5.5): {@link UriType}'s facets with `spec` pinned to
  * RFC 3987, admitting characters beyond US-ASCII. The kernel's `iri => !iri_type { allow_relative:
  * false }` types `atom_specification.spec`; meta's `schema_identity` is a second instance.
  */
@@ -173,7 +173,7 @@ export interface EmailType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `uuid_type` constructor (§5.5's `uuid` atom, RFC 9562). `version`
+ * `net.uuid_type` constructor (§5.5's `uuid` atom, RFC 9562). `version`
  * selects a generation scheme (a selector, not an ordered bound — version 7 is not
  * "narrower" than version 4, it is a different value set), and is `bigint` because the
  * kernel's own field is typed `non_negative_integer`.

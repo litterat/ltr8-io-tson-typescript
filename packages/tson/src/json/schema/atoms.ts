@@ -29,7 +29,7 @@
  *
  * **A kind is a string naming a member** ([TSON-JSON] §5.6, [TSON-SCHEMA] §4.2): its content is
  * read as the kernel's `type_name` reads it and judged a member of the kind's linked `members`
- * (`atom/reference.ts`'s `createKindParser`), so `kind<uuid_type>` takes `"stock_id"` and refuses
+ * (`atom/reference.ts`'s `createReferenceParser`), so `kind<uuid_type>` takes `"stock_id"` and refuses
  * a uuid, which is a value of a member and no type name. It is an atom like any other here, never
  * a discrimination case over its members. `hostname`, `host` and `media_type` are string content
  * read by the network parsers `atomParserFor` routes them to, as every other string family is.
@@ -55,7 +55,7 @@
 import type { AtomToken } from '../../atom/contract.js';
 import { atomParserFor, type ScalarParser } from '../../atom/forType.js';
 import { createEnumParser } from '../../atom/enum.js';
-import { createKindParser } from '../../atom/reference.js';
+import { createReferenceParser } from '../../atom/reference.js';
 import { diagnosticCodeForAtomError } from '../../core/diagnostic.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import { toExactDecimal, toExactInteger } from '../../base/numberNarrowing.js';
@@ -67,14 +67,15 @@ import type { Atom, Top } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import type { LinkedSchema } from '../../link/link.js';
-import { selfNames, terminal } from '../../link/referenceChain.js';
+import { selfNames, terminal } from '../../link/aliasChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { tokenHygieneRefuses } from './tokenHygiene.js';
 import type { JsonEvent } from '../stream.js';
 import { jsonBoolean, jsonNull, jsonNumber, jsonString, type JsonValue } from '../tree.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
 import { nameHygieneRefuses, valueNameRefuses } from './nameHygiene.js';
-import { lead as leadOf, leadPresent, readWrapped, SCHEMA, TYPE } from './tagMembers.js';
+import { lead as leadOf, leadPresent, readWrapped, TYPE } from './tagMembers.js';
+import { PLAIN, refusesScope } from './tags.js';
 import type { JsonTypeReader } from './types.js';
 import { identityOfHost, type Identified } from './valueIdentity.js';
 
@@ -177,13 +178,15 @@ export function describeEvent(event: JsonEvent): string {
 // `ValueReaderFactoryRegistry.atoms()` and `.tree()`).
 // ---------------------------------------------------------------------------------------------
 
-function tokenOf(text: string): AtomToken {
-  // Every JSON string arrives fully decoded already (`json/lexer.ts`), so this is always the
-  // "quoted" reading §5.1 asks for; no atom parser in this package inspects `form` for anything
-  // beyond that, so the exact literal chosen here is unobservable -- see `atom/contract.ts`'s own
-  // `TokenForm` for the three-way type this satisfies structurally, without importing it (this
-  // module must not reach into `lexer/`, per the `src/json/**` ESLint zone).
-  return { text, form: 'single-line' };
+function tokenOf(text: string, unquoted = false): AtomToken {
+  // Every JSON string arrives fully decoded already (`json/lexer.ts`), so this is the "quoted"
+  // reading §5.1 asks for, with one exception: a reference's value is the reference grammar's own
+  // text, which TSON writes unquoted and JSON, having no unquoted form, writes as a string
+  // ([TSON-JSON] §5.6), so a reference position reads its string as an unquoted token. No other
+  // atom parser in this package inspects `form` -- see `atom/contract.ts`'s own `TokenForm` for the
+  // three-way type this satisfies structurally, without importing it (this module must not reach
+  // into `lexer/`, per the `src/json/**` ESLint zone).
+  return { text, form: unquoted ? 'unquoted' : 'single-line' };
 }
 
 /** A record naming the reader an atom position's slot was built for, and the raw host-value reader beneath any tree wrapping -- for `treeAtomKeyedReader`. */
@@ -268,22 +271,8 @@ export function withAnnotationObject(
       if (first.kind !== 'object-start') return yield* inner.read(ctx);
       const found = yield* leadOf(ctx);
       if (!leadPresent(found)) return yield* inner.read(ctx);
-      if (found.schema) {
-        // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `tagMembers.ts`'s
-        // top note on this port's reading of §9.4's table (a deliberate divergence from the Java
-        // reference, which reports `UNRECOGNIZED_FIELD` here too).
-        ctx
-          .field(SCHEMA)
-          .report(
-            'SCOPE_NOT_ADMITTED',
-            `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
-              `position -- '${displayName}' is not scoped`,
-            'no $schema at this position',
-            SCHEMA,
-          );
-        yield* skipNextValue(ctx);
-        return undefined;
-      }
+      // §3.3: `$import` stands at the top of the document alone.
+      if (yield* refusesScope(ctx, found, displayName, PLAIN)) return undefined;
       if (found.type === undefined) {
         // §9.4's table: "a `$value` in an object not led by `$type`" is a resolver error, not
         // `VALIDATION_ERROR` -- the same divergence `tagMembers.ts`'s top note records. A
@@ -353,8 +342,8 @@ export function atomReader(
 ): AtomReader {
   const form = atomFormOf(body);
   const parser: ScalarParser | undefined =
-    body.kind === 'kind_type'
-      ? createKindParser(displayName, body, options.judgesKindMembers ?? false)
+    body.kind === 'reference_type'
+      ? createReferenceParser(displayName, body, options.judgesKindMembers ?? false)
       : atomParserFor(displayName, body);
   const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;
   return makeAtomReader(
@@ -365,7 +354,7 @@ export function atomReader(
       if (parser === undefined) {
         throw new Error(`'${displayName}' is an atom body with no parser -- this is a library bug`);
       }
-      return parser.read(tokenOf(content));
+      return parser.read(tokenOf(content, body.kind === 'reference_type'));
     },
     profile === undefined
       ? undefined

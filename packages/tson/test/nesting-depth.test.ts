@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createTson, parse, readTree, validate } from '../src/index.js';
 import {
+  DEFAULT_LIMITS,
   DEFAULT_MAX_NESTING_DEPTH as MAX_NESTING_DEPTH,
   maxNestingDepthOf,
 } from '../src/core/limits.js';
@@ -160,17 +161,9 @@ describe('the limit is configurable (§9.1 asks for a bound, not for this number
 
   it('is reachable off a Tson instance with no document in hand, beside the §8.2 processor policy', () => {
     const tson = createTson({ maxNestingDepth: 20 });
-    // The five [TSON-SCHEMA] §11.5 schema-side limits ride along at their own spec defaults --
-    // not independently configurable yet (`core/limits.ts`'s own top note) -- so only
+    // Every other limit of §9.1 and §11.5 rides along at its spec default, so only
     // `maxNestingDepth` reflects what this instance was configured with.
-    expect(tson.processorPolicy.limits).toEqual({
-      maxNestingDepth: 20,
-      maxImportClosure: 64,
-      maxSchemaEntries: 65_536,
-      maxReferenceChain: 64,
-      maxSupertypeChain: 64,
-      maxMaterialisationDepth: 64,
-    });
+    expect(tson.processorPolicy.limits).toEqual({ ...DEFAULT_LIMITS, maxNestingDepth: 20 });
     expect(tson.processorPolicy.unicodeDataVersion).toBeTruthy();
   });
 
@@ -191,17 +184,20 @@ describe('a schema document is bounded too, on every path into it', () => {
   // Worse than the data-side case, because a schema is routinely fetched from somewhere else:
   // each of these used to exhaust the host call stack inside `resolveSchema`/`compile` and escape
   // as an uncaught RangeError.
-  const HEADER = '!!id:"test://deep.tn"\n!!meta:"https://tson.io/2026/38/m/meta.tn"\n';
+  const HEADER = '!!id:"test://deep.tn"\n';
 
   const VECTORS: readonly (readonly [string, (n: number) => string])[] = [
     [
       'an annotation value',
-      (n) => `${HEADER}@x:${'['.repeat(n)}${']'.repeat(n)}\n{ t => { f: text } }\n`,
+      (n) => `${HEADER}@x:${'['.repeat(n)}${']'.repeat(n)}\n!schema { t => { f: text } }\n`,
     ],
-    ['a nested array type', (n) => `${HEADER}{ t => ${'['.repeat(n)}text${']'.repeat(n)} }\n`],
+    [
+      'a nested array type',
+      (n) => `${HEADER}!schema { t => ${'['.repeat(n)}text${']'.repeat(n)} }\n`,
+    ],
     [
       'a nested choice type',
-      (n) => `${HEADER}{ t => ${'('.repeat(n)}text|text${')'.repeat(n)} }\n`,
+      (n) => `${HEADER}!schema { t => ${'('.repeat(n)}text|text${')'.repeat(n)} }\n`,
     ],
   ];
 
@@ -230,9 +226,8 @@ describe('a recursive schema-governed read is bounded (the compiled reader stack
   // schema type reading a deep document overflowed the host stack and escaped `readTree`.
   const compiled = compile(
     resolveUserSchema(`!!id:"test://recursive.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   node => { children: [node] }
 }
 `),

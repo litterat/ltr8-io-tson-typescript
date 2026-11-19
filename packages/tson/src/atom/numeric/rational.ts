@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `rational_type` constructor (§5.6's `rational` atom)
+ * Parses and validates against `numeric.rational_type` constructor (§5.6's `rational` atom)
  * -- the port of `atom/RationalParser.java`.
  *
  * Accepts only the `rational` grammar form (§7.6) -- `"2/3"`, always quoted in practice since `/`

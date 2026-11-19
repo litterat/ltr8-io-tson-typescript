@@ -36,6 +36,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { isVerdict } from '../src/core/diagnostic.js';
 import { TsonInternalError, TsonReadError } from '../src/core/errors.js';
 import {
   readJsonTree,
@@ -51,11 +52,10 @@ const ID = 'https://example.test/json-schema-binding.tn';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"${ID}"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   person => { name: text  tries?: int32 ~ 0 }
-  alias  => person
+  renamed => person
 }
 `);
 
@@ -115,8 +115,38 @@ describe('JSON schema binding ([TSON-JSON] §3.4)', () => {
   });
 
   it('an alias is a usable root type -- [TSON-SCHEMA] §8.3’s collapse, reached through the front door', () => {
-    const result = validateJson('{"name": "Ada"}', { schema: schema(), root: 'alias' });
+    const result = validateJson('{"name": "Ada"}', { schema: schema(), root: 'renamed' });
     expect(result.diagnostics).toEqual([]);
+  });
+
+  // §3.4's in-band route, which this processor does not read.
+
+  it('§3.4: a root led by $import stands where §3.3 puts a document’s binding, so it is no misplaced member -- the route is one this processor does not read, which is NOT_IMPLEMENTED, no verdict on the document', () => {
+    const result = validateJson(`{"$import": ["${ID}"], "$type": "person", "name": "Ada"}`, {
+      schema: schema(),
+      root: 'person',
+    });
+    expect(result.value).toBeUndefined();
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe('NOT_IMPLEMENTED');
+    expect(result.diagnostics[0]?.path).toBe('/$import');
+    expect(isVerdict(result.diagnostics[0]?.code ?? 'NOT_IMPLEMENTED')).toBe(false);
+  });
+
+  it('§3.4: a fail-fast read declines the in-band route the same way', () => {
+    expect(() =>
+      readJsonTree(`{"$import": ["${ID}"], "$type": "person", "name": "Ada"}`, {
+        schema: schema(),
+        root: 'person',
+      }),
+    ).toThrow(TsonReadError);
+  });
+
+  it('§3.4: a root led by $type alone is the out-of-band route’s voluntary restatement, and reads', () => {
+    expect(
+      validateJson('{"$type": "person", "name": "Ada"}', { schema: schema(), root: 'person' })
+        .diagnostics,
+    ).toEqual([]);
   });
 
   it('the schemaless door is untouched: parseJson consults no schema and JSON null is a plain tree node', async () => {

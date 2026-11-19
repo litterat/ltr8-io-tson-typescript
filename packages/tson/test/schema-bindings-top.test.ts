@@ -14,7 +14,7 @@ import { fieldMapOf } from './model-fixtures.js';
 describe("an entry's value can be written, not just read (§8.1)", () => {
   it.each([
     [
-      'record',
+      'meta.record',
       {
         kind: 'record',
         fields: fieldMapOf([]),
@@ -22,22 +22,21 @@ describe("an entry's value can be written, not just read (§8.1)", () => {
         extension: 'OPEN',
       },
     ],
-    ['value_type', { kind: 'value_type' }],
-    ['void_type', { kind: 'void_type' }],
-    ['enum_type', { kind: 'enum', nameType: 'identifier', members: ['A', 'B'] }],
+    ['meta.void_type', { kind: 'void_type' }],
+    ['meta.enum_type', { kind: 'enum', nameType: 'meta.identifier', members: ['A', 'B'] }],
   ])('writes a %s value without a write error', (wireName, body) => {
     const encoded = toDataValue(topBinding, body as Top);
     expect(encoded.typeRef).toBe(wireName);
   });
 
   it('names the constructor on the wire, which is what a read matches back on', () => {
-    expect(toDataValue(topBinding, { kind: 'value_type' }).typeRef).toBe('value_type');
+    expect(toDataValue(topBinding, { kind: 'void_type' }).typeRef).toBe('meta.void_type');
   });
 
   it("writes a value under the constructor its entry's facts name (§8.1)", () => {
-    const enumeration: Top = { kind: 'enum', nameType: 'identifier', members: ['A', 'B'] };
+    const enumeration: Top = { kind: 'enum', nameType: 'meta.identifier', members: ['A', 'B'] };
     // `enum` and `enum_type` share one body shape: the head, never the shape, says which.
     expect(toDataValue(topBinding, headed(enumeration, 'enum')).typeRef).toBe('enum');
-    expect(toDataValue(topBinding, enumeration).typeRef).toBe('enum_type');
+    expect(toDataValue(topBinding, enumeration).typeRef).toBe('meta.enum_type');
   });
 });

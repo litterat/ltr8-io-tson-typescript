@@ -4,7 +4,7 @@
  * This is the default entry: the four flat, tree-shakable front-door functions ({@link parse},
  * {@link readTree}, {@link validate}, {@link write}), `createTson(config)` as a config-bound
  * convenience over a schema registry built on them (`config.ts`'s own top note), and enough of
- * the compiler/linking pipeline (`bootstrapMetaKernel`/`linkSchema`/`compile`) to build the
+ * the compiler/linking pipeline (`bootstrapKernel`/`linkSchema`/`compile`) to build the
  * {@link CompiledSchema} those functions and that registry both consume.
  *
  * **Anyone who imports {@link parse} does not pay for the schema compiler.**
@@ -72,7 +72,7 @@ export * from './facade/write.js';
 
 // ── `createTson`, and enough of the resolve/link/compile pipeline to feed it ───────────────────
 export * from './config.js';
-export { bootstrapMetaKernel } from './schema/bootstrap.js';
+export { bootstrapKernel } from './schema/bootstrap.js';
 export type { Schema } from './compiler/schemaResolver.js';
 export { stripSchema, stripSchemaKeepingDocs } from './compiler/strip.js';
 export { linkSchema } from './link/link.js';

@@ -103,6 +103,60 @@ describe('policyText / policySummary: permitting', () => {
   });
 });
 
+describe('policyText: the whole of policy.limits', () => {
+  it('states every limit, in policy.limits order, its value aligned under the surfaces', () => {
+    expect(policyText(policyFor([]))).toBe(
+      [
+        `identifier policy:          HIGHLY_RESTRICTIVE`,
+        `token policy:               UNRESTRICTED`,
+        `unicode data:               ${policyFor([]).unicodeDataVersion}`,
+        'max depth:                  64',
+        'max token length:           1048576',
+        'max text length:            1048576',
+        'max numeric literal length: 4096',
+        'max binary size:            16777216',
+        'max document size:          16777216',
+        'max elements:               1048576',
+        'max entries:                1048576',
+        'max fields:                 65536',
+        'max annotations:            64',
+        'max values:                 16777216',
+        'max import closure:         64',
+        'max schema entries:         65536',
+        'max alias chain:            64',
+        'max supertype chain:        64',
+        'max materialisation depth:  64',
+        'max wait depth:             64',
+      ].join('\n'),
+    );
+  });
+
+  it('a stated depth is stated in the text, the summary and the machine form', () => {
+    const policy = policyFor(['--max-depth', '8', '--max-wait-depth', '2']);
+    expect(policyText(policy)).toContain('max depth:                  8');
+    expect(policyText(policy)).toContain('max wait depth:             2');
+    expect(policySummary(policy)).toContain('max depth 8');
+    expect(policySummary(policy)).toContain('max wait depth 2');
+    expect(policyJson(policy).limits.max_wait_depth).toBe(2);
+    expect(isDefaultPolicy(policy)).toBe(false);
+  });
+
+  it('a report states a limit past int32, each a policy.limit int64, and it reads back as written', () => {
+    const tson = stdlibTson();
+    const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
+    if (linked === undefined) throw new Error('policy.tn is not registered');
+    const rendered = renderPolicy(policyFor([]), 'tson')
+      .replace(/max_depth: *64/u, 'max_depth: 3000000000')
+      .replace(/max_wait_depth: *64/u, 'max_wait_depth: 9007199254740991');
+    expect(rendered).toContain('3000000000');
+    const result = tson.validate(new TextEncoder().encode(rendered), {
+      schema: tson.compile(linked),
+      root: 'policy.processor',
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe('isDefaultPolicy: permittedScripts', () => {
   it('is no longer the default once a combination is admitted, even at the default level', () => {
     expect(isDefaultPolicy(policyFor([]))).toBe(true);
@@ -110,10 +164,10 @@ describe('isDefaultPolicy: permittedScripts', () => {
   });
 });
 
-// ── The report is `policy.tn`'s `policy` type (spec/m/policy.tn) ─────────────────────────────────
+// ── The report is `policy.tn`'s `policy.processor` type (spec/m/policy.tn) ─────────────────────────────────
 
 describe('policy report shape', () => {
-  it('json: identifier_policy has four members, token_policy two, and limits is max_depth alone', () => {
+  it('json: identifier_policy has four members, token_policy two, and limits is the whole of policy.limits', () => {
     const json = policyJson(policyFor([]));
     expect(Object.keys(json.identifier_policy)).toEqual([
       'level',
@@ -122,7 +176,25 @@ describe('policy report shape', () => {
       'permitting',
     ]);
     expect(Object.keys(json.token_policy)).toEqual(['level', 'permitting']);
-    expect(json.limits).toEqual({ max_depth: 64 });
+    expect(json.limits).toEqual({
+      max_depth: 64,
+      max_token_length: 1048576,
+      max_text_length: 1048576,
+      max_numeric_literal_length: 4096,
+      max_binary_size: 16777216,
+      max_document_size: 16777216,
+      max_elements: 1048576,
+      max_entries: 1048576,
+      max_fields: 65536,
+      max_annotations: 64,
+      max_values: 16777216,
+      max_import_closure: 64,
+      max_schema_entries: 65536,
+      max_alias_chain: 64,
+      max_supertype_chain: 64,
+      max_materialisation_depth: 64,
+      max_wait_depth: 64,
+    });
     expect(json).not.toHaveProperty('limits_policy');
   });
 
@@ -160,9 +232,9 @@ describe('policy report shape', () => {
         'Latin+Cyrillic',
       ],
     ],
-  ])('a rendered report is valid data under policy.tn: %s', (_name, flags) => {
+  ])('a rendered report is a policy.processor under policy.tn: %s', (_name, flags) => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/38/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
     if (linked === undefined)
       throw new Error('policy.tn is not registered in the standard library');
     const compiled = tson.compile(linked);
@@ -183,7 +255,7 @@ describe('policy report shape', () => {
       }
       const result = tson.validate(new TextEncoder().encode(rendered), {
         schema: compiled,
-        root: 'policy',
+        root: 'policy.processor',
       });
       expect(result.diagnostics).toEqual([]);
     }
@@ -191,14 +263,14 @@ describe('policy report shape', () => {
 
   it('policy.tn does reject a report missing `limits` (the check above is not vacuous)', () => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/38/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
     if (linked === undefined) throw new Error('policy.tn is not registered');
     const full = renderPolicy(policyFor([]), 'tson');
     // `limits` is the last member of the written record: cut it, close the record.
     const rendered = `${full.slice(0, full.indexOf('limits'))}}`;
     const result = tson.validate(new TextEncoder().encode(rendered), {
       schema: tson.compile(linked),
-      root: 'policy',
+      root: 'policy.processor',
     });
     expect(result.diagnostics.length).toBeGreaterThan(0);
   });

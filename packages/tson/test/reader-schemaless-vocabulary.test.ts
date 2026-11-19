@@ -71,7 +71,7 @@ describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
     expect(() => uint8?.read({ text: '-1', form: 'unquoted' })).toThrow(TsonAtomValidationError);
   });
 
-  it('integer is unbounded-width and unbounded-sign, matching `integer => !integer_type {}` (§5.6)', () => {
+  it('integer is unbounded-width and unbounded-sign, matching `integer => !numeric.integer_type {}` (§5.6)', () => {
     const integer = lookupBuiltinAtom('integer');
     expect(integer?.read({ text: '9007199254740993', form: 'unquoted' })).toBe(9007199254740993n);
     expect(integer?.read({ text: '-9007199254740993', form: 'unquoted' })).toBe(-9007199254740993n);
@@ -98,7 +98,7 @@ describe('lookupBuiltinAtom -- each entry matches its core.tn instance', () => {
     expect(text?.read({ text: 'hello world', form: 'single-line' })).toBe('hello world');
   });
 
-  it('bytes decodes RFC 4648 §4 base64, matching `bytes => !bytes_type { encoding: BASE64 }`', () => {
+  it('bytes decodes RFC 4648 §4 base64, matching `bytes => !binary.bytes_type { encoding: BASE64 }`', () => {
     // "hi" == base64 "aGk="
     const bytes = lookupBuiltinAtom('bytes');
     expect(bytes?.read({ text: 'aGk=', form: 'unquoted' })).toEqual(new Uint8Array([0x68, 0x69]));

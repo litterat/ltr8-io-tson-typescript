@@ -12,14 +12,12 @@ import { desugar, lifted, type DesugarFailureReporter } from '../src/compiler/de
 import { ofBinding as internalName } from '../src/compiler/derivedName.js';
 import type { Declaration, SchemaDocument } from '../src/ast/schema/document.js';
 import type { Instance } from '../src/ast/schema/fields.js';
-import type { TypeRef } from '../src/ast/schema/typeref.js';
+import type { TypeExpr } from '../src/ast/schema/typeref.js';
 import type { CoreValue, RecordField } from '../src/ast/value.js';
 
-const META = '!!meta:"https://example.com/m.tn"';
-
-/** Parses `{ ${declarations} }` as a complete schema document body. */
+/** Parses `!schema { ${declarations} }` as a complete schema document body. */
 function parse(declarations: string): SchemaDocument {
-  return runSync(parseSchemaDocument(fromString(`${META} { ${declarations} }`)));
+  return runSync(parseSchemaDocument(fromString(`!schema { ${declarations} }`)));
 }
 
 function desugarDoc(
@@ -38,6 +36,10 @@ function declarationOf(document: SchemaDocument, name: string): Declaration {
 
 function instanceOf(document: SchemaDocument, name: string): Instance {
   const typeDef = declarationOf(document, name).typeDef;
+  // A record template is the `!meta.record_template { ... }` payload the desugarer labelled (§5.10).
+  if (typeDef.kind === 'recordTemplateDef') {
+    return { kind: 'instance', typeParams: typeDef.typeParams, value: typeDef.payload };
+  }
   if (typeDef.kind !== 'instance')
     throw new Error(`'${name}' is not an instance, got ${typeDef.kind}`);
   return typeDef;
@@ -55,7 +57,7 @@ function onlyInjected(document: SchemaDocument, prefix: string): Declaration {
 }
 
 /** The type-ref of `declaration`'s first record field -- the use site every fixture here reads back. */
-function firstFieldTypeRef(document: SchemaDocument, declaration: string): TypeRef {
+function firstFieldTypeRef(document: SchemaDocument, declaration: string): TypeExpr {
   const typeDef = declarationOf(document, declaration).typeDef;
   if (typeDef.kind !== 'structuralTypeDef' || typeDef.body.kind !== 'recordDef') {
     throw new Error(`'${declaration}' is not a fresh record declaration`);
@@ -70,7 +72,7 @@ function firstFieldTypeRef(document: SchemaDocument, declaration: string): TypeR
 /** The bare name a field's type-ref resolves to -- every fixture here that hoists lands on a `simpleRef`. */
 function firstFieldType(document: SchemaDocument, declaration: string): string {
   const ref = firstFieldTypeRef(document, declaration);
-  if (ref.kind !== 'simpleRef') throw new Error(`'${declaration}' field type is not a simpleRef`);
+  if (ref.kind !== 'nameRef') throw new Error(`'${declaration}' field type is not a simpleRef`);
   return ref.name;
 }
 
@@ -93,7 +95,7 @@ function fieldNames(value: CoreValue): string[] {
 
 /** One named field's core value out of a record core value, or `undefined` when the field is absent. */
 function namedField(value: CoreValue, name: string): CoreValue | undefined {
-  return recordFields(value).find((field) => field.name === name)?.value.value.coreValue;
+  return recordFields(value).find((field) => field.name === name)?.value.coreValue;
 }
 
 /** The value of the field map entry at `index` (`record.fields` is a map keyed by name, §5.2), or throws. */
@@ -101,7 +103,7 @@ function fieldAt(value: CoreValue, index: number): CoreValue {
   if (value.kind !== 'map') throw new Error(`expected a field map, got '${value.kind}'`);
   const entry = value.entries[index];
   if (entry === undefined) throw new Error(`no field at index ${String(index)}`);
-  return entry.value.value.coreValue;
+  return entry.value.coreValue;
 }
 
 /** The entries of a field map core value, or throws. */
@@ -115,7 +117,7 @@ function elementAt(value: CoreValue, index: number): CoreValue {
   const elements = arrayElements(value);
   const element = elements[index];
   if (element === undefined) throw new Error(`no element at index ${String(index)}`);
-  return element.value.coreValue;
+  return element.coreValue;
 }
 
 /** Reads a named field off an `!C { ... }` instance's record payload, or throws when it is absent. */
@@ -188,14 +190,14 @@ describe('the array sugar ([T] and the sized forms, §5.3)', () => {
     const injected = onlyInjected(document, 'array');
     expect(firstFieldType(document, 'holder')).toBe(injected.name);
     const instance = injected.typeDef as Instance;
-    expect(instance.value.typeRef).toBe('array');
+    expect(instance.value.typeRef).toBe('meta.array');
     expect(tokenText(requiredField(instance, 'element_type'))).toBe('text');
   });
 
   it('is the construction itself at declaration position, injecting nothing alongside it', () => {
     const document = desugarDoc('ids => [text]');
     const instance = instanceOf(document, 'ids');
-    expect(instance.value.typeRef).toBe('array');
+    expect(instance.value.typeRef).toBe('meta.array');
     expect(tokenText(requiredField(instance, 'element_type'))).toBe('text');
     expect(document.body.declarations.size).toBe(1);
   });
@@ -251,14 +253,14 @@ describe('the map sugar ({K => V}, §5.3)', () => {
     const injected = onlyInjected(document, 'map');
     expect(firstFieldType(document, 'holder')).toBe(injected.name);
     const instance = injected.typeDef as Instance;
-    expect(instance.value.typeRef).toBe('map');
+    expect(instance.value.typeRef).toBe('meta.map');
     expect(tokenText(requiredField(instance, 'key_type'))).toBe('text');
     expect(tokenText(requiredField(instance, 'value_type'))).toBe('integer');
   });
 
   it('is the construction itself at declaration position, injecting nothing alongside it', () => {
     const document = desugarDoc('entries => {text => integer}');
-    expect(instanceOf(document, 'entries').value.typeRef).toBe('map');
+    expect(instanceOf(document, 'entries').value.typeRef).toBe('meta.map');
     expect(document.body.declarations.size).toBe(1);
   });
 
@@ -278,7 +280,7 @@ describe('the tuple sugar ([T, U], §5.3)', () => {
   it('is the construction itself at declaration position', () => {
     const document = desugarDoc('pair => [integer, text]');
     const instance = instanceOf(document, 'pair');
-    expect(instance.value.typeRef).toBe('tuple');
+    expect(instance.value.typeRef).toBe('meta.tuple');
     expect(requiredField(instance, 'elements').kind).toBe('array');
   });
 
@@ -302,7 +304,7 @@ describe('the choice sugar ((A | B), §5.4)', () => {
   it('is the construction itself at declaration position', () => {
     const document = desugarDoc('contact => (text | integer)');
     const instance = instanceOf(document, 'contact');
-    expect(instance.value.typeRef).toBe('choice');
+    expect(instance.value.typeRef).toBe('meta.choice');
     const variants = requiredField(instance, 'variants');
     expect(tokenText(elementAt(variants, 0))).toBe('text');
     expect(tokenText(elementAt(variants, 1))).toBe('integer');
@@ -326,7 +328,7 @@ describe('nested declaration-level forms', () => {
       d.name.startsWith('array_'),
     );
     expect(arrays).toHaveLength(2);
-    expect(instanceOf(document, 'deep').value.typeRef).toBe('array');
+    expect(instanceOf(document, 'deep').value.typeRef).toBe('meta.array');
   });
 
   it('a tuple position holding a nested sized array refers to the injected inner array', () => {
@@ -357,9 +359,7 @@ describe('identity and deduplication (§8.2)', () => {
     const fields: RecordField[] = [
       {
         name: 'element_type',
-        value: {
-          value: { annotations: [], coreValue: { kind: 'token', text: 'text', form: 'unquoted' } },
-        },
+        value: { annotations: [], coreValue: { kind: 'token', text: 'text', form: 'unquoted' } },
       },
     ];
     expect(internalName('array', fields)).toBe(internalName('array', fields));
@@ -389,14 +389,14 @@ describe("a template's bare record body (§5.2)", () => {
     expect(plain.typeDef.kind).toBe('structuralTypeDef');
 
     const template = instanceOf(desugarDoc('box => <T> { v: T }'), 'box');
-    expect(template.value.typeRef).toBe('record');
+    expect(template.value.typeRef).toBe('meta.record_template');
     expect(template.typeParams).toEqual(['T']);
   });
 
   it("writes optional/voidable/role/value only where the author's marks say something the default does not", () => {
     const instance = instanceOf(desugarDoc('box => <T> { v: T  count?: integer ~ 0 }'), 'box');
     const fields = requiredField(instance, 'fields');
-    expect(fieldNames(fieldAt(fields, 0))).toEqual(['type']);
+    expect(fieldNames(fieldAt(fields, 0))).toEqual(['type_param']);
     expect(fieldNames(fieldAt(fields, 1))).toEqual(['type', 'optional', 'role', 'value']);
   });
 
@@ -429,7 +429,7 @@ describe("a template's bare record body (§5.2)", () => {
   /** The tokens of an array-of-names core value, as text. */
   function names(value: CoreValue | undefined): string[] {
     if (value === undefined) throw new Error('expected a list of names');
-    return arrayElements(value).map((element) => tokenText(element.value.coreValue));
+    return arrayElements(value).map((element) => tokenText(element.coreValue));
   }
 
   it('writes a group as its options, the members marked optional within them, and its own mark (§5.11)', () => {
@@ -489,14 +489,16 @@ describe('open (parameter-bearing) synthetics', () => {
   it('lifts a form naming a template parameter to an open synthetic, referenced by application', () => {
     const document = desugarDoc('holder => <T> { xs: [T] }');
     const injected = onlyInjected(document, 'array');
-    const instance = declarationOf(document, 'holder').typeDef as Instance;
+    const instance = instanceOf(document, 'holder');
     const xsField = fieldAt(requiredField(instance, 'fields'), 0);
     const typeValue = namedField(xsField, 'type');
     if (typeValue === undefined) throw new Error("'xs' field has no type");
-    expect(typeValue.kind).toBe('record');
-    expect(
-      tokenText(namedField(typeValue, 'name') ?? { kind: 'token', text: '', form: 'unquoted' }),
-    ).toBe(injected.name);
+    // The open synthetic is named by an application, a reference value of the data grammar (§7.4).
+    if (typeValue.kind !== 'reference' || typeValue.reference.kind !== 'application') {
+      throw new Error("'xs' type is not an application");
+    }
+    expect(typeValue.reference.name).toBe(injected.name);
+    expect(typeValue.reference.arguments).toHaveLength(1);
   });
 
   it('renames a parameter positionally (p0, p1, ...), so alpha-equivalent forms land on one entry', () => {
@@ -515,14 +517,14 @@ describe('open (parameter-bearing) synthetics', () => {
     const document = desugarDoc('vector => <T, N> [T; N]');
     const instance = instanceOf(document, 'vector');
     expect(instance.typeParams).toEqual(['T', 'N']);
-    expect(instance.value.typeRef).toBe('array');
+    expect(instance.value.typeRef).toBe('meta.array');
     expect(document.body.declarations.size).toBe(1);
   });
 
   it('a partial application (an alias with leftover parameters) desugars to !reference { target }', () => {
     const document = desugarDoc('uuid_pair => <B> pair<text, B>');
     const instance = instanceOf(document, 'uuid_pair');
-    expect(instance.value.typeRef).toBe('reference');
+    expect(instance.value.typeRef).toBe('meta.alias');
     expect(instance.typeParams).toEqual(['B']);
   });
 });
@@ -539,15 +541,15 @@ describe('template application checks', () => {
   it("leaves an unresolved (unimported, undeclared) head alone -- that is a later phase's verdict", () => {
     const document = desugarDoc('use => { f: unknownHead<text> }');
     const ref = firstFieldTypeRef(document, 'use');
-    expect(ref.kind).toBe('genericRef');
-    expect(ref.kind === 'genericRef' && ref.name).toBe('unknownHead');
+    expect(ref.kind).toBe('applicationRef');
+    expect(ref.kind === 'applicationRef' && ref.name).toBe('unknownHead');
   });
 
   it('passes a well-formed application to a local template through untouched', () => {
     const document = desugarDoc('box => <T> { v: T }\nuse => { f: box<text> }');
     const ref = firstFieldTypeRef(document, 'use');
-    expect(ref.kind).toBe('genericRef');
-    expect(ref.kind === 'genericRef' && ref.name).toBe('box');
+    expect(ref.kind).toBe('applicationRef');
+    expect(ref.kind === 'applicationRef' && ref.name).toBe('box');
   });
 });
 

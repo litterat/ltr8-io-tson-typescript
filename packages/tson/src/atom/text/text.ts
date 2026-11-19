@@ -1,5 +1,5 @@
 /**
- * Parses and validates against meta-kernel's `text_type` constructor (§5.7's `!text` atom, the
+ * Parses and validates against the kernel's `unicode.text_type` constructor (§5.7's `!text` atom, the
  * Unicode code point sequence every other text-shaped atom composes with) -- the port of
  * `atom/TextParser.java`.
  *

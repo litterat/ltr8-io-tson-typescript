@@ -156,7 +156,7 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
       [
         'phone_of',
         entry({
-          kind: 'reference',
+          kind: 'alias',
           target: { name: 'phone', arguments: [], annotations: [] },
         }),
       ],
@@ -208,12 +208,11 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
 
 const DISJOINT_SCHEMA = `
 !!id:"test://choice-disjoint.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }
-  @disjoint
+  @meta.disjoint
   target_ref => (designator | channel)
   holder => { targets: [target_ref; 1..8] }
 
@@ -223,7 +222,7 @@ const DISJOINT_SCHEMA = `
   ambiguous_holder => { code: ambiguous_code }
 
   point => { x: int32  y: int32 }
-  @disjoint
+  @meta.disjoint
   shape_choice => (point | [int32] | boolean)
   shape_holder => { shape: shape_choice }
 }
@@ -339,9 +338,8 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"test://choice-sealed.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   pet => abstract {
     pet_type: text =?
     name: text
@@ -416,9 +414,8 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
  */
 const ALIAS_VARIANT_SCHEMA = `
 !!id:"test://choice-alias-variant.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   note    => { body: text }
   n_of    => note
   n2      => note

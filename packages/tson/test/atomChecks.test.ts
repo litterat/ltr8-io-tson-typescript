@@ -39,14 +39,28 @@ describe('integer_type narrowing (§5.7)', () => {
     expect(checkAtomNarrows(source, wideHigh).length).toBeGreaterThan(0);
   });
 
-  it('folds an implied `size` range into the comparison, so a merely-wider explicit bound the size already excludes is not itself a violation', () => {
+  it("judges a stated bound against the range the source's width fixes (§5.7), exactly and for any width", () => {
     const source: IntegerType = { kind: 'integer_type', size: { bits: 8n, signed: false } };
-    const refined: IntegerType = {
-      kind: 'integer_type',
-      size: { bits: 8n, signed: false },
-      max: 300n,
-    };
-    expect(checkAtomNarrows(source, refined)).toEqual([]);
+    expect(
+      checkAtomNarrows(source, {
+        kind: 'integer_type',
+        size: { bits: 8n, signed: false },
+        max: 300n,
+      }),
+    ).toEqual(["max 300 is above the source's own unsigned 8-bit size"]);
+    expect(checkAtomNarrows(source, { kind: 'integer_type', min: -10n })).toEqual([
+      "min -10 is below the source's own unsigned 8-bit size",
+    ]);
+    expect(checkAtomNarrows(source, { kind: 'integer_type', min: 10n, max: 200n })).toEqual([]);
+  });
+
+  it('compares two widths by their bits however many, never by a materialised range (§5.7, §9)', () => {
+    const w5000: IntegerType = { kind: 'integer_type', size: { bits: 5000n, signed: false } };
+    const w6000: IntegerType = { kind: 'integer_type', size: { bits: 6000n, signed: false } };
+    expect(checkAtomNarrows(w5000, w6000)).toEqual([
+      "size unsigned 6000-bit is wider than the source's own unsigned 5000-bit",
+    ]);
+    expect(checkAtomNarrows(w6000, w5000)).toEqual([]);
   });
 
   it('narrowing the size (e.g. 16 bits to 8) tightens; widening it does not', () => {
@@ -98,13 +112,54 @@ describe("integer_type coherence (§7.4's 'Coherence of a body's facets')", () =
     expect(checkAtomCoherence({ kind: 'integer_type', min: 5n, max: 5n })).toEqual([]);
   });
 
-  it('a size-derived range contradicting an explicit bound is caught (the fold, not just the written facets)', () => {
-    const violations = checkAtomCoherence({
-      kind: 'integer_type',
-      size: { bits: 8n, signed: false }, // implies [0, 255]
-      max: -5n,
-    });
-    expect(violations.length).toBeGreaterThan(0);
+  it("a width's range contradicting a stated bound is caught, the width judged by bit length (§5.6)", () => {
+    expect(
+      checkAtomCoherence({
+        kind: 'integer_type',
+        size: { bits: 8n, signed: false }, // admits [0, 255]
+        max: -5n,
+      }),
+    ).toEqual(["max -5 is below the unsigned 8-bit size's floor"]);
+    expect(
+      checkAtomCoherence({ kind: 'integer_type', size: { bits: 8n, signed: false }, min: 300n }),
+    ).toEqual(["min 300 is above the unsigned 8-bit size's ceiling"]);
+    // An exclusive end excludes the width's own end too: `exclusive_min: 255` leaves nothing of uint8.
+    expect(
+      checkAtomCoherence({
+        kind: 'integer_type',
+        size: { bits: 8n, signed: false },
+        exclusiveMin: 255n,
+      }),
+    ).toEqual(["exclusive_min 255 is above the unsigned 8-bit size's ceiling"]);
+  });
+
+  it('a step wider than any host integer is coherent, and a width must be above zero (§5.6, §9)', () => {
+    expect(
+      checkAtomCoherence({
+        kind: 'integer_type',
+        size: { bits: 128n, signed: false },
+        multipleOf: 1n << 64n,
+      }),
+    ).toEqual([]);
+    expect(checkAtomCoherence({ kind: 'integer_type', size: { bits: 0n, signed: true } })).toEqual([
+      'size.bits 0 is not a width above zero',
+    ]);
+    expect(
+      checkAtomCoherence({ kind: 'integer_type', size: { bits: -8n, signed: false } }),
+    ).toEqual(['size.bits -8 is not a width above zero']);
+    expect(checkAtomCoherence({ kind: 'integer_type', size: { bits: 1n, signed: false } })).toEqual(
+      [],
+    );
+  });
+
+  it('a member outside the width is incoherent, whatever the bounds say (§7.4)', () => {
+    expect(
+      checkAtomCoherence({
+        kind: 'integer_type',
+        size: { bits: 8n, signed: false },
+        members: [300n],
+      }),
+    ).toEqual(['member 300 is outside the unsigned 8-bit size']);
   });
 
   it('multiple_of: 0 is rejected outright -- it divides nothing', () => {
@@ -1398,8 +1453,8 @@ describe('period_type', () => {
 // ── Families with no orderable facet at all ─────────────────────────────────────────────────
 
 describe('families with nothing to narrow or contradict', () => {
-  it('value_type/void_type/uuid_type always report clean', () => {
-    const cases: Atom[] = [{ kind: 'value_type' }, { kind: 'void_type' }, { kind: 'uuid_type' }];
+  it('void_type/uuid_type always report clean', () => {
+    const cases: Atom[] = [{ kind: 'void_type' }, { kind: 'uuid_type' }];
     for (const atom of cases) {
       expect(checkAtomNarrows(atom, atom)).toEqual([]);
       expect(checkAtomCoherence(atom)).toEqual([]);
@@ -1412,7 +1467,6 @@ describe('families with nothing to narrow or contradict', () => {
 describe('isAtom', () => {
   it('recognises every Atom member and rejects every other Top shape', () => {
     expect(isAtom({ kind: 'integer_type' })).toBe(true);
-    expect(isAtom({ kind: 'value_type' })).toBe(true);
     expect(isAtom({ kind: 'void_type' })).toBe(true);
     expect(
       isAtom({
@@ -1435,9 +1489,9 @@ describe('isAtom', () => {
     expect(isAtom({ kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' })).toBe(
       false,
     );
-    expect(
-      isAtom({ kind: 'reference', target: { name: 'x', arguments: [], annotations: [] } }),
-    ).toBe(false);
+    expect(isAtom({ kind: 'alias', target: { name: 'x', arguments: [], annotations: [] } })).toBe(
+      false,
+    );
     // A held template body: no `kind` tag at all (schema/meta's own contract).
     expect(
       isAtom({

@@ -26,15 +26,15 @@ import { jsonValueToText } from '../src/json/write.js';
 import { DEFAULT_IDENTIFIER_POLICY } from '../src/unicode/policy.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { Top } from '../src/schema/meta/typedef.js';
+import type { MetaValue } from '../src/schema/meta/typedef.js';
 import { namespaceOf } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
-import { entry } from './model-fixtures.js';
+import { entry, namespaceEntry } from './model-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   count      => int32
   exact      => number
   ratio      => float64
@@ -43,8 +43,8 @@ const SCHEMA = resolveUserSchema(`
   day        => date
   blob       => bytes
   colour     => !enum [ RED GREEN BLUE ]
-  words      => !identifier_type { continue_add: "-"  medial: " " }
-  activity   => !enum_type { name_type: words  members: [sedentary "lightly active"] }
+  words      => !unicode.identifier_type { continue_add: "-"  medial: " " }
+  activity   => !meta.enum_type { name_type: words  members: [sedentary "lightly active"] }
   country    => !text ^ { length: 2  members: ["AU" "NZ"] }
   flag       => boolean
   nothing    => void
@@ -93,11 +93,12 @@ const SCHEMA = resolveUserSchema(`
   nested     => { who: person  labels: [text] }
 
   counts    => { text => int32 }
+  bag       => { counts: counts }
   by_date   => { date => number }
   by_number => { number => text }
   by_small  => { small => text }
   optional  => { text => int32? }
-  sized_map => !map { key_type: text  value_type: int32  min_items: 1  max_items: 2 }
+  sized_map => !meta.map { key_type: text  value_type: int32  min_items: 1  max_items: 2 }
   point     => { x: int32  y: int32 }
   by_point  => { point => text }
   by_pair   => { pair => text }
@@ -283,7 +284,7 @@ describe('§5 atoms', () => {
     // whenever a caller supplies no side-table of its own -- `resolveUserSchema` (this file's own
     // fixture pipeline) is one such caller, and so is `config.ts#resolveAgainstRegistry` (the
     // real `Tson.resolveSchema`), so this now holds for both encodings' production path.
-    expect(d.schemaPosition).toEqual({ line: 11, column: 3, offset: 252 });
+    expect(d.schemaPosition).toEqual({ line: 10, column: 3, offset: 217 });
     expect(d.path, 'the data pointer: this value is the document root').toBe('');
   });
 
@@ -305,11 +306,13 @@ describe('§5 atoms', () => {
     expect(refusal('count', '{"$value": 42}').code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema at an atom position is SCOPE_NOT_ADMITTED -- no atom position is scoped (§8.5, [TSON-SCHEMA] §7.8)', () => {
-    expect(
-      refusal('count', '{"$schema": "https://example.test/x.tn", "$type": "count", "$value": 42}')
-        .code,
-    ).toBe('SCOPE_NOT_ADMITTED');
+  it('§3.3: $import at an atom position is SCOPE_NOT_ADMITTED -- the binding stands at the top of the document alone', () => {
+    const found = refusal(
+      'nested',
+      '{"who": {"name": {"$import": ["https://example.test/x.tn"], "$type": "text", "$value": "x"}}, "labels": []}',
+    );
+    expect(found.code).toBe('SCOPE_NOT_ADMITTED');
+    expect(found.path).toBe('/who/name/$import');
   });
 });
 
@@ -318,7 +321,7 @@ describe('§5 atoms', () => {
 // note in the Java module says the same) ───────────────────────────────────────────────────────
 
 describe('§5.7 value and identifier (meta-kernel root types)', () => {
-  const KERNEL = compileJsonSchema(resolvedBundled('meta-kernel'));
+  const KERNEL = compileJsonSchema(resolvedBundled('meta'));
 
   function acceptedKernel(typeName: string, json: string): string {
     const result = validateJson(json, { schema: KERNEL, root: typeName });
@@ -327,23 +330,9 @@ describe('§5.7 value and identifier (meta-kernel root types)', () => {
     return jsonValueToText(result.value);
   }
 
-  it("the value escape hatch classifies by JSON's own grammar (§5.7)", () => {
-    expect(acceptedKernel('value', 'true')).toBe('true');
-    expect(acceptedKernel('value', '7')).toBe('7');
-    expect(acceptedKernel('value', '7.5')).toBe('7.5');
-    expect(acceptedKernel('value', '"null"')).toBe('"null"');
-  });
-
-  it('the value escape hatch refuses a container', () => {
-    const result = validateJson('{"a": 1}', { schema: KERNEL, root: 'value' });
-    expect(result.diagnostics[0]?.code).toBe('TYPE_MISMATCH');
-    const arr = validateJson('[1]', { schema: KERNEL, root: 'value' });
-    expect(arr.diagnostics[0]?.code).toBe('TYPE_MISMATCH');
-  });
-
   it('identifier faces the shared name profile', () => {
-    expect(acceptedKernel('identifier', '"order_id"')).toBe('"order_id"');
-    const result = validateJson('"42nd"', { schema: KERNEL, root: 'identifier' });
+    expect(acceptedKernel('meta.identifier', '"order_id"')).toBe('"order_id"');
+    const result = validateJson('"42nd"', { schema: KERNEL, root: 'meta.identifier' });
     expect(result.diagnostics[0]?.code).toBe('ATOM_FORM_INVALID');
   });
 });
@@ -662,7 +651,7 @@ describe('§6.4 maps', () => {
   });
 
   it('a dollar-initial member is an ordinary key at a map position (§3.2)', () => {
-    expect(accepted('counts', '{"$schema": 1}')).toBe('{"$schema":1}');
+    expect(accepted('bag', '{"counts": {"$import": 1}}')).toBe('{"counts":{"$import":1}}');
   });
 
   it('keys compare as values and not as spellings (§5.5)', () => {
@@ -840,7 +829,6 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const map = new Map(Object.entries(entries));
     return {
       id: 'test://json-schema-read/gaps.tn',
-      meta: 'https://tson.io/2026/38/m/meta.tn',
       imports: [],
       entries: map,
       keyAnnotations: new Map(),
@@ -860,29 +848,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     return diagnostic;
   }
 
-  it("a scoped position -- core.tn's own `dynamic` -- reads (§8.5): a bare null names no type", () => {
-    const gapSchema = resolveUserSchema(`
-!!id:"https://example.test/gaps-scoped.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
-  either => dynamic
-}
-`);
-    const compiled = compileJsonSchema(gapSchema);
-    const result = validateJson('null', {
-      schema: compiled,
-      root: 'either',
-      identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
-    });
-    const diagnostic = onlyDiagnostic(result);
-    expect(diagnostic.code).toBe('VALIDATION_ERROR');
-  });
-
   it("a namespace value -- a meta layer's vocabulary, a value and not a type (§4.1) -- is a gap and not a verdict", () => {
     const compiled = compileJsonSchema(
       handLinked({
-        op: namespaceOf('api', new Map()),
+        op: namespaceEntry(namespaceOf('api', new Map<string, MetaValue>())),
       }),
     );
     const result = validateJson('{}', {
@@ -899,7 +868,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
         box: entry({
-          kind: 'reference',
+          kind: 'alias',
           target: {
             name: 'pair',
             arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],

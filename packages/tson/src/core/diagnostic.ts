@@ -111,11 +111,10 @@ export type DiagnosticCode =
   /** A type reference does not resolve within the linked schema. */
   | 'UNKNOWN_TYPE'
   /**
-   * A value opened a schema scope with a nested `!!schema` at a position whose type is not a
-   * `scoped` instance, a container of scoped elements included ([TSON-SCHEMA] §7.1, §7.8).
-   * Cross-schema acceptance is authored intent, declared by the position's own type, so a position
-   * that did not declare it has no cell to refuse the directive: §8.1's `resolver` category, where
-   * a nested `!!schema` at a `scoped` position whose cell does not admit it is a validation error.
+   * A document's imports written at a value position -- `$import` in JSON anywhere but the leading
+   * member of the document's top object ([TSON-JSON] §3.4). §8.1's `resolver` category: the
+   * document's binding is written where no binding stands. TSON text has no counterpart, an
+   * `!!import` anywhere but the header being a parse error ([TSON-DATA] §3.3).
    */
   | 'SCOPE_NOT_ADMITTED'
   /** A validation rule not covered by a more specific code. */
@@ -126,8 +125,8 @@ export type DiagnosticCode =
   | 'BIND_MISMATCH'
   // -- A schema was not obtained: one code per reason ---------------------------------------
   //
-  // None of these five is a verdict on anything. A schema reference (`!!import`, `!!meta`, or
-  // `!!schema`) named a document no configured source would supply, so it was never obtained and
+  // None of these five is a verdict on anything. A schema reference (an `!!import`) named a
+  // document no configured source would supply, so it was never obtained and
   // never read -- unlike `SCHEMA_ERROR`, which means the schema *was* obtained and is wrong. They
   // split along [TSON-DATA] §8.1's two outcomes beside the four categories ([TSON-SCHEMA] §10.1,
   // §11.2): `SCHEMA_NOT_PERMITTED` and `SCHEMA_TOO_LARGE` are this deployment declining to supply

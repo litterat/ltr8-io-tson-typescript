@@ -1,33 +1,39 @@
 /**
- * The two remaining base-kind unions (`product`, `sum`, §4.1), the `value_type` and `void_type` atom constructors,
+ * The two remaining base-kind unions (`product`, `sum`, §4.1), the `void_type` atom constructor and the `declared_type` sum constructor,
  * the two product-shape enums implied by (but never carried on) a product body, and the exact
  * host-value shapes this package's constraint fields are typed with: {@link Rational} and
  * {@link Decimal}.
  */
 import type { TypeBase } from './typedef.js';
-import type { Scoped } from './typedef.js';
-import type { ArrayBody, ChoiceBody, MapBody, RecordBody, TupleBody } from './bodies.js';
+import type {
+  ArrayBody,
+  ChoiceBody,
+  MapBody,
+  NamespaceBody,
+  RecordBody,
+  RecordTemplateBody,
+  TupleBody,
+} from './bodies.js';
 
 /**
- * The meta-kernel's `product => top & { access_pattern: ...  size_type: ... }` base kind
- * (§4.1) — every PRODUCT-kind {@link Top} variant: exactly `record`/`array`/`set`/`map`/
- * `tuple`, the kernel's own structural-type family ("record, array, set, map, and tuple
- * compose with product, fixing `access_pattern` and `size_type`"). `set` refines `array` and
- * so resolves to an {@link ArrayBody} shape, not a member of its own.
+ * The kernel's `meta.product` base kind (§4.1) — every PRODUCT-kind {@link Top} variant: `record`,
+ * `record_template`, `array` (and `set_type`, its refinement, which resolves to an {@link ArrayBody}
+ * shape), `map`, `namespace` and `tuple`, the kernel's own structural-type family. A namespace type is
+ * a refinement of `map`, and a record template is its own constructor, a family base.
  */
-export type Product = RecordBody | ArrayBody | MapBody | TupleBody;
+export type Product =
+  RecordBody | RecordTemplateBody | ArrayBody | MapBody | NamespaceBody | TupleBody;
 
 /**
- * The meta-kernel's `sum => top & {}` base kind (§4.1) — every SUM-kind {@link Top}
- * variant: {@link ChoiceBody} (`choice => sum & { variants: [type_ref]  disjoint: boolean?
- * }`, §5.4), the closed sum that enumerates its variants, and {@link Scoped} (`scoped => sum
- * & { scope: ...  schemas: ...? }`, §7.8), the open one that names the namespaces its
- * variants are drawn from.
+ * The kernel's `meta.sum` base kind (§4.1) — every SUM-kind {@link Top} variant: {@link ChoiceBody}
+ * (`choice => sum & { variants: [type_ref]  disjoint: boolean? }`, §5.4), the closed sum that enumerates
+ * its variants, and {@link DeclaredType} (`declared_type => sum & {}`, §7.8), the open one that draws its
+ * variants from the closure.
  */
-export type Sum = ChoiceBody | Scoped;
+export type Sum = ChoiceBody | DeclaredType;
 
 /**
- * The meta-kernel's `product_size_type` enum (§4.1, §8.1) — fixed per product constructor
+ * the kernel's `meta.product_size_type` enum (§4.1, §8.1) — fixed per product constructor
  * (`record`/`tuple` are `FIXED`; `array`/`map` are `VARIABLE`) and, like {@link
  * ProductAccessType}, implied by which body shape is in play rather than carried as a field
  * on {@link RecordBody}/{@link ArrayBody}/{@link MapBody}/{@link TupleBody} — informative
@@ -36,7 +42,7 @@ export type Sum = ChoiceBody | Scoped;
 export type ProductSizeType = 'FIXED' | 'VARIABLE';
 
 /**
- * The meta-kernel's `product_access_type` enum (§4.1, §8.1) — `record`'s own
+ * the kernel's `meta.product_access_type` enum (§4.1, §8.1) — `record`'s own
  * `access_pattern` is fixed to `NAMED` and `array`/`map`/`tuple`'s to `INDEX`; neither ever
  * varies per instance, which is why no body shape in this package carries this value as a
  * field — informative only, implied by which shape is in play.
@@ -44,16 +50,18 @@ export type ProductSizeType = 'FIXED' | 'VARIABLE';
 export type ProductAccessType = 'INDEX' | 'NAMED';
 
 /**
- * The meta-kernel's `value_type` atom constructor, resolved (§4.2, §5.4, §8.1): an empty marker,
- * `!value_type {}` — the body of `value`, the atom with no constraint vocabulary and no class. A
- * processor recognises it by constructor, never by name.
+ * The kernel's `meta.declared_type` constructor, resolved (§7.8): the open sum over the governing
+ * closure, whose one instance is the kernel's `meta.declared`, the type of a schema map's values. A value
+ * at a position of this type names its own type, by its tag, among the types the closure declares or
+ * imports, and is read in full against it. The body carries nothing: what the position admits is the
+ * closure the entry belongs to, known when the schema compiles.
  */
-export interface ValueType extends TypeBase {
-  readonly kind: 'value_type';
+export interface DeclaredType extends TypeBase {
+  readonly kind: 'declared_type';
 }
 
 /**
- * The meta-kernel's `void_type` atom constructor, resolved (§4.2, §7.3, §8.1): an empty marker,
+ * the kernel's `meta.void_type` atom constructor, resolved (§4.2, §7.3, §8.1): an empty marker,
  * `!void_type {}` — the body of `void` (and core's own `void` sibling), the atom whose only value
  * is the void sentinel. A processor recognises it by constructor, never by name.
  */
@@ -62,7 +70,7 @@ export interface VoidType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `rational` host value — an exact fraction, `numerator`/`denominator`,
+ * the kernel's `rational` host value — an exact fraction, `numerator`/`denominator`,
  * `denominator` always strictly positive (§7.6's grammar never permits a negative or zero
  * denominator; any sign belongs to the numerator). Lives here rather than in a richer
  * host-value module because {@link RationalType}'s own `min`/`max`/`multipleOf` constraint

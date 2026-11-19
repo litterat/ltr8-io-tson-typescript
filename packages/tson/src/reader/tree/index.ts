@@ -22,7 +22,6 @@ export {
   skipAnnotationsAndTypeRef,
   skipCoreValue,
   skipDataValue,
-  skipScopedValue,
   skipTypeRef,
 } from './grammar.js';
 export { deepEqual, valuesEqual } from './equality.js';

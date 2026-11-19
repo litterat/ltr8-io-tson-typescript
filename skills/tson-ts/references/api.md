@@ -55,14 +55,14 @@ interface ValidationResult {
 
 interface WriteOptions {
   readonly id?: string; // writes !!id
-  readonly schema?: string; // writes !!schema
+  readonly imports?: readonly string[]; // writes one !!import per schema, in order
 }
 
 type DocumentKind = 'data' | 'schema';
 interface DocumentClassification {
   readonly kind: DocumentKind;
   readonly id?: string; // !!id, uninterpreted — not canonicalised, not syntax-checked
-  readonly meta?: string; // !!meta — only for kind: 'schema'
+  readonly imports: readonly string[]; // every !!import, in header order; empty when there are none
 }
 ```
 
@@ -226,7 +226,7 @@ declared `?sha256=` pin, and rejects a document whose own `!!id` is not the iden
 ### The compile pipeline
 
 ```ts
-function bootstrapMetaKernel(bytes: Uint8Array): Schema; // §1.5 — meta-kernel's !!meta names itself
+function bootstrapKernel(bytes: Uint8Array): Schema; // the kernel (meta.tn) has nothing to resolve against
 function linkSchema(resolved: Schema, deps?: LinkDeps): LinkedSchema;
 
 interface LinkedSchema {
@@ -500,7 +500,7 @@ Real, and worth knowing before you write around them:
   on data, or one whose value does not match its declared type, passes. The schema side does
   enforce this.
 - **`@ltr8/tson/json` has no `objectReader`/bind counterpart and no schema-directed encoder, and it
-  has no registry of its own.** A `scoped` position's EXTERN `$schema` is looked up through the
-  `foreignSchemas` the caller passes to `compileJsonSchema(linked, { foreignSchemas })`; without
-  one the push reports `SCHEMA_NOT_PERMITTED`. See `STATUS.md`'s Part 3 section for the full,
+  fetches no schema.** A `meta.declared_type` position reads an object led by `$type` against the
+  closure of the `LinkedSchema` passed to `compileJsonSchema(linked)`; `$import` at a value
+  position is `SCOPE_NOT_ADMITTED`. See `STATUS.md`'s Part 3 section for the full,
   current list.

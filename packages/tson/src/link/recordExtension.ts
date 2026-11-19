@@ -7,7 +7,7 @@
  * decoded through the same parser a read uses rather than compared as spelled tokens. The
  * base-level structural facts §5.2 states about a selector — its declared type resolves to an
  * atom-family instance or an enum — are checked here too, since only a link-time pass can follow a
- * field's reference chain against the whole merged namespace (`referenceChain.ts`'s own
+ * field's alias chain against the whole merged namespace (`aliasChain.ts`'s own
  * `terminalDefinition`).
  *
  * This module's own shape follows this package's existing linker passes (`typeInhabitance.ts`,
@@ -42,12 +42,13 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isAtom } from '../compiler/atomChecks.js';
 import { buildAtomReader } from '../compiler/atomBuilder.js';
-import { terminal, terminalDefinition } from './referenceChain.js';
+import { terminal, terminalDefinition } from './aliasChain.js';
 import { collectBodyNames } from './referenceValidation.js';
 import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
-import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
+import type { RecordBody, RecordField, RecordTemplateBody } from '../schema/meta/bodies.js';
+import { typeNameOf } from '../schema/meta/bodies.js';
 import {
   applicationOf,
   isConstructor,
@@ -122,8 +123,8 @@ export function checkRecordExtension(
   // schemas that each link cleanly can each add a member to one imported family, and the schema
   // importing both holds a family neither did.
   for (const [name, def] of merged) {
-    if (!isRecordBody(def) || def.discriminators === undefined) continue;
-    if (!isOpen(def)) {
+    if (!(isRecordBody(def) || isFamilyBase(def)) || def.discriminators === undefined) continue;
+    if (isRecordBody(def) && !isOpen(def)) {
       checkFamily(name, def.discriminators, selectorOf(def), merged, localNames, options, minted);
       continue;
     }
@@ -132,14 +133,13 @@ export function checkRecordExtension(
     // parameter has its type only on each member: a selector's declared type is the one every
     // member carries. A base with no member yet has no pins to judge.
     const members = directMembers(name, merged, minted);
-    const parameters = new Set(typeParameters(def));
-    const own = selectorOf(def);
+    const own = isFamilyBase(def) ? templateSelectorOf(def) : selectorOf(def);
     checkFamily(
       name,
       def.discriminators,
       (fieldName) => {
         const field = own(fieldName);
-        if (field !== undefined && !parameters.has(field.type.name)) return field;
+        if (field !== undefined) return field;
         return members
           .map((member) => member.body.fields.entries.get(fieldName))
           .find((candidate) => candidate !== undefined);
@@ -150,6 +150,29 @@ export function checkRecordExtension(
       minted,
     );
   }
+}
+
+/** A record template's selector field by name, where it states its own type: one labelled by a parameter has its type on each member only (§5.10). */
+function templateSelectorOf(
+  template: RecordTemplateBody,
+): (fieldName: string) => RecordField | undefined {
+  return (fieldName) => {
+    const field = template.fields.entries.get(fieldName);
+    if (field === undefined || field.typeParam !== undefined || field.type === undefined) {
+      return undefined;
+    }
+    const parameters = new Set(typeParameters(template));
+    if (field.type.kind !== 'sibling' && parameters.has(field.type.name)) return undefined;
+    // The selector's own pin rides `value_param` (`kind: text = N`): each member pins it, so only the type is the base's to state.
+    return {
+      type: field.type,
+      optional: field.optional,
+      voidable: field.voidable,
+      role: field.role,
+      ...(field.value === undefined ? {} : { value: field.value }),
+      annotations: field.annotations,
+    };
+  };
 }
 
 // ── A family member is declared (§5.2, §8.2) ─────────────────────────────────────────────────
@@ -444,7 +467,7 @@ function requireAt<T>(array: readonly T[], index: number): T {
 // ── Base-level selector checks ───────────────────────────────────────────────────────────────
 
 /**
- * §5.2: "the marked field's declared type resolves, after its reference chain, to an atom-family
+ * §5.2: "the marked field's declared type resolves, after its alias chain, to an atom-family
  * instance or an enum" — the one base-level fact declaration time cannot check, since it needs
  * the field's type resolved against the whole merged namespace. Every other base-level fact
  * (unmarked name, non-voidable type, no value, no group membership) is structurally guaranteed
@@ -475,18 +498,18 @@ function checkSelectorType(
         'such field',
     );
   }
-  const terminalDef = terminalDefinition(field.type.name, (n) => merged.get(n));
+  const terminalDef = terminalDefinition(typeNameOf(field), (n) => merged.get(n));
   if (terminalDef === undefined || isTemplateBody(terminalDef) || !isAtom(terminalDef)) {
     fail(
       options,
-      `'${baseName}': the discriminator '${fieldName}' is typed '${field.type.name}', which is ` +
+      `'${baseName}': the discriminator '${fieldName}' is typed '${typeNameOf(field)}', which is ` +
         'not an atom-family instance or an enum -- a selector MUST resolve, after its reference ' +
         'chain, to one of those (§5.2)',
       baseName,
     );
     return undefined;
   }
-  return buildAtomReader(field.type.name, terminalDef);
+  return buildAtomReader(typeNameOf(field), terminalDef);
 }
 
 function isTemplateBase(name: string, merged: ReadonlyMap<string, Top>): boolean {

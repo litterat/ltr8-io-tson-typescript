@@ -8,7 +8,7 @@ description: Read, validate, write and bind TSON (`.tn`) documents with `@ltr8/t
 A TypeScript port of TSON (Typed Schema Object Notation) for **Node 24+ and modern browsers**, with
 **zero runtime dependencies**. It implements all three spec parts — Class 1 (the text data format),
 Class 2 (the schema layer), and Part 3 (the JSON encoding, behind its own `./json` subpath) — and
-passes the shared conformance suite in full (695/695 subjects).
+passes the shared conformance suite in full (944/944 subjects).
 
 Two packages, released in lockstep: `@ltr8/tson` (the library; subpath entry points, ESM + CJS +
 `.d.ts`) and `@ltr8/tson-cli` (the `tson` command). Source and issues:
@@ -16,9 +16,9 @@ Two packages, released in lockstep: `@ltr8/tson` (the library; subpath entry poi
 from is [ltr8-io-tson-java](https://github.com/litterat/ltr8-io-tson-java), and both are tested
 against [ltr8-io-tson-test-suite](https://github.com/litterat/ltr8-io-tson-test-suite).
 
-**Versioning is `0.<spec revision>.<patch>`.** `0.38.x` implements the **2026 Revision 38** spec
+**Versioning is `0.<spec revision>.<patch>`.** `0.39.x` implements the **2026 Revision 39** spec
 series. A new revision moves the minor, and the spec is a working draft with no compatibility
-guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/38/m/core.tn` is
+guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/39/m/core.tn` is
 revision-specific and must match the library's own revision. The CLI depends on the library at an
 exact pin, never a range.
 
@@ -42,7 +42,7 @@ exact pin, never a range.
 ## Pick the entry point
 
 - `@ltr8/tson` — `parse`, `readTree`, `validate`, `write`, tree nodes and accessors, errors,
-  diagnostics, `createTson`, `linkSchema`, `bootstrapMetaKernel`. `parse` alone never pulls in the
+  diagnostics, `createTson`, `linkSchema`, `bootstrapKernel`. `parse` alone never pulls in the
   schema compiler.
 - `@ltr8/tson/tree` — the `Value` node model and `get`/`at`/`as*` alone.
 - `@ltr8/tson/schema` — the resolved-schema value model: `Top` (an entry is its value), `Type` and
@@ -53,8 +53,8 @@ exact pin, never a range.
 - `@ltr8/tson/identity` — `sha256Hex`, `withSha256Pin`, `declaredSha256`, `verifyContentHash`,
   `canonicalizeIdentity`.
 - `@ltr8/tson/regex` — the standalone RFC 9485 I-Regexp engine.
-- `@ltr8/tson/stdlib` — `standardLibrary()` / `registerStandardLibrary()` and the five bundled
-  schemas as source text (`meta-kernel`, `meta`, `core`, `net`, `policy`). Pulls in the compiler.
+- `@ltr8/tson/stdlib` — `standardLibrary()` / `registerStandardLibrary()` and the six bundled
+  schemas as source text (`meta` is the kernel; `numeric`, `temporal`, `net`, `core`, `policy`). Pulls in the compiler.
 - `@ltr8/tson/json` — Part 3, the JSON encoding (below).
 - `@ltr8/tson/source` — `httpSchemaSource`, `fileSchemaSource`. **Node-only**, never reachable from
   the default entry, so a browser build never pulls in `node:fs` or `node:http`; a browser supplies
@@ -88,7 +88,7 @@ write(tree);
 // '{ order_id: 1042 customer: { name: "Ada Lovelace" } placed: !date "2026-07-01" total: 149.95 }'
 ```
 
-`write(value, { id, schema })` adds the `!!id`/`!!schema` header directives; with neither it writes
+`write(value, { id, imports })` adds the `!!id` and `!!import` header directives; with neither it writes
 a plain headerless document.
 
 ### Navigating the tree
@@ -118,9 +118,8 @@ import { validate } from '@ltr8/tson';
 import { standardLibrary } from '@ltr8/tson/stdlib';
 
 const SCHEMA = `!!id:"https://example.com/order.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   order => {
     order_id: int32
     customer: customer
@@ -133,7 +132,7 @@ const SCHEMA = `!!id:"https://example.com/order.tn"
 }
 `;
 
-const tson = standardLibrary(); // the five bundled schemas already registered
+const tson = standardLibrary(); // the six bundled schemas already registered
 const linked = tson.resolveSchema(SCHEMA); // registers it under its own !!id
 const schema = tson.compile(linked);
 
@@ -145,10 +144,11 @@ Three stages: **resolve** (schema text → `LinkedSchema`,
 against what the registry already holds), **link** (references checked, name hygiene applied), and
 **compile** (`LinkedSchema` → `CompiledSchema`, whose readers are built lazily per entry). `root` is
 the entry name the _root value_ reads against, and it is not inferred from the document's own
-`!!schema` directive.
+`!!import` header or root `!type`.
 
-A schema using `ipv4`, `ipv6`, `cidr4`, `cidr6`, `mac`, `hostname`, `host` or `media_type` imports
-`https://tson.io/2026/38/m/net.tn` as well; they are not in `core.tn`.
+`core.tn` imports `numeric.tn`, `temporal.tn` and `net.tn`, so a schema importing it sees `ipv4`,
+`ipv6`, `cidr4`, `cidr6`, `mac`, `hostname`, `host` and `media_type` too. A schema that wants only
+one library imports that one (`https://tson.io/2026/39/m/net.tn` for the network atoms).
 
 `standardLibrary()` is not a singleton — a registry is mutable state, and two callers sharing one
 would see each other's registrations. Build a fresh one per unit of work; re-resolving the same
@@ -156,8 +156,8 @@ schema text into the same instance is a caller error, not an idempotent no-op.
 
 `createTson(config)` is the same thing without the bundled schemas. Use it directly only when
 supplying a standard library from elsewhere (a newer revision, a private mirror), which needs
-`bootstrapMetaKernel` because meta-kernel's `!!meta` names itself (§1.5) and cannot resolve the
-ordinary way.
+`bootstrapKernel`, because the kernel (`meta.tn`) is the document every other schema's closure
+holds and has nothing to resolve against: it is registered first, from its own source.
 
 ## JSON encoding
 
@@ -189,7 +189,7 @@ import { createTson } from '@ltr8/tson';
 import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
-await tson.preload(['https://tson.io/2026/38/m/meta.tn', 'https://tson.io/2026/38/m/core.tn']);
+await tson.preload(['https://tson.io/2026/39/m/core.tn']); // with the kernel registered first
 ```
 
 `preload` verifies a `?sha256=` pin whenever one is declared, and checks that the fetched
@@ -305,8 +305,10 @@ npx @ltr8/tson-cli strip person.tn                                           # t
 ```
 
 Six commands: `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`. `--schema` is a
-local path or `https://` URL and is **never** a data file's own `!!schema`; it requires `--root`.
-`validate`/`compile`/`hash` register the five bundled schemas, so they work offline.
+local path or `https://` URL and is **never** a data file's own `!!import`; it requires `--root`. With no `--schema`, a data
+document is read under its own `!!import`s against the bundled library alone, and a header naming
+anything else exits `69`. `--max-depth` and `--max-wait-depth` state §9.1's and §11.5's bounds.
+`validate`/`compile`/`hash` register the six bundled schemas, so they work offline.
 
 Exit codes, ranked `70 > 78 > 69 > 1 > 75` by who must act first: `0` checked and nothing to
 report, `1` checked and rejected (a §8.2 refusal included), `2` usage error, `69` a schema
@@ -381,9 +383,9 @@ is the only checklist; `references/` here documents the API as it stands.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/38/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/38/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/38/tson-part3-json.md (`@ltr8/tson/json`)
+- Part 1 — Text Data Format: https://tson.io/raw/2026/39/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/39/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/39/tson-part3-json.md (`@ltr8/tson/json`)
 
 All are working revisions and change without compatibility guarantees until the spec freezes at
 version 1. Re-fetch and check the revision number at the top rather than trusting a cached copy.

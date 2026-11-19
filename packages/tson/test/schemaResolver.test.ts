@@ -8,6 +8,7 @@ import {
   TsonInternalError,
   TsonNotImplementedError,
   TsonSchemaFetchError,
+  TsonLimitRefusedError,
   TsonSchemaValidationError,
 } from '../src/core/errors.js';
 import {
@@ -16,181 +17,84 @@ import {
   type Schema,
   type SchemaResolverDeps,
 } from '../src/compiler/schemaResolver.js';
-import { metaFormOfLexer } from '../src/compiler/tokenForms.js';
-import type { DataValue, RecordValue, TokenValue } from '../src/ast/value.js';
+import { bootstrapKernel } from '../src/schema/bootstrap.js';
+import { linkSchema, type LinkedSchema } from '../src/link/link.js';
+import { encodeUtf8 } from '../src/io/utf8.js';
+import { META_TN } from '../src/stdlib/schemas.generated.js';
+import { toCoreValue } from '../src/bind/encode.js';
+import { defaultAtomEncoder } from '../src/write/bindingWriter.js';
+import { topBinding } from '../src/schema/bindings.js';
+import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
+import { createDefinitionValueReader } from '../src/schema/namespaceReader.js';
 import type { SchemaDocument } from '../src/ast/schema/document.js';
-import type {
-  ArrayBody,
-  EnumBody,
-  NamedField,
-  RecordBody,
-  RecordField,
-} from '../src/schema/meta/bodies.js';
-import { fieldMap, fieldMapOf, namedField } from '../src/schema/meta/bodies.js';
-import type { Top, TypeArgument, TypeRef } from '../src/schema/meta/typedef.js';
+import type { ArrayBody, EnumBody, RecordBody } from '../src/schema/meta/bodies.js';
+import { fieldMapOf, namedField } from '../src/schema/meta/bodies.js';
+import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
+import type { DataValue } from '../src/ast/value.js';
 import {
   applicationOf,
   isFamilyBase,
   isTemplateBody,
   parentsOf,
   supertypesOf,
-  typeChain,
   typeParameters,
-  withChain,
 } from '../src/schema/meta/typedef.js';
 
 // ── Parsing helper ───────────────────────────────────────────────────────────────────────────
 
 function parse(header: string, declarations: string): SchemaDocument {
-  return runSync(parseSchemaDocument(fromString(`${header} { ${declarations} }`)));
+  return runSync(parseSchemaDocument(fromString(`${header} !schema { ${declarations} }`)));
 }
 
 /** The common case: one meta, no imports, `!!id` present -- every declaration text is the caller's own. */
 function document(declarations: string, id = 'https://example.com/s.tn'): SchemaDocument {
-  return parse(`!!id:"${id}" !!meta:"https://example.com/m.tn"`, declarations);
+  return parse(`!!id:"${id}" !!import:"${KERNEL_URI}"`, declarations);
 }
 
-// ── A minimal hand-rolled reader for `record`/`array` binding records ──────────────────────────
+// ── Real readers over the real kernel ───────────────────────────────────────────────────────────
 //
-// Just enough of `definitionMetaReader`'s contract to bind what `definitionResolver.ts`/
-// `templates.ts` actually hand it in these tests: the wire shapes `desugar.ts` and `heldBody.ts`
-// themselves produce for a fresh record body and an array sugar lift. Not a stand-in for a real
-// compiled reader (no field-level validation, no defaults) -- this package's own conformance
-// suite exercises the real thing; this file only has to prove `schemaResolver.ts`'s own driving
-// logic, which is agnostic to how a value gets bound.
+// Every test here drives `resolveSchema` with the readers the library itself uses and the real,
+// pre-loaded kernel as its one import: what a constructor application binds to, and what an
+// application's argument is read as, are the kernel's to say (§4.1, §5.10), so a stand-in reader
+// would only test itself.
 
-function fieldOf(record: RecordValue, name: string): DataValue | undefined {
-  return record.fields.find((f) => f.name === name)?.value.value;
-}
+const KERNEL_URI = 'https://tson.io/2026/39/m/meta.tn';
 
-function typeRefField(record: RecordValue, name: string): TypeRef {
-  const value = fieldOf(record, name)?.coreValue;
-  if (value === undefined) throw new Error(`missing '${name}'`);
-  if (value.kind === 'token') return { name: value.text, arguments: [], annotations: [] };
-  throw new Error(`unsupported type_ref wire shape for '${name}'`);
-}
+const kernel = linkSchema(bootstrapKernel(encodeUtf8(META_TN)));
 
-function testMetaReader(type: string, value: DataValue): Top {
-  const record = value.coreValue as RecordValue;
-  if (type === 'record') {
-    const fieldsField = fieldOf(record, 'fields')?.coreValue;
-    const fields = new Map<string, RecordField>();
-    if (fieldsField?.kind === 'map') {
-      for (const entry of fieldsField.entries) {
-        const fieldRecord = entry.value.value.coreValue as RecordValue;
-        const name = (entry.key.coreValue as TokenValue).text;
-        fields.set(name, {
-          type: typeRefField(fieldRecord, 'type'),
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        });
-      }
-    }
-    const extensionField = fieldOf(record, 'extension')?.coreValue;
-    const extension =
-      extensionField?.kind === 'token' && extensionField.text === 'ABSTRACT'
-        ? 'ABSTRACT'
-        : extensionField?.kind === 'token' && extensionField.text === 'FINAL'
-          ? 'FINAL'
-          : 'OPEN';
-    const discriminatorsField = fieldOf(record, 'discriminators')?.coreValue;
-    const discriminators: string[] = [];
-    if (discriminatorsField?.kind === 'array') {
-      for (const element of discriminatorsField.elements) {
-        const token = element.value.coreValue as TokenValue;
-        discriminators.push(token.text);
-      }
-    }
-    return {
-      kind: 'record',
-      fields: fieldMap(fields),
-      groups: [],
-      extension,
-      discriminators,
-    } satisfies RecordBody;
-  }
-  if (type === 'array') {
-    return {
-      kind: 'array',
-      elementType: typeRefField(record, 'element_type'),
-      voidable: false,
-      ordered: true,
-      uniqueItems: false,
-    } satisfies ArrayBody;
-  }
-  throw new Error(`testMetaReader: unhandled constructor '${type}'`);
-}
-
-const neverCalled = (type: string): Top => {
-  throw new Error(`not exercised by this test: '${type}'`);
-};
-
-/**
- * A structure namespace with the two constructors these tests' sugar/template forms apply --
- * enough vocabulary for `checkTemplateBindings` (§5.10's own declaration-time check) and
- * `testMetaReader` to have somewhere to bind them, mirroring the real `record`/`array` shapes
- * `spec/m/meta-kernel-resolved.tn` declares (`heldBody.ts`'s own `RECORD`/`ARRAY` wire fields).
- */
-/** A constructor entry over `fields`: IS-A `top` through `product` (hand-built) is what makes `isConstructor` true. */
-function constructorEntry(fields: readonly NamedField[]): Top {
-  return withChain(
-    { kind: 'record', fields: fieldMapOf(fields), groups: [], extension: 'OPEN' },
-    typeChain(['product', 'top']),
-  );
-}
-
-function testStructureNamespace(): (name: string) => Top | undefined {
-  const anyType: TypeRef = { name: 'any', arguments: [], annotations: [] };
-  const structure = new Map<string, Top>([
-    [
-      'record',
-      constructorEntry([
-        {
-          name: 'fields',
-          type: anyType,
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-      ]),
-    ],
-    [
-      'array',
-      constructorEntry([
-        {
-          name: 'element_type',
-          type: anyType,
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-      ]),
-    ],
-  ]);
-  return (name) => structure.get(name);
+/** `linked` as one of the schemas another imports. */
+function importedFrom(linked: LinkedSchema): ImportedSchema {
+  return {
+    entries: linked.entries,
+    facts: linked.facts,
+    keyAnnotations: linked.keyAnnotations,
+    originOf: (entry) => linked.origins.get(entry) ?? linked.id,
+    enumForms: linked.enumForms,
+    nameTypes: linked.nameTypes,
+  };
 }
 
 function deps(overrides: Partial<SchemaResolverDeps> = {}): SchemaResolverDeps {
   return {
-    definitionMetaReader: overrides.definitionMetaReader ?? neverCalled,
-    metaDefinitions: overrides.metaDefinitions ?? (() => undefined),
-    ...(overrides.annotationValueReader === undefined
-      ? {}
-      : { annotationValueReader: overrides.annotationValueReader }),
-    ...(overrides.encodeSourceBody === undefined
-      ? {}
-      : { encodeSourceBody: overrides.encodeSourceBody }),
-    ...(overrides.resolveImport === undefined ? {} : { resolveImport: overrides.resolveImport }),
+    readers:
+      overrides.readers ??
+      ((lookup) => ({
+        meta: createDefinitionMetaReader(lookup),
+        value: createDefinitionValueReader(lookup),
+      })),
+    encodeSourceBody:
+      overrides.encodeSourceBody ?? ((body) => toCoreValue(topBinding, body, defaultAtomEncoder)),
+    resolveImport: overrides.resolveImport ?? (() => importedFrom(kernel)),
   };
 }
 
-/** `deps()` plus a working `record`/`array` reader and structure namespace -- what every sugar/template test in this file needs. */
+/** The real readers over the real kernel -- what every sugar/template test in this file needs. */
 function depsWithReader(): SchemaResolverDeps {
-  return deps({ definitionMetaReader: testMetaReader, metaDefinitions: testStructureNamespace() });
+  return deps();
+}
+
+function richDeps(): SchemaResolverDeps {
+  return deps();
 }
 
 function isRecordBody(body: Top): body is RecordBody {
@@ -220,21 +124,22 @@ function fieldNamesOf(body: RecordBody): string[] {
 function fieldTypeOf(schema: Schema, name: string, field: string): TypeRef {
   const found = namedField(recordBodyOf(schema, name), field);
   if (found === undefined) throw new Error(`'${name}' has no field '${field}'`);
-  return found.type;
+  const type = found.type;
+  if (type.kind === 'sibling') throw new Error(`'${name}.${field}' is typed by a sibling`);
+  return type;
 }
 
 // ── !!id / header handling ───────────────────────────────────────────────────────────────────
 
 describe('!!id and header handling', () => {
   it('throws TsonSchemaValidationError when !!id is absent', () => {
-    const doc = parse('!!meta:"https://example.com/m.tn"', 'x => { v: text }');
+    const doc = parse('', 'x => { v: text }');
     expect(() => resolveSchema(doc, deps())).toThrow(TsonSchemaValidationError);
   });
 
-  it('carries !!id/!!meta/!!import straight through to the result', () => {
+  it('carries !!id/!!import straight through to the result', () => {
     const doc = parse(
-      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
-        '!!import:"https://example.com/i.tn"',
+      '!!id:"https://example.com/s.tn" ' + '!!import:"https://example.com/i.tn"',
       'x => { v: text }',
     );
     const schema = resolveSchema(
@@ -247,7 +152,6 @@ describe('!!id and header handling', () => {
       }),
     );
     expect(schema.id).toBe('https://example.com/s.tn');
-    expect(schema.meta).toBe('https://example.com/m.tn');
     expect(schema.imports).toEqual(['https://example.com/i.tn']);
     expect(schema.bootstrap).toBe(false);
   });
@@ -273,10 +177,22 @@ describe('resolving a whole document, on demand and dependency-following', () =>
     expect(supertypesOf(recordBodyOf(schema, 'b'))).toEqual(['base']);
   });
 
-  it('rejects a circular composition chain', () => {
+  it('rejects a wait cycle, naming the entries on it in wait order (§3.4.1)', () => {
     const doc = document('a => b & {} b => a & {}');
-    expect(() => resolveSchema(doc, deps())).toThrow(/circular/);
+    expect(() => resolveSchema(doc, deps())).toThrow(/'a' waits on 'b' waits on 'a'/);
     expect(() => resolveSchema(doc, deps())).toThrow(TsonSchemaValidationError);
+  });
+
+  it('refuses a chain of waits past max_wait_depth at its head, in any declaration order (§11.5)', () => {
+    // e waits on d waits on c waits on b waits on a: four waits from the head.
+    const forward = document('a => {} b => a & {} c => b & {} d => c & {} e => d & {}');
+    const backward = document('e => d & {} d => c & {} c => b & {} b => a & {} a => {}');
+    for (const doc of [forward, backward]) {
+      expect(() => resolveSchema(doc, { ...deps(), maxWaitDepth: 3 })).toThrow(
+        TsonLimitRefusedError,
+      );
+      expect(() => resolveSchema(doc, { ...deps(), maxWaitDepth: 4 })).not.toThrow();
+    }
   });
 
   it('rejects a composition supertype naming nothing this schema declares', () => {
@@ -293,8 +209,7 @@ describe('!!import merging into the type-name namespace', () => {
       ['base', { kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' }],
     ]);
     const doc = parse(
-      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
-        '!!import:"https://example.com/i.tn"',
+      '!!id:"https://example.com/s.tn" ' + '!!import:"https://example.com/i.tn"',
       'child => base & { y: text }',
     );
     const schema = resolveSchema(
@@ -316,8 +231,7 @@ describe('!!import merging into the type-name namespace', () => {
       ['base', { kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' }],
     ]);
     const doc = parse(
-      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
-        '!!import:"https://example.com/i.tn"',
+      '!!id:"https://example.com/s.tn" ' + '!!import:"https://example.com/i.tn"',
       'base => { x: text }',
     );
     expect(() =>
@@ -332,11 +246,12 @@ describe('!!import merging into the type-name namespace', () => {
 
   it('reports TsonNotImplementedError for a document that writes !!import with no loader supplied', () => {
     const doc = parse(
-      '!!id:"https://example.com/s.tn" !!meta:"https://example.com/m.tn" ' +
-        '!!import:"https://example.com/i.tn"',
+      '!!id:"https://example.com/s.tn" ' + '!!import:"https://example.com/i.tn"',
       'x => { v: text }',
     );
-    expect(() => resolveSchema(doc, deps())).toThrow(TsonNotImplementedError);
+    const { resolveImport: _loader, ...noLoader } = deps();
+    void _loader;
+    expect(() => resolveSchema(doc, noLoader)).toThrow(TsonNotImplementedError);
   });
 });
 
@@ -366,23 +281,28 @@ describe('collecting mode (a DiagnosticsReceiver in options)', () => {
 // ── Positive classification: every reportable failure gets its own code, nothing falls to a
 //    catch-all, and an error none of the four categories claims still propagates as itself ─────
 
-/** A structure namespace exposing one constructor entry, `ctorName`, for `!ctorName { }` declarations to resolve against. */
-function structureNamespaceWith(ctorName: string): (name: string) => Top | undefined {
-  const entry = constructorEntry([]);
-  return (name) => (name === ctorName ? entry : undefined);
-}
-
 describe('positive classification of a failed declaration', () => {
+  /** The real readers, with `meta` replaced: what a constructor application's payload is bound through. */
+  function depsWithMeta(meta: (type: string, value: DataValue) => Top): SchemaResolverDeps {
+    return deps({
+      readers: (lookup) => ({ meta, value: createDefinitionValueReader(lookup) }),
+    });
+  }
+
+  /** The real readers, with `value` replaced: what a value entry's payload is read through. */
+  function depsWithValue(value: (type: string, payload: DataValue) => never): SchemaResolverDeps {
+    return deps({
+      readers: (lookup) => ({ meta: createDefinitionMetaReader(lookup), value }),
+    });
+  }
+
   it("reports BIND_MISMATCH for a TsonBindMismatchError the meta reader throws while binding '!ctor { }'", () => {
-    const doc = document('bad => !something { }  good => { x: text }');
+    const doc = document('bad => !meta.record { }  good => { x: text }');
     const receiver = collector();
     const schema = resolveSchema(
       doc,
-      deps({
-        definitionMetaReader: () => {
-          throw new TsonBindMismatchError("bound class disagrees with 'something'");
-        },
-        metaDefinitions: structureNamespaceWith('something'),
+      depsWithMeta(() => {
+        throw new TsonBindMismatchError("bound class disagrees with 'record'");
       }),
       { receiver },
     );
@@ -392,27 +312,22 @@ describe('positive classification of a failed declaration', () => {
     expect(fieldNamesOf(recordBodyOf(schema, 'good'))).toEqual(['x']);
   });
 
-  it('reports the code belonging to the fetch reason for a TsonSchemaFetchError the structure namespace throws', () => {
-    // Injected through `metaDefinitions` rather than `definitionMetaReader`: the latter's own
-    // caller (`definitionResolver.ts`'s `bindAtomInstance`) already folds an unrecognised error
-    // from that particular seam into `TsonNotImplementedError`, so a fetch failure can only reach
-    // this resolver's own classifier unwrapped through a namespace lookup, exactly as a governing
-    // meta backed by a real schema loader would raise one.
-    const doc = document('bad => !something { }  good => { x: text }');
+  it('reports the code belonging to the fetch reason for a TsonSchemaFetchError a value read throws', () => {
+    // Injected through the value reader rather than the meta reader: the latter's own caller
+    // (`definitionResolver.ts`'s `bindAtomInstance`) already folds an unrecognised error from that
+    // particular seam into `TsonNotImplementedError`, so a fetch failure can only reach this
+    // resolver's own classifier unwrapped through the value reader, as a reader backed by a real
+    // schema loader would raise one.
+    const doc = document('thing => { x: text }  bad => !thing { x: abc }  good => { x: text }');
     const receiver = collector();
     const schema = resolveSchema(
       doc,
-      deps({
-        metaDefinitions: (name) => {
-          if (name === 'something') {
-            throw new TsonSchemaFetchError(
-              'https://example.com/unreachable.tn',
-              'not-permitted',
-              'no configured source would supply this schema',
-            );
-          }
-          return undefined;
-        },
+      depsWithValue(() => {
+        throw new TsonSchemaFetchError(
+          'https://example.com/unreachable.tn',
+          'not-permitted',
+          'no configured source would supply this schema',
+        );
       }),
       { receiver },
     );
@@ -423,35 +338,30 @@ describe('positive classification of a failed declaration', () => {
   });
 
   it('rethrows a BIND_MISMATCH-worthy error unchanged when there is no receiver (fail-fast)', () => {
-    const doc = document('bad => !something { }');
+    const doc = document('bad => !meta.record { }');
     expect(() =>
       resolveSchema(
         doc,
-        deps({
-          definitionMetaReader: () => {
-            throw new TsonBindMismatchError('mismatch');
-          },
-          metaDefinitions: structureNamespaceWith('something'),
+        depsWithMeta(() => {
+          throw new TsonBindMismatchError('mismatch');
         }),
       ),
     ).toThrow(TsonBindMismatchError);
   });
 
   it('never classifies an unrecognised error as a verdict -- it propagates as itself, not SCHEMA_ERROR', () => {
-    // `metaDefinitions` throwing is a bug in the caller-supplied structure namespace, not any of
-    // the four reportable categories -- injected here rather than through `definitionMetaReader`,
-    // since `definitionResolver.ts`'s own `bindAtomInstance` already folds an unrecognised error
-    // from *that* seam into `TsonNotImplementedError` (a deliberate, lower-level classification
-    // this test is not the one to re-cover).
-    const doc = document('bad => !something { }');
+    // A value reader throwing a library fault is not any of the four reportable categories --
+    // injected here rather than through the meta reader, since `definitionResolver.ts`'s own
+    // `bindAtomInstance` already folds an unrecognised error from *that* seam into
+    // `TsonNotImplementedError` (a deliberate, lower-level classification this test is not the
+    // one to re-cover).
+    const doc = document('thing => { x: text }  bad => !thing { x: abc }');
     const receiver = collector();
     expect(() =>
       resolveSchema(
         doc,
-        deps({
-          metaDefinitions: () => {
-            throw new TsonInternalError('a bug in this namespace, not a document problem');
-          },
+        depsWithValue(() => {
+          throw new TsonInternalError('a bug in this reader, not a document problem');
         }),
         { receiver },
       ),
@@ -470,8 +380,8 @@ describe('a sugar form lifts to a synthetic entry, marked @synthetic at its key'
     expect(schema.entries.size).toBe(2); // wrapper + one lifted array entry
     const fieldType = fieldTypeOf(schema, 'wrapper', 'v');
     expect(isArrayBody(entryOf(schema, fieldType.name))).toBe(true);
-    expect(schema.facts.get(fieldType.name)?.head).toBe('array');
-    expect(schema.keyAnnotations.get(fieldType.name)).toEqual([{ name: 'synthetic' }]);
+    expect(schema.facts.get(fieldType.name)?.head).toBe('meta.array');
+    expect(schema.keyAnnotations.get(fieldType.name)).toEqual([{ name: 'meta.synthetic' }]);
     // The author's own declaration carries no @synthetic marker.
     expect(schema.keyAnnotations.has('wrapper')).toBe(false);
   });
@@ -550,179 +460,6 @@ describe('template materialisation (§5.10), end to end through the real Templat
   });
 });
 
-// ── A richer reader/structure namespace: application record-forms and `enum` ───────────────
-//
-// `testMetaReader`/`testStructureNamespace` above only ever meet a bare name in `element_type`/
-// `type`. The two describe blocks below need a slot that reads an *application* (§5.10's
-// materialisation closing one first) and a governing meta with `enum`/`enum_set`/`identifier`
-// wired up (§5.10's own VALUE-parameter motivating case) -- so they get their own, richer pair.
-
-function richTypeRefField(record: RecordValue, name: string): TypeRef {
-  const value = fieldOf(record, name)?.coreValue;
-  if (value === undefined) throw new Error(`missing '${name}'`);
-  if (value.kind === 'token') return { name: value.text, arguments: [], annotations: [] };
-  const argsRecord = value as RecordValue;
-  const head = (fieldOf(argsRecord, 'name')?.coreValue as TokenValue).text;
-  const argumentsValue = fieldOf(argsRecord, 'arguments')?.coreValue;
-  const args: TypeArgument[] = [];
-  if (argumentsValue?.kind === 'array') {
-    for (const element of argumentsValue.elements) {
-      const argRecord = element.value.coreValue as RecordValue;
-      const literal = fieldOf(argRecord, 'value')?.coreValue;
-      if (literal !== undefined) {
-        const token = literal as TokenValue;
-        args.push({
-          kind: 'value',
-          value: { text: token.text, form: metaFormOfLexer(token.form) },
-        });
-      } else {
-        args.push({ kind: 'ref', ref: richTypeRefField(argRecord, 'name') });
-      }
-    }
-  }
-  return { name: head, arguments: args, annotations: [] };
-}
-
-/** `true` when `record`'s `name` field is a `token` holding the literal `"true"` -- §5.2's `optional`/`voidable` wire fields, written only when `true` (`desugar.ts`'s own `recordFieldValue`). */
-function richBooleanField(record: RecordValue, name: string): boolean {
-  const value = fieldOf(record, name)?.coreValue;
-  return value?.kind === 'token' && value.text === 'true';
-}
-
-function richMetaReader(type: string, value: DataValue): Top {
-  const record = value.coreValue as RecordValue;
-  if (type === 'record') {
-    const fieldsField = fieldOf(record, 'fields')?.coreValue;
-    const fields: NamedField[] = [];
-    if (fieldsField?.kind === 'map') {
-      for (const entry of fieldsField.entries) {
-        const fieldRecord = entry.value.value.coreValue as RecordValue;
-        const fname = (entry.key.coreValue as TokenValue).text;
-        const roleWire = fieldOf(fieldRecord, 'role')?.coreValue;
-        const role: RecordField['role'] =
-          roleWire?.kind === 'token' && (roleWire.text === 'DEFAULT' || roleWire.text === 'FIXED')
-            ? roleWire.text
-            : 'FREE';
-        const valueWire = fieldOf(fieldRecord, 'value')?.coreValue;
-        const fieldValue =
-          valueWire?.kind === 'token'
-            ? { text: valueWire.text, form: metaFormOfLexer(valueWire.form) }
-            : undefined;
-        fields.push({
-          name: fname,
-          type: richTypeRefField(fieldRecord, 'type'),
-          optional: richBooleanField(fieldRecord, 'optional'),
-          voidable: richBooleanField(fieldRecord, 'voidable'),
-          role,
-          ...(fieldValue === undefined ? {} : { value: fieldValue }),
-          annotations: [],
-        });
-      }
-    }
-    return {
-      kind: 'record',
-      fields: fieldMapOf(fields),
-      groups: [],
-      extension: 'OPEN',
-    } satisfies RecordBody;
-  }
-  if (type === 'array') {
-    return {
-      kind: 'array',
-      elementType: richTypeRefField(record, 'element_type'),
-      voidable: false,
-      ordered: true,
-      uniqueItems: false,
-    } satisfies ArrayBody;
-  }
-  if (type === 'enum') {
-    const membersField = fieldOf(record, 'members')?.coreValue;
-    const members: string[] = [];
-    if (membersField?.kind === 'array') {
-      for (const element of membersField.elements) {
-        members.push((element.value.coreValue as TokenValue).text);
-      }
-    }
-    return { kind: 'enum', members, nameType: 'identifier' } satisfies EnumBody;
-  }
-  throw new Error(`richMetaReader: unhandled constructor '${type}'`);
-}
-
-/**
- * A structure namespace whose `record.fields[].type`/`array.element_type` are genuinely typed
- * `type_ref` (unlike `testStructureNamespace()`'s placeholder `any`, which the other describe
- * blocks in this file don't care about) -- §5.10's `ParameterKinds` walk classifies a parameter
- * by the slot's *declared* type, so this is the one thing a realistic governing meta must get
- * right for these two describe blocks. Plus `enum`/`enum_set`/`identifier`, the VALUE-parameter
- * motivating case's own vocabulary.
- */
-function richStructureNamespace(): (name: string) => Top | undefined {
-  const typeRefType: TypeRef = { name: 'type_kind', arguments: [], annotations: [] };
-  const extra = new Map<string, Top>([
-    [
-      'record',
-      constructorEntry([
-        {
-          name: 'fields',
-          type: typeRefType,
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-      ]),
-    ],
-    [
-      'array',
-      constructorEntry([
-        {
-          name: 'element_type',
-          type: typeRefType,
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-      ]),
-    ],
-    [
-      'enum',
-      constructorEntry([
-        {
-          name: 'members',
-          type: { name: 'enum_set', arguments: [], annotations: [] },
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-      ]),
-    ],
-    [
-      'enum_set',
-      withChain(
-        {
-          kind: 'array',
-          elementType: { name: 'identifier', arguments: [], annotations: [] },
-          voidable: false,
-          ordered: true,
-          uniqueItems: false,
-        },
-        typeChain(['product', 'top']),
-      ),
-    ],
-    [
-      'identifier',
-      withChain({ kind: 'text_type', normalization: 'NONE' }, typeChain(['atom', 'top'])),
-    ],
-  ]);
-  return (name) => extra.get(name);
-}
-
-function richDeps(): SchemaResolverDeps {
-  return deps({ definitionMetaReader: richMetaReader, metaDefinitions: richStructureNamespace() });
-}
-
 // ── §5.10 parameter kinds: an argument is classified by the parameter it binds ──────────────
 
 describe('§5.10 parameter kinds, end to end through the real schemaResolver', () => {
@@ -797,7 +534,10 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       // `w` stays open while resolving the composition operand (its own `S` is unbound): the
       // routed field's substituted value is `S` itself, and the record template states the name
       // mark the author wrote.
-      expect(namedField(recordBodyOf(schema, 'w'), 'type')?.optional).toBe(false);
+      const open = entryOf(schema, 'w');
+      if (!isFamilyBase(open)) throw new Error('w is a record template');
+      expect(open.fields.entries.get('type')?.optional).toBe(false);
+      expect(open.fields.entries.get('type')?.valueParam).toBe('S');
       // Once `w<"dog">` itself closes, `S` becomes concrete: the field is the marker the
       // fully-bound operand reaches directly (the test above).
       const usedType = namedField(recordBodyOf(schema, 'used'), 'type');

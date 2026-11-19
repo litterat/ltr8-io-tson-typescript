@@ -25,9 +25,8 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-dispatch.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   pet => abstract { pet_type: text =?  name: text  nickname?: text? }
   cat => pet & { pet_type: = cat  hunting_skill?: text ~ lazy }
   dog => pet & { pet_type: = dog  pack_size: positive_integer }
@@ -106,7 +105,7 @@ describe('§3.2/§3.3 the annotation object', () => {
     ).toBe('{"pet_type":"dog","name":"Rex","pack_size":3}');
   });
 
-  it('the wrapper form: $schema/$type/$value only, $value carrying the value', () => {
+  it('the wrapper form: $import/$type/$value only, $value carrying the value', () => {
     expect(
       acceptedJson(
         'dog',
@@ -136,9 +135,16 @@ describe('§3.2/§3.3 the annotation object', () => {
     expect(d.code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema at a position whose own type is not scoped is SCOPE_NOT_ADMITTED, a resolver error (§8.5, [TSON-SCHEMA] §7.8)', () => {
-    const d = refusalJson('dog', '{"$schema": "https://example.test/x.tn", "pet_type": "dog"}');
+  it('§3.3: $import at a value position is SCOPE_NOT_ADMITTED, a resolver error -- it stands at the top of the document alone', () => {
+    const d = refusalJson(
+      'registration',
+      JSON.stringify({
+        id: '9f1c8e2a-4b7d-4e6f-9a3b-2c5d8e7f1a09',
+        pet: { $import: ['https://example.test/x.tn'], pet_type: 'dog' },
+      }),
+    );
     expect(d.code).toBe('SCOPE_NOT_ADMITTED');
+    expect(d.path).toBe('/pet/$import');
   });
 
   it('§3.2: a $-initial member outside the three is an ordinary member, so an undeclared one is §6.1.1’s closure error', () => {
@@ -469,9 +475,8 @@ describe('cross-encoding parity: same schema, same verdict', () => {
 describe('a record-bodied template family base', () => {
   const TEMPLATE_SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-dispatch-template.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
-{
+!!import:"https://tson.io/2026/39/m/core.tn"
+!schema {
   box => abstract <T> { kind: text =?  value: T }
   int_box => box<int32> & { kind: = int_box }
   text_box => box<text> & { kind: = text_box }

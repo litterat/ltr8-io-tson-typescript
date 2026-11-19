@@ -1,17 +1,12 @@
 /**
  * Bridges `class2/validate/` vectors -- a data document read against a schema that has already
  * loaded, where [TSON-DATA] §8.1's `validation` category finally has vectors -- to this
- * implementation's real `Tson.validate`.
+ * implementation's real `Tson.validateDocument`.
  *
- * The subject is self-describing at the root: its own root value carries a `!type-ref` naming its
- * type (`class2Tson.ts`'s fresh registry has the schema compiled), which this port's own
- * `readTree`/`validate` do not infer from a document's own header (`facade/tree.ts`'s
- * `SchemaGovernedReadOptions` always takes an explicit `root`) -- so the root type name is read
- * off the parsed subject's own {@link DataValue.typeRef} rather than assumed.
+ * The subject is a complete document (RUNNER.md): its own header names the schemas it imports and its own root
+ * `!type-ref` the type it is read as, so nothing about either is stated here -- the front door reads them, as
+ * the Java reference's own `Class2ConformanceSuiteTest.checkValidateVector` has its tree reader do.
  */
-import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
-import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
-import { parseDocument } from '../../packages/tson/src/compiler/dataParser.js';
 import type { Diagnostic, DiagnosticCode } from '../../packages/tson/src/core/diagnostic.js';
 import {
   diagnosticCodeForMechanism,
@@ -19,8 +14,7 @@ import {
   isVerdict,
 } from '../../packages/tson/src/core/diagnostic.js';
 
-import { resolveBundledSchemaId } from './bundled-ids.js';
-import { newClass2Tson } from './class2Tson.js';
+import { loadImports, newClass2Tson } from './class2Tson.js';
 import type { Category, ValidateSidecar } from './sidecar.js';
 import type { Class2Layer, Vector } from './vectors.js';
 
@@ -72,37 +66,21 @@ function categoryOf(vector: Vector<Class2Layer>, diagnostic: Diagnostic): Catego
   throw new Error(`${vector.name}: unclassified diagnostic code '${diagnostic.code}'`);
 }
 
-/** The root value's own declared type -- what a self-describing document names itself as. */
-function rootTypeOf(vector: Vector<Class2Layer>, subject: Uint8Array): string {
-  const { document } = runSync(parseDocument(fromBytes(subject)));
-  const typeRef = document.root.typeRef;
-  if (typeRef === undefined) {
-    throw new Error(
-      `${vector.name}: a class2/validate subject's root value must carry its own !type-ref`,
-    );
-  }
-  return typeRef;
-}
-
-export function checkValidateVector(
+/**
+ * A data document read the way the processor reads one ([TSON-DATA] §2.2), as the Java reference's own
+ * `Class2ConformanceSuiteTest.checkValidateVector` does: through the front door, which reads the document's
+ * header, obtains the schemas its `!!import`s name, merges them into one namespace (§2.2.3) and reads the root
+ * value as the type its own root `!type-ref` names. Nothing about the schema or the root type is stated
+ * outside the subject, which is a complete document (RUNNER.md).
+ */
+export async function checkValidateVector(
   vector: Vector<Class2Layer>,
   subject: Uint8Array,
   sidecar: ValidateSidecar,
-): void {
-  if (sidecar.schema === undefined) {
-    throw new Error(`${vector.name}: a class2/validate vector must name its governing schema`);
-  }
-  const tson = newClass2Tson(subject);
-  const schemaId = resolveBundledSchemaId(sidecar.schema);
-  const linked = tson.schemas.get(canonicalizeIdentity(schemaId));
-  if (linked === undefined) {
-    throw new Error(
-      `${vector.name}: '${sidecar.schema}' (${schemaId}) is not registered on this Tson instance`,
-    );
-  }
-  const compiled = tson.compile(linked);
-  const root = rootTypeOf(vector, subject);
-  const result = tson.validate(subject, { schema: compiled, root });
+): Promise<void> {
+  const tson = newClass2Tson();
+  await loadImports(tson, subject);
+  const result = tson.validateDocument(subject);
 
   switch (sidecar.outcome) {
     case 'refused': {

@@ -1,6 +1,6 @@
 import { parseDocument } from '../../packages/tson/src/compiler/dataParser.js';
 import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
-import type { DataValue, ScopedValue } from '../../packages/tson/src/ast/value.js';
+import type { DataValue } from '../../packages/tson/src/ast/value.js';
 
 /**
  * Reduction from the generic {@link DataValue} tree our own parser produces over a sidecar's
@@ -61,16 +61,6 @@ export interface CommonSidecarFields {
   readonly description: string;
   /** Present only when the subject is not plain UTF-8. */
   readonly encoding?: Encoding;
-  /** A short bundled-schema name (`bundled-ids.ts`) for the subject's own `!!meta` target. */
-  readonly meta?: string;
-  /** Short bundled-schema names for the subject's own `!!import` entries, in order. */
-  readonly import?: readonly string[];
-  /**
-   * A short bundled-schema name for the subject's own `!!schema` target (`class2/validate/`'s own
-   * `spliced_header`, `schemas/sidecar-common.tn`) -- governs a *data*-document subject, where
-   * {@link meta}/{@link import} govern a schema-document one.
-   */
-  readonly schema?: string;
 }
 
 // ── Lexer layer ──────────────────────────────────────────────────────────────────────────────
@@ -117,26 +107,33 @@ export type ExpectedCoreValue =
   | { readonly kind: 'token'; readonly form: TokenForm; readonly text: string }
   | { readonly kind: 'absent' }
   | { readonly kind: 'empty-brace' }
+  | {
+      readonly kind: 'reference';
+      readonly name: string;
+      readonly arguments: readonly ExpectedReferenceArgument[];
+    }
   | { readonly kind: 'record'; readonly fields: readonly ExpectedRecordField[] }
   | { readonly kind: 'map'; readonly entries: readonly ExpectedMapEntry[] }
-  | { readonly kind: 'array'; readonly elements: readonly ExpectedScopedValue[] };
+  | { readonly kind: 'array'; readonly elements: readonly ExpectedDataValue[] };
+
+/** One argument of an expected reference (parser layer): a nested reference with arguments, or a token. */
+export type ExpectedReferenceArgument =
+  | {
+      readonly kind: 'reference';
+      readonly name: string;
+      readonly arguments: readonly ExpectedReferenceArgument[];
+    }
+  | { readonly kind: 'token'; readonly form: TokenForm; readonly text: string };
 
 /** An expected record field (parser layer). */
 export interface ExpectedRecordField {
   readonly name: string;
-  readonly value: ExpectedScopedValue;
+  readonly value: ExpectedDataValue;
 }
 
 /** An expected map entry (parser layer). */
 export interface ExpectedMapEntry {
   readonly key: ExpectedDataValue;
-  readonly value: ExpectedScopedValue;
-}
-
-/** An expected scoped-value: a field/array-element/map-value's own `!!schema` plus its value. */
-export interface ExpectedScopedValue {
-  /** Absent (`_`) unless this position carries its own `!!schema` directive. */
-  readonly schemaRef?: string;
   readonly value: ExpectedDataValue;
 }
 
@@ -152,8 +149,8 @@ export interface ExpectedDataValue {
 export interface ExpectedDocument {
   /** Absent (`_`) unless the document carries its own `!!id`. */
   readonly id?: string;
-  /** Absent (`_`) unless the document carries its own `!!schema`. */
-  readonly schema?: string;
+  /** The document's `!!import`s, in header order; empty when there are none. */
+  readonly imports: readonly string[];
   readonly root: ExpectedDataValue;
 }
 
@@ -288,6 +285,11 @@ export type ExpectedReaderAtom =
  */
 export type ExpectedReaderValue =
   | { readonly kind: 'record'; readonly fields: readonly ExpectedReaderField[] }
+  | {
+      readonly kind: 'reference';
+      readonly segments: readonly string[];
+      readonly arguments: readonly ExpectedReaderValue[];
+    }
   | { readonly kind: 'map'; readonly entries: readonly ExpectedReaderEntry[] }
   | { readonly kind: 'array'; readonly elements: readonly ExpectedReaderValue[] }
   | { readonly kind: 'atom'; readonly atom: ExpectedReaderAtom }
@@ -320,7 +322,7 @@ export interface ReaderSidecar extends CommonSidecarFields {
 // generic tree by field name to recover the meaning a sidecar author encoded in it — reduction,
 // not a second parser (see this module's own top note).
 
-/** The record fields of `dv`'s core-value, keyed by field name, `!!schema` directives dropped. */
+/** The record fields of `dv`'s core-value, keyed by field name. */
 function recordFields(dv: DataValue, what: string): Map<string, DataValue> {
   const core = dv.coreValue;
   if (core.kind !== 'record') {
@@ -328,13 +330,13 @@ function recordFields(dv: DataValue, what: string): Map<string, DataValue> {
   }
   const map = new Map<string, DataValue>();
   for (const field of core.fields) {
-    map.set(field.name, field.value.value);
+    map.set(field.name, field.value);
   }
   return map;
 }
 
 /** The elements of `dv`'s core-value, which must be an array. */
-function arrayElements(dv: DataValue, what: string): readonly ScopedValue[] {
+function arrayElements(dv: DataValue, what: string): readonly DataValue[] {
   const core = dv.coreValue;
   if (core.kind !== 'array') {
     throw new Error(`expected an array for ${what}, got core-value kind '${core.kind}'`);
@@ -452,26 +454,24 @@ function toCommonFields(fields: Map<string, DataValue>): CommonSidecarFields {
   const spec = requiredText(fields, 'spec', 'sidecar');
   const description = requiredText(fields, 'description', 'sidecar');
   const encoding = optionalText(fields, 'encoding') as Encoding | undefined;
-  const meta = optionalText(fields, 'meta');
-  const schema = optionalText(fields, 'schema');
-  const importField = fields.get('import');
-  const importNames =
-    importField === undefined
-      ? undefined
-      : arrayElements(importField, 'import').map((el) => tokenText(el.value, 'import entry'));
   return {
     spec,
     description,
     ...(encoding !== undefined ? { encoding } : {}),
-    ...(meta !== undefined ? { meta } : {}),
-    ...(schema !== undefined ? { schema } : {}),
-    ...(importNames !== undefined ? { import: importNames } : {}),
   };
 }
 
 // ── Parser-layer: ExpectedDocument ───────────────────────────────────────────────────────────
 
-const CORE_VALUE_KINDS = ['token', 'record', 'map', 'array', 'absent', 'empty-brace'] as const;
+const CORE_VALUE_KINDS = [
+  'token',
+  'reference',
+  'record',
+  'map',
+  'array',
+  'absent',
+  'empty-brace',
+] as const;
 
 function toExpectedToken(dv: DataValue): ExpectedToken {
   const fields = recordFields(dv, 'lexer token');
@@ -484,11 +484,13 @@ function toExpectedToken(dv: DataValue): ExpectedToken {
 function toExpectedDocument(dv: DataValue): ExpectedDocument {
   const fields = recordFields(dv, 'document');
   const id = optionalText(fields, 'id');
-  const schema = optionalText(fields, 'schema');
+  const imports = arrayElements(requireField(fields, 'imports', 'document'), 'imports').map((el) =>
+    tokenText(el, 'import entry'),
+  );
   const root = toExpectedDataValue(requireField(fields, 'root', 'document'));
   return {
     ...(id !== undefined ? { id } : {}),
-    ...(schema !== undefined ? { schema } : {}),
+    imports,
     root,
   };
 }
@@ -498,7 +500,7 @@ function toExpectedDataValue(dv: DataValue): ExpectedDataValue {
   const annotations = arrayElements(
     requireField(fields, 'annotations', 'data-value'),
     'annotations',
-  ).map((el) => toExpectedAnnotation(el.value));
+  ).map((el) => toExpectedAnnotation(el));
   const typeRef = optionalText(fields, 'type-ref');
   const core = toExpectedCoreValue(requireField(fields, 'core', 'data-value'));
   return {
@@ -519,21 +521,11 @@ function toExpectedAnnotation(dv: DataValue): ExpectedAnnotation {
   };
 }
 
-function toExpectedScopedValue(dv: DataValue): ExpectedScopedValue {
-  const fields = recordFields(dv, 'scoped-value');
-  const schemaRef = optionalText(fields, 'schema-ref');
-  const value = toExpectedDataValue(requireField(fields, 'value', 'scoped-value'));
-  return {
-    ...(schemaRef !== undefined ? { schemaRef } : {}),
-    value,
-  };
-}
-
 function toExpectedRecordField(dv: DataValue): ExpectedRecordField {
   const fields = recordFields(dv, 'record field');
   return {
     name: requiredText(fields, 'name', 'record field'),
-    value: toExpectedScopedValue(requireField(fields, 'value', 'record field')),
+    value: toExpectedDataValue(requireField(fields, 'value', 'record field')),
   };
 }
 
@@ -541,7 +533,40 @@ function toExpectedMapEntry(dv: DataValue): ExpectedMapEntry {
   const fields = recordFields(dv, 'map entry');
   return {
     key: toExpectedDataValue(requireField(fields, 'key', 'map entry')),
-    value: toExpectedScopedValue(requireField(fields, 'value', 'map entry')),
+    value: toExpectedDataValue(requireField(fields, 'value', 'map entry')),
+  };
+}
+
+/** `dv` is a `reference_core` record (`parser-sidecar.tn`): a qualified name and its arguments. */
+function toExpectedReference(
+  dv: DataValue,
+  context: string,
+): Extract<ExpectedCoreValue, { readonly kind: 'reference' }> {
+  const fields = recordFields(dv, context);
+  return {
+    kind: 'reference',
+    name: requiredText(fields, 'name', context),
+    arguments: arrayElements(
+      requireField(fields, 'arguments', context),
+      `${context}.arguments`,
+    ).map(toExpectedReferenceArgument),
+  };
+}
+
+/** `dv` is a `reference_argument` field group: a nested `reference` or a `token`. */
+function toExpectedReferenceArgument(dv: DataValue): ExpectedReferenceArgument {
+  const fields = recordFields(dv, 'reference argument');
+  const { name: kind, value: payload } = soleMember(
+    fields,
+    ['reference', 'token'],
+    'reference argument',
+  );
+  if (kind === 'reference') return toExpectedReference(payload, 'reference argument.reference');
+  const payloadFields = recordFields(payload, 'reference argument.token');
+  return {
+    kind: 'token',
+    form: requiredText(payloadFields, 'form', 'reference argument.token') as TokenForm,
+    text: requiredText(payloadFields, 'text', 'reference argument.token'),
   };
 }
 
@@ -561,6 +586,8 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
         text: requiredText(payloadFields, 'text', 'core-value.token'),
       };
     }
+    case 'reference':
+      return toExpectedReference(payload, 'core-value.reference');
     case 'absent':
       return { kind: 'absent' };
     case 'empty-brace':
@@ -572,7 +599,7 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
         fields: arrayElements(
           requireField(payloadFields, 'fields', 'core-value.record'),
           'fields',
-        ).map((el) => toExpectedRecordField(el.value)),
+        ).map((el) => toExpectedRecordField(el)),
       };
     }
     case 'map': {
@@ -582,7 +609,7 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
         entries: arrayElements(
           requireField(payloadFields, 'entries', 'core-value.map'),
           'entries',
-        ).map((el) => toExpectedMapEntry(el.value)),
+        ).map((el) => toExpectedMapEntry(el)),
       };
     }
     case 'array': {
@@ -592,7 +619,7 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
         elements: arrayElements(
           requireField(payloadFields, 'elements', 'core-value.array'),
           'elements',
-        ).map((el) => toExpectedScopedValue(el.value)),
+        ).map((el) => toExpectedDataValue(el)),
       };
     }
     default:
@@ -712,7 +739,7 @@ function toExpectedVocabularyValue(dv: DataValue): ExpectedVocabularyValue {
 
 // ── Reader-layer: ExpectedReaderValue ────────────────────────────────────────────────────────
 
-const READER_VALUE_KINDS = ['record', 'map', 'array', 'atom', 'absent'] as const;
+const READER_VALUE_KINDS = ['record', 'reference', 'map', 'array', 'atom', 'absent'] as const;
 const READER_ATOM_KINDS = ['boolean', 'string', 'number'] as const;
 
 function toExpectedReaderField(dv: DataValue): ExpectedReaderField {
@@ -758,7 +785,21 @@ function toExpectedReaderValue(dv: DataValue): ExpectedReaderValue {
         fields: arrayElements(
           requireField(payloadFields, 'fields', 'reader value.record'),
           'fields',
-        ).map((el) => toExpectedReaderField(el.value)),
+        ).map((el) => toExpectedReaderField(el)),
+      };
+    }
+    case 'reference': {
+      const payloadFields = recordFields(payload, 'reader value.reference');
+      return {
+        kind: 'reference',
+        segments: arrayElements(
+          requireField(payloadFields, 'segments', 'reader value.reference'),
+          'segments',
+        ).map((el) => tokenText(el, 'reader value.reference segment')),
+        arguments: arrayElements(
+          requireField(payloadFields, 'arguments', 'reader value.reference'),
+          'arguments',
+        ).map(toExpectedReaderValue),
       };
     }
     case 'map': {
@@ -768,7 +809,7 @@ function toExpectedReaderValue(dv: DataValue): ExpectedReaderValue {
         entries: arrayElements(
           requireField(payloadFields, 'entries', 'reader value.map'),
           'entries',
-        ).map((el) => toExpectedReaderEntry(el.value)),
+        ).map((el) => toExpectedReaderEntry(el)),
       };
     }
     case 'array': {
@@ -778,7 +819,7 @@ function toExpectedReaderValue(dv: DataValue): ExpectedReaderValue {
         elements: arrayElements(
           requireField(payloadFields, 'elements', 'reader value.array'),
           'elements',
-        ).map((el) => toExpectedReaderValue(el.value)),
+        ).map((el) => toExpectedReaderValue(el)),
       };
     }
     case 'atom':
@@ -827,7 +868,7 @@ export function parseLexerSidecar(raw: Uint8Array): LexerSidecar {
   const tokens = arrayElements(
     requireField(payloadFields, 'tokens', 'lexer sidecar.valid'),
     'tokens',
-  ).map((el) => toExpectedToken(el.value));
+  ).map((el) => toExpectedToken(el));
   return { ...common, outcome, tokens };
 }
 
@@ -1042,7 +1083,7 @@ function toExpectedSubtyping(dv: DataValue): ExpectedSubtyping {
     subtypes: arrayElements(
       requireField(fields, 'subtypes', 'subtyping'),
       'subtyping.subtypes',
-    ).map((el) => tokenText(el.value, 'subtyping.subtypes entry')),
+    ).map((el) => tokenText(el, 'subtyping.subtypes entry')),
   };
 }
 
@@ -1051,7 +1092,7 @@ function toExpectedMembership(dv: DataValue): ExpectedMembership {
   return {
     name: requiredText(fields, 'name', 'membership'),
     members: arrayElements(requireField(fields, 'members', 'membership'), 'membership.members').map(
-      (el) => tokenText(el.value, 'membership.members entry'),
+      (el) => tokenText(el, 'membership.members entry'),
     ),
   };
 }
@@ -1063,22 +1104,22 @@ function toLinkValid(dv: DataValue): LinkValid {
   const binds =
     bindsField === undefined || isAbsent(bindsField)
       ? undefined
-      : arrayElements(bindsField, 'binds').map((el) => tokenText(el.value, 'binds entry'));
+      : arrayElements(bindsField, 'binds').map((el) => tokenText(el, 'binds entry'));
   const disjointField = fields.get('disjoint');
   const disjoint =
     disjointField === undefined || isAbsent(disjointField)
       ? undefined
-      : arrayElements(disjointField, 'disjoint').map((el) => toExpectedDisjointness(el.value));
+      : arrayElements(disjointField, 'disjoint').map((el) => toExpectedDisjointness(el));
   const subtypesField = fields.get('subtypes');
   const subtypes =
     subtypesField === undefined || isAbsent(subtypesField)
       ? undefined
-      : arrayElements(subtypesField, 'subtypes').map((el) => toExpectedSubtyping(el.value));
+      : arrayElements(subtypesField, 'subtypes').map((el) => toExpectedSubtyping(el));
   const membersField = fields.get('members');
   const members =
     membersField === undefined || isAbsent(membersField)
       ? undefined
-      : arrayElements(membersField, 'members').map((el) => toExpectedMembership(el.value));
+      : arrayElements(membersField, 'members').map((el) => toExpectedMembership(el));
   return {
     ...(binds !== undefined ? { binds } : {}),
     ...(disjoint !== undefined ? { disjoint } : {}),
@@ -1151,10 +1192,6 @@ export function parseValidateSidecar(raw: Uint8Array): ValidateSidecar {
 export interface SidecarSummary {
   readonly outcome: Outcome;
   readonly encoding?: Encoding;
-  readonly meta?: string;
-  readonly import?: readonly string[];
-  /** A short bundled-schema name for the subject's own `!!schema` target -- `class2/validate/`'s own splice target; see {@link CommonSidecarFields.schema}. */
-  readonly schema?: string;
   /**
    * Present iff `outcome === 'refused'`: the UTS #39 data version the vector was computed
    * against. Surfaced here, ahead of any layer-specific parse, because `registerVectors`
@@ -1199,9 +1236,6 @@ export function peekSidecarSummary(raw: Uint8Array): SidecarSummary {
   return {
     outcome,
     ...(common.encoding !== undefined ? { encoding: common.encoding } : {}),
-    ...(common.meta !== undefined ? { meta: common.meta } : {}),
-    ...(common.schema !== undefined ? { schema: common.schema } : {}),
-    ...(common.import !== undefined ? { import: common.import } : {}),
     ...(refusedUnicode !== undefined ? { refusedUnicode } : {}),
   };
 }

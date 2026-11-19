@@ -14,8 +14,9 @@
  * below it, a `Document` has no smaller unit a caller could ask for instead — but nothing here
  * ever holds more than one open container's worth of un-reduced event state at a time.
  *
- * `!!meta` in the header is already rejected by `stream/dataStream.js` before this module ever
- * sees an event, so a schema document never reaches here as a `Document` at all.
+ * A schema document -- one whose root is tagged `!schema` (§2.2) -- is refused before its root is
+ * reduced, so it never reaches here as a `Document`, unless the caller says it is reading a resolved
+ * form ({@link ParseOptions.resolvedForm}).
  */
 
 import { TsonInternalError } from '../core/errors.js';
@@ -26,7 +27,7 @@ import {
 } from '../core/limits.js';
 import type { Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
-import { createDataStream } from '../stream/dataStream.js';
+import { createDataStream, requireDataDocument } from '../stream/dataStream.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
 import type {
   VoidValue,
@@ -40,7 +41,7 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
-  ScopedValue,
+  ReferenceValue,
   TokenValue,
 } from '../ast/value.js';
 
@@ -55,6 +56,13 @@ const noopRecorder: PositionRecorder = () => {
 
 /** What a caller may configure about a parse. */
 export interface ParseOptions extends NestingLimitOptions {
+  /**
+   * Whether the document is a *resolved form* ([TSON-SCHEMA] §8.1): a document whose root is tagged
+   * `!schema` and whose entries are written as values, so it reads as data. Nothing in such a
+   * document marks it resolved -- its header is its source's -- so it is the caller who says which
+   * it is. Any other document parses exactly as it would without the option.
+   */
+  readonly resolvedForm?: boolean;
   /**
    * Where each freshly built {@link CoreValue}'s start position goes. Defaults to discarding
    * them, so a caller that does not track positions need not thread a `WeakMap` through.
@@ -117,7 +125,7 @@ export interface ParsedDocument {
  */
 export function* parseDocument(
   input: ByteInput,
-  options?: NestingLimitOptions,
+  options?: NestingLimitOptions & Pick<ParseOptions, 'resolvedForm'>,
 ): Task<ParsedDocument> {
   const source = createDataStream(input);
   const positions = new WeakMap<CoreValue, Position>();
@@ -130,6 +138,7 @@ export function* parseDocument(
   if (start.kind !== 'document-start') {
     throw new TsonInternalError(`expected document-start, got '${start.kind}'`);
   }
+  if (options?.resolvedForm !== true) yield* requireDataDocument(source, start.position);
 
   const root = yield* dataValue(source, ctx, 0);
 
@@ -140,7 +149,7 @@ export function* parseDocument(
 
   const document: Document = {
     ...(start.id !== undefined ? { id: start.id } : {}),
-    ...(start.schema !== undefined ? { schema: start.schema } : {}),
+    imports: start.imports,
     root,
   };
   return { document, positions };
@@ -154,7 +163,7 @@ export function* parseDocument(
 // re-implementing them, and this is where such a caller would pull from. `recorder` defaults to a
 // no-op so a caller that doesn't track positions doesn't need to thread a `WeakMap` through.
 
-/** `data-value = *annotation [type-ref] core-value` (§2.3, §7.4). */
+/** `data-value = *annotation [tag] core-value` (§2.3, §7.4). */
 export function* parseDataValue(source: EventSource, options?: ParseOptions): Task<DataValue> {
   return yield* dataValue(source, contextOf(options), 0);
 }
@@ -193,7 +202,7 @@ function* dataValue(source: EventSource, ctx: ParseContext, depth: number): Task
   };
 }
 
-/** `"@" unquoted-token [ ":" data-value ]` (§3.1, §7.4): one annotation, with or without a value. */
+/** `"@" qualified-name-token [ ":" data-value ]` (§3.1, §7.4): one annotation, with or without a value. */
 export function* parseAnnotation(source: EventSource, options?: ParseOptions): Task<Annotation> {
   return yield* annotation(source, contextOf(options), 0);
 }
@@ -222,7 +231,7 @@ function* annotation(source: EventSource, ctx: ParseContext, depth: number): Tas
 }
 
 /**
- * `core-value = record / map / array / empty-brace / absent / token` (§2.3, §7.4).
+ * `core-value = record / map / array / empty-brace / void / reference / token` (§2.3, §7.4).
  *
  * Records the value's own start position via `recorder` before returning it — the one place a
  * fresh {@link CoreValue} comes into existence, so the one place its position can be captured
@@ -256,6 +265,8 @@ function* reduceCoreEvent(
   switch (event.kind) {
     case 'token':
       return { kind: 'token', text: event.text, form: event.form } satisfies TokenValue;
+    case 'reference':
+      return { kind: 'reference', reference: event.reference } satisfies ReferenceValue;
     case 'void':
       return { kind: 'void' } satisfies VoidValue;
     case 'empty-brace':
@@ -280,7 +291,7 @@ function* parseRecord(source: EventSource, ctx: ParseContext, depth: number): Ta
     if (event.kind !== 'field-name') {
       throw new TsonInternalError(`expected field-name or record-end, got '${event.kind}'`);
     }
-    const value = yield* parseScopedValue(source, ctx, depth);
+    const value = yield* dataValue(source, ctx, depth);
     fields.push({ name: event.name, value });
   }
   return { kind: 'record', fields };
@@ -300,41 +311,22 @@ function* parseMap(source: EventSource, ctx: ParseContext, depth: number): Task<
     if (arrow.kind !== 'map-arrow') {
       throw new TsonInternalError(`expected map-arrow, got '${arrow.kind}'`);
     }
-    const value = yield* parseScopedValue(source, ctx, depth);
+    const value = yield* dataValue(source, ctx, depth);
     entries.push({ key, value });
   }
   return { kind: 'map', entries };
 }
 
-/** `array = "[" ws [ scoped-value *( separator scoped-value ) ] ws "]"` (§2.7, §7.4). `array-start` already consumed. */
+/** `array = "[" ws [ data-value *( separator data-value ) ] ws "]"` (§2.7, §7.4). `array-start` already consumed. */
 function* parseArray(source: EventSource, ctx: ParseContext, depth: number): Task<ArrayValue> {
-  const elements: ScopedValue[] = [];
+  const elements: DataValue[] = [];
   for (;;) {
     const peeked = yield* source.peek();
     if (peeked.kind === 'array-end') {
       yield* source.next();
       break;
     }
-    elements.push(yield* parseScopedValue(source, ctx, depth));
+    elements.push(yield* dataValue(source, ctx, depth));
   }
   return { kind: 'array', elements };
-}
-
-/** `scoped-value = [ schema-directive ws ] data-value` (§2.3, §7.4). */
-function* parseScopedValue(
-  source: EventSource,
-  ctx: ParseContext,
-  depth: number,
-): Task<ScopedValue> {
-  const peeked = yield* source.peek();
-  let schemaRef: string | undefined;
-  if (peeked.kind === 'schema-ref') {
-    yield* source.next();
-    schemaRef = peeked.uri;
-  }
-  const value = yield* dataValue(source, ctx, depth);
-  return {
-    ...(schemaRef !== undefined ? { schemaRef } : {}),
-    value,
-  };
 }

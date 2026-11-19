@@ -21,11 +21,9 @@ function thrownBy(text: string): unknown {
   throw new Error(`expected parsing '${text}' to throw, but it completed`);
 }
 
-const META = '!!meta:"https://example.com/m.tn"';
-
 /** Wraps `body` as a declaration's type-def and returns just that `TypeDef`. */
 function typeDefOf(body: string): TypeDef {
-  const doc = parse(`${META} { x => ${body} }`);
+  const doc = parse(`!schema { x => ${body} }`);
   const decl = doc.body.declarations.get('x');
   if (decl === undefined) throw new Error('declaration x missing');
   return decl.typeDef;
@@ -34,44 +32,42 @@ function typeDefOf(body: string): TypeDef {
 // ── Document header (§2.1, §2.2) ────────────────────────────────────────
 
 describe('schema document header (§2.2)', () => {
-  it('parses !!meta alone', () => {
-    const doc = parse(`${META} { x => uuid }`);
+  it('parses a header of nothing: no !!id, no imports', () => {
+    const doc = parse(`!schema { x => uuid }`);
     expect(doc.id).toBeUndefined();
-    expect(doc.meta).toBe('https://example.com/m.tn');
     expect(doc.imports).toEqual([]);
   });
 
-  it('parses !!id, !!meta, and repeated !!import in order', () => {
+  it('parses !!id and repeated !!import in order', () => {
     const doc = parse(
-      `!!id:"https://example.com/task.tn" ${META} ` +
+      `!!id:"https://example.com/task.tn" ` +
         `!!import:"https://example.com/a.tn" !!import:"https://example.com/b.tn" ` +
-        `{ x => uuid }`,
+        `!schema { x => uuid }`,
     );
     expect(doc.id).toBe('https://example.com/task.tn');
-    expect(doc.meta).toBe('https://example.com/m.tn');
     expect(doc.imports).toEqual(['https://example.com/a.tn', 'https://example.com/b.tn']);
   });
 
-  it('rejects a document with no !!meta at all', () => {
+  it("rejects a root that is not tagged '!schema' (§2.2)", () => {
     expect(thrownBy('{ x => uuid }')).toBeInstanceOf(TsonParseError);
   });
 
-  it('rejects !!meta not immediately after !!id', () => {
-    expect(
-      thrownBy(
-        `!!id:"https://example.com/a.tn" !!import:"https://example.com/b.tn" ${META} { x => uuid }`,
-      ),
-    ).toBeInstanceOf(TsonParseError);
-  });
-
-  it('rejects a directive after !!import that is neither another !!import nor the schema map', () => {
-    expect(thrownBy(`${META} !!schema:"https://example.com/s.tn" { x => uuid }`)).toBeInstanceOf(
+  it("refuses the retired '!!meta' directive (§2.2)", () => {
+    expect(thrownBy(`!!meta:"https://example.com/m.tn" !schema { x => uuid }`)).toBeInstanceOf(
       TsonParseError,
     );
   });
 
+  it('rejects a directive after !!import that is neither another !!import nor the root', () => {
+    expect(
+      thrownBy(
+        `!!import:"https://example.com/a.tn" !!schema:"https://example.com/s.tn" !schema { x => uuid }`,
+      ),
+    ).toBeInstanceOf(TsonParseError);
+  });
+
   it('rejects unexpected content after the schema map', () => {
-    expect(thrownBy(`${META} { x => uuid } garbage`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => uuid } garbage`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -79,21 +75,21 @@ describe('schema document header (§2.2)', () => {
 
 describe('schema map (§2.1, §12.1)', () => {
   it('rejects an empty schema map', () => {
-    expect(thrownBy(`${META} {}`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema {}`)).toBeInstanceOf(TsonParseError);
   });
 
   it('preserves declaration insertion order and a later duplicate name overwrites the earlier entry', () => {
-    const doc = parse(`${META} { a => uuid  b => text  a => text }`);
+    const doc = parse(`!schema { a => uuid  b => text  a => text }`);
     expect([...doc.body.declarations.keys()]).toEqual(['a', 'b']);
     expect(doc.body.declarations.get('a')?.typeDef).toEqual({
       kind: 'referenceTypeDef',
       typeParams: [],
-      ref: { kind: 'simpleRef', name: 'text' },
+      ref: { kind: 'nameRef', name: 'text' },
     });
   });
 
   it('binds annotations before "{" to the schema map, and key/type-def annotations to the right place', () => {
-    const doc = parse(`${META} @doc:"schema doc" { @doc:"key doc" x => @doc:"def doc" uuid }`);
+    const doc = parse(`@doc:"schema doc" !schema { @doc:"key doc" x => @doc:"def doc" uuid }`);
     expect(doc.body.annotations).toEqual([
       {
         name: 'doc',
@@ -109,7 +105,7 @@ describe('schema map (§2.1, §12.1)', () => {
   });
 
   it('rejects a declaration name that matches the number grammar (§12.1)', () => {
-    expect(thrownBy(`${META} { 42 => uuid }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { 42 => uuid }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -120,7 +116,7 @@ describe('type-def: plain reference (§8.3)', () => {
     expect(typeDefOf('uuid')).toEqual({
       kind: 'referenceTypeDef',
       typeParams: [],
-      ref: { kind: 'simpleRef', name: 'uuid' },
+      ref: { kind: 'nameRef', name: 'uuid' },
     });
   });
 
@@ -129,11 +125,11 @@ describe('type-def: plain reference (§8.3)', () => {
       kind: 'referenceTypeDef',
       typeParams: [],
       ref: {
-        kind: 'genericRef',
+        kind: 'applicationRef',
         name: 'map',
         args: [
-          { kind: 'ref', ref: { kind: 'simpleRef', name: 'text' } },
-          { kind: 'ref', ref: { kind: 'simpleRef', name: 'integer' } },
+          { kind: 'ref', ref: { kind: 'nameRef', name: 'text' } },
+          { kind: 'ref', ref: { kind: 'nameRef', name: 'integer' } },
         ],
       },
     });
@@ -144,10 +140,10 @@ describe('type-def: plain reference (§8.3)', () => {
     expect(def.kind).toBe('referenceTypeDef');
     if (def.kind !== 'referenceTypeDef') throw new Error('unreachable');
     expect(def.ref).toEqual({
-      kind: 'choiceRef',
+      kind: 'choiceExpr',
       variants: [
-        { kind: 'simpleRef', name: 'email' },
-        { kind: 'simpleRef', name: 'phone' },
+        { kind: 'nameRef', name: 'email' },
+        { kind: 'nameRef', name: 'phone' },
       ],
     });
   });
@@ -159,7 +155,7 @@ describe('type-def: plain reference (§8.3)', () => {
   });
 
   it('after a bare type-ref, "{" is a parse error suggesting ^ or &', () => {
-    expect(thrownBy(`${META} { x => uuid { y: text } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => uuid { y: text } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -181,7 +177,7 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
   it('rejects the `~`/`=` field modifiers in a refinement body', () => {
     // The other side of the same rule, stated so it is not rediscovered as a regression: the
     // body is data, so the schema-only modifier syntax has no meaning in it.
-    expect(thrownBy(`${META} { x => !integer ^ { min: ~ 1 } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => !integer ^ { min: ~ 1 } }`)).toBeInstanceOf(TsonParseError);
   });
   it("parses a real atom refinement's bindings as data, not as type definitions (§5.5)", () => {
     // A refinement body holds constraint VALUES. `{ size: { bits: 8  signed: true } }` is
@@ -196,11 +192,11 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
   });
 
   it('rejects a parameterized atom refinement (§12.1: refinement has no parameter slot)', () => {
-    expect(thrownBy(`${META} { x => <T> !integer ^ { min: 1 } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => <T> !integer ^ { min: 1 } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('rejects an atom refinement whose body is not a brace', () => {
-    expect(thrownBy(`${META} { x => !integer ^ 5 }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => !integer ^ 5 }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('instance with a token core-value', () => {
@@ -214,22 +210,16 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
           kind: 'array',
           elements: [
             {
-              value: {
-                annotations: [],
-                coreValue: { kind: 'token', text: 'OPEN', form: 'unquoted' },
-              },
+              annotations: [],
+              coreValue: { kind: 'token', text: 'OPEN', form: 'unquoted' },
             },
             {
-              value: {
-                annotations: [],
-                coreValue: { kind: 'token', text: 'ACTIVE', form: 'unquoted' },
-              },
+              annotations: [],
+              coreValue: { kind: 'token', text: 'ACTIVE', form: 'unquoted' },
             },
             {
-              value: {
-                annotations: [],
-                coreValue: { kind: 'token', text: 'DONE', form: 'unquoted' },
-              },
+              annotations: [],
+              coreValue: { kind: 'token', text: 'DONE', form: 'unquoted' },
             },
           ],
         },
@@ -252,25 +242,19 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
         {
           name: 'variants',
           value: {
-            value: {
-              annotations: [],
-              coreValue: {
-                kind: 'array',
-                elements: [
-                  {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
-                    },
-                  },
-                  {
-                    value: {
-                      annotations: [],
-                      coreValue: { kind: 'token', text: 'error', form: 'unquoted' },
-                    },
-                  },
-                ],
-              },
+            annotations: [],
+            coreValue: {
+              kind: 'array',
+              elements: [
+                {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'T', form: 'unquoted' },
+                },
+                {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: 'error', form: 'unquoted' },
+                },
+              ],
             },
           },
         },
@@ -279,11 +263,11 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
   });
 
   it("requires '!' to be immediately adjacent to the type name", () => {
-    expect(thrownBy(`${META} { x => ! integer }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => ! integer }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('rejects a numeric name after "!"', () => {
-    expect(thrownBy(`${META} { x => !42 }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => !42 }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('an instance payload record admits a trailing comma (§2.4, §12.1)', () => {
@@ -294,7 +278,7 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
 
   it('an instance payload field name is any single-line token, exactly as in ordinary data (§2.5, §7.7)', () => {
     // The constructor's record reads the name when the payload is bound, never the grammar.
-    expect(() => parse(`${META} { x => !choice { "not an id": [T error] } }`)).not.toThrow();
+    expect(() => parse(`!schema { x => !meta.choice { "not an id": [T error] } }`)).not.toThrow();
   });
 });
 
@@ -311,14 +295,14 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
             annotations: [],
             name: 'id',
             optional: false,
-            type: { typeRef: { kind: 'simpleRef', name: 'uuid' }, voidable: false },
+            type: { typeRef: { kind: 'nameRef', name: 'uuid' }, voidable: false },
           },
           {
             kind: 'fieldDef',
             annotations: [],
             name: 'title',
             optional: false,
-            type: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+            type: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
           },
         ],
       },
@@ -337,7 +321,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     // There is no constructor marker any more: an entry is a constructor by being IS-A `top`
     // (§4.2), never by a leading `~`. The corpus states this by name
     // (`class2/schema/invalid/a-constructor-marker-is-not-grammar`).
-    expect(thrownBy(`${META} { x => ~{ y: uuid } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => ~{ y: uuid } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('refinement ("^") targets a bare type-name and takes a record-def body', () => {
@@ -346,7 +330,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
       typeParams: [],
       body: {
         kind: 'refinedDef',
-        target: { kind: 'simpleRef', name: 'customer' },
+        target: { kind: 'nameRef', name: 'customer' },
         body: {
           kind: 'recordDef',
           entries: [
@@ -355,7 +339,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
               annotations: [],
               name: 'vip',
               optional: false,
-              type: { typeRef: { kind: 'simpleRef', name: 'boolean' }, voidable: false },
+              type: { typeRef: { kind: 'nameRef', name: 'boolean' }, voidable: false },
             },
           ],
         },
@@ -364,7 +348,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
   });
 
   it('"~" before a refinement head is likewise a parse error (§4.2, §12.1)', () => {
-    expect(thrownBy(`${META} { x => ~pair<uuid, text> ^ { } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => ~pair<uuid, text> ^ { } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('composition chains "&"-joined supertypes and admits a trailing body', () => {
@@ -380,8 +364,8 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
       body: {
         kind: 'constructionDef',
         supertypes: [
-          { kind: 'simpleRef', name: 'address' },
-          { kind: 'simpleRef', name: 'contact' },
+          { kind: 'nameRef', name: 'address' },
+          { kind: 'nameRef', name: 'contact' },
         ],
         body: {
           kind: 'recordDef',
@@ -391,7 +375,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
               annotations: [],
               name: 'vip',
               optional: false,
-              type: { typeRef: { kind: 'simpleRef', name: 'boolean' }, voidable: false },
+              type: { typeRef: { kind: 'nameRef', name: 'boolean' }, voidable: false },
             },
           ],
         },
@@ -406,8 +390,8 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     expect(def.body).toEqual({
       kind: 'constructionDef',
       supertypes: [
-        { kind: 'simpleRef', name: 'address' },
-        { kind: 'simpleRef', name: 'contact' },
+        { kind: 'nameRef', name: 'address' },
+        { kind: 'nameRef', name: 'contact' },
       ],
     });
   });
@@ -418,7 +402,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     if (def.kind !== 'structuralTypeDef') throw new Error('unreachable');
     expect(def.body).toEqual({
       kind: 'constructionDef',
-      supertypes: [{ kind: 'simpleRef', name: 'customer' }],
+      supertypes: [{ kind: 'nameRef', name: 'customer' }],
       removal: { fieldNames: ['vip'] },
     });
   });
@@ -426,7 +410,7 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
   it("a removal clause's '-' must be separated from the preceding token by whitespace", () => {
     // 'customer-' lexes as one unquoted token (hyphen absorbed), so no removal clause exists
     // and the following '{' has nothing valid to attach to.
-    expect(thrownBy(`${META} { x => customer -{ vip } y => customer- { vip } }`)).toBeInstanceOf(
+    expect(thrownBy(`!schema { x => customer -{ vip } y => customer- { vip } }`)).toBeInstanceOf(
       TsonParseError,
     );
   });
@@ -434,11 +418,11 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
   it('composition operands are restricted to a bare supertype-ref, never a choice/bracket/map form (§4.3, §5.8)', () => {
     // Deliberate divergence from the Java reference, which reads continuation operands with the
     // unrestricted type-ref parser; this port enforces §12.1's own `supertype-ref` production.
-    expect(thrownBy(`${META} { x => customer & (a | b) }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => customer & (a | b) }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('the removal set requires at least one field name', () => {
-    expect(thrownBy(`${META} { x => customer -{} }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => customer -{} }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -460,7 +444,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
         annotations: [],
         name: 'f',
         optional: false,
-        type: { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: false },
+        type: { typeRef: { kind: 'nameRef', name: 'integer' }, voidable: false },
       },
     ]);
   });
@@ -471,7 +455,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
   });
 
   it("rejects a name '?' separated from the name by whitespace", () => {
-    expect(thrownBy(`${META} { x => { f ?: integer } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f ?: integer } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('the type\'s own "?" (adjacent to the type) sets FieldType.voidable, independent of the name', () => {
@@ -480,7 +464,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
   });
 
   it("rejects a type '?' separated from the type by whitespace", () => {
-    expect(thrownBy(`${META} { x => { f: integer ? } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f: integer ? } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('both marks compose: "f?: integer?" is optional AND voidable', () => {
@@ -495,7 +479,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
         annotations: [],
         name: 'f',
         optional: true,
-        type: { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: false },
+        type: { typeRef: { kind: 'nameRef', name: 'integer' }, voidable: false },
         modifier: {
           kind: 'default',
           token: { kind: 'token', text: '3', form: 'unquoted' },
@@ -516,19 +500,19 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
         annotations: [],
         name: 'f',
         optional: false,
-        type: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+        type: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
         modifier: { kind: 'selector' },
       },
     ]);
   });
 
   it("rejects a value after '=?' -- the selector takes none", () => {
-    expect(thrownBy(`${META} { x => { f: text =? v } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f: text =? v } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it("the void sentinel '_' is no longer a modifier value", () => {
-    expect(thrownBy(`${META} { x => { f: text? = _ } }`)).toBeInstanceOf(TsonParseError);
-    expect(thrownBy(`${META} { x => { f: text ~ _ } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f: text? = _ } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f: text ~ _ } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('a modifier alone (elided type-ref) parses -- legality of eliding is a later, semantic-layer check', () => {
@@ -548,7 +532,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
   });
 
   it("rejects a field-modifier value that is a container, since field-modifier admits only a token, '=?', or nothing", () => {
-    expect(thrownBy(`${META} { x => { f: text = [1 2] } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f: text = [1 2] } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it("rejects '=>' at a non-first record-entry position, naming the record/map confusion", () => {
@@ -556,7 +540,7 @@ describe('field marks: name-"?", type-"?", and the "~"/"="/"=?" modifier (§5.2)
     // dispatch decides between record and map ('f =>' there commits to the map sugar, correctly
     // -- see the map-sugar tests below); this checks a later entry, once the body has already
     // committed to being a record.
-    expect(thrownBy(`${META} { x => { f: text  g => text } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { f: text  g => text } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -582,7 +566,7 @@ describe('field groups (§5.11, §12.1)', () => {
             annotations: [],
             name: 'email_addr',
             omittable: false,
-            typeRef: { kind: 'simpleRef', name: 'email' },
+            typeRef: { kind: 'nameRef', name: 'email' },
             voidable: false,
           },
         ],
@@ -591,7 +575,7 @@ describe('field groups (§5.11, §12.1)', () => {
             annotations: [],
             name: 'phone_num',
             omittable: false,
-            typeRef: { kind: 'simpleRef', name: 'phone' },
+            typeRef: { kind: 'nameRef', name: 'phone' },
             voidable: false,
           },
         ],
@@ -628,12 +612,12 @@ describe('field groups (§5.11, §12.1)', () => {
   });
 
   it('the mark after ")" must touch it, and a group takes one mark', () => {
-    expect(thrownBy(`${META} { x => { (a: text | b: text) + } }`)).toBeInstanceOf(TsonParseError);
-    expect(thrownBy(`${META} { x => { (a: text | b: text)?+ } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { (a: text | b: text) + } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { (a: text | b: text)?+ } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('a group with no member is not a group', () => {
-    expect(thrownBy(`${META} { x => { () } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { () } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it("a member's own type may carry '?', making it voidable (§5.11)", () => {
@@ -643,7 +627,7 @@ describe('field groups (§5.11, §12.1)', () => {
   });
 
   it('a modifier on a member is a parse error: a group never supplies a member (§5.11)', () => {
-    expect(thrownBy(`${META} { x => { (a: text ~ "x" | b: text) } }`)).toBeInstanceOf(
+    expect(thrownBy(`!schema { x => { (a: text ~ "x" | b: text) } }`)).toBeInstanceOf(
       TsonParseError,
     );
   });
@@ -651,10 +635,10 @@ describe('field groups (§5.11, §12.1)', () => {
 
 describe('the shapes a field group may take (§5.11)', () => {
   const refused = (group: string): void => {
-    expect(thrownBy(`${META} { x => { ${group} } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { ${group} } }`)).toBeInstanceOf(TsonParseError);
   };
   const accepted = (group: string): void => {
-    expect(() => parse(`${META} { x => { ${group} } }`)).not.toThrow();
+    expect(() => parse(`!schema { x => { ${group} } }`)).not.toThrow();
   };
 
   it('a second mark after ")" is a parse error, whichever order (§5.11)', () => {
@@ -710,11 +694,11 @@ describe('a declared field name is any single-line token, judged at link by its 
   });
 
   it('admits a non-identifier group member name', () => {
-    expect(() => parse(`${META} { x => { ("first name": text | b: text) } }`)).not.toThrow();
+    expect(() => parse(`!schema { x => { ("first name": text | b: text) } }`)).not.toThrow();
   });
 
   it('admits a non-identifier name in a removal set', () => {
-    expect(() => parse(`${META} { x => customer -{ "not an id" } }`)).not.toThrow();
+    expect(() => parse(`!schema { x => customer -{ "not an id" } }`)).not.toThrow();
   });
 });
 
@@ -722,7 +706,7 @@ describe('a declared field name is any single-line token, judged at link by its 
 
 describe('choice types (§5.4)', () => {
   it('requires at least two variants', () => {
-    expect(thrownBy(`${META} { x => (email) }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => (email) }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -732,57 +716,57 @@ describe('bracket forms: array and tuple (§5.3)', () => {
       kind: 'referenceTypeDef',
       typeParams: [],
       ref: {
-        kind: 'arrayRef',
-        elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+        kind: 'arrayExpr',
+        elementType: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
       },
     });
   });
 
   it('"N" is an exact size spec', () => {
     const def = typeDefOf('[text; 3]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'exact', bound: '3' });
   });
 
   it('"N..M" is a ranged size spec', () => {
     const def = typeDefOf('[text; 1..2]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'ranged', lower: '1', upper: '2' });
   });
 
   it('"N.." is a min size spec', () => {
     const def = typeDefOf('[text; 1..]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'min', lower: '1' });
   });
 
   it('"..M" is a max size spec', () => {
     const def = typeDefOf('[text; ..2]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'max', upper: '2' });
   });
 
   it('two or more elements is a tuple, each position carrying its own "?"', () => {
     const def = typeDefOf('[text, integer?]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'tupleRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'tupleExpr')
       throw new Error('expected a tuple ref');
     expect(def.ref.elementTypes).toEqual([
-      { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
-      { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: true },
+      { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
+      { typeRef: { kind: 'nameRef', name: 'integer' }, voidable: true },
     ]);
   });
 
   it('nesting: [[T; 2]; 3] is the recursion in element-type, needing no second production', () => {
     const def = typeDefOf('[[text; 2]; 3]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.elementType.typeRef).toEqual({
-      kind: 'arrayRef',
-      elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+      kind: 'arrayExpr',
+      elementType: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
       size: { kind: 'exact', bound: '2' },
     });
   });
@@ -794,56 +778,56 @@ describe('map sugar (§5.3)', () => {
       kind: 'referenceTypeDef',
       typeParams: [],
       ref: {
-        kind: 'mapRef',
-        keyType: { kind: 'simpleRef', name: 'text' },
-        valueType: { typeRef: { kind: 'simpleRef', name: 'integer' }, voidable: false },
+        kind: 'mapExpr',
+        keyType: { kind: 'nameRef', name: 'text' },
+        valueType: { typeRef: { kind: 'nameRef', name: 'integer' }, voidable: false },
       },
     });
   });
 
   it('admits a generic key', () => {
     const def = typeDefOf('{enum_key<status> => integer}');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapExpr')
       throw new Error('expected a map ref');
     expect(def.ref.keyType).toEqual({
-      kind: 'genericRef',
+      kind: 'applicationRef',
       name: 'enum_key',
-      args: [{ kind: 'ref', ref: { kind: 'simpleRef', name: 'status' } }],
+      args: [{ kind: 'ref', ref: { kind: 'nameRef', name: 'status' } }],
     });
   });
 
   it('admits a size spec after ";"', () => {
     const def = typeDefOf('{text => integer; 1..10}');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapExpr')
       throw new Error('expected a map ref');
     expect(def.ref.size).toEqual({ kind: 'ranged', lower: '1', upper: '10' });
   });
 
   it('rejects "?" on the key side, where a void key states an entry for nothing', () => {
-    expect(thrownBy(`${META} { x => {text? => integer} }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => {text? => integer} }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('admits "?" on the value side, marking the entry value OPTIONAL (§5.3)', () => {
     const def = typeDefOf('{text => integer?}');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapRef') {
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapExpr') {
       throw new Error('unreachable');
     }
     expect(def.ref.valueType.voidable).toBe(true);
   });
 
   it('rejects a second entry: a map type is a single key => value entry', () => {
-    expect(thrownBy(`${META} { x => {a => b  c => d} }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => {a => b  c => d} }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('a bare record body is not spellable at a type position -- "{" there is always the map sugar', () => {
-    expect(thrownBy(`${META} { x => field: { f: text } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => field: { f: text } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
 describe('type arguments (§12.1, §5.10)', () => {
   it('a quoted token is unambiguously a value', () => {
     const def = typeDefOf('keyed<"literal">');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'genericRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
       throw new Error('expected a generic ref');
     expect(def.ref.args[0]).toEqual({
       kind: 'value',
@@ -853,7 +837,7 @@ describe('type arguments (§12.1, §5.10)', () => {
 
   it('a numeric unquoted token is a value', () => {
     const def = typeDefOf('vector<pixel, 1920>');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'genericRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
       throw new Error('expected a generic ref');
     expect(def.ref.args[1]).toEqual({
       kind: 'value',
@@ -863,24 +847,24 @@ describe('type arguments (§12.1, §5.10)', () => {
 
   it('a non-numeric unquoted token always parses as a type-ref, never a value (deferred to the semantic layer)', () => {
     const def = typeDefOf('flagged<status, N>');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'genericRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
       throw new Error('expected a generic ref');
-    expect(def.ref.args[1]).toEqual({ kind: 'ref', ref: { kind: 'simpleRef', name: 'N' } });
+    expect(def.ref.args[1]).toEqual({ kind: 'ref', ref: { kind: 'nameRef', name: 'N' } });
   });
 
   it('rejects the void sentinel as a type argument', () => {
-    expect(thrownBy(`${META} { x => box<_> }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => box<_> }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('a choice, bracket, or map form is admitted as a type argument (wrapped as a ref)', () => {
     const def = typeDefOf('box<[text]>');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'genericRef')
+    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
       throw new Error('expected a generic ref');
     expect(def.ref.args[0]).toEqual({
       kind: 'ref',
       ref: {
-        kind: 'arrayRef',
-        elementType: { typeRef: { kind: 'simpleRef', name: 'text' }, voidable: false },
+        kind: 'arrayExpr',
+        elementType: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
       },
     });
   });
@@ -888,24 +872,24 @@ describe('type arguments (§12.1, §5.10)', () => {
 
 describe('type names (§12.1)', () => {
   it('rejects a numeric type parameter name', () => {
-    expect(thrownBy(`${META} { x => <42> map<text, 42> }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => <42> map<text, 42> }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
 describe('a type parameter may write its type (§5.10, §12.1)', () => {
   /** The declaration `x`'s written parameter types, as the parameter name and the type spelled. */
   function written(source: string): Record<string, unknown> {
-    const declaration = parse(`${META} { x => ${source} }`).body.declarations.get('x');
+    const declaration = parse(`!schema { x => ${source} }`).body.declarations.get('x');
     return Object.fromEntries(declaration?.parameterTypes ?? []);
   }
 
   it('records the type after ":" under the parameter name and leaves the name list alone', () => {
-    const doc = parse(`${META} { box => <T: text, N: int8> { v: T  n: N } }`);
+    const doc = parse(`!schema { box => <T: text, N: int8> { v: T  n: N } }`);
     const declaration = doc.body.declarations.get('box');
     expect(declaration?.typeDef).toMatchObject({ typeParams: ['T', 'N'] });
     expect(Object.fromEntries(declaration?.parameterTypes ?? [])).toEqual({
-      T: { kind: 'simpleRef', name: 'text' },
-      N: { kind: 'simpleRef', name: 'int8' },
+      T: { kind: 'nameRef', name: 'text' },
+      N: { kind: 'nameRef', name: 'int8' },
     });
   });
 
@@ -914,18 +898,18 @@ describe('a type parameter may write its type (§5.10, §12.1)', () => {
   });
 
   it('records nothing when no parameter wrote a type', () => {
-    const declaration = parse(`${META} { x => <T> { v: T } }`).body.declarations.get('x');
+    const declaration = parse(`!schema { x => <T> { v: T } }`).body.declarations.get('x');
     expect(declaration?.parameterTypes).toBeUndefined();
   });
 
   it('a written type may be an application', () => {
     expect(written('<T: box<text>> { v: T }')).toMatchObject({
-      T: { kind: 'genericRef', name: 'box' },
+      T: { kind: 'applicationRef', name: 'box' },
     });
   });
 
   it('a written type follows its name after ":", and a name alone is still a name', () => {
-    expect(thrownBy(`${META} { x => <T:> { v: T } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => <T:> { v: T } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -933,7 +917,7 @@ describe('a type parameter may write its type (§5.10, §12.1)', () => {
 
 describe('a comma may follow the last element of every list in this grammar (§2.4, §12.1)', () => {
   it('a trailing comma follows the last declaration in a schema map', () => {
-    const doc = parse(`${META} { a => uuid, b => text, }`);
+    const doc = parse(`!schema { a => uuid, b => text, }`);
     expect([...doc.body.declarations.keys()]).toEqual(['a', 'b']);
   });
 
@@ -947,7 +931,7 @@ describe('a comma may follow the last element of every list in this grammar (§2
     if (def.kind !== 'structuralTypeDef') throw new Error('unreachable');
     expect(def.body).toEqual({
       kind: 'constructionDef',
-      supertypes: [{ kind: 'simpleRef', name: 'customer' }],
+      supertypes: [{ kind: 'nameRef', name: 'customer' }],
       removal: { fieldNames: ['vip', 'tier'] },
     });
   });
@@ -965,11 +949,11 @@ describe('a comma may follow the last element of every list in this grammar (§2
   });
 
   it('a leading comma (following nothing) is still a parse error', () => {
-    expect(thrownBy(`${META} { x => { , id: uuid } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { , id: uuid } }`)).toBeInstanceOf(TsonParseError);
   });
 
   it('a comma following another comma is still a parse error, needing no rule of its own', () => {
-    expect(thrownBy(`${META} { x => { id: uuid, , title: text } }`)).toBeInstanceOf(TsonParseError);
+    expect(thrownBy(`!schema { x => { id: uuid, , title: text } }`)).toBeInstanceOf(TsonParseError);
   });
 });
 
@@ -986,10 +970,9 @@ describe("the spec's own worked example (§1.6)", () => {
     // N`, a parametric default taking the name mark its literal spelling takes (§5.7).
     const doc = parse(`
 !!id:"https://example.com/task.tn"
-${META}
-!!import:"https://tson.io/2026/38/m/core.tn"
+!!import:"https://tson.io/2026/39/m/core.tn"
 @doc:"Task-tracking example schema."
-{
+!schema {
   priority => integer
   status   => !enum [OPEN ACTIVE DONE]
   flagged  => <T, N> { entry: T  priority?: priority ~ N }
@@ -1020,14 +1003,14 @@ ${META}
       type: {
         voidable: false,
         typeRef: {
-          kind: 'arrayRef',
+          kind: 'arrayExpr',
           elementType: {
             voidable: false,
             typeRef: {
-              kind: 'genericRef',
+              kind: 'applicationRef',
               name: 'flagged',
               args: [
-                { kind: 'ref', ref: { kind: 'simpleRef', name: 'status' } },
+                { kind: 'ref', ref: { kind: 'nameRef', name: 'status' } },
                 { kind: 'value', value: { kind: 'token', text: '2', form: 'unquoted' } },
               ],
             },

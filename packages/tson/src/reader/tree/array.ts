@@ -17,12 +17,7 @@ import type { ArrayBody } from '../../schema/meta/bodies.js';
 import type { Value } from '../../tree/nodes.js';
 import { voidNode, arrayNode } from '../../tree/nodes.js';
 import { captureAnnotations } from './annotations.js';
-import {
-  describeEvent,
-  refuseUnscopedSchemaRef,
-  skipAnnotationsAndTypeRef,
-  skipCoreValue,
-} from './grammar.js';
+import { describeEvent, skipAnnotationsAndTypeRef, skipCoreValue } from './grammar.js';
 import { valuesEqual } from './equality.js';
 import { declareOrder } from '../../value/orderedness.js';
 import { reportConfusablePair } from './refusal.js';
@@ -31,8 +26,7 @@ import { createConfusableScope } from '../../unicode/skeleton.js';
 
 /**
  * Builds an `array` tree reader for one compiled schema entry. `resolveType` resolves the element
- * type's own reader once, at construction; `isScopedType` answers §7.8's typed-position question
- * for that same element type, at the same step.
+ * type's own reader once, at construction.
  *
  * `elementsAreNames` is true when the array is unique (a set, or any `unique_items` array) and its
  * element type is an identifier family: its elements are then one naming scope (§11.4), and an
@@ -47,11 +41,9 @@ export function arrayTreeReader(
   body: ArrayBody,
   resolveType: TreeTypeResolver,
   schemaLocation: SchemaLocation,
-  isScopedType: (typeName: string) => boolean,
   elementsAreNames = false,
 ): TypeReader<Value> {
   const elementParser = resolveType(body.elementType.name);
-  const scopedElement = isScopedType(body.elementType.name);
 
   function validateSize(size: number, ctx: ReadContext): void {
     const count = BigInt(size);
@@ -98,7 +90,6 @@ export function arrayTreeReader(
       const peeked = yield* ctx.peek();
       if (peeked.kind === 'array-end') break;
       const elementCtx = ctx.index(index);
-      yield* refuseUnscopedSchemaRef(elementCtx, scopedElement, body.elementType.name);
       const elementPeek = yield* ctx.peek();
       let decoded: Value;
       // Whether this element's own read reported anything -- an abandoned element (ConstructionGuard)

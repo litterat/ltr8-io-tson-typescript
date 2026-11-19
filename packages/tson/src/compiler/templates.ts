@@ -91,11 +91,11 @@ import {
 import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '../core/limits.js';
 import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
 import type { Token, TypeArgument, TypeRef, Top } from '../schema/meta/typedef.js';
+import { namespaceOf } from '../schema/meta/typedef.js';
 import {
   chainOf,
   isConstructor,
   isFamilyBase,
-  isNamespaceValue,
   isOpen,
   isTemplateBody,
   parametersOf,
@@ -106,10 +106,11 @@ import {
   withChain,
 } from '../schema/meta/typedef.js';
 import { mapFields, type RecordBody } from '../schema/meta/bodies.js';
-import { checkAtomCoherence, isAtom } from './atomChecks.js';
+import { checkBodyCoherence } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
-import { CHAIN, field, heldRecord, isApplication, rescope, typeRefOf } from './wireForm.js';
+import { metaName } from '../schema/meta/kernel.js';
+import { CHAIN, RECORD, applicationIn, field, heldRecord, rescope } from './wireForm.js';
 import { chainOfParents } from './ancestry.js';
 import { heldOf, withParametersOf, type HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
@@ -121,7 +122,7 @@ import {
   typePositionParameters,
   type Kind,
 } from './parameterTypes.js';
-import { terminal } from '../link/referenceChain.js';
+import { terminal } from '../link/aliasChain.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { enumLabelForm, type EnumEntry } from '../link/enumLabels.js';
 import { lexerFormOfMeta } from './tokenForms.js';
@@ -230,6 +231,12 @@ export interface MaterialiseResult {
   readonly synthetics: ReadonlySet<string>;
 }
 
+/** An application the schema closed, and the entry it denotes. */
+export interface ClosedApplication {
+  readonly entry: string;
+  readonly application: TypeRef;
+}
+
 /**
  * What the materialiser knows of an entry it minted beyond its value: the application the entry
  * closes (its `@application`, §8.2) and the constructor its value's tag names.
@@ -308,6 +315,9 @@ export interface TemplateMaterialiser {
    */
   expansionsByApplication(): ReadonlyMap<string, string>;
 
+  /** Every application this materialiser closed, each with the entry it denotes (§4.2, §8.2). */
+  closedApplications(): readonly ClosedApplication[];
+
   /**
    * The subset of every entry this materialiser has minted so far (on-demand closures included)
    * that is a *synthetic* entry, whose key carries the derived `@synthetic` marker (§8.2).
@@ -354,10 +364,10 @@ export interface TemplateMaterialiser {
 const MAX_CLOSING_DEPTH = DEFAULT_MAX_MATERIALISATION_DEPTH;
 
 /** The constructor a held record template carries — its closure is the instantiation itself. */
-const RECORD_HEAD = 'record';
+const RECORD_HEAD = RECORD;
 
 /** The constructor a held alias carries — §5.10's partial application, which mints no entry. */
-const REFERENCE_HEAD = 'reference';
+const REFERENCE_HEAD = metaName('alias');
 
 export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): TemplateMaterialiser {
   /** The entries produced, keyed by their derived internal name, in creation order. */
@@ -416,6 +426,23 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * applied-parent fold reads the edge an operand `& box<int32>` reaches from here.
    */
   const expansionsByApplication = new Map<string, string>();
+
+  /**
+   * Every application the schema closed, by canonical application, with the entry each denotes -- an
+   * expansion's among them, which carries no `@meta.application` of its own (§8.2). What a reference read
+   * in data is resolved against by structural identity (§4.2).
+   */
+  const closedApplications = new Map<string, ClosedApplication>();
+
+  function recordClosed(head: string, args: readonly TypeArgument[], entry: string): void {
+    const key = canonicalApplication(head, args);
+    if (!closedApplications.has(key)) {
+      closedApplications.set(key, {
+        entry,
+        application: { name: head, arguments: args, annotations: [] },
+      });
+    }
+  }
 
   /**
    * The applications whose closing reached themselves -- the knot tied on the application-derived
@@ -696,8 +723,8 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     if (
       body === undefined ||
       isTemplateBody(body) ||
-      isNamespaceValue(body) ||
-      body.kind === 'reference' ||
+      body.kind === 'value_entry' ||
+      body.kind === 'alias' ||
       !isScalarBody(body)
     ) {
       return; // no scalar reading -- the substituted body's own position judges it
@@ -797,18 +824,23 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     // matters.
     const args = canonicalArgs(byParameterKind(head, template, parameters, rawArgs));
     const name = ofApplication(head, args);
+    /** The entry this application denotes, recorded among the applications the schema closed. */
+    const denotes = (entry: string): string => {
+      recordClosed(head, args, entry);
+      return entry;
+    };
     // §8.2: "a use-site application resolves to a declaration that owns it where one exists" --
     // `owners` is populated by `closeApplicationAs`. A recursive application inside a
     // declaration-owned closure ties the knot on the declared name, and a use site writing the
     // same application names the declaration instead of a derived entry.
     const owner = owners.get(name);
     if (owner !== undefined) {
-      return owner;
+      return denotes(owner);
     }
     // An application nothing declares is its expansion: a later sight names the same synthetic.
     const expansion = expansions.get(name);
     if (expansion !== undefined) {
-      return expansion;
+      return denotes(expansion);
     }
     if (aliasClosing.has(name)) {
       throw new TsonSchemaValidationError(
@@ -826,7 +858,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // Already built, or under construction -- the knot-tying case. Under construction, the
       // expansion names its own application, so the application keeps an entry of its own.
       if (!materialised.has(name)) tied.add(name);
-      return name;
+      return denotes(name);
     }
     closing.add(name);
     if (closing.size > MAX_CLOSING_DEPTH) {
@@ -870,7 +902,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       // hands back whatever that denotes.
       if (target === REFERENCE_HEAD) {
         aliasClosing.add(name);
-        return closeHeldAlias(head, held, bind(parameters, args));
+        return denotes(closeHeldAlias(head, held, bind(parameters, args)));
       }
       // A record template's closure is a record, named for its content like every other closed
       // form unless it names its own application (§8.2): a use site's application is its
@@ -879,12 +911,12 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         const closed = closeHeldRecord(head, held, bind(parameters, args));
         refuseMintedMember(head, args, closed);
         if (!tied.has(name)) {
-          return mintedRecord(name, canonicalApplication(head, args), closed);
+          return denotes(mintedRecord(name, canonicalApplication(head, args), closed));
         }
         materialised.set(name, closed);
         facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
         deps.publish(name, closed);
-        return name;
+        return denotes(name);
       }
       const formName = closeHeldTemplate(head, held, bind(parameters, args));
       if (generated.has(head)) {
@@ -895,7 +927,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       if (!tied.has(name)) {
         // An application nothing declares is its expansion: the use site names the synthetic.
         expansions.set(name, formName);
-        return formName;
+        return denotes(formName);
       }
       // The expansion names this application, so it is named by the application: a reference to
       // the synthetic, which the compiler collapses, so it costs nothing at read time.
@@ -903,7 +935,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
       materialised.set(name, alias);
       facts.set(name, { application: { name: head, arguments: args, annotations: [] } });
       deps.publish(name, alias);
-      return name;
+      return denotes(name);
     } finally {
       closing.delete(name);
       aliasClosing.delete(name);
@@ -967,8 +999,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * declaration is already refused by `checkCoherent`).
    */
   function checkMaterialisedCoherence(head: string, constructorName: string, body: Top): void {
-    if (!isAtom(body)) return;
-    const violations = checkAtomCoherence(body);
+    const violations = checkBodyCoherence(body);
     if (violations.length > 0) {
       throw new TsonSchemaValidationError(
         `'${head}<...>' closes to a '${constructorName}' body whose own constraints contradict ` +
@@ -1147,7 +1178,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    * cannot make the answer depend on declaration order.
    */
   function closeApplicationsOutsideChain(value: CoreValue): CoreValue {
-    if (value.kind !== 'record' || isApplication(value)) return closeApplications(value);
+    if (value.kind !== 'record') return closeApplications(value);
     return {
       kind: 'record',
       fields: value.fields.map((field) =>
@@ -1155,7 +1186,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           ? field
           : {
               name: field.name,
-              value: rescope(field.value, closeApplications(field.value.value.coreValue)),
+              value: rescope(field.value, closeApplications(field.value.coreValue)),
             },
       ),
     };
@@ -1169,27 +1200,29 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function closeApplications(value: CoreValue): CoreValue {
     switch (value.kind) {
+      case 'reference': {
+        const application = applicationIn(value);
+        if (application === undefined) return value;
+        const token: TokenValue = {
+          kind: 'token',
+          text: close(application).name,
+          form: 'unquoted',
+        };
+        return token;
+      }
       case 'record':
-        if (isApplication(value)) {
-          const token: TokenValue = {
-            kind: 'token',
-            text: close(typeRefOf(value)).name,
-            form: 'unquoted',
-          };
-          return token;
-        }
         return {
           kind: 'record',
           fields: value.fields.map((field) => ({
             name: field.name,
-            value: rescope(field.value, closeApplications(field.value.value.coreValue)),
+            value: rescope(field.value, closeApplications(field.value.coreValue)),
           })),
         };
       case 'array':
         return {
           kind: 'array',
           elements: value.elements.map((element) =>
-            rescope(element, closeApplications(element.value.coreValue)),
+            rescope(element, closeApplications(element.coreValue)),
           ),
         };
       case 'map':
@@ -1198,7 +1231,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
           kind: 'map',
           entries: value.entries.map((entry) => ({
             key: entry.key,
-            value: rescope(entry.value, closeApplications(entry.value.value.coreValue)),
+            value: rescope(entry.value, closeApplications(entry.value.coreValue)),
           })),
         };
       case 'empty-brace':
@@ -1245,6 +1278,7 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
         owners.set(identityKey, name);
       }
       minted.claim(name, canonicalApplication(head, canonical));
+      recordClosed(head, canonical, name);
       const already = declared.get(name);
       if (already !== undefined) {
         return already;
@@ -1319,6 +1353,9 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     },
     expansionsByApplication(): ReadonlyMap<string, string> {
       return new Map(expansionsByApplication);
+    },
+    closedApplications(): readonly ClosedApplication[] {
+      return [...closedApplications.values()];
     },
     syntheticNames(): ReadonlySet<string> {
       return new Set(synthetics);
@@ -1416,7 +1453,7 @@ function mentionsParameter(ref: TypeRef, parameters: readonly string[]): boolean
  * it costs nothing at read time.
  */
 function instantiationOf(formName: string): Top {
-  return { kind: 'reference', target: { name: formName, arguments: [], annotations: [] } };
+  return { kind: 'alias', target: { name: formName, arguments: [], annotations: [] } };
 }
 
 /**
@@ -1433,12 +1470,40 @@ export function mapBodyRefs(body: Top, map: (ref: TypeRef) => TypeRef): Top {
     case 'record':
       return {
         ...body,
-        fields: mapFields(body.fields, (field) => ({ ...field, type: map(field.type) })),
+        fields: mapFields(body.fields, (field) => ({
+          ...field,
+          type: field.type.kind === 'sibling' ? field.type : map(field.type),
+        })),
+      };
+    case 'record_template':
+      // A field's type where it names none of the template's own parameters; a parameter standing as a
+      // whole type is a label, and a sibling reference names a field.
+      return {
+        ...body,
+        fields: namespaceOf(
+          body.fields.type,
+          [...body.fields.entries].map(([name, field]) => [
+            name,
+            field.type === undefined ||
+            field.type.kind === 'sibling' ||
+            mentionsParameter(
+              field.type,
+              body.parameters.map((p) => p.name),
+            )
+              ? field
+              : { ...field, type: map(field.type) },
+          ]),
+          body.fields.keyAnnotations,
+        ),
       };
     case 'array':
       return { ...body, elementType: map(body.elementType) };
     case 'map':
       return { ...body, keyType: map(body.keyType), valueType: map(body.valueType) };
+    case 'namespace':
+      return { ...body, keyType: map(body.keyType), valueType: map(body.valueType) };
+    case 'reference_type':
+      return { ...body, of: map(body.of) };
     case 'tuple':
       return {
         ...body,
@@ -1449,10 +1514,10 @@ export function mapBodyRefs(body: Top, map: (ref: TypeRef) => TypeRef): Top {
       };
     case 'choice':
       return { ...body, variants: body.variants.map(map) };
-    case 'reference':
+    case 'alias':
       return { ...body, target: map(body.target) };
     default:
-      return body; // an atom body or a namespace value holds no type reference this walk rewrites
+      return body; // an atom body or a value entry holds no type reference this walk rewrites
   }
 }
 

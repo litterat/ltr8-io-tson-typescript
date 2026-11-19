@@ -108,6 +108,11 @@ prints it on its own; 'validate'/'compile' carry it as their own 'policy' field)
   --token-scripts <A+B>         the same for values; on its own it raises the token level to
                                 single-script, a list of combinations being no configuration
                                 at all under a level that scans nothing (repeatable)
+  --max-depth <n>               how deeply a document may nest before this refuses to read it
+                                (default: 64). A refusal is not a verdict: the document may be
+                                read in full by a processor configured for more.
+  --max-wait-depth <n>          the longest chain of waits resolving a schema may run, each
+                                entry waiting on the next being ready (default: 64)
 
 <level> is a UTS #39 §5.2 restriction level: ascii-only, single-script, highly-restrictive,
 moderately-restrictive, minimally-restrictive, unrestricted. The spelling 'tson policy'
@@ -124,11 +129,14 @@ const VALIDATE_USAGE =
 
 const VALIDATE_HELP = `usage: tson validate [--schema <file-or-url> --root <name>] [--input tson|json] [<policy options>] [--format text|json|tson] <file|->...
 
-Validates data documents. With no --schema: base syntax and the built-in type vocabulary
-only (Class 1), for TSON text. With --schema: also give --root, and every file's root value
-is read against that schema entry. Never fetches or opens a schema a data file's own
-!!schema directive names -- only --schema/--root, given on the command line, is ever
-consulted.
+Validates data documents. With no --schema, a TSON text document is read under its own
+!!import headers, which resolve against the bundled library alone (meta, numeric, temporal,
+net, core, policy), with the root type taken from its root !type-ref; a document with no
+!!import gets a base-syntax and built-in-type check (Class 1). A header naming any other
+schema is reported as SCHEMA_NOT_PERMITTED -- this run will not supply it -- which is exit 69.
+With --schema: also give --root, and every file's root value is read against that schema
+entry. Never fetches or opens a schema a data file's own !!import names -- only --schema,
+given on the command line, and the bundled library are ever consulted.
 
 A file named *.json (case-insensitive) is a JSON encoding of TSON data ([TSON-JSON] §3.1)
 and is read against --schema/--root, which are then required -- this encoding has no
@@ -160,8 +168,8 @@ const COMPILE_USAGE =
 
 const COMPILE_HELP = `usage: tson compile [<policy options>] [--format text|json|tson] <schema>...
 
-Resolves and links each schema document against the bundled standard library (meta-kernel,
-meta.tn, core.tn) and reports whether it compiles -- composition, refinement, template
+Resolves and links each schema document against the bundled standard library (meta,
+numeric, temporal, net, core, policy) and reports whether it compiles -- composition, refinement, template
 application, reference validity, choice disjointness. Does not force every declared
 entry's reader; see this command's own module doc for why.
 
@@ -223,14 +231,14 @@ the file is never rewritten.
 Removed or shortened, and nothing else:
   !!id                       dropped
   ?query on a header         dropped (the ?sha256= pin); a #fragment stays
-  meta-kernel, meta, core, net   shortened to revision and name, "38/net"; other references keep their URL
-  @doc @title @examples @comment   dropped (with --keep-docs only @comment)
+  meta, numeric, temporal, net, core   shortened to revision and name, "39/core"; other references keep their URL
+  @doc                       dropped (with --keep-docs, kept)
 
 Whitespace is collapsed to one space, never removed; one line per header directive and per
 declaration; a quoted string is rewritten single-line.
 
 options:
-  --keep-docs  keep @doc, @title and @examples
+  --keep-docs  keep @doc
 
 exit codes: 0 printed, 1 not a well-formed schema document (reported as file:line:col: message),
             2 usage error or a file that cannot be read, 70 an internal fault`;

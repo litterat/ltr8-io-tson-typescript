@@ -24,16 +24,16 @@ edit — another agent is compiling against that type right now.
 
 Waves run in order. A wave starts only when the previous wave's gate is green.
 
-| Wave | Work                                                                                                      | Gate                                                                                    |
-| ---- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| 0    | Contract review. No implementation.                                                                       | `typecheck` clean; `.references/` and `spec/` present; every vector discovered          |
-| 1    | The leaf packages: unicode, byte input, lexer, numbers, event stream, atoms ×4, regex, tree, bind runtime | Gates green; lexer and resolver vectors moving                                          |
-| 2    | Data parser, schema grammar parser, `schema.meta` bindings, desugarer, conformance harness                | **All Class 1 vectors green.** The Part 1 completion gate                               |
-| 3    | Definition resolver → template materialisation ∥ schema resolver, flattening, meta-kernel bootstrap       | meta-kernel resolves 49 declarations, meta 31, core 48, matching `spec/m/*-resolved.tn` |
-| 4    | Linking, registry, identity, content hashing ∥ readers (abstract → tree ∥ bind ∥ schemaless)              | Gates green; no vector regressed                                                        |
-| 5    | Compiler ∥ emit and writers                                                                               | A user schema importing `core.tn` compiles and validates real data three schemas deep   |
-| 6    | Facades and front door → CLI                                                                              | Gates green; CLI exit codes correct                                                     |
-| 7    | Sweep: full conformance, fixture tests, browser bundle, docs, `publint`, `arethetypeswrong`               | Everything green, CI included                                                           |
+| Wave | Work                                                                                                      | Gate                                                                                  |
+| ---- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 0    | Contract review. No implementation.                                                                       | `typecheck` clean; `.references/` and `spec/` present; every vector discovered        |
+| 1    | The leaf packages: unicode, byte input, lexer, numbers, event stream, atoms ×4, regex, tree, bind runtime | Gates green; lexer and resolver vectors moving                                        |
+| 2    | Data parser, schema grammar parser, `schema.meta` bindings, desugarer, conformance harness                | **All Class 1 vectors green.** The Part 1 completion gate                             |
+| 3    | Definition resolver → template materialisation ∥ schema resolver, flattening, kernel bootstrap            | Each bundled schema resolves, matching `spec/fixtures/*-resolved.tn`                  |
+| 4    | Linking, registry, identity, content hashing ∥ readers (abstract → tree ∥ bind ∥ schemaless)              | Gates green; no vector regressed                                                      |
+| 5    | Compiler ∥ emit and writers                                                                               | A user schema importing `core.tn` compiles and validates real data three schemas deep |
+| 6    | Facades and front door → CLI                                                                              | Gates green; CLI exit codes correct                                                   |
+| 7    | Sweep: full conformance, fixture tests, browser bundle, docs, `publint`, `arethetypeswrong`               | Everything green, CI included                                                         |
 
 Waves 1 and 2 are `pipeline()` — each package is verified the moment it lands, because no package
 in those waves depends on another. Waves 3 to 6 carry real ordering, expressed as sequential stages
@@ -42,8 +42,8 @@ inside the script; the `∥` above marks what genuinely runs concurrently.
 ## Revision runs
 
 Moving the port to a new spec revision is driven the same way as the original port, one stage at a
-time, and the plan for it is `REVISION-<n>-PLAN.md` (`REVISION-38-PLAN.md` for the current one,
-`REVISION-37-PLAN.md` before it). A stage is a work package or a few, and the shape of every stage
+time, and the plan for it is `REVISION-<n>-PLAN.md` (`REVISION-39-PLAN.md` for the current one,
+`REVISION-38-PLAN.md` before it). A stage is a work package or a few, and the shape of every stage
 is the same: **port → adversarial review → repair → gate**. A `tson-porter` writes the
 implementation, a reviewer who has not seen the porter's reasoning reads the diff against the spec
 and the Java, repairs follow, and the gate below decides whether the next stage may start.
@@ -58,13 +58,14 @@ A revision run may drive its stages any of three ways:
 - **Worktree-isolated concurrent packages** (Revision 38): packages over disjoint files run at the
   same time, each in its own git worktree off one commit, and the manager merges them in dependency
   order. Revision 38 ran 1B beside 1A, 2A beside 2B, and Stage 3 (the JSON encoding) and the
-  documentation sweep beside the last Stage 2 package. A package is told which files it owns and
+  documentation sweep beside the last Stage 2 package; Revision 39 ran Stage 3 and Stage 4 (the
+  CLI and the sweep) beside WP2C. A package is told which files it owns and
   touches nothing else, so a merge conflict is a broken ownership boundary, which the manager
   repairs rather than the packages.
 
 Whichever is used, the brief names the Java sources and the spec sections, states what the shared
-conformance suite should do at that point, and carries the current subject count. At the Revision 38
-corpus pin that is **695 discovered subjects**: a stage that discovers fewer has broken the harness.
+conformance suite should do at that point, and carries the current subject count. At the Revision 39
+corpus pin that is **944 discovered subjects**: a stage that discovers fewer has broken the harness.
 
 ## Running a wave
 

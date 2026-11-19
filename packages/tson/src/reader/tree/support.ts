@@ -128,6 +128,9 @@ export function renderValue(value: Value): string {
       return 'an array';
     case 'tuple':
       return 'a tuple';
+    case 'application-reference':
+    case 'sibling-reference':
+      return value.text;
     case 'missing':
       return '(missing)';
   }

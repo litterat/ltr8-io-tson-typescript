@@ -14,8 +14,8 @@ import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
 import { isTemplateBody } from '../src/schema/meta/typedef.js';
 import type { NamedField } from '../src/schema/meta/bodies.js';
-import { TYPE_KIND, fieldMapOf } from '../src/schema/meta/bodies.js';
-import { entry } from './model-fixtures.js';
+import { fieldMapOf } from '../src/schema/meta/bodies.js';
+import { entry, recordTemplate } from './model-fixtures.js';
 
 /**
  * `link/nameHygiene.ts`'s implementation of [TSON-SCHEMA] §11.4's schema-layer name-hygiene
@@ -84,13 +84,7 @@ function def(
   const value: Top =
     parameters.length === 0 || isTemplateBody(body) || body.kind !== 'record'
       ? body
-      : {
-          ...body,
-          parameters: parameters.map((name) => ({
-            name,
-            type: { name: TYPE_KIND, arguments: [], annotations: [] },
-          })),
-        };
+      : recordTemplate(parameters, body);
   return entry(value, options.supertypes ?? [], options.subtypes ?? []);
 }
 
@@ -159,7 +153,6 @@ function schema(
   }
   return {
     id,
-    meta: 'https://tson.io/2026/38/m/meta-kernel.tn',
     imports,
     entries: own,
     keyAnnotations: new Map(),

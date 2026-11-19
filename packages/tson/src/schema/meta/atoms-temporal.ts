@@ -51,7 +51,7 @@ export interface OffsetDateTime {
 }
 
 /**
- * The meta-kernel's `date_type` constructor (§5.4's `date` atom, RFC 3339 `full-date`).
+ * `temporal.date_type` constructor (§5.4's `date` atom, RFC 3339 `full-date`).
  * Both bounds are inclusive — this family has no exclusive facet.
  *
  * Also an {@link Atom} variant: `date => !date_type {}` is a constructor-application
@@ -64,7 +64,7 @@ export interface DateType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `time_type` constructor (§5.4's `time` atom, RFC 3339 `full-time`).
+ * `temporal.time_type` constructor (§5.4's `time` atom, RFC 3339 `full-time`).
  *
  * **No timezone facet.** RFC 3339 `full-time`, which this atom's `spec` pins, already makes
  * the offset mandatory — a facet requiring it would be vacuous and one relaxing it would
@@ -88,7 +88,7 @@ export interface TimeType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `datetime_type` constructor (§5.4's `datetime` atom, RFC 3339
+ * `temporal.datetime_type` constructor (§5.4's `datetime` atom, RFC 3339
  * `date-time`). Carries the same `precision` facet as {@link TimeType}, for the same reason,
  * and the same absence of a timezone facet.
  *
@@ -104,7 +104,7 @@ export interface DateTimeType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `duration_type` constructor (§5.5's `duration` atom, RFC 3339 Appendix A,
+ * `temporal.duration_type` constructor (§5.5's `duration` atom, RFC 3339 Appendix A,
  * restricted to no `Y`/month-`M` component). Elapsed time — a signed exact count of seconds,
  * bounded at both ends by a signed 64-bit count of nanoseconds (about 292 years); `!period`
  * (`PeriodType`) carries the calendar half this family excludes, which is what makes
@@ -142,7 +142,7 @@ export interface DurationType extends TypeBase {
 }
 
 /**
- * The meta-kernel's `period_type` constructor (§5.5's `period` atom, RFC 3339 Appendix A,
+ * `temporal.period_type` constructor (§5.5's `period` atom, RFC 3339 Appendix A,
  * restricted to a `Y` component, an `M` component, or both — no fraction, no `W`/`D` component,
  * no `T` part). Calendar span — a signed integer count of months, so `P1Y` and `P12M` are one
  * value. The calendar half that `duration` excludes, and the reason `!duration`

@@ -199,7 +199,7 @@ export function renderHashRun(run: HashRun, format: Format): string {
 
 // ── policy ───────────────────────────────────────────────────────────────────────────────────
 
-/** `tson policy`'s own rendering -- no run envelope, since this states this processor's configuration, not a verdict on anything. The machine formats are `policy.tn`'s `policy` type. */
+/** `tson policy`'s own rendering -- no run envelope, since this states this processor's configuration, not a verdict on anything. The machine formats are `policy.tn`'s `policy.processor` type. */
 export function renderPolicy(policy: ProcessorPolicy, format: Format): string {
   if (format === 'json') return JSON.stringify(policyJson(policy), null, 2);
   if (format === 'tson') return write(policyNode(policy));

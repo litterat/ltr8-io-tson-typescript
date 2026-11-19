@@ -22,7 +22,7 @@
  *
  * **§5.4's no-class list includes two straddling kinds: an approximate atom
  * (`float_type`) still admitting `allow_nan` or `allow_infinity`, and a map whose key type, after
- * following its reference chain, is not an atom-family instance or an enum.** Both make `disjoint`
+ * following its alias chain, is not an atom-family instance or an enum.** Both make `disjoint`
  * class-stable: a choice's untagged values are the same set in every encoding ([TSON-JSON] §8.3),
  * at the price that `( float64 | text )` needs a tag in text too unless the float narrows
  * `allow_nan`/`allow_infinity` to `false` -- a language change on the text side, not only the
@@ -35,13 +35,14 @@ import { resolveBaseType } from '../base/baseTypeResolver.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import { isAtom } from '../compiler/atomChecks.js';
-import { terminal, terminalDefinition } from './referenceChain.js';
+import { terminal, terminalDefinition } from './aliasChain.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { FloatType } from '../schema/meta/atoms-numeric.js';
 import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import { schemaPositionOf } from './facts.js';
 import { choiceDisjoint } from '../schema/meta/typedef.js';
+import { DISJOINT_ANNOTATION } from '../schema/meta/kernel.js';
 
 /**
  * The granularity at which TSON text discriminates an untagged value ([TSON-DATA] §4's three
@@ -74,7 +75,7 @@ function classifyEnum(body: EnumBody): DiscriminationClass | undefined {
 }
 
 /**
- * Whether `keyType`'s reference chain terminates at a type "a single scalar token denotes by its
+ * Whether `keyType`'s alias chain terminates at a type "a single scalar token denotes by its
  * content" (§5.4) — an atom-family instance or an enum, **the `value_type` and `void_type`
  * instances excepted**: `value` is read by kind rather than content and `void` has no key at all,
  * so neither is a type a token's own content picks out. The two are recognised by constructor
@@ -85,8 +86,8 @@ function isScalarContentKeyType(keyName: string, namespace: ReadonlyMap<string, 
   const def = namespace.get(terminalName);
   if (def === undefined) return false; // unresolved or cyclic: no class either
   const body = def;
-  if (isTemplateBody(body) || body.kind === 'namespace' || !isAtom(body)) return false;
-  return body.kind !== 'value_type' && body.kind !== 'void_type';
+  if (isTemplateBody(body) || !isAtom(body)) return false;
+  return body.kind !== 'void_type';
 }
 
 /**
@@ -104,8 +105,8 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
   if (isTemplateBody(body)) {
     return undefined; // a held TemplateBody: no class until an application closes it
   }
-  if (body.kind === 'namespace') {
-    return undefined; // a namespace value is no type, and has no class
+  if (body.kind === 'value_entry') {
+    return undefined; // a value is no type, and has no class
   }
   switch (body.kind) {
     case 'integer_type':
@@ -118,8 +119,7 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
     // are string content in both encodings.
     case 'text_type':
     case 'identifier_type':
-    case 'kind_type':
-    case 'ref_type':
+    case 'reference_type':
     case 'hostname_type':
     case 'host_type':
     case 'media_type_type':
@@ -143,10 +143,11 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
     case 'enum':
       return classifyEnum(body);
     case 'record':
+    case 'namespace':
       return 'BRACE';
     case 'map':
       // §5.4, #17: a map whose key type has no class of its own -- after following its own
-      // reference chain -- straddles classes the same way a NaN-admitting float does, since an
+      // alias chain -- straddles classes the same way a NaN-admitting float does, since an
       // encoding with no delimiter pair for a compound key spells such a map in the bracket class
       // instead ([TSON-JSON] §6.4).
       return isScalarContentKeyType(body.keyType.name, namespace) ? 'BRACE' : undefined;
@@ -161,9 +162,9 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
 }
 
 /**
- * The class of `name`'s untagged wire values, or `undefined` when it has none. A reference chain
+ * The class of `name`'s untagged wire values, or `undefined` when it has none. A alias chain
  * is followed to its terminal entry first (§8.3 makes an alias and its target one type,
- * `referenceChain.ts`'s shared walk); a cycle, having no terminal, has no class. An `undefined`
+ * `aliasChain.ts`'s shared walk); a cycle, having no terminal, has no class. An `undefined`
  * result makes the enclosing choice non-disjoint and blocks untagged recovery — the conservative
  * side, the tag stays required.
  */
@@ -218,7 +219,7 @@ export interface CheckDisjointAssertionsOptions {
    * `entries.get(name)`'s own key-position annotations (§6) for every *local* name -- the same
    * map `compiler/schemaResolver.ts`'s `Schema.keyAnnotations`/`link/link.ts`'s
    * `LinkedSchema.keyAnnotations` already carry through resolution and linking. §6 lets
-   * `@disjoint` appear before the declared name, not only on the entry's own value, and this
+   * `@meta.disjoint` appear before the declared name, not only on the entry's own value, and this
    * function checks both channels for the marker. Omitted means "no key annotations in scope":
    * every local entry is then checked against its value's own annotations alone.
    */
@@ -227,30 +228,30 @@ export interface CheckDisjointAssertionsOptions {
   readonly facts?: ReadonlyMap<string, EntryFacts>;
 }
 
-/** `true` when `name` carries a `@disjoint` marker, on its own value (its facts' `annotations`) or on its declaration (`keyAnnotations`, §6). */
+/** `true` when `name` carries a `@meta.disjoint` marker, on its own value (its facts' `annotations`) or on its declaration (`keyAnnotations`, §6). */
 function assertsDisjoint(
   facts: EntryFacts | undefined,
   name: string,
   keyAnnotations: ReadonlyMap<string, Annotations> | undefined,
 ): boolean {
-  if ((facts?.annotations ?? []).some((a) => a.name === 'disjoint')) return true;
-  return (keyAnnotations?.get(name) ?? []).some((a) => a.name === 'disjoint');
+  if ((facts?.annotations ?? []).some((a) => a.name === DISJOINT_ANNOTATION)) return true;
+  return (keyAnnotations?.get(name) ?? []).some((a) => a.name === DISJOINT_ANNOTATION);
 }
 
 /**
- * §5.4's `@disjoint` assertion, checked against the fact {@link computeDisjointness} derived. The
+ * §5.4's `@meta.disjoint` assertion, checked against the fact {@link computeDisjointness} derived. The
  * annotation carries no decode force -- the resolver computes a choice body's `disjoint` whether
  * or not it is present -- and exists to be checked against that derived fact, converting a silent
  * drift into a diagnostic. Two outcomes, because the fact is two-valued: `disjoint: true`
  * verifies the assertion silently; `false` makes it an error. There is no third, unprovable
- * outcome to report, which is what makes `@disjoint` mean *machine-verified* rather than merely
+ * outcome to report, which is what makes `@meta.disjoint` mean *machine-verified* rather than merely
  * asserted.
  *
  * **Local entries only.** An imported entry was checked when its own schema linked, and a
  * diagnostic here stamps *this* schema's own identity -- re-checking an imported entry would
  * report another document's problem against this one.
  *
- * **Checked against both annotation channels.** §6 lets `@disjoint` appear before the declared
+ * **Checked against both annotation channels.** §6 lets `@meta.disjoint` appear before the declared
  * name (a *key* annotation) as readily as on the entry's own value; {@link
  * CheckDisjointAssertionsOptions.keyAnnotations}, when a caller supplies it, is checked alongside
  * the annotations on the entry's value so a marker written either way is caught.
@@ -271,7 +272,7 @@ export function checkDisjointAssertions(
 
     const variants = body.variants.map((v) => v.name);
     const message =
-      `'${name}' asserts @disjoint, but its variants [${variants.join(', ')}] are not ` +
+      `'${name}' asserts @meta.disjoint, but its variants [${variants.join(', ')}] are not ` +
       'disjoint (§5.4) -- two of them occupy the same discrimination class (or one has no class ' +
       "at all), so no encoding's single form-resolution pass can tell them apart and every value " +
       'keeps its !variant tag; drop the assertion, or use a field group (§5.11), which ' +

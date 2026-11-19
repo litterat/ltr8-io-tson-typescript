@@ -10,10 +10,10 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/38/tson-part1-data.md
+  https://tson.io/raw/2026/39/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/38/tson-part2-schema.md
-- Part 3 — the JSON encoding: https://tson.io/raw/2026/38/tson-part3-json.md
+  https://tson.io/raw/2026/39/tson-part2-schema.md
+- Part 3 — the JSON encoding: https://tson.io/raw/2026/39/tson-part3-json.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than
@@ -23,10 +23,10 @@ trusting a cached copy.
 port is written against:
 
 - `.references/ltr8-io-tson-java` — the reference implementation, **pinned** to a fixed commit so the
-  port target cannot move underneath the work. Its `spec/` holds the spec snapshots and the five
-  live bundled schemas `spec/m/{meta-kernel,meta,core,net,policy}.tn` plus the `*-resolved.tn`
-  resolver-output fixtures of the first four.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 695
+  port target cannot move underneath the work. Its `spec/` holds the spec snapshots, the six
+  live bundled schemas `spec/m/{meta,numeric,temporal,net,core,policy}.tn` (`meta.tn` is the kernel)
+  and the `*-resolved.tn` resolver-output fixtures of the first five, under `spec/fixtures/`.
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 944
   subjects over `tests/<class>/<layer>/<bucket>/`: Class 1 (`lexer`, `parser`, `reader`, `resolver`,
   `vocabulary` and `identity`) and Class 2 (`schema`, `link`, `validate`). **Pinned**, like the Java: a corpus that tracked
   `main` turned this repo's CI red on an upstream commit with no change here.
@@ -35,8 +35,8 @@ Both are required before the conformance project will run. A SessionStart hook f
 automatically in cloud sessions; run the script yourself locally.
 
 `spec/` holds the same spec snapshots, the change log, and bundled schemas — Parts 1 through 3 plus
-`tson-rev38-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
-`.references/` is gitignored and absent from a bare clone, but the five bundled schemas are loaded
+`tson-rev39-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
+`.references/` is gitignored and absent from a bare clone, but the six bundled schemas are loaded
 at runtime and every `§` citation in the source refers to the spec text, so both have to be readable
 without network access. They are copies: do not edit them, and move the pin and re-copy together.
 `spec/PROVENANCE.md` records where they came from and `vendored-spec.test.ts` fails if they drift.
@@ -182,18 +182,19 @@ in conversation rather than silently picking.
 
 - Resolved-output writing names the applied constructor from a fact recorded beside the entry, not
   from the body. §8.1 says a closed entry's value is "a binding record headed by the applied
-  constructor", and `spec/m/*-resolved.tn` writes `enum_set`'s body as `!set_type { element_type:
-text  min_items: 1 }`. `set_type` restates `array`'s fields and adds none, and `enum` and
-  `enum_type` share one body shape, so the head cannot be recovered from the body: the resolver
-  records it in the entry's facts (`link/facts.ts`, `head`), and the writer (`schema/bindings.ts`,
-  `topBinding`) writes the body under that name, never a guess from the body's shape. A body with no
-  recorded head is written under its base constructor (`array`, `enum_type`). A field the head pins
-  (`set_type`'s `ordered`, `enum`'s `name_type`, a FIXED `spec`) is left out at its pinned value.
-  Revision 38 removed `type_definition` and its `source` field, so this is the one place the applied
-  head survives outside the `@application` key annotation. The Java still writes `!array { … }`
-  here, and its fixture test cannot see it, since it binds the fixture into the value model and
-  compares bodies where both forms arrive as one `ArrayBody`. This port compares written form. Worth
-  reporting upstream as a §8.1 conformance gap in the Java.
+  constructor", and `spec/fixtures/*-resolved.tn` writes `enum_set`'s body as `!meta.set_type {
+element_type: text  min_items: 1 }`. `meta.set_type` restates `meta.array`'s fields and adds none,
+  and `enum` and `meta.enum_type` share one body shape, so the head cannot be recovered from the
+  body: the resolver records it in the entry's facts (`link/facts.ts`, `head`), and the writer
+  (`schema/bindings.ts`, `topBinding`) writes the body under that name, never a guess from the
+  body's shape. A body with no recorded head is written under its base constructor (`meta.array`,
+  `meta.enum_type`). A field the head pins (`meta.set_type`'s `ordered`, `enum`'s `name_type`, a
+  FIXED `spec`) is left out at its pinned value. The kernel has no `type_definition`, so this is
+  the one place the applied head survives outside the `@application` key annotation. The Java still
+  writes `!meta.array { … }` here, restating `voidable`, `ordered` and `unique_items` at their
+  defaults, and its fixture test cannot see either difference, since it binds the fixture into the
+  value model and compares bodies where both forms arrive as one `ArrayBody`. This port compares
+  written form. Worth reporting upstream as a §8.1 conformance gap in the Java.
 
 - **Name hygiene is policy, not validity** (§8.2, and §11.4 for the schema-layer scopes). The three
   UTS #39 mechanisms — skeleton distinctness, `Identifier_Status`, restriction level — are
@@ -289,10 +290,10 @@ The rules the runner must keep:
   load, never by reading whichever internal diagnostic fired.
 - **At the identity layer judge the subject's first directive alone** (RUNNER.md rule 3e). The
   subject is a header and an empty body and nothing is fetched. `!!id` must be written in canonical
-  form; `!!schema` may be any spelling of its identity. A `valid` vector's `identity` is compared
+  form; `!!import` may be any spelling of its identity. A `valid` vector's `identity` is compared
   byte for byte with the computed canonical identity; an `error` vector's category is `resolver`.
-- **A meta layer's own records need no host class here.** RUNNER.md asks a runner that binds to
-  supply one per record a fixture meta-schema's namespace types hold. This port binds nothing for
+- **A fixture schema's own records need no host class here.** RUNNER.md asks a runner that binds
+  to supply one per record a fixture schema's namespace types hold. This port binds nothing for
   them: an entry applying a namespace type is read into a generic `MetaValue` (the record's
   constructor name and its fields by wire name, a name at a kind- or reference-typed slot kept as
   written), so the rule is met by construction.

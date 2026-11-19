@@ -282,13 +282,16 @@ did, so there is no single TSON-side sibling to point at, only the pattern), and
 nameHygiene.ts` calls the _shared_ `unicode/policy.ts#nameHygieneRefusal` with a one-name scope
 rather than duplicating its logic — the one place in this item's list where reuse, not
 duplication, was possible, because that function already lived below both `reader/` and `json/`
-in the import graph. A third: `json/schema/scoped.ts` and `json/schema/foreign.ts` are the JSON copy of
-`compiler/compile.ts`'s `buildScopedReader` and its `compileForeign` cache ([TSON-SCHEMA] §7.8,
-[TSON-JSON] §8.5) — the same cell rule, `schemas` narrowing and foreign-schema lookup, where the
-text reader selects the cell off `!type`/`!!schema` and this one off the annotation object's
-leading members. The seam a unification would take is a cell-selection function from "what the
-value said about itself" to a `{ local | extern, schema?, type? }` verdict, with each encoding's
-reader supplying only how it peeks and how it consumes the opening apparatus.
+in the import graph. A third: `json/schema/declared.ts` is the JSON copy of `compiler/compile.ts`'s
+`buildDeclaredReader` ([TSON-SCHEMA] §7.8, [TSON-JSON] §8.5) — the `meta.declared_type` position's
+reader: an open sum over the governing schema's closure, each entry routed lazily so a recursive
+declaration reads through its finished reader, where the text reader selects the type off the
+value's `!type` annotation and this one off the annotation object's leading `$type`. The seam a
+unification would take is the closure map from a qualified name to a lazily resolved reader, with
+each encoding's reader supplying only how it peeks the name and how it consumes the opening
+apparatus. The `$import` refusal (`json/schema/tags.ts`) and the in-band root decline
+(`json/inBandBinding.ts`) have no text-side sibling: a text document carries its `!!import`s in the
+header, which the parser reads before any value.
 
 **What is _not_ duplicated, on purpose.** The `src/json/**` ESLint zone (`eslint.config.js`)
 forbids importing `lexer/`, `stream/`, `reader/`, `compiler/`, `tree/`, `write/` or `facade/` at
@@ -369,7 +372,7 @@ duplicates a predicate the model itself now answers once), and `json/schema/reco
 `fieldValueOf`/`resolveFieldBody`/`fieldValueParser` (a discriminator's pin, decoded once, the same
 way a FIXED field's pin already was). §7.2's alias-flattened admissible-name set (`selfNames`/
 `admitting`) is not a sixth duplication: the repair pass moved it out of `compiler/subsumption.ts`'s
-own module-private copy and into `link/referenceChain.ts`, beside `terminal` (the walk it is built
+own module-private copy and into `link/aliasChain.ts`, beside `terminal` (the walk it is built
 on), so both `compiler/subsumption.ts` and every dispatcher here import the one function rather
 than each holding a copy — the reuse this item's own trigger describes, reached a step early
 because `link/` was already the walk's home and nothing stopped the text side from importing it
@@ -385,7 +388,7 @@ shared `Cursor`, exactly mirroring the text encoding's `PathStep`-adjacent field
 are now closer in shape than the trigger below already argued they were.
 
 **One more narrowing this pair shares, and it is not idiom debt.** `json/schema/dispatchChoice.ts`'s
-`$type` at a choice position is flattened for alias (`link/referenceChain.ts`'s own `admitting`,
+`$type` at a choice position is flattened for alias (`link/aliasChain.ts`'s own `admitting`,
 over the declared variant list, each first walked to its own terminal so a variant that is itself
 an alias admits its target and every sibling alias too) but not for subtype, and
 `compiler/choiceReader.ts` reads identically — alias-flattened, not subtype-flattened — so this is

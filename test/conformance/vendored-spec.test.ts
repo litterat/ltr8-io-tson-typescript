@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
  * `spec/` holds verbatim copies of the reference implementation's spec snapshots and bundled
  * schemas. This checks they have not drifted from the pinned checkout.
  *
- * Drift matters in two different ways. An edited `m/*.tn` invalidates the `*-resolved.tn`
+ * Drift matters in two different ways. An edited `m/*.tn` invalidates the `fixtures/*-resolved.tn`
  * fixtures it was resolved into, since those carry content digests — the Wave 3 gate would then
  * be measuring the port against a target that no longer exists upstream. An edited spec snapshot
  * is quieter and worse: every `§` citation in the source would refer to a document that says
@@ -52,21 +52,23 @@ function sha256(path: string): string {
 describe.skipIf(!referenceAvailable())('vendored spec files', () => {
   const files = vendoredFiles();
 
-  it('vendors the three spec parts, the revision change log, all eight bundled schemas and the policy vocabulary', () => {
+  it('vendors the three spec parts, the revision change log, the six bundled schemas and their five resolved fixtures', () => {
     expect(files).toEqual([
-      'm/core-resolved.tn',
+      'fixtures/core-resolved.tn',
+      'fixtures/meta-resolved.tn',
+      'fixtures/net-resolved.tn',
+      'fixtures/numeric-resolved.tn',
+      'fixtures/temporal-resolved.tn',
       'm/core.tn',
-      'm/meta-kernel-resolved.tn',
-      'm/meta-kernel.tn',
-      'm/meta-resolved.tn',
       'm/meta.tn',
-      'm/net-resolved.tn',
       'm/net.tn',
+      'm/numeric.tn',
       'm/policy.tn',
+      'm/temporal.tn',
       'tson-part1-data.md',
       'tson-part2-schema.md',
       'tson-part3-json.md',
-      'tson-rev38-changelog.md',
+      'tson-rev39-changelog.md',
     ]);
   });
 
@@ -83,13 +85,13 @@ describe('vendored spec files, without the reference checkout', () => {
 
   it('are present in the repository', () => {
     expect(existsSync(join(VENDORED_ROOT, 'tson-part1-data.md'))).toBe(true);
-    expect(existsSync(join(VENDORED_ROOT, 'm/meta-kernel.tn'))).toBe(true);
+    expect(existsSync(join(VENDORED_ROOT, 'm/meta.tn'))).toBe(true);
   });
 
   it('record the spec revision the port is written against', () => {
     const part1 = readFileSync(join(VENDORED_ROOT, 'tson-part1-data.md'), 'utf8');
     const part2 = readFileSync(join(VENDORED_ROOT, 'tson-part2-schema.md'), 'utf8');
-    expect(part1).toContain('2026 Revision 38');
-    expect(part2).toContain('2026 Revision 38');
+    expect(part1).toContain('2026 Revision 39');
+    expect(part2).toContain('2026 Revision 39');
   });
 });

@@ -45,6 +45,8 @@ export function describeEvent(e: TsonEvent): string {
       return "the void sentinel '_'";
     case 'token':
       return `token '${e.text}'`;
+    case 'reference':
+      return e.reference.kind === 'sibling' ? 'a sibling reference' : 'a reference';
     default:
       return e.kind;
   }

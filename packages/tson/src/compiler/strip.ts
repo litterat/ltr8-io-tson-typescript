@@ -10,13 +10,13 @@
  *   (§2.2.1).
  * - **A header reference's query** goes, and its `#fragment` stays. In an identifying URI the
  *   query holds nothing but `?sha256=` pins, which are verification metadata (§2.2.1).
- * - **A header reference to the spec's own library** -- `meta-kernel`, `meta`, `core` and `net` at
- *   any revision -- is shortened to its revision and name (`"38/meta"`). Any other reference keeps its
- *   URL, which is the only thing that tells a reader which schema it names.
- * - **The documentary annotations** (§3.1) go, wherever they are written: `@doc`, `@title` and
- *   `@examples`, which are for the schema's readers, and `@comment`, which is for its maintainers.
- *   {@link stripSchemaKeepingDocs} keeps the first three and drops only `@comment`. Every other
- *   annotation stays: several are checked and change what the schema means.
+ * - **A header reference to the spec's own library** -- `meta`, `numeric`, `temporal`, `net` and
+ *   `core` at any revision -- is shortened to its revision and name (`"39/numeric"`). Any other
+ *   reference keeps its URL, which is the only thing that tells a reader which schema it names;
+ *   `policy.tn` is a processor's vocabulary rather than one a schema builds on, and keeps its URL.
+ * - **The documentary annotation**, `@doc` (§3.1), goes wherever it is written;
+ *   {@link stripSchemaKeepingDocs} keeps it, for a reader the documentation is written for. Every
+ *   other annotation stays: several are checked and change what the schema means.
  *
  * **Whitespace is collapsed, never removed.** TSON has no comments, so the token stream is the
  * whole document, and the grammar reads adjacency (§7.5): some tokens must touch (`@doc:`,
@@ -41,11 +41,20 @@ import { adjacentTo, type Token } from '../lexer/token.js';
 import { createEmitter, stringSink } from '../write/emitter.js';
 import { parseSchemaDocument } from './schemaParser.js';
 
-/** The annotations {@link stripSchema} removes: everything written for a person rather than a processor. */
-const DOCUMENTARY: ReadonlySet<string> = new Set(['doc', 'title', 'examples', 'comment']);
+/** The spec's own library a schema builds on, by file name: shortened in a header reference (§9). */
+const BUNDLED_LIBRARIES: ReadonlySet<string> = new Set([
+  'meta',
+  'numeric',
+  'temporal',
+  'net',
+  'core',
+]);
 
-/** The annotations {@link stripSchemaKeepingDocs} removes: the maintainers' notes alone. */
-const MAINTAINERS: ReadonlySet<string> = new Set(['comment']);
+/** The annotations {@link stripSchema} removes: everything written for a person rather than a processor. */
+const DOCUMENTARY: ReadonlySet<string> = new Set(['doc']);
+
+/** The annotations {@link stripSchemaKeepingDocs} removes: none. */
+const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The reading form of `source`, a schema document.
@@ -58,13 +67,13 @@ export function stripSchema(source: string): string {
 }
 
 /**
- * The reading form of `source` with its documentation kept -- `@doc`, `@title` and `@examples` --
- * for a reader that wants the schema explained; `@comment` still goes.
+ * The reading form of `source` with its documentation kept: every annotation stays, `@doc`
+ * included, for a reader that wants the schema explained.
  *
  * @throws TsonLexError | TsonParseError as {@link stripSchema} does.
  */
 export function stripSchemaKeepingDocs(source: string): string {
-  return strip(source, MAINTAINERS);
+  return strip(source, NONE);
 }
 
 function tokenize(source: string): Token[] {
@@ -133,8 +142,9 @@ function lineBreaksOf(tokens: readonly Token[]): boolean[] {
     breaks[i] = true;
   }
   while (is(tokens, i, 'at')) i += annotationLength(tokens, i);
+  if (is(tokens, i, 'bang')) i += 2; // the root's tag: `!schema` (§2.2, §5)
   let depth = 0;
-  for (i++; depth > 0 || !is(tokens, i, 'rbrace'); i++) {
+  for (i++; i < tokens.length && (depth > 0 || !is(tokens, i, 'rbrace')); i++) {
     if (depth === 0) {
       const arrow = entryArrow(tokens, i);
       if (arrow > 0) {
@@ -214,7 +224,7 @@ function shortened(reference: string): string {
   } catch {
     return unpinned; // not an identity at all, so not the library's: the spelling stays
   }
-  // `tson.io/<year>/<revision>/m/<meta-kernel|meta|core|net>.tn` (§2.2.1)
+  // `tson.io/<year>/<revision>/m/<meta|numeric|temporal|net|core>.tn` (§2.2.1)
   const [host, year, revision, directory, file, ...rest] = identity.split('/');
   if (host !== 'tson.io' || directory !== 'm' || file === undefined || rest.length > 0) {
     return unpinned;
@@ -222,9 +232,7 @@ function shortened(reference: string): string {
   if (year === undefined || revision === undefined) return unpinned;
   if (!isDigits(year, 4) || !isDigits(revision)) return unpinned;
   const library = file.endsWith('.tn') ? file.slice(0, -3) : '';
-  return library === 'meta-kernel' || library === 'meta' || library === 'core' || library === 'net'
-    ? `${revision}/${library}`
-    : unpinned;
+  return BUNDLED_LIBRARIES.has(library) ? `${revision}/${library}` : unpinned;
 }
 
 function isDigits(text: string, length?: number): boolean {

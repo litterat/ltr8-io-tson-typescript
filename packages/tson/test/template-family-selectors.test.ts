@@ -17,7 +17,7 @@ describe('a family whose base is a record-bodied template is judged (§5.2, §5.
   it('pins compare under the selector type: "dog" and "DOG" collide under ASCII_CASEFOLD', () => {
     const header = '';
     const message = loadError(
-      `sel => !text_type { normalization: ASCII_CASEFOLD }\npet => <N, T> { type: sel = N  pet: T }\ndog => pet<"dog", text>\ndog2 => pet<"DOG", int32>`,
+      `sel => !unicode.text_type { normalization: ASCII_CASEFOLD }\npet => <N, T> { type: sel = N  pet: T }\ndog => pet<"dog", text>\ndog2 => pet<"DOG", int32>`,
       header,
     );
     expect(message).toMatch(/same value/);

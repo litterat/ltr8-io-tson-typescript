@@ -51,6 +51,7 @@
  * then the per-name mechanisms in order, matching `checkScope`'s own "its own collision relation,
  * then each name's own two rules" — see that function's own doc.
  */
+import { typeNameOf } from '../schema/meta/bodies.js';
 import { diagnosticCodeForMechanism } from '../core/diagnostic.js';
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonNameHygieneRefusedError } from '../core/errors.js';
@@ -70,7 +71,7 @@ import type { SourcePosition } from '../schema/meta/position.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
 import type { FactsTable } from './facts.js';
-import { terminalDefinition } from './referenceChain.js';
+import { terminalDefinition } from './aliasChain.js';
 
 /** Dependencies {@link checkNameHygiene} needs beyond the merged namespace itself. */
 export interface CheckNameHygieneOptions {
@@ -297,10 +298,12 @@ function checkFieldValues(
   receiver: DiagnosticsReceiver | undefined,
 ): void {
   const body: Top = def;
-  if (isTemplateBody(body) || body.kind !== 'record') return;
+  if (isTemplateBody(body) || (body.kind !== 'record' && body.kind !== 'record_template')) return;
+  // A template's literal values are every application's, so they are judged here, once; a value
+  // parameter is an argument's, judged where the application writes it (§5.10).
   for (const [fieldName, field] of body.fields.entries) {
-    if (field.value === undefined) continue;
-    const family = terminalDefinition(field.type.name, (n) => merged.get(n));
+    if (field.value === undefined || field.type === undefined) continue;
+    const family = terminalDefinition(typeNameOf({ type: field.type }), (n) => merged.get(n));
     if (family === undefined || isTemplateBody(family) || family.kind !== 'identifier_type') {
       continue;
     }

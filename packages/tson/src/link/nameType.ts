@@ -15,20 +15,21 @@
  * **What may stand there** is a member of `identifier_kind` (§4.2): an entry built with
  * `identifier_type` -- an instance, a refinement of one, a closed application of a template over
  * the constructor, or an alias of any of them -- which is to say one whose value, at the end of its
- * reference chain, is an `identifier_type` body. And its `normalization` must imply NFC
+ * alias chain, is an `identifier_type` body. And its `normalization` must imply NFC
  * ({@link nameTypeFormRefusal}).
  */
 import type { IdentifierBase, IdentifierType } from '../schema/meta/atoms-text.js';
 import type { RecordBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
+import { metaName } from '../schema/meta/kernel.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
-import { terminal, type EntryLookup } from './referenceChain.js';
+import { terminal, type EntryLookup } from './aliasChain.js';
 
 /** The kernel's `field_name` (§5.2), the name type a record that states none has. */
-export const FIELD_NAME = 'field_name';
+export const FIELD_NAME = metaName('field_name');
 
 /** The kernel's `identifier` (§7.7), the entry `field_name` resolves to. */
-const IDENTIFIER = 'identifier';
+const IDENTIFIER = metaName('identifier');
 
 /** A resolved name type: the terminal entry's name, its value, and the namespace its own names resolve in. */
 export interface ResolvedNameType {
@@ -46,7 +47,7 @@ function fallingBackTo(primary: EntryLookup, fallback: EntryLookup | undefined):
  * absent for the meta-kernel bootstrap). `undefined` for a name that resolves in neither.
  */
 export function recordNameType(
-  body: RecordBody,
+  body: Pick<RecordBody, 'nameType'>,
   local: EntryLookup,
   structure: EntryLookup | undefined,
 ): ResolvedNameType | undefined {

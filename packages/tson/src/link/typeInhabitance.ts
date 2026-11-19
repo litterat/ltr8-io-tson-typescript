@@ -29,11 +29,11 @@
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { resolvesToConstructor } from './referenceChain.js';
+import { resolvesToConstructor } from './aliasChain.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
 import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
-import { namedFields } from '../schema/meta/bodies.js';
-import type { Top, TypeRef } from '../schema/meta/typedef.js';
+import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
+import type { Reference, Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ function isInhabited(
     return true;
   }
   switch (body.kind) {
-    case 'namespace':
+    case 'value_entry':
       return true; // not a type; TypeInhabitance's own question does not apply to it
     case 'record':
       // §5.2: "Inhabitance gains no case" -- ABSTRACT is not a productivity question at all, and
@@ -174,8 +174,19 @@ function isInhabited(
     // branches rather than conjoins, and the reason `(leaf | node)` survives a non-productive `node`.
     case 'choice':
       return body.variants.some((variant) => refInhabited(variant, namespace, inhabited));
-    case 'reference':
+    case 'alias':
       return refInhabited(body.target, namespace, inhabited);
+    case 'namespace':
+      return (
+        isEmptyAllowed(body.minItems) ||
+        (refInhabited(body.keyType, namespace, inhabited) &&
+          refInhabited(body.valueType, namespace, inhabited))
+      );
+    // A reference that names types admits the names of its members, whatever the types they name admit, so it is
+    // inhabited exactly when linking found a member. One that names values admits a name whose referent only
+    // the linker judges.
+    case 'reference_type':
+      return body.index?.namesTypes === false || (body.index?.members.length ?? 0) > 0;
     default:
       return true; // an atom's own satisfiability is its family's question, not this one
   }
@@ -207,7 +218,7 @@ function recordInhabited(
     // §5.10.1, §5.2: `a: void` — a field the document MUST write and MUST NOT write `_` at — is
     // the one declaration this rule refuses on its own, the record having no member at all: `_`
     // is the only value `void` admits, and this field admits neither a value nor `_`. Followed
-    // through the reference chain (§8.3) rather than checked by bare name, since a rename
+    // through the alias chain (§8.3) rather than checked by bare name, since a rename
     // (`nothing => void`) is the same type under another name and `a: nothing` empties the
     // record exactly as `a: void` would.
     if (refIsVoid(field.type, namespace)) {
@@ -314,22 +325,24 @@ function isEmptyAllowed(minItems: bigint | undefined): boolean {
  * too would report the same defect twice, in words that name a different problem.
  */
 function refInhabited(
-  ref: TypeRef,
+  ref: Reference,
   namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
+  if (ref.kind === 'sibling') return true; // the type a dependent field is read as is each instance's (§5.2)
   return !namespace.has(ref.name) || inhabited.has(ref.name);
 }
 
 /**
- * Whether `ref`, followed through its reference chain (§8.3), terminates at the kernel's own
+ * Whether `ref`, followed through its alias chain (§8.3), terminates at the kernel's own
  * `void` -- what a required, non-voidable field's own `a: void` refusal (§5.10.1, §5.2) must ask
  * rather than comparing `ref.name` by spelling, since a rename (`nothing => void`) is the same
  * type under another name and `void` itself is otherwise an ordinary, trivially satisfiable
  * atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
  * one position-specific exemption from it, not a fact `void`'s own entry carries.
  */
-function refIsVoid(ref: TypeRef, namespace: ReadonlyMap<string, Top>): boolean {
+function refIsVoid(ref: Reference, namespace: ReadonlyMap<string, Top>): boolean {
+  if (ref.kind === 'sibling') return false;
   return resolvesToConstructor(ref.name, (n) => namespace.get(n), 'void_type');
 }
 
@@ -386,7 +399,7 @@ function recordDependency(
       !isOptionalField(field) &&
       (refIsVoid(field.type, namespace) || !refInhabited(field.type, namespace, inhabited))
     ) {
-      return field.type.name;
+      return typeNameOf(field);
     }
   }
   for (const group of record.groups) {
@@ -396,7 +409,7 @@ function recordDependency(
     }
     for (const member of group.members.flat()) {
       const field = record.fields.entries.get(member);
-      if (field !== undefined && !statable(field, namespace, inhabited)) return field.type.name;
+      if (field !== undefined && !statable(field, namespace, inhabited)) return typeNameOf(field);
     }
   }
   return undefined;
@@ -432,7 +445,7 @@ function firstUnsatisfiedDependency(
       );
       return bad?.elementType.name;
     }
-    case 'reference':
+    case 'alias':
       return refInhabited(body.target, namespace, inhabited) ? undefined : body.target.name;
     default:
       return undefined; // a choice fails on every variant at once, so no single link continues the chain

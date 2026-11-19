@@ -2,7 +2,7 @@
  * A map in one of its two JSON forms ([TSON-JSON] §6.4), selected by the key type and never by
  * inspecting the value:
  *
- * - **Object form** — `K` resolves, after its reference chain, to an atom-family instance,
+ * - **Object form** — `K` resolves, after its alias chain, to an atom-family instance,
  *   `identifier`, or an enum (never `value` or `void`, neither of which reads token content). The
  *   map is a JSON object; each member name is a key token, faced to `K`'s own parsing contract
  *   exactly as §5.1 hands value strings, and identity is over the decoded key's value space —
@@ -17,7 +17,7 @@
 import { diagnosticCodeForAtomError, type SchemaLocation } from '../../core/diagnostic.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
-import { terminal, terminalDefinition } from '../../link/referenceChain.js';
+import { terminal, terminalDefinition } from '../../link/aliasChain.js';
 import type { MapBody } from '../../schema/meta/bodies.js';
 import type { Atom } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
@@ -42,7 +42,7 @@ function slotNode(slot: Slot | undefined): JsonValue | undefined {
   return slot === VOID ? jsonNull() : slot;
 }
 
-/** `K`'s own scalar parser, when `K`'s reference chain ends at a type a single scalar token denotes — `undefined` for every other `K`, which takes the pairs form. */
+/** `K`'s own scalar parser, when `K`'s alias chain ends at a type a single scalar token denotes — `undefined` for every other `K`, which takes the pairs form. */
 function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValueParser | undefined {
   const entries = ctx.linkedSchema.entries;
   const lookup = (name: string) => entries.get(name);
@@ -51,9 +51,9 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
   const terminalName = terminal(keyTypeName, lookup);
   const body = definition;
   if (!('kind' in body)) return undefined;
-  if (body.kind === 'reference') return undefined;
-  if (body.kind === 'value_type' || body.kind === 'void_type') return undefined; // no content grammar
-  if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/scoped/Data
+  if (body.kind === 'alias') return undefined;
+  if (body.kind === 'void_type') return undefined; // no content grammar
+  if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/declared
   try {
     return fieldValueParser(terminalName, body as Atom, enumFormOf(ctx.linkedSchema, terminalName));
   } catch {

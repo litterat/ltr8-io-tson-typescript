@@ -52,7 +52,7 @@ function recordVocab(fields: readonly { readonly name: string; readonly type: st
     ),
   };
   // IS-A `top` through `product` (hand-built) is what makes `isConstructor` true.
-  return entry(body, ['product', 'top']);
+  return entry(body, ['meta.product', 'meta.top']);
 }
 
 function arrayVocab(elementType: string): Top {
@@ -64,12 +64,12 @@ function arrayVocab(elementType: string): Top {
       ordered: true,
       uniqueItems: false,
     },
-    ['product', 'top'],
+    ['meta.product', 'meta.top'],
   );
 }
 
 function atomVocab(): Top {
-  return entry({ kind: 'text_type', normalization: 'NONE' }, ['atom', 'top']);
+  return entry({ kind: 'text_type', normalization: 'NONE' }, ['meta.atom', 'meta.top']);
 }
 
 /** A local type that IS-A each of `supertypes`, as the schema's own namespace records it. */
@@ -86,33 +86,33 @@ function localType(...supertypes: string[]): Top {
 function baseMeta(): Map<string, Top> {
   return new Map<string, Top>([
     [
-      'array',
+      'meta.array',
       recordVocab([
-        { name: 'element_type', type: 'type_kind' },
-        { name: 'min_items', type: 'non_negative_integer' },
+        { name: 'element_type', type: 'meta.type_ref' },
+        { name: 'min_items', type: 'numeric.count' },
       ]),
     ],
-    ['non_negative_integer', atomVocab()],
-    ['record', recordVocab([{ name: 'fields', type: 'record_field_list' }])],
-    ['record_field_list', arrayVocab('record_field')],
+    ['numeric.count', atomVocab()],
+    ['meta.record', recordVocab([{ name: 'fields', type: 'record_field_list' }])],
+    ['record_field_list', arrayVocab('meta.record_field')],
     [
-      'record_field',
+      'meta.record_field',
       recordVocab([
-        { name: 'name', type: 'identifier' },
-        { name: 'type', type: 'type_kind' },
+        { name: 'name', type: 'meta.identifier' },
+        { name: 'type', type: 'meta.type_ref' },
         { name: 'value', type: 'value' },
       ]),
     ],
     ['value', atomVocab()],
     ['enum', recordVocab([{ name: 'members', type: 'enum_set' }])],
-    ['enum_set', arrayVocab('identifier')],
-    ['identifier', atomVocab()],
-    ['reference', recordVocab([{ name: 'target', type: 'type_kind' }])],
+    ['enum_set', arrayVocab('meta.identifier')],
+    ['meta.identifier', atomVocab()],
+    ['meta.alias', recordVocab([{ name: 'target', type: 'meta.type_ref' }])],
     [
       'both',
       recordVocab([
-        { name: 'x', type: 'type_kind' },
-        { name: 'y', type: 'identifier' },
+        { name: 'x', type: 'meta.type_ref' },
+        { name: 'y', type: 'meta.identifier' },
       ]),
     ],
   ]);
@@ -130,7 +130,7 @@ function noReports(): { report(name: string, error: TsonSchemaValidationError): 
 
 describe('inferOne', () => {
   it('a parameter standing at a `type_kind`-typed slot is a TYPE parameter', () => {
-    const box = template(['T'], 'array', record({ element_type: token('T') }));
+    const box = template(['T'], 'meta.array', record({ element_type: token('T') }));
     const kinds = inferOne(box, (name) => baseMeta().get(name));
     expect(kinds.get('T')).toBe('TYPE');
   });
@@ -206,30 +206,34 @@ function infer(
 describe('inferAll -- each parameter gets the type an argument for it is read as (§5.10, §8.1)', () => {
   it('a parameter at a type_ref slot is a type parameter, recorded type: type_ref with no bound', () => {
     const entries = new Map([
-      ['box', template(['T'], 'array', record({ element_type: token('T') }))],
+      ['box', template(['T'], 'meta.array', record({ element_type: token('T') }))],
     ]);
-    expect(infer(entries).get('box')?.get('T')).toEqual({ name: 'T', type: refT('type_kind') });
+    expect(infer(entries).get('box')?.get('T')).toEqual({ name: 'T', type: refT('meta.type_ref') });
   });
 
   it("a parameter at a scalar slot records that slot's declared type", () => {
     const entries = new Map([
       [
         'vec',
-        template(['N'], 'array', record({ element_type: token('text'), min_items: token('N') })),
+        template(
+          ['N'],
+          'meta.array',
+          record({ element_type: token('text'), min_items: token('N') }),
+        ),
       ],
       ['e', template(['M'], 'enum', record({ members: array(token('a'), token('M')) }))],
     ]);
     const parameters = infer(entries);
     expect(parameters.get('vec')?.get('N')).toEqual({
       name: 'N',
-      type: refT('non_negative_integer'),
+      type: refT('numeric.count'),
     });
-    expect(parameters.get('e')?.get('M')).toEqual({ name: 'M', type: refT('identifier') });
+    expect(parameters.get('e')?.get('M')).toEqual({ name: 'M', type: refT('meta.identifier') });
   });
 
   it('kinds() reads a type parameter off type: type_ref and every other as a value parameter', () => {
     const entries = new Map([
-      ['box', template(['T'], 'array', record({ element_type: token('T') }))],
+      ['box', template(['T'], 'meta.array', record({ element_type: token('T') }))],
       ['e', template(['M'], 'enum', record({ members: array(token('a'), token('M')) }))],
     ]);
     const kinds = kindsOf(infer(entries));
@@ -247,19 +251,19 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
         value: token('N'),
       });
       const entries = new Map([
-        ['boxed', template(['T', 'N'], 'record', record({ fields: array(w) }))],
+        ['boxed', template(['T', 'N'], 'meta.record', record({ fields: array(w) }))],
       ]);
       const parameters = infer(entries).get('boxed');
-      expect(parameters?.get('T')).toEqual({ name: 'T', type: refT('type_kind') });
+      expect(parameters?.get('T')).toEqual({ name: 'T', type: refT('meta.type_ref') });
       expect(parameters?.get('N')).toEqual({ name: 'N', type: refT('T') });
     },
   );
 
   it("a parameter riding another template's argument list takes the callee's recorded type, settled by a fixed point", () => {
-    const box = template(['T'], 'array', record({ element_type: token('T') }));
+    const box = template(['T'], 'meta.array', record({ element_type: token('T') }));
     const wrap = template(
       ['U'],
-      'reference',
+      'meta.alias',
       record({
         target: refValue({
           name: 'box',
@@ -273,14 +277,14 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
       ['wrap', wrap],
     ]);
     const parameters = infer(entries);
-    expect(parameters.get('box')?.get('T')?.type).toEqual(refT('type_kind'));
-    expect(parameters.get('wrap')?.get('U')).toEqual({ name: 'U', type: refT('type_kind') });
+    expect(parameters.get('box')?.get('T')?.type).toEqual(refT('meta.type_ref'));
+    expect(parameters.get('wrap')?.get('U')).toEqual({ name: 'U', type: refT('meta.type_ref') });
   });
 
   it("a parameter grounded only by mutual template recursion ('loop => <T> loop<T>') is an unbounded type parameter, not an error", () => {
     const loop = template(
       ['T'],
-      'reference',
+      'meta.alias',
       record({
         target: refValue({
           name: 'loop',
@@ -290,25 +294,28 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
       }),
     );
     const parameters = infer(new Map([['loop', loop]]));
-    expect(parameters.get('loop')?.get('T')).toEqual({ name: 'T', type: refT('type_kind') });
+    expect(parameters.get('loop')?.get('T')).toEqual({ name: 'T', type: refT('meta.type_ref') });
   });
 
   it('a parameter used by no position is an unbounded type parameter', () => {
     const entries = new Map([
-      ['unused', template(['T'], 'array', record({ element_type: token('text') }))],
+      ['unused', template(['T'], 'meta.array', record({ element_type: token('text') }))],
     ]);
-    expect(infer(entries).get('unused')?.get('T')).toEqual({ name: 'T', type: refT('type_kind') });
+    expect(infer(entries).get('unused')?.get('T')).toEqual({
+      name: 'T',
+      type: refT('meta.type_ref'),
+    });
   });
 
   it('an imported template is taken as recorded, not walked again -- a local template passing a parameter to it inherits the recorded bound', () => {
-    const imported = template(['T'], 'array', record({ element_type: token('T') }));
+    const imported = template(['T'], 'meta.array', record({ element_type: token('T') }));
     const recorded: Top = {
       ...(imported as TemplateBody),
-      parameters: [{ name: 'T', type: refT('type_kind'), bound: refT('text') }],
+      parameters: [{ name: 'T', type: refT('meta.type_ref'), bound: refT('text') }],
     };
     const wrap = template(
       ['U'],
-      'reference',
+      'meta.alias',
       record({
         target: refValue({
           name: 'imported',
@@ -327,7 +334,7 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
     expect(parameters.has('imported')).toBe(false);
     expect(parameters.get('wrap')?.get('U')).toEqual({
       name: 'U',
-      type: refT('type_kind'),
+      type: refT('meta.type_ref'),
       bound: refT('text'),
     });
   });
@@ -336,18 +343,18 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
 describe('inferAll -- a written type narrows what the positions give (§5.10)', () => {
   const extra = new Map<string, Top>([
     ['text', localType()],
-    ['uint8', localType('non_negative_integer')],
+    ['uint8', localType('numeric.count')],
     ['int8', localType('integer')],
   ]);
 
   it('on a type parameter it is the bound', () => {
     const entries = new Map([
-      ['box', template(['T'], 'array', record({ element_type: token('T') }))],
+      ['box', template(['T'], 'meta.array', record({ element_type: token('T') }))],
     ]);
     const written = new Map([['box', new Map([['T', refT('text')]])]]);
     expect(infer(entries, { written, extra }).get('box')?.get('T')).toEqual({
       name: 'T',
-      type: refT('type_kind'),
+      type: refT('meta.type_ref'),
       bound: refT('text'),
     });
   });
@@ -356,7 +363,11 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     const entries = new Map([
       [
         'vec',
-        template(['N'], 'array', record({ element_type: token('text'), min_items: token('N') })),
+        template(
+          ['N'],
+          'meta.array',
+          record({ element_type: token('text'), min_items: token('N') }),
+        ),
       ],
     ]);
     const written = new Map([['vec', new Map([['N', refT('uint8')]])]]);
@@ -370,7 +381,11 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     const entries = new Map([
       [
         'vec',
-        template(['N'], 'array', record({ element_type: token('text'), min_items: token('N') })),
+        template(
+          ['N'],
+          'meta.array',
+          record({ element_type: token('text'), min_items: token('N') }),
+        ),
       ],
     ]);
     const written = new Map([['vec', new Map([['N', refT('int8')]])]]);
@@ -389,29 +404,29 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     expect(result.has('vec')).toBe(false);
   });
 
-  it('a bound naming a constructor of the governing meta is refused: a bound names a type (§3.3.1)', () => {
+  it('a bound naming a constructor is refused: a bound names a type, which IS-A no constructor (§4.1, §5.10)', () => {
     const entries = new Map([
-      ['box', template(['T'], 'array', record({ element_type: token('T') }))],
+      ['box', template(['T'], 'meta.array', record({ element_type: token('T') }))],
     ]);
-    const written = new Map([['box', new Map([['T', refT('array')]])]]);
+    const written = new Map([['box', new Map([['T', refT('meta.array')]])]]);
     const reported: string[] = [];
     infer(entries, {
       written,
-      extra,
+      extra: new Map([...extra, ['meta.array', arrayVocab('meta.type_ref')]]),
       reporter: {
         report(_name, error): void {
           reported.push(error.message);
         },
       },
     });
-    expect(reported[0]).toContain('structure vocabulary, not a type');
+    expect(reported[0]).toContain('is a constructor, not a type');
   });
 
   it('a parameter inherits the bound of the template it is passed to, and a written bound may not be wider', () => {
-    const box = template(['T'], 'array', record({ element_type: token('T') }));
+    const box = template(['T'], 'meta.array', record({ element_type: token('T') }));
     const wrap = template(
       ['U'],
-      'reference',
+      'meta.alias',
       record({
         target: refValue({
           name: 'box',
@@ -430,7 +445,7 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     });
     expect(bounded.get('wrap')?.get('U')).toEqual({
       name: 'U',
-      type: refT('type_kind'),
+      type: refT('meta.type_ref'),
       bound: refT('uint8'),
     });
 

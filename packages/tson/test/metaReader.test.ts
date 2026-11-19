@@ -10,8 +10,7 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import type { AtomBinding } from '../src/bind/binding.js';
 import type { TokenValue } from '../src/ast/value.js';
 
-const KERNEL_ID = 'https://tson.io/2026/38/m/meta-kernel.tn';
-const META_ID = 'https://tson.io/2026/38/m/meta.tn';
+const CORE_ID = 'https://tson.io/2026/39/m/core.tn';
 
 // A `value`-typed schema facet is read under the atom the slot stands for, once that atom is in
 // scope (§7.4). `date_type`/`time_type`/`datetime_type` are the three families the kernel types
@@ -65,15 +64,12 @@ describe('metaAtomDecoder -- date/time/datetime (§7.4)', () => {
 
 // ── Constructor applications read through the governing meta (§5.5, §5.7) ──────────────────────
 
-describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
+describe('createDefinitionMetaReader -- the constructors of the kernel and the bundled libraries', () => {
   const tson = standardLibrary();
-  const kernel = tson.schemas.get(canonicalizeIdentity(KERNEL_ID));
-  if (kernel === undefined) throw new Error('the standard library registers meta-kernel');
-  const meta = tson.schemas.get(canonicalizeIdentity(META_ID));
-  if (meta === undefined) throw new Error('the standard library registers meta');
-  const read = createDefinitionMetaReader(
-    (name) => meta.entries.get(name) ?? kernel.entries.get(name),
-  );
+  // `core.tn`'s one namespace holds every bundled constructor: it imports the three libraries, which import the kernel (§9).
+  const core = tson.schemas.get(canonicalizeIdentity(CORE_ID));
+  if (core === undefined) throw new Error('the standard library registers core');
+  const read = createDefinitionMetaReader((name) => core.entries.get(name));
 
   function body(typeRef: string, source: string): Top {
     const { document } = runSync(parseDocument(fromBytes(encodeUtf8(`!${typeRef} ${source}`))));
@@ -81,7 +77,7 @@ describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
   }
 
   it('an identifier_type instance takes the profile and normalization defaults the kernel declares', () => {
-    expect(body('identifier_type', '{ continue_add: "-" }')).toEqual({
+    expect(body('unicode.identifier_type', '{ continue_add: "-" }')).toEqual({
       kind: 'identifier_type',
       spec: 'https://www.unicode.org/reports/tr31/',
       normalization: 'NFC',
@@ -92,29 +88,32 @@ describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
   });
 
   it('a text_type takes normalization NONE, and a regex_type fixes it', () => {
-    expect(body('text_type', '{}')).toEqual({ kind: 'text_type', normalization: 'NONE' });
-    expect(body('regex_type', '{}')).toMatchObject({ kind: 'regex_type', normalization: 'NONE' });
+    expect(body('unicode.text_type', '{}')).toEqual({ kind: 'text_type', normalization: 'NONE' });
+    expect(body('unicode.regex_type', '{}')).toMatchObject({
+      kind: 'regex_type',
+      normalization: 'NONE',
+    });
   });
 
   it('a uri_type permits relative references and fragments until it withdraws either, and holds schemes as a set', () => {
-    expect(body('uri_type', '{}')).toMatchObject({
+    expect(body('net.uri_type', '{}')).toMatchObject({
       kind: 'uri_type',
       allowRelative: true,
       allowFragment: true,
     });
-    expect(body('uri_type', '{ allow_relative: false  schemes: [http https] }')).toMatchObject({
+    expect(body('net.uri_type', '{ allow_relative: false  schemes: [http https] }')).toMatchObject({
       allowRelative: false,
       schemes: ['http', 'https'],
     });
   });
 
-  it('an enum pins its name type to identifier, and an enum_type states its own (§7.4)', () => {
+  it('an enum pins its name type to meta.identifier, and a meta.enum_type states its own (§7.4)', () => {
     expect(body('enum', '[A B]')).toEqual({
       kind: 'enum',
-      nameType: 'identifier',
+      nameType: 'meta.identifier',
       members: ['A', 'B'],
     });
-    expect(body('enum_type', '{ name_type: kebab  members: [a-b] }')).toEqual({
+    expect(body('meta.enum_type', '{ name_type: kebab  members: [a-b] }')).toEqual({
       kind: 'enum',
       nameType: 'kebab',
       members: ['a-b'],
@@ -122,15 +121,15 @@ describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
   });
 
   it('an array is ordered and a map unordered unless they say otherwise (§5.3, §7.5)', () => {
-    expect(body('array', '{ element_type: text }')).toMatchObject({
+    expect(body('meta.array', '{ element_type: text }')).toMatchObject({
       ordered: true,
       voidable: false,
     });
-    expect(body('map', '{ key_type: text  value_type: text }')).toMatchObject({
+    expect(body('meta.map', '{ key_type: text  value_type: text }')).toMatchObject({
       ordered: false,
       voidable: false,
     });
-    expect(body('set_type', '{ element_type: text }')).toMatchObject({
+    expect(body('meta.set_type', '{ element_type: text }')).toMatchObject({
       ordered: false,
       uniqueItems: true,
     });
@@ -138,7 +137,7 @@ describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
 
   it('a field group reads its options, its optional members, and defaults optional to false (§5.11)', () => {
     const group = body(
-      'record',
+      'meta.record',
       '{ fields: { a => { type: text  optional: true }  b => { type: text  optional: true } }  groups: [ { members: [[a b]]  optional_members: [a b] } ] }',
     );
     expect(group).toMatchObject({
@@ -149,13 +148,13 @@ describe('createDefinitionMetaReader -- the Revision 38 constructors', () => {
 
   it('a template reads its typed parameters, a bound only on a type parameter', () => {
     const held = body(
-      'template',
-      '{ parameters: [ { name: T  type: type_ref  bound: text } { name: N  type: non_negative_integer } ]  template: "!array { element_type: T }" }',
+      'meta.template',
+      '{ parameters: [ { name: T  type: meta.type_ref  bound: text } { name: N  type: numeric.count } ]  template: "!meta.array { element_type: T }" }',
     );
     expect(held).toMatchObject({
       parameters: [
-        { name: 'T', type: { name: 'type_ref' }, bound: { name: 'text' } },
-        { name: 'N', type: { name: 'non_negative_integer' } },
+        { name: 'T', type: { name: 'meta.type_ref' }, bound: { name: 'text' } },
+        { name: 'N', type: { name: 'numeric.count' } },
       ],
     });
   });

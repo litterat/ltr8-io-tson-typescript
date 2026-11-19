@@ -1,43 +1,34 @@
 /**
- * Resolves a whole {@link SchemaDocument} into a {@link Schema}: `!!id`/`!!import` handling,
- * merging every import's namespace into the type-name namespace before any local declaration
- * resolves, driving `definitionResolver.ts` over every declaration on demand (dependency order,
- * not source order, so a declaration may compose or refine one declared later in the same
- * schema), and the `@synthetic` key marker (§8.2). A type position naming a `REFERENCE` entry is
- * left exactly as the author wrote it (§8.3) -- nothing here walks or rewrites a use site past
- * one; a consumer that needs the type at the end of a chain does its own ephemeral walk
- * (`compiler/referenceChain.ts`'s shared function).
+ * Resolves a whole {@link SchemaDocument} into a {@link Schema}: `!!id`/`!!import` handling, merging every
+ * import's entries into the schema's one namespace before any local declaration resolves (Part 2 §2.2.3,
+ * §3.3), driving `definitionResolver.ts` over every declaration on demand (dependency order, not source
+ * order, so a declaration may compose or refine one declared later in the same schema), and the
+ * `@meta.synthetic` and `@meta.application` key markers (§8.2). A type position naming an `alias` entry is
+ * left exactly as the author wrote it (§8.3) -- nothing here walks or rewrites a use site past one; a
+ * consumer that needs the type at the end of a chain does its own ephemeral walk
+ * (`link/aliasChain.ts`'s shared function).
  *
- * Ported from the reference implementation's `SchemaResolver`
- * (`tson-compiler/.../resolver/SchemaResolver.java`); see that file's own module doc for the
- * exhaustive rationale. This module states only what differs in the port.
+ * **One namespace per schema (§3.3).** Every name -- a construction head, a refinement source, a type
+ * position, an annotation -- resolves in the document's own entries and its import closure's, from the
+ * root; there is no governing meta. A schema map nested as an entry (`geo => !schema { ... }`) declares its
+ * members under their paths, and a map of one path declared by several documents of one closure is the
+ * union of their members.
  *
- * **This module does not fetch, link, or register anything.** The Java original holds a
- * `TsonCompiledSchemaLoader` that resolves `!!meta`/`!!import` by fetching, compiling and caching
- * schemas on demand -- that whole apparatus (a schema registry, canonical-identity validation,
- * transitive-import linking) is a later work package's (linking/registry, identity and hashing).
- * This module instead takes the governing meta's own compiled surface
- * ({@link SchemaResolverDeps.metaDefinitions}/{@link SchemaResolverDeps.definitionMetaReader}/
- * {@link SchemaResolverDeps.annotationValueReader}) and each import's already-resolved namespace
- * ({@link SchemaResolverDeps.resolveImport}) as caller-supplied dependencies, the same
- * dependency-injection shape `definitionResolver.ts` already uses for its own five/eight
- * functions. A caller with no loader yet (every caller today) simply omits `resolveImport`; this
- * module then reports {@link TsonNotImplementedError} the moment a document actually writes
- * `!!import`, rather than pretending to resolve one.
+ * **This module does not fetch, link, or register anything.** It takes each import's already-resolved
+ * entries ({@link SchemaResolverDeps.resolveImport}) and the readers a body is read through
+ * ({@link SchemaResolverDeps.readers}) as caller-supplied dependencies, the same dependency-injection shape
+ * `definitionResolver.ts` uses for its own. A caller with no loader simply omits `resolveImport`; this
+ * module then reports {@link TsonNotImplementedError} the moment a document actually writes `!!import`.
  *
- * **§5.10 materialisation runs exactly where the Java's own `SchemaResolver` runs it.** One
- * `templates.ts` `TemplateMaterialiser` is constructed per call, before the driving loop -- its
- * `closeApplication` is wired into `definitionResolver.ts` as its own on-demand `ApplicationCloser`
- * (a composition supertype or refinement source that is a *closed* generic application needs one
- * to absorb its fields immediately, per that module's own note), and its batch `materialise` pass
- * runs once every local declaration has resolved. Sharing one instance for both is what makes an
+ * **The kernel resolves through the same lookup (§3.4).** Every construction head in `meta.tn` names an
+ * entry `meta.tn` declares, and a head is made ready, on demand, before an instance that applies it is
+ * read, so the kernel needs no imported vocabulary and no special case beyond being handed no import.
+ *
+ * **§5.10 materialisation runs exactly where the reference runs it.** One `templates.ts`
+ * `TemplateMaterialiser` is constructed per call, before the driving loop -- its `closeApplication` is
+ * wired into `definitionResolver.ts` as its own on-demand `ApplicationCloser`, and its batch `materialise`
+ * pass runs once every local declaration has resolved. Sharing one instance for both is what makes an
  * on-demand closing and a later batch closing of the same application land on one entry.
- *
- * **Two namespace dependencies, mirroring `definitionResolver.ts`'s own split (§3.3.1).**
- * `deps.metaDefinitions` is the structure namespace (the governing meta's own entries, one hop via
- * `!!meta`); the type-name namespace is this module's own concern, built from `!!import` and grown
- * as each local declaration resolves -- never a caller-supplied function, since only this module
- * knows the resolution order a document's own declarations create.
  */
 import {
   TsonBindMismatchError,
@@ -51,9 +42,9 @@ import { diagnosticCodeForFetch, diagnosticCodeForMechanism } from '../core/diag
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
+import type { DataValue } from '../ast/value.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { FieldNameType } from '../link/fieldNames.js';
-import { checkImportLevel, type ImportLevel } from '../link/importLevel.js';
 import type { TemplateParam } from '../schema/meta/bodies.js';
 import { NO_FIELDS, TYPE_KIND } from '../schema/meta/bodies.js';
 import type { Annotations, EntryFacts, Top, TypeRef } from '../schema/meta/typedef.js';
@@ -62,6 +53,7 @@ import {
   SYNTHETIC_ANNOTATION,
   applicationOf,
   chainOf,
+  isConstructor,
   isOpen,
   isType,
   supertypesOf,
@@ -70,6 +62,10 @@ import {
   withApplication,
   withChain,
 } from '../schema/meta/typedef.js';
+import { areOneSynthetic, unifiedFacts } from '../link/importedSynthetics.js';
+import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
+import { DEFAULT_MAX_WAIT_DEPTH, waitDepthLimitRefusal } from '../core/limits.js';
+import { terminal } from '../link/aliasChain.js';
 import { canonicalApplication } from './derivedName.js';
 import {
   createDefinitionResolver,
@@ -80,11 +76,13 @@ import type {
   AnnotationValueReader,
   DefinitionGetter,
   DefinitionMetaReader,
+  DefinitionValueReader,
   EntryFactsTable,
   SourceBodyEncoder,
 } from './resolverTypes.js';
-import { desugar, lifted, type DesugarFailureReporter } from './desugar.js';
+import { desugar, lifted, typeParamsOf, type DesugarFailureReporter } from './desugar.js';
 import { heldOf, withParametersOf } from './heldBody.js';
+import { looseAnnotationValue } from './looseAnnotation.js';
 import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
 import { inferAll, kinds as parameterKindsOf } from './parameterTypes.js';
 import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syntheticMerge.js';
@@ -92,38 +90,31 @@ import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syn
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
 /**
- * A resolved schema (Part 2 §8): a value of the kernel's `schema`, the namespace type `{type_name
- * => top}` (§4.1) -- an entry is its value (§8.1) -- plus the governing-chain directives the
- * document header carried (`!!id`/`!!meta`/`!!import*`, §2.2). `entries`' insertion order is
- * preserved, matching `SchemaMap.declarations`'s own ordering guarantee.
+ * A resolved schema (Part 2 §8): a value of the kernel's `meta.schema`, the namespace type `{type_name =>
+ * declared}` (§4.1) -- an entry is its value (§8.1) -- plus the header directives the document carried
+ * (`!!id`/`!!import*`, §2.2). `entries` holds this schema's own entries only, at every depth and keyed by
+ * path (`geo.address`), a nested map's own entry derived from its members (`schema/meta/schemaPaths.ts`);
+ * insertion order is preserved, matching `SchemaMap.declarations`'s own ordering guarantee.
  *
- * `facts` holds what an entry's value cannot (§8.1's {@link EntryFacts}): where it was declared,
- * the annotations written on its value, the constructor its tag names -- present only for an
- * entry with any to record. `keyAnnotations` are the key's: those written before the name, and the
- * resolver-attached `@synthetic` and `@application` (§8.2).
+ * `facts` holds what an entry's value cannot (§8.1's {@link EntryFacts}): where it was declared, the
+ * annotations written on its value, the constructor its tag names -- present only for an entry with any to
+ * record. `keyAnnotations` are the key's: those written before the name, and the resolver-attached
+ * `@meta.synthetic` and `@meta.application` (§8.2).
  *
- * `id` is a plain `string`, not optional -- the grammar itself marks `!!id` optional (a raw
- * parsed {@link SchemaDocument} can genuinely lack one), but a *resolved* schema always needs a
- * real identity; {@link resolveSchema} enforces this before ever constructing one.
+ * `id` is a plain `string`, not optional -- the grammar itself marks `!!id` optional (a raw parsed
+ * {@link SchemaDocument} can genuinely lack one), but a *resolved* schema always needs a real identity;
+ * {@link resolveSchema} enforces this before ever constructing one.
  *
- * `bootstrap` is `true` only for a schema `bootstrap.ts`'s `bootstrapMetaKernel` itself produced
- * (Part 2 §1.5's one deliberate circularity: meta-kernel's own `!!meta` names its own `!!id`, and
- * nothing else is allowed to).
+ * `bootstrap` is `true` only for a schema `bootstrap.ts`'s `bootstrapKernel` itself produced (§3.4: the
+ * kernel is pre-loaded, never resolved from a document, and nothing else is allowed to claim it).
  *
- * **`entries`/`keyAnnotations` are two parallel maps, not one `AnnotatedMap`.**
- * `annotations/index.ts` already declares an `AnnotatedMap<K, V>` with exactly this shape, but its
- * own `Annotations` is the *wire* carrier (`{ values: readonly Annotation[] }`, over
- * `ast/value.ts`'s `Annotation`) -- a different, incompatible type from `schema/meta/typedef.ts`'s
- * own local stand-in (`readonly Annotation[]`, over its own `Annotation`) that every other
- * annotation-carrying field in this module already uses (`EntryFacts.annotations`,
- * `RecordField.annotations`, ...). `STATUS.md`'s own "Known gaps" note names this exact mismatch.
- * Reusing `AnnotatedMap` here would force a conversion this module has no reason to perform;
- * spelling the same shape with `schema/meta`'s own `Annotations` keeps every annotation in this
- * module speaking one type.
+ * **`entries`/`keyAnnotations` are two parallel maps, not one `AnnotatedMap`.** `annotations/index.ts`
+ * declares an `AnnotatedMap<K, V>` with exactly this shape, but its own `Annotations` is the *wire* carrier
+ * -- a different, incompatible type from `schema/meta/typedef.ts`'s own local stand-in that every other
+ * annotation-carrying field in this module already uses.
  */
 export interface Schema {
   readonly id: string;
-  readonly meta: string;
   readonly imports: readonly string[];
   /** Every resolved entry's value, local-only (imported entries are visible during resolution but never part of this). */
   readonly entries: ReadonlyMap<string, Top>;
@@ -136,23 +127,23 @@ export interface Schema {
 
 /** One `!!import`'s own resolved namespace, and where each of its entries was originally declared. */
 export interface ImportedSchema {
-  /** Every entry this import contributes -- its own whole, transitively-merged namespace. */
+  /** Every entry this import contributes -- its own whole, transitively-merged namespace, keyed by path. */
   readonly entries: ReadonlyMap<string, Top>;
   /** Each contributed entry's facts, where its schema recorded any. Absent means none. */
   readonly facts?: ReadonlyMap<string, EntryFacts>;
   /** Each contributed entry's key annotations, where its schema recorded any. Absent means none. */
   readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
   /**
-   * `name`'s origin schema id, for the identity-based collision rule §2.2.3 states: one schema
-   * reached by several `!!import` routes unifies (same origin, kept once), two different schemas
-   * declaring one name is an error (different origins). Called only for a name `entries` holds.
+   * `name`'s origin schema id, for the identity-based collision rule §2.2.3 states: one schema reached by
+   * several `!!import` routes unifies (same origin, kept once), two different schemas declaring one name is
+   * an error (different origins). Called only for a name `entries` holds.
    */
   readonly originOf: (name: string) => string;
   /**
-   * The imported schema's identity, `!!meta` and governing level, for §2.2.3's import-level rule
-   * (`link/importLevel.ts`). Absent means the edge is not judged -- a hand-assembled import only.
+   * Reads an annotation value through the type `name` of this import's entries, as its own compiled schema
+   * reads it. Absent means this import offers none.
    */
-  readonly level?: ImportLevel;
+  readonly annotationReader?: AnnotationValueReader;
   /** Each enum among `entries` that matches in a form other than `NONE`, by name -- `LinkedSchema.enumForms`. Absent means none. */
   readonly enumForms?: ReadonlyMap<string, Normalization>;
   /** Each record among `entries` that states a `name_type`, with its identifier family -- `LinkedSchema.nameTypes`. Absent means none. */
@@ -162,25 +153,32 @@ export interface ImportedSchema {
 /** Resolves one `!!import` directive's URI to the namespace it contributes. */
 export type ImportResolver = (importUri: string) => ImportedSchema;
 
+/** The readers a schema's bodies are read through, over the lookup that finds a name's entry. */
+export interface ResolverReaders {
+  /** Reads `!C { ... }` against constructor `C`'s own bindings (§5.5). */
+  readonly meta: DefinitionMetaReader;
+  /** Reads a value entry's payload against the ordinary type its tag names (§4.1). */
+  readonly value?: DefinitionValueReader;
+  /** Reads an annotation's value through the type its name refers to (§6). */
+  readonly annotation?: AnnotationValueReader;
+}
+
 /**
- * Every dependency {@link resolveSchema} needs beyond the document in hand. The four fields
- * shared with {@link DefinitionResolverDeps} carry the identical contract that module states for
- * each -- see `resolverTypes.ts`. `definitionMetaReader` doubles as `templates.ts`'s own
- * `TemplateMaterialiserDeps.definitionMetaReader`: the same "bind a value through this
- * constructor's compiled reader" contract, whether the value came from a written `!C value` or a
- * template application's own substituted body.
+ * Every dependency {@link resolveSchema} needs beyond the document in hand. `readers` is a factory because
+ * the readers consult the namespace being built -- a constructor's own declaration supplies its fields'
+ * defaults -- so they are made over the lookup this resolution runs.
  */
 export interface SchemaResolverDeps {
-  readonly definitionMetaReader: DefinitionMetaReader;
-  readonly metaDefinitions: DefinitionGetter;
-  /** The governing meta's own entry facts, by name -- where a meta constructor's head is read. Omitted means none recorded. */
-  readonly metaFacts?: (name: string) => EntryFacts | undefined;
-  readonly annotationValueReader?: AnnotationValueReader;
+  readonly readers: (lookup: DefinitionGetter) => ResolverReaders;
   readonly encodeSourceBody?: SourceBodyEncoder;
   /** Resolves an `!!import` URI's namespace. Omitted means "no loader": a document with no `!!import` is unaffected; one that writes any reports {@link TsonNotImplementedError}. */
   readonly resolveImport?: ImportResolver;
-  /** Whether the meta-kernel governs the document being resolved, for §2.2.3's import-level rule. Omitted means the rule is not judged here. */
-  readonly kernelGoverned?: boolean;
+  /**
+   * `max_wait_depth` ([TSON-SCHEMA] §11.5): the longest chain of waits resolving one schema may run, each entry
+   * waiting on the next being ready. A chain past it refuses the entry at its head, whichever order it was
+   * reached in. Defaults to {@link DEFAULT_MAX_WAIT_DEPTH}.
+   */
+  readonly maxWaitDepth?: number;
 }
 
 /** Options for {@link resolveSchema}. */
@@ -195,8 +193,7 @@ export interface ResolveSchemaOptions {
    * **Omitting this is not "no positions at all".** Every resolved entry's `position` fact
    * (§8.1's diagnostic addition) falls back to `declaration.position` -- the position
    * `compiler/schemaParser.ts` already stamps on every declaration it parses -- so a caller that
-   * builds no side-table of its own (every caller today) still gets one, via
-   * {@link positionOf}.
+   * builds no side-table of its own (every caller today) still gets one, via {@link positionOf}.
    */
   readonly positions?: WeakMap<Declaration, Position>;
   /**
@@ -228,35 +225,29 @@ function positionOf(
 }
 
 /**
- * Resolves every declaration in `document`'s body, on demand and dependency-following rather than
- * strict source order (§3.4.1), and carries `document`'s own header directives
- * (`!!id`?/`!!meta`/`!!import*`) into the result's `id`/`meta`/`imports`.
+ * Resolves every declaration in `document`'s body, on demand and dependency-following rather than strict
+ * source order (§3.4.1), and carries `document`'s own header directives (`!!id`?/`!!import*`) into the
+ * result's `id`/`imports`.
  *
- * **Two things are validated up front**, before any declaration is resolved: `document.id` must
- * be present (§2.2.1: "publishing a schema... REQUIRES `!!id`"), thrown as
- * {@link TsonSchemaValidationError} naming the document's own `!!meta` so the caller can tell
- * *which* document lacked one. `document.meta` itself is not independently validated here --
- * `deps.metaDefinitions`/`deps.definitionMetaReader` are simply used as given; a caller responsible
- * for resolving `!!meta` to those functions in the first place (a later work package) is where a
- * malformed or unreachable `!!meta` is caught.
+ * **`document.id` must be present** (§2.2.1: "publishing a schema... REQUIRES `!!id`"), thrown as
+ * {@link TsonSchemaValidationError} before any declaration is resolved.
  *
- * **`!!import` is merged into the type-name namespace before any local declaration resolves.**
- * Collision handling mirrors what the reference implementation's linker does one phase later
- * (§2.2.3): a name declared by more than one import, or by an import *and* a local declaration, is
- * a {@link TsonSchemaValidationError}. **Merged entries keep their home namespace** -- an imported
- * entry is copied in exactly as its own schema resolved it, never re-resolved or re-materialised
+ * **`!!import` is merged into the one namespace before any local declaration resolves.** Collision handling
+ * mirrors what the reference implementation's linker does one phase later (§2.2.3): a name declared by more
+ * than one import, or by an import *and* a local declaration, is a {@link TsonSchemaValidationError}, but for
+ * a schema map of one path, which is open: this document's contribution to an imported one is no collision,
+ * its members colliding by path as any name does. **Merged entries keep their home namespace** -- an
+ * imported entry is copied in exactly as its own schema resolved it, never re-resolved or re-materialised
  * against the importer.
  *
- * §5.10 materialisation runs once every local declaration has resolved -- see this module's own
- * doc on its optionality. Nothing runs after it to rewrite a use site (§8.3): a reference is a
- * hop, not a rewrite, so what materialisation and the synthetic merge leave in `namespace` is the
- * resolved schema's own final shape.
+ * §5.10 materialisation runs once every local declaration has resolved. Nothing runs after it to rewrite a
+ * use site (§8.3): a reference is a hop, not a rewrite, so what materialisation and the synthetic merge
+ * leave in the namespace is the resolved schema's own final shape.
  *
- * **§6: an annotation written before a declared name binds to the name, not the definition.** A
- * resolved schema is `{type_name => type_definition}`, so the name is the *key* of `entries` --
- * which is where {@link Schema.keyAnnotations} keeps them, alongside the derived `@synthetic`
- * marker (§8.2) every entry this module lifted from a sugar form or materialised from an open
- * synthetic carries at its key, and nowhere else.
+ * **§6: an annotation written before a declared name binds to the name, not the definition.** A resolved
+ * schema is `{type_name => declared}`, so the name is the *key* of `entries` -- which is where
+ * {@link Schema.keyAnnotations} keeps them, alongside the derived `@meta.synthetic` and `@meta.application`
+ * markers (§8.2).
  */
 export function resolveSchema(
   document: SchemaDocument,
@@ -266,18 +257,29 @@ export function resolveSchema(
   const id = document.id;
   if (id === undefined) {
     throw new TsonSchemaValidationError(
-      `'!!meta:"${document.meta}"': !!id is required to resolve this schema, but is absent (§2.2.1)`,
+      '!!id is required to resolve this schema, but is absent -- an id-less schema is a development ' +
+        'artifact (§2.2.1, §10.1), and this schema has no name to be registered under',
     );
   }
   const { positions, receiver } = options;
 
-  // Every entry's facts -- an import's as its schema recorded them, a local one's as resolution
-  // learns them. Shared with the definition resolver, which records each declaration's here.
+  // Every entry's facts -- an import's as its schema recorded them, a local one's as resolution learns
+  // them. Shared with the definition resolver, which records each declaration's here.
   const facts: EntryFactsTable = new Map<string, EntryFacts>();
-  // The application each imported entry closes, from its `@application` -- what the applied-parent
+  // The application each imported entry closes, from its `@meta.application` -- what the applied-parent
   // fold keys an imported instantiation on, as it keys a local one (§8.2).
   const importedApplications = new Map<string, TypeRef>();
-  const namespace = mergeImports(document, deps, facts, importedApplications);
+  // Which schema declared each imported entry, and the readers its annotation values come through.
+  const origins = new Map<string, string>();
+  const annotationReaders = new Map<string, AnnotationValueReader>();
+  const namespace = mergeImports(
+    document,
+    deps,
+    facts,
+    importedApplications,
+    origins,
+    annotationReaders,
+  );
 
   const reporter: DesugarFailureReporter | undefined =
     receiver === undefined
@@ -289,9 +291,11 @@ export function resolveSchema(
             );
           },
         };
+  const reused = new Map<string, Declaration>();
   const desugared = desugar(document, new Set(namespace.keys()), {
     ...(reporter === undefined ? {} : { reporter }),
     ...(positions === undefined ? {} : { positions }),
+    reused,
   });
   const declarations = desugared.body.declarations;
   // Mutable, not the plain `ReadonlySet` `lifted` returns: the synthetic merge below removes an
@@ -300,14 +304,46 @@ export function resolveSchema(
   // end, which asks it per entry).
   const generated = new Set(lifted(document, desugared));
 
-  // Local-vs-import collisions, up front (local names are already unique -- SchemaMap dedupes them).
-  for (const name of declarations.keys()) {
-    if (namespace.has(name)) {
+  // Local-vs-import collisions, up front (local names are already unique -- SchemaMap dedupes them). A
+  // schema map of one path is open: this document's contribution to an imported one is no collision, its
+  // members colliding by path as any name does (§2.2.3).
+  for (const [name, declaration] of declarations) {
+    const nested = declaration.typeDef.kind === 'schemaMapDef';
+    if (namespace.has(name) && !(nested && isNestedMap(namespace.get(name)))) {
       throw new TsonSchemaValidationError(
         `'${name}' collides with an entry of the same name brought in by !!import`,
       );
     }
+    if (nested) {
+      // This document's own map is resolved here, holding its own members; the imports' members stay
+      // keyed under their paths.
+      namespace.delete(name);
+      origins.delete(name);
+      facts.delete(name);
+    }
   }
+
+  // The names the imports bring in, which a template's parameter may not be spelled like (§5.10).
+  const imported = new Set(namespace.keys());
+
+  /**
+   * §5.10: within a template's body a parameter's name is read before the schema's, so a parameter spelled
+   * like an entry the schema's namespace holds -- a type or a value entry, its own or an import's -- makes
+   * that entry unreachable there, and is a resolver error at the declaration rather than a silent capture.
+   * Judged by the name alone, before anything resolves, so no entry is waited on. A parameter list the
+   * desugarer wrote for a lifted form is its own renaming (`p0`, `p1`), and is not asked.
+   */
+  const refuseShadowingParameters = (name: string, parameters: readonly string[]): void => {
+    for (const parameter of parameters) {
+      if (declarations.has(parameter) || imported.has(parameter)) {
+        throw new TsonSchemaValidationError(
+          `'${name}': parameter '${parameter}' shadows the entry '${parameter}' this schema's ` +
+            `namespace holds -- inside a template a parameter's name is read before the schema's, so ` +
+            `the entry would be unreachable there (§5.10). Rename the parameter`,
+        );
+      }
+    }
+  };
 
   // Resolve on demand, following dependencies rather than source order (§3.4.1). `resolving`
   // catches a cycle through a composition/refinement/atom-refinement edge; ordinary recursion
@@ -316,10 +352,35 @@ export function resolveSchema(
   const resolving = new Set<string>();
   const failed = new Set<string>();
   const resolverBox: { current?: DefinitionResolver } = {};
+  const maxWaitDepth = deps.maxWaitDepth ?? DEFAULT_MAX_WAIT_DEPTH;
+  // For each entry being made ready, the declarations of this document it has waited on so far, and each ready
+  // declaration's wait depth: none for an entry that waits on nothing of this document, one more than the
+  // deepest entry it waits on otherwise. An import is ready before the resolution starts, so a wait ends at one.
+  const waits = new Map<string, Set<string>>();
+  const depths = new Map<string, number>();
+
+  /** Records that the entry being made ready waits on `name`, one of this document's declarations. */
+  const waited = (name: string): void => {
+    const waiting = [...resolving].at(-1);
+    if (waiting !== undefined && waiting !== name && declarations.has(name)) {
+      waits.get(waiting)?.add(name);
+    }
+  };
+
+  /** `name`'s wait depth, from the depths of the entries it waited on, refused past the limit. */
+  const measure = (name: string): void => {
+    let depth = 0;
+    for (const on of waits.get(name) ?? []) {
+      depth = Math.max(depth, (depths.get(on) ?? 0) + 1);
+    }
+    if (depth > maxWaitDepth) throw waitDepthLimitRefusal(maxWaitDepth, name);
+    depths.set(name, depth);
+  };
 
   const namespaceGetter: DefinitionGetter = (name) => {
     const already = namespace.get(name);
     if (already !== undefined) {
+      waited(name);
       return already;
     }
     const declaration = declarations.get(name);
@@ -327,12 +388,25 @@ export function resolveSchema(
       return undefined; // not a local entry -- an as-yet-unverified reference a later phase validates
     }
     if (resolving.has(name)) {
+      // An entry reached again while it is being made ready waits on itself: the cycle, from its first wait.
+      const chain = [...resolving];
+      const cycle = [...chain.slice(chain.indexOf(name)), name];
       throw new TsonSchemaValidationError(
-        `'${name}' is part of a circular composition/refinement chain (${[...resolving].join(' -> ')} -> ${name}) ` +
-          '-- a supertype or refinement source cannot depend, directly or transitively, on the type it helps define',
+        `${cycle.map((entry) => `'${entry}'`).join(' waits on ')}: entries waiting on each other are never ` +
+          "ready -- an entry's declaration is read against its head, the types of its annotations, its " +
+          "refinement source and its '&' operands, and every type a part of it is read against, each of " +
+          'which must be ready first ([TSON-SCHEMA] §3.4.1). A name at a type position orders nothing: ' +
+          'type a field by the entry instead of reading a value against it',
       );
     }
+    waited(name);
+    if (resolving.size > maxWaitDepth) {
+      // The entries being made ready are a chain of waits, and this one lengthens it past the limit: refused at
+      // its head, which no order can make shallower, before the recursion runs any deeper.
+      throw waitDepthLimitRefusal(maxWaitDepth, [...resolving][0] ?? name);
+    }
     resolving.add(name);
+    waits.set(name, new Set());
     try {
       const resolver = resolverBox.current;
       if (resolver === undefined) {
@@ -341,8 +415,10 @@ export function resolveSchema(
         );
       }
       const position = positionOf(declaration, positions);
+      if (!generated.has(name)) refuseShadowingParameters(name, typeParamsOf(declaration.typeDef));
       const resolved = resolver.resolve(declaration, position);
       refuseHeadAbstraction(name, resolved);
+      measure(name);
       namespace.set(name, resolved);
       return resolved;
     } catch (e: unknown) {
@@ -355,12 +431,14 @@ export function resolveSchema(
       const position = positionOf(declaration, positions);
       receiver.report(schemaProblem(id, name, e, position));
       failed.add(name);
-      const placeholder = unresolvedPlaceholder(typeParamsOfDeclaration(declaration));
+      const placeholder = unresolvedPlaceholder(typeParamsOf(declaration.typeDef));
       if (position !== undefined) facts.set(name, { position });
       namespace.set(name, placeholder);
+      depths.set(name, 0);
       return placeholder;
     } finally {
       resolving.delete(name);
+      waits.delete(name);
     }
   };
 
@@ -369,28 +447,57 @@ export function resolveSchema(
   // application's fields cannot wait for the batch pass below). `generated` is `templates.ts`'s
   // own `generatedNames`: the desugar lift's synthetic names, so a generated head closing its own
   // intermediate form is told apart from an authored one.
+  // Where a construction head and an annotation type resolve: the whole namespace, each entry made ready
+  // on demand, in dependency order. The kernel resolves through the same lookup: every head it applies is
+  // one of its own entries, ready before the instance that applies it is read (§3.4).
+  const heads: DefinitionGetter = namespaceGetter;
+  const readers = deps.readers(heads);
+  // An annotation's value is read through the compiled readers of the import that declared its type, else
+  // through the resolution's own; a type this document declares itself has no compiled reader yet, so its
+  // value is read with no type to read it against (`looseAnnotation.ts`).
+  const annotationValueReader: AnnotationValueReader = (type, value) => {
+    const own = annotationReaders.get(type);
+    if (own !== undefined) return own(type, value);
+    return readers.annotation !== undefined
+      ? readers.annotation(type, value)
+      : looseAnnotationValue(value);
+  };
+  // A held body closes to whatever its head builds: a type where the head is a constructor, and a value entry
+  // where it is an ordinary type (`fetch => <T> !operations { ... }`, then `get_order => fetch<order>`). An
+  // alias of a constructor is applied as its target is (§3.3.1).
+  const closingReader: DefinitionMetaReader = (written, value) => {
+    const type = terminal(written, heads);
+    const head = heads(type);
+    if (head === undefined || isConstructor(head, type) || readers.value === undefined) {
+      return readers.meta(written, value);
+    }
+    return {
+      kind: 'value_entry',
+      type,
+      value: readers.value(type, retagged(value, written, type)),
+    };
+  };
   const materialiser = createTemplateMaterialiser({
     namespaceDefinitions: namespaceGetter,
     publish: (name, definition) => namespace.set(name, definition),
-    definitionMetaReader: deps.definitionMetaReader,
+    definitionMetaReader: closingReader,
     generatedNames: generated,
-    metaTypes: deps.metaDefinitions,
+    metaTypes: heads,
     resolving: () => [...resolving].at(-1),
-    heads: (name) => facts.get(name)?.head ?? deps.metaFacts?.(name)?.head,
+    heads: (name) => facts.get(name)?.head,
   });
 
   resolverBox.current = createDefinitionResolver({
-    definitionMetaReader: deps.definitionMetaReader,
-    metaDefinitions: deps.metaDefinitions,
+    definitionMetaReader: readers.meta,
+    ...(readers.value === undefined ? {} : { definitionValueReader: readers.value }),
+    metaDefinitions: heads,
     namespaceDefinitions: namespaceGetter,
     facts,
     applicationCloser: (application) => materialiser.closeApplication(application),
     applicationChecker: (application) => materialiser.checkApplication(application),
     declaredApplicationCloser: (declaredName, application) =>
       materialiser.closeApplicationAs(declaredName, application),
-    ...(deps.annotationValueReader === undefined
-      ? {}
-      : { annotationValueReader: deps.annotationValueReader }),
+    annotationValueReader,
     ...(deps.encodeSourceBody === undefined ? {} : { encodeSourceBody: deps.encodeSourceBody }),
   } satisfies DefinitionResolverDeps);
   const resolver: DefinitionResolver = resolverBox.current;
@@ -422,24 +529,18 @@ export function resolveSchema(
       schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
     );
   });
-  const declaredParameters = inferAll(
-    namespace,
-    new Set(declarations.keys()),
-    written,
-    deps.metaDefinitions,
-    {
-      report(name, error): void {
-        if (receiver === undefined) {
-          throw error;
-        }
-        unkinded.add(name);
-        const declaration = declarations.get(name);
-        receiver.report(
-          schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
-        );
-      },
+  const declaredParameters = inferAll(namespace, new Set(declarations.keys()), written, heads, {
+    report(name, error): void {
+      if (receiver === undefined) {
+        throw error;
+      }
+      unkinded.add(name);
+      const declaration = declarations.get(name);
+      receiver.report(
+        schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
+      );
     },
-  );
+  });
   stampParameters(declaredParameters, [beforeMaterialise, namespace]);
   materialiser.setParameterKinds(parameterKindsOf(declaredParameters));
   // An application closed during the driving loop was checked against parameters carrying no
@@ -531,7 +632,7 @@ export function resolveSchema(
       namespace,
       new Set([...resolvedLocals.keys(), ...instantiations.keys()]),
       written,
-      deps.metaDefinitions,
+      heads,
       {
         report(): void {
           // Already reported against the declaration that wrote it, by the pass before.
@@ -552,11 +653,27 @@ export function resolveSchema(
   const entries = new Map<string, Top>();
   const keyAnnotations = new Map<string, Annotations>();
   const localFacts = new Map<string, EntryFacts>();
+  // Every application this schema closed, recorded on the entry it denotes (§4.2, §8.2): an entry's own
+  // application, and an expansion's, which carries no `@meta.application`. A reference read in data is resolved
+  // against these by structural identity, and they travel with the facts to every importer.
+  const closes = new Map<string, TypeRef[]>();
+  for (const { entry, application } of materialiser.closedApplications()) {
+    const name = merged.get(entry) ?? entry;
+    const held = closes.get(name);
+    if (held === undefined) closes.set(name, [application]);
+    else held.push(application);
+  }
   /** `name`'s facts as resolution recorded them, with the head the materialiser knows where it closed the entry. */
   const factsFor = (name: string): EntryFacts => {
     const known = facts.get(name) ?? {};
     const head = materialiser.mintedFacts(name)?.head;
-    return head === undefined || known.head !== undefined ? known : { ...known, head };
+    const withHead = head === undefined || known.head !== undefined ? known : { ...known, head };
+    const closed = closes.get(name);
+    const closing = closed === undefined ? withHead : { ...withHead, closes: closed };
+    // A form no author named is synthetic (§8.2): an importer reaching it by two routes unifies it.
+    return generated.has(name) || mintedSynthetic.has(name)
+      ? { ...closing, synthetic: true }
+      : closing;
   };
   /** `annotations` with the application `name` closes recorded as its `@application` (§8.2). */
   const withAppliedKey = (name: string, annotations: Annotations): Annotations => {
@@ -615,12 +732,13 @@ export function resolveSchema(
     if (annotated.length > 0) keyAnnotations.set(name, annotated);
   }
 
+  // A nested map's own entry is derived from the members' paths, so the two never disagree (§2.2.3).
+  const synced = syncedEntries({ entries, keyAnnotations });
   return {
     id,
-    meta: document.meta,
     imports: document.imports,
-    entries,
-    keyAnnotations,
+    entries: synced.entries,
+    keyAnnotations: synced.keyAnnotations,
     facts: localFacts,
     bootstrap: false,
   };
@@ -758,6 +876,12 @@ function isReportable(e: unknown): e is ReportableSchemaError {
   );
 }
 
+function requiredEntry(entries: ReadonlyMap<string, Top>, name: string): Top {
+  const entry = entries.get(name);
+  if (entry === undefined) throw new TsonInternalError(`no entry '${name}' in the merged imports`);
+  return entry;
+}
+
 /**
  * Stage 1 of {@link resolveSchema} -- every `!!import`'s whole namespace, in declaration order,
  * merged as-is (never re-resolved against the importer). Mirrors the reference implementation's
@@ -770,9 +894,10 @@ function mergeImports(
   deps: SchemaResolverDeps,
   facts: EntryFactsTable,
   applications: Map<string, TypeRef>,
+  origins: Map<string, string>,
+  annotationReaders: Map<string, AnnotationValueReader>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
-  const origins = new Map<string, string>();
   const alreadyImported = new Set<string>();
   for (const importUri of document.imports) {
     if (alreadyImported.has(importUri)) {
@@ -785,20 +910,40 @@ function mergeImports(
       );
     }
     const imported = deps.resolveImport(importUri);
-    checkImportLevel(
-      deps.kernelGoverned === undefined || document.id === undefined
-        ? undefined
-        : { id: document.id, meta: document.meta, kernelGoverned: deps.kernelGoverned },
-      imported.level,
-    );
     for (const [name, definition] of imported.entries) {
       const origin = imported.originOf(name);
       const incumbent = origins.get(name);
+      // A schema map of one path declared by several documents is one map, the union of their members,
+      // each merged under its path; the map's entry is derived from them (§2.2.3).
+      if (incumbent !== undefined && isNestedMap(merged.get(name)) && isNestedMap(definition)) {
+        continue;
+      }
       if (incumbent !== undefined) {
+        const incumbentFacts = facts.get(name);
+        const arrivingFacts = imported.facts?.get(name);
+        if (
+          incumbent !== origin &&
+          merged.get(name) !== undefined &&
+          areOneSynthetic(
+            name,
+            incumbentFacts,
+            requiredEntry(merged, name),
+            incumbent,
+            arrivingFacts,
+            definition,
+            origin,
+          )
+        ) {
+          // One synthetic minted by two documents is one entry (§8.2): the first arrival is kept.
+          if (incumbentFacts !== undefined && arrivingFacts !== undefined) {
+            facts.set(name, unifiedFacts(incumbentFacts, arrivingFacts));
+          }
+          continue;
+        }
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ('${incumbent}' and ` +
-              `'${origin}') -- distinct types cannot share one name in the flat namespace; import one of them, ` +
+              `'${origin}') -- distinct types cannot share one name in the one namespace; import one of them, ` +
               `or a version of each that agrees on where '${name}' is declared`,
           );
         }
@@ -806,13 +951,17 @@ function mergeImports(
       }
       merged.set(name, definition);
       origins.set(name, origin);
+      if (imported.annotationReader !== undefined) {
+        annotationReaders.set(name, imported.annotationReader);
+      }
       const recorded = imported.facts?.get(name);
       if (recorded !== undefined) facts.set(name, recorded);
       const application = applicationOf(imported.keyAnnotations?.get(name));
       if (application !== undefined) applications.set(name, application);
     }
   }
-  return merged;
+  // Each nested map holds the union of the members its closure declares.
+  return new Map(syncedEntries({ entries: merged, keyAnnotations: new Map() }).entries);
 }
 
 /**
@@ -937,19 +1086,6 @@ function condemn(
   }
 }
 
-/** A declaration's own declared type parameters -- mirrors `desugar.ts`'s own (unexported) `typeParamsOf`. */
-function typeParamsOfDeclaration(declaration: Declaration): readonly string[] {
-  const typeDef = declaration.typeDef;
-  switch (typeDef.kind) {
-    case 'instance':
-    case 'structuralTypeDef':
-    case 'referenceTypeDef':
-      return typeDef.typeParams;
-    case 'atomRefinement':
-      return [];
-  }
-}
-
 /**
  * One declaration's failure as a {@link Diagnostic}, classified positively -- `BIND_MISMATCH` for
  * a {@link TsonBindMismatchError} (the reading application's own binding disagrees with the
@@ -995,4 +1131,9 @@ function requiredGet<K, V>(map: ReadonlyMap<K, V>, key: K, context: string): V {
     throw new TsonInternalError(`${context}: missing expected key '${String(key)}'`);
   }
   return value;
+}
+
+/** `value` tagged with `type` where it was written under the alias `written` of it. */
+function retagged(value: DataValue, written: string, type: string): DataValue {
+  return type !== written && value.typeRef === written ? { ...value, typeRef: type } : value;
 }

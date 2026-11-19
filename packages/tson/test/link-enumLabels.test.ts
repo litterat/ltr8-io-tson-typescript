@@ -13,18 +13,17 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `
 !!id:"https://example.test/enum-labels.tn"
-!!meta:"https://tson.io/2026/38/m/meta.tn"
-!!import:"https://tson.io/2026/38/m/core.tn"
+!!import:"https://tson.io/2026/39/m/core.tn"
 `;
 
 const HEADER_NAME = `
-  header_name => !identifier_type { start: NONE  continue: NONE
+  header_name => !unicode.identifier_type { start: NONE  continue: NONE
     start_add: "abcdefghijklmnopqrstuvwxyz"  continue_add: "abcdefghijklmnopqrstuvwxyz0123456789-"
     normalization: NFKC_CASEFOLD }
 `;
 
 function schema(body: string) {
-  return resolveUserSchema(`${HEAD}{\n${body}\n}`);
+  return resolveUserSchema(`${HEAD}!schema {\n${body}\n}`);
 }
 
 function loadFailure(body: string): string {
@@ -50,7 +49,7 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
 
   it('an enum over a folding identifier family records that family’s form', () => {
     const linked = schema(
-      `${HEADER_NAME}\n  safe_header => !enum_type { name_type: header_name  members: [Accept content-type] }`,
+      `${HEADER_NAME}\n  safe_header => !meta.enum_type { name_type: header_name  members: [Accept content-type] }`,
     );
     expect(linked.enumForms.get('safe_header')).toBe('NFKC_CASEFOLD');
   });
@@ -58,21 +57,21 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
   it('an enum over a text family is refused: a closed set of text is `text`’s own `members` facet', () => {
     expect(
       loadFailure(
-        `charset => !text_type { normalization: NFKC_CASEFOLD }\n  names => !enum_type { name_type: charset  members: [UTF-8 ascii] }`,
+        `charset => !unicode.text_type { normalization: NFKC_CASEFOLD }\n  names => !meta.enum_type { name_type: charset  members: [UTF-8 ascii] }`,
       ),
     ).toContain('is not an identifier family');
   });
 
   it('a pinned type resolves in the governing meta, so a schema’s own `identifier` does not retype `!enum`', () => {
     const linked = schema(
-      `identifier => !identifier_type { start: NONE  continue: NONE  start_add: "z"  continue_add: "z"  normalization: NFKC_CASEFOLD }\n  status => !enum [OPEN DONE]`,
+      `identifier => !unicode.identifier_type { start: NONE  continue: NONE  start_add: "z"  continue_add: "z"  normalization: NFKC_CASEFOLD }\n  status => !enum [OPEN DONE]`,
     );
     expect(linked.enumForms.get('status')).toBe('NFC');
   });
 
   it('an author-written type resolves in the schema’s own namespace', () => {
     const linked = schema(
-      `${HEADER_NAME}\n  safe_header => !enum_type { name_type: header_name  members: [accept] }`,
+      `${HEADER_NAME}\n  safe_header => !meta.enum_type { name_type: header_name  members: [accept] }`,
     );
     expect(linked.enumForms.get('safe_header')).toBe('NFKC_CASEFOLD');
   });
@@ -87,7 +86,6 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
     };
     const importer: Schema = {
       id: 'https://example.test/importer.tn',
-      meta: 'https://tson.io/2026/38/m/meta.tn',
       imports: ['https://example.test/imported.tn'],
       entries: new Map(),
       keyAnnotations: new Map(),
@@ -102,44 +100,42 @@ describe('an enum’s class and form are read from its type (§7.4, §5.4)', () 
 describe('what an enum’s type obliges (§7.4)', () => {
   it('refuses a type that is not an identifier family', () => {
     expect(
-      loadFailure('ports => !enum_type { name_type: integer  members: ["80" "443"] }'),
+      loadFailure('ports => !meta.enum_type { name_type: integer  members: ["80" "443"] }'),
     ).toContain('is not an identifier family');
   });
 
   it('refuses a name type whose form does not imply NFC (§7.4, §5.2)', () => {
     expect(
       loadFailure(
-        'raw => !identifier_type { normalization: NONE }\n  kinds => !enum_type { name_type: raw  members: [a b] }',
+        'raw => !unicode.identifier_type { normalization: NONE }\n  kinds => !meta.enum_type { name_type: raw  members: [a b] }',
       ),
     ).toContain('its normalization is NONE');
   });
 
   it('refuses a type that names nothing in scope', () => {
-    expect(loadFailure('ports => !enum_type { name_type: nowhere  members: [a b] }')).toMatch(
+    expect(loadFailure('ports => !meta.enum_type { name_type: nowhere  members: [a b] }')).toMatch(
       /nowhere|nothing in scope/,
     );
   });
 
   it('refuses two members that are one value under the type’s equality', () => {
     const message = loadFailure(
-      `${HEADER_NAME}\n  safe_header => !enum_type { name_type: header_name  members: [Accept accept] }`,
+      `${HEADER_NAME}\n  safe_header => !meta.enum_type { name_type: header_name  members: [Accept accept] }`,
     );
     expect(message).toContain('are one value');
   });
 
   it('refuses a member that is not a value of its type', () => {
     const message = loadFailure(
-      `${HEADER_NAME}\n  safe_header => !enum_type { name_type: header_name  members: [9lives] }`,
+      `${HEADER_NAME}\n  safe_header => !meta.enum_type { name_type: header_name  members: [9lives] }`,
     );
     expect(message).toContain("member '9lives' is not a value of its name_type 'header_name'");
   });
 
   it('reports every enum through a receiver rather than stopping at the first', () => {
     const diagnostics = collector();
-    const linked = schema('ok => !enum [A]');
     const bad: Schema = {
       id: 'https://example.test/bad.tn',
-      meta: linked.meta,
       imports: [],
       entries: new Map([
         ['one', entry({ kind: 'enum', nameType: 'integer', members: ['1'] })],
