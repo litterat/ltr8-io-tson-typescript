@@ -47,7 +47,7 @@ function fallingBackTo(primary: EntryLookup, fallback: EntryLookup | undefined):
  * absent for the meta-kernel bootstrap). `undefined` for a name that resolves in neither.
  */
 export function recordNameType(
-  body: RecordBody,
+  body: Pick<RecordBody, 'nameType'>,
   local: EntryLookup,
   structure: EntryLookup | undefined,
 ): ResolvedNameType | undefined {

@@ -138,13 +138,32 @@ describe('§3.2 closed set', () => {
     expect(refusal('person', '{"$value": {"name": "Ada"}}').code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('§8.5 admits $schema only at a scoped position; §3.3 makes it a resolver error anywhere else', () => {
+  it('§3.3: the refusal is the position’s, at the member’s own pointer', () => {
     const problem = refusal(
-      'person',
-      '{"$schema": "https://example.test/other.tn", "$type": "person", "name": "Ada"}',
+      'holder',
+      '{"who": {"$import": ["https://example.test/other.tn"], "$type": "person", "name": "Ada"}}',
     );
     expect(problem.code).toBe('SCOPE_NOT_ADMITTED');
-    expect(problem.path).toBe('/$schema');
+    expect(problem.path).toBe('/who/$import');
+    expect(problem.message).toContain("'$import'");
+  });
+
+  it('§3.3: the refusal is the position’s, whatever the member holds -- no value position admits a binding at all', () => {
+    const problem = refusal(
+      'holder',
+      '{"who": {"$import": "https://example.test/other.tn", "name": "Ada"}}',
+    );
+    expect(problem.code).toBe('SCOPE_NOT_ADMITTED');
+    expect(problem.path).toBe('/who/$import');
+  });
+
+  it('§3.3: $import leads where it stands at all, so one after $type is refused as out of place too', () => {
+    const problem = refusal(
+      'person',
+      '{"$type": "person", "$import": ["https://example.test/other.tn"], "name": "Ada"}',
+    );
+    expect(problem.code).toBe('SCOPE_NOT_ADMITTED');
+    expect(problem.path).toBe('/$import');
   });
 
   it('§3.2: at a map position every member name is an ordinary key, the three included', () => {

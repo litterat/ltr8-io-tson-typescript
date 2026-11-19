@@ -93,6 +93,7 @@ const SCHEMA = resolveUserSchema(`
   nested     => { who: person  labels: [text] }
 
   counts    => { text => int32 }
+  bag       => { counts: counts }
   by_date   => { date => number }
   by_number => { number => text }
   by_small  => { small => text }
@@ -305,11 +306,13 @@ describe('§5 atoms', () => {
     expect(refusal('count', '{"$value": 42}').code).toBe('UNKNOWN_TYPE_REF');
   });
 
-  it('$schema at an atom position is SCOPE_NOT_ADMITTED -- no atom position is scoped (§8.5, [TSON-SCHEMA] §7.8)', () => {
-    expect(
-      refusal('count', '{"$schema": "https://example.test/x.tn", "$type": "count", "$value": 42}')
-        .code,
-    ).toBe('SCOPE_NOT_ADMITTED');
+  it('§3.3: $import at an atom position is SCOPE_NOT_ADMITTED -- the binding stands at the top of the document alone', () => {
+    const found = refusal(
+      'nested',
+      '{"who": {"name": {"$import": ["https://example.test/x.tn"], "$type": "text", "$value": "x"}}, "labels": []}',
+    );
+    expect(found.code).toBe('SCOPE_NOT_ADMITTED');
+    expect(found.path).toBe('/who/name/$import');
   });
 });
 
@@ -648,7 +651,7 @@ describe('§6.4 maps', () => {
   });
 
   it('a dollar-initial member is an ordinary key at a map position (§3.2)', () => {
-    expect(accepted('counts', '{"$schema": 1}')).toBe('{"$schema":1}');
+    expect(accepted('bag', '{"counts": {"$import": 1}}')).toBe('{"counts":{"$import":1}}');
   });
 
   it('keys compare as values and not as spellings (§5.5)', () => {

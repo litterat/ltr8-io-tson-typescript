@@ -30,6 +30,9 @@ const SCHEMA_SOURCE = `
   pet => abstract fbase & { kind: text =?  name: text }
   dog => pet & { kind?: = "dog"  breed: text }
   kennel => { p: pet }
+  tpet => <B> fbase & { kind: text =?  name: text  extra?: B }
+  tdog => tpet<text> & { kind?: = "dog" }
+  tkennel => { p: tpet }
   words => !unicode.identifier_type { continue_add: "-"  medial: " " }
   row => !meta.record { name_type: words  fields: { "first name" => { type: text } } }
   json_record => !meta.record { name_type: json_name  extension: ABSTRACT  fields: {} }
@@ -80,6 +83,8 @@ describe('§6.1.1 a member name is a value of its record’s name type', () => {
   it('§6.1.1, §6.1.5: a member name is matched in its name type’s form, and so is a family’s selector', () => {
     expect(read('frow', '{"NAME": "x"}')).toEqual([]);
     expect(read('kennel', '{"p": {"KIND": "dog", "name": "Rex", "Breed": "c"}}')).toEqual([]);
+    // A record template base's members take its name type too.
+    expect(read('tkennel', '{"p": {"KIND": "dog", "name": "Rex"}}')).toEqual([]);
   });
 
   /**

@@ -70,7 +70,8 @@ import { describeEvent } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
-import { lead as leadOf, leadPresent, SCHEMA, TYPE, type Lead } from './tagMembers.js';
+import { lead as leadOf, leadPresent, TYPE, type Lead } from './tagMembers.js';
+import { CHOICE, refusesScope } from './tags.js';
 import { hasChoiceSelfTag, routeTo, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 
@@ -202,24 +203,11 @@ function* tagged(
   resolvers: ReadonlyMap<string, () => JsonTypeReader>,
   entries: ReadonlyMap<string, Top>,
 ): Task<unknown> {
-  const { schema, type } = lead;
-  if (schema) {
-    // §3.3, §9.4: resolver category, not `UNRECOGNIZED_FIELD` -- see `tagMembers.ts`'s top
-    // note.
-    ctx
-      .field(SCHEMA)
-      .report(
-        'SCOPE_NOT_ADMITTED',
-        `'$schema' opens a schema scope, which [TSON-SCHEMA] §7.8 admits only at a scoped ` +
-          `position -- '${displayName}' is a choice, whose variants its own schema declares`,
-        'no $schema at this position',
-        SCHEMA,
-      );
-    yield* skipNextValue(ctx);
-    return undefined;
-  }
+  const { type } = lead;
+  // §3.3: `$import` stands at the top of the document alone, so a choice position refuses it.
+  if (yield* refusesScope(ctx, lead, displayName, CHOICE)) return undefined;
   if (type === undefined) {
-    // `tagged` is reached only when `leadPresent(lead)` held and `schema` has already been ruled
+    // `tagged` is reached only when `leadPresent(lead)` held and `$import` has already been ruled
     // out above, so this is always a bare `$value` with no leading `$type` (`lead.wrapper`) --
     // §9.4's table: "a `$value` in an object not led by `$type`" is resolver category, not
     // `TYPE_MISMATCH`'s validation one.

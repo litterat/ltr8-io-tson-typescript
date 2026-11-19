@@ -22,7 +22,7 @@
 import { atomParserFor } from '../atom/forType.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../core/errors.js';
 import type { IdentifierType, Normalization } from '../schema/meta/atoms-text.js';
-import type { RecordBody } from '../schema/meta/bodies.js';
+import type { RecordBody, RecordTemplateBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { isTemplateBody } from '../schema/meta/typedef.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
@@ -64,6 +64,17 @@ function recordOf(value: Top | undefined): RecordBody | undefined {
 }
 
 /**
+ * The body of a record template (§5.10), the family base whose members compose it and so share its
+ * name type: a reader that dispatches a family on the base's discriminator names matches them in
+ * that form.
+ */
+function recordTemplateOf(value: Top | undefined): RecordTemplateBody | undefined {
+  return value !== undefined && !isTemplateBody(value) && value.kind === 'record_template'
+    ? value
+    : undefined;
+}
+
+/**
  * Every local record's field names judged by its name type, and the name types a reader needs for
  * the records that state one (§5.2). `structure` is the governing meta's namespace, absent for the
  * meta-kernel bootstrap.
@@ -78,7 +89,17 @@ export function checkFieldNameTypes(
   const local: EntryLookup = (name) => merged.get(name);
   for (const name of localNames) {
     const body = recordOf(merged.get(name));
-    if (body === undefined) continue;
+    if (body === undefined) {
+      // A record template's name type is recorded for a reader and never judged here: each
+      // application closes to a record, which is.
+      const template = recordTemplateOf(merged.get(name));
+      if (template?.nameType === undefined) continue;
+      const outcome = check(name, template, local, structure);
+      if (typeof outcome === 'object') {
+        nameTypes.set(name, { typeName: template.nameType, definition: outcome });
+      }
+      continue;
+    }
     const outcome = check(name, body, local, structure);
     if (typeof outcome === 'string') {
       violations.push({ entry: name, message: outcome });
@@ -92,7 +113,9 @@ export function checkFieldNameTypes(
 /** The violation, or the name type `body` was judged under (`undefined` where none resolves to judge by). */
 function check(
   name: string,
-  body: RecordBody,
+  body: Pick<RecordBody, 'nameType' | 'groups' | 'discriminators'> & {
+    readonly fields: { readonly entries: ReadonlyMap<string, unknown> };
+  },
   local: EntryLookup,
   structure: EntryLookup | undefined,
 ): string | IdentifierType | undefined {

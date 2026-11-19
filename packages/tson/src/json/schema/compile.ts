@@ -16,9 +16,10 @@
  * here, at compile time, so a redundant `$type` restating the position's own type (or an alias of
  * it) is the only form §7.2 subsumption admits there.
  *
- * **A declared position (§7.8)**, the open sum of `meta.declared_type`, compiles to a
- * {@link notImplementedReader}: reading a value that names its own type in the JSON annotation object
- * is not built yet, and a dependent field (§5.2) likewise.
+ * **A declared position (§7.8)**, the open sum of `meta.declared_type`, compiles to
+ * `json/schema/declared.ts`'s reader: the value names its own type in the JSON annotation object,
+ * from every entry the governing closure holds (§8.5). A dependent field (§5.6) is read through
+ * its record (`json/schema/dependent.ts`).
  *
  * **A namespace type reads as its map** ([TSON-SCHEMA] §4.1): a field typed `headers`, where
  * `headers => !meta.namespace { key_type: header_name  value_type: text }`, takes a JSON object
@@ -64,19 +65,12 @@ import { buildTagDispatcher } from './dispatchTag.js';
 import { notImplementedReader } from './notImplemented.js';
 import { buildMapReader } from './map.js';
 import { buildRecordReader } from './record.js';
-import { createForeignLookup, type ForeignLookup, type ForeignSchemas } from './foreign.js';
+import { buildDeclaredReader } from './declared.js';
 import { buildTupleReader } from './tuple.js';
 import type { JsonTypeReader } from './types.js';
 
 export { notImplementedReader } from './notImplemented.js';
 export type { JsonTypeReader } from './types.js';
-export type { ForeignSchemas } from './foreign.js';
-
-/** {@link compileJsonSchema}'s dependencies. */
-export interface JsonCompileDeps {
-  /** Where a value's own `$schema` is looked up as it arrives ([TSON-JSON] §8.5). Omitted, a scope push reports `SCHEMA_NOT_PERMITTED`. */
-  readonly foreignSchemas?: ForeignSchemas;
-}
 
 /** What a factory needs beyond the entry it is building — one held per compile, never mutated after it finishes. */
 export interface CompileContext {
@@ -97,8 +91,6 @@ export interface CompileContext {
    * reader that produces that decoded value.
    */
   rawAtomReader(name: string): AtomReader | undefined;
-  /** The lookup a position reaches a document-named schema through (§8.5). */
-  readonly foreign: ForeignLookup;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -135,17 +127,8 @@ function locationOf(
 
 /**
  * Compiles `linkedSchema` in tree mode: one {@link JsonTypeReader} per entry, eagerly.
- * `foreign` is the lookup shared with the schema that admitted this one, so a scope push
- * compiles each foreign identity once.
  */
-export function compileJsonSchema(
-  linkedSchema: LinkedSchema,
-  deps: JsonCompileDeps = {},
-  foreign?: ForeignLookup,
-): JsonCompiledSchema {
-  const lookup: ForeignLookup =
-    foreign ??
-    createForeignLookup(deps.foreignSchemas, (linked) => compileJsonSchema(linked, deps, lookup));
+export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchema {
   const finished = new Map<string, JsonTypeReader>();
   const atomReaders = new Map<string, AtomReader>();
   const building = new Set<string>();
@@ -194,7 +177,6 @@ export function compileJsonSchema(
     locationOf: (name: string) => locationOf(linkedSchema, name),
     isAtomReader: (name: string) => atomReaders.has(name),
     rawAtomReader: (name: string) => atomReaders.get(name),
-    foreign: lookup,
   };
 
   function build(name: string, def: Top): JsonTypeReader {
@@ -239,7 +221,7 @@ export function compileJsonSchema(
       return buildMapReader(name, namespaceAsMap(body), location, context);
     }
     if (body.kind === 'declared_type') {
-      return notImplementedReader(name, 'a declared position');
+      return buildDeclaredReader(name, location, context);
     }
     const nonData: NonHeldTop = body;
 
