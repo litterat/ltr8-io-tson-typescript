@@ -183,12 +183,14 @@ ${CORE}
     expect(codes(found)).toEqual(['VALIDATION_ERROR']);
   });
 
-  it('an import that is not registered is reported as the schema failing to load, never thrown', () => {
+  it('an import that is not registered is refused as a schema this instance will not supply, never thrown', () => {
+    // A read fetches nothing, so the instance refuses what it does not hold -- the reference's own
+    // `SchemaSource.registeredOnly` miss -- which is no verdict on the document or on the schema.
     const tson = instance(ALL);
     const found = tson.validateDocument(
       encodeUtf8(`!!import:"https://example.test/orders.tn"\n!pick { which: o1 }`),
     );
-    expect(codes(found.diagnostics)).toEqual(['SCHEMA_ERROR']);
+    expect(codes(found.diagnostics)).toEqual(['SCHEMA_NOT_PERMITTED']);
   });
 
   it('a document with no import has no schema and reads schemaless', () => {

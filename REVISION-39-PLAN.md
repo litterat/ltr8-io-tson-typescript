@@ -602,6 +602,3 @@ a corpus item names the file.
   naming a code. The reference reports `SCOPE_NOT_ADMITTED`, and so does this port.
 - **`strip` and `policy.tn`.** The reference shortens `meta`, `numeric`, `temporal`, `net` and
   `core`, but not `policy`, although `policy.tn` is bundled. Part 2 could state which.
-- **An unregistered import in a data document.** Part 2 §2.2.3 and §11.2 read this as a refusal
-  ("will not supply"). The library reports a schema error, and the CLI maps it to
-  `SCHEMA_NOT_PERMITTED`.

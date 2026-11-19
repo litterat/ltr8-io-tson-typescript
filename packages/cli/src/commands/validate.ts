@@ -285,21 +285,6 @@ interface SchemaContext {
   readonly json?: JsonCompiledSchema;
 }
 
-/** The message the library gives a data document's `!!import` of a schema nothing registered. */
-const UNREGISTERED_IMPORT = 'is not registered';
-
-/**
- * A data document's `!!import` of a schema this run holds no copy of arrives from the library as a
- * schema error ("not registered"); for this CLI it is a schema nothing here would supply
- * (`SCHEMA_NOT_PERMITTED`, exit 69), not a verdict on the document -- the same outcome a refused
- * fetch has. Every other diagnostic passes through unchanged.
- */
-function unsuppliedImport(diagnostic: Diagnostic): Diagnostic {
-  return diagnostic.code === 'SCHEMA_ERROR' && diagnostic.message.includes(UNREGISTERED_IMPORT)
-    ? { ...diagnostic, code: 'SCHEMA_NOT_PERMITTED' }
-    : diagnostic;
-}
-
 async function validateOne(
   file: string,
   kind: InputKind,
@@ -339,12 +324,15 @@ async function validateOne(
     } else {
       // No schema was named: the document is read under its own `!!import`s ([TSON-DATA] §2.2), which
       // resolve against the bundled library alone -- this run holds no schema source, so a header
-      // naming anything else is refused below, never fetched. A document with no `!!import` reads
+      // naming anything else is refused as `SCHEMA_NOT_PERMITTED`, never fetched. A document with no `!!import` reads
       // schemaless, on Class 1 terms.
       result = await plain.validateDocument(source);
     }
-    const diagnostics = result.diagnostics.map(unsuppliedImport);
-    return { file, outcome: outcomeOfDiagnostics(diagnostics), diagnostics };
+    return {
+      file,
+      outcome: outcomeOfDiagnostics(result.diagnostics),
+      diagnostics: result.diagnostics,
+    };
   } catch (error) {
     const problem = classifyReadError(error);
     if (problem.kind === 'invalid') {

@@ -690,17 +690,29 @@ export function createTson(config: Config = {}): Tson {
    * own compilation for one import in any number of spellings, and otherwise a schema of no entries of its
    * own importing each of them, linked under an identity derived from theirs that is never registered.
    */
+  /**
+   * A data document's import, from the registry alone. A read fetches nothing (see {@link
+   * Config.schemaSource}), so an import nothing registered is a schema this instance will not
+   * supply: a `not-permitted` refusal ([TSON-SCHEMA] §2.2.3, [TSON-DATA] §8.1's undetermined
+   * outcome), reported as `SCHEMA_NOT_PERMITTED` and never as a verdict on the document.
+   */
+  function governingImport(reference: string): LinkedSchema {
+    if (!schemas.has(canonicalizeIdentity(reference))) {
+      throw new TsonSchemaFetchError(
+        reference,
+        'not-permitted',
+        `'${reference}' is not registered, and a read fetches nothing -- register or preload it first`,
+      );
+    }
+    return requireRegistered(schemas, contentHashes, reference, '(a data document)');
+  }
+
   function governingSchema(imports: readonly string[]): CompiledSchema {
     const identities = importIdentities(imports);
     const resolveImport: ImportResolver = (uri) =>
-      importedFrom(
-        requireRegistered(schemas, contentHashes, uri, '(a data document)'),
-        config.identifierPolicy,
-      );
+      importedFrom(governingImport(uri), config.identifierPolicy);
     // Each resolved on its own first: its pin verified, and every problem reported as for one import.
-    const registered = imports.map((uri) =>
-      requireRegistered(schemas, contentHashes, uri, '(a data document)'),
-    );
+    const registered = imports.map(governingImport);
     const only = registered[0];
     if (identities.length === 1 && only !== undefined) {
       const known = compiledImports.get(only);

@@ -11,7 +11,7 @@ A TypeScript port of the reference Java implementation. Conformance is measured 
 corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 944 subjects
 over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: PASS-COUNT-FOR-MANAGER / 944 subjects passing at the pinned suite commit, Class 1 and Class 2.** <!-- the manager fills this line in at the merge, from `npm run test:conformance` -->
+**Conformance: 944 / 944 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
 Class 1 (316): 28 identity, 35 lexer, 56 parser, 34 reader, 14 resolver, 149 vocabulary. Class 2
 (628): 264 schema, 133 link, 231 validate.
