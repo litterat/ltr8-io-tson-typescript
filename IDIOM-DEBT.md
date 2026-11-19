@@ -282,13 +282,16 @@ did, so there is no single TSON-side sibling to point at, only the pattern), and
 nameHygiene.ts` calls the _shared_ `unicode/policy.ts#nameHygieneRefusal` with a one-name scope
 rather than duplicating its logic — the one place in this item's list where reuse, not
 duplication, was possible, because that function already lived below both `reader/` and `json/`
-in the import graph. A third: `json/schema/scoped.ts` and `json/schema/foreign.ts` are the JSON copy of
-`compiler/compile.ts`'s `buildScopedReader` and its `compileForeign` cache ([TSON-SCHEMA] §7.8,
-[TSON-JSON] §8.5) — the same cell rule, `schemas` narrowing and foreign-schema lookup, where the
-text reader selects the cell off `!type`/`!!schema` and this one off the annotation object's
-leading members. The seam a unification would take is a cell-selection function from "what the
-value said about itself" to a `{ local | extern, schema?, type? }` verdict, with each encoding's
-reader supplying only how it peeks and how it consumes the opening apparatus.
+in the import graph. A third: `json/schema/declared.ts` is the JSON copy of `compiler/compile.ts`'s
+`buildDeclaredReader` ([TSON-SCHEMA] §7.8, [TSON-JSON] §8.5) — the `meta.declared_type` position's
+reader: an open sum over the governing schema's closure, each entry routed lazily so a recursive
+declaration reads through its finished reader, where the text reader selects the type off the
+value's `!type` annotation and this one off the annotation object's leading `$type`. The seam a
+unification would take is the closure map from a qualified name to a lazily resolved reader, with
+each encoding's reader supplying only how it peeks the name and how it consumes the opening
+apparatus. The `$import` refusal (`json/schema/tags.ts`) and the in-band root decline
+(`json/inBandBinding.ts`) have no text-side sibling: a text document carries its `!!import`s in the
+header, which the parser reads before any value.
 
 **What is _not_ duplicated, on purpose.** The `src/json/**` ESLint zone (`eslint.config.js`)
 forbids importing `lexer/`, `stream/`, `reader/`, `compiler/`, `tree/`, `write/` or `facade/` at

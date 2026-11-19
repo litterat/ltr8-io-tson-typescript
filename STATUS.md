@@ -303,10 +303,9 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
 - [x] Revision 38 changes (§1.3, §3.2, §5.6, §6.1.1, §9.4) — a member name is a value of its
       record's name type, matched in the type's form, a repeat under a folding type
       `DUPLICATE_FIELD`, an unmatched name the type admits held to §8.2 under the type's profile
-      before closure; `$schema`, `$type` and `$value` used and not reserved, so any other
-      `$`-initial member is a field name; `$type` a type name and a kind-typed slot one bare name
-      judged a member; a namespace-typed slot read as its map; a foreign-schema lookup miss
-      `SCHEMA_NOT_PERMITTED` (refused), a source's miss `SCHEMA_NOT_FOUND` (undetermined);
+      before closure; `$import`, `$type` and `$value` used and not reserved, so any other
+      `$`-initial member is a field name; `$type` a qualified type name and a kind-typed slot one
+      bare name judged a member; a namespace-typed slot read as its map;
       `hostname`, `host` and `media_type` string-class through the net atoms' parsers.
       **Two encodings, two spellings** (open): the text reader judges every field name, the JSON
       reader only an unmatched one, and a folded match's schema pointer is the written spelling in
@@ -319,11 +318,12 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
       that is not optional admitting exactly one option, an optional group at most one, `+` any
       non-empty subset; an identifier-typed value judged under its family's profile and an
       identifier-keyed map's keys a look-alike scope
-- [x] Scoped positions (§3.3, §8.5) — `$type` alone selects LOCAL; `$schema` with `$type` selects
-      EXTERN, fetched through the caller's `foreignSchemas`, consumed, and the rest read as a
-      `$type`-led object; a bare value, a missing `$type`, a cell the scope does not admit or a
-      schema or type outside `schemas` is a validation error; `$schema` at a position whose own
-      type is not scoped is `SCOPE_NOT_ADMITTED`
+- [x] Declared positions (§3.3, §3.4, §8.5; [TSON-SCHEMA] §7.8) — a `meta.declared_type` position
+      (`json/schema/declared.ts`) reads an object led by `$type`, a qualified name read against the
+      governing closure; a bare value or an object with no leading `$type` is `VALIDATION_ERROR`, a
+      `$type` outside the closure `UNKNOWN_TYPE`. `$import` stands for the header's `!!import`s and
+      at any value position is `SCOPE_NOT_ADMITTED` (`json/schema/tags.ts`). A reference or
+      application at a `meta.reference_type` position is a JSON string read as an unquoted token
 - [x] Front door (`json/facade.ts`) — `readJsonTree`/`readJsonTreeAsync`,
       `validateJson`/`validateJsonAsync`, sync over bytes and async over a chunked `Task<T>` source
       exactly as the text stack's `readTree`/`validate`; a caller supplies an already-compiled
@@ -442,18 +442,17 @@ ok<text>` over `ok => <T> result<T> & { note: text }` is IS-A `result` as well a
   narrower than the reference implementation's own** (`REVISION-36-PLAN.md`'s own "Scope
   decisions"; the reference records most of these as deferrals, not conclusions). Everything below
   except the object-binding gap matches a deferral the reference records too:
-  - **§3.4's in-band root binding is not read.** A document naming its own `$schema`/`$type` at
-    the root, with no schema supplied out of band, is not a route this package implements — every
-    call to `readJsonTree`/`validateJson` requires `schema`/`root`. `$type` tag dispatch _inside_
-    a document already bound out of band (subsumption, record families, choices) is implemented in
-    full; what is missing is starting a read with no binding at all.
-  - **§8.5's scoped positions** (`declared`, `extern`, `dynamic`, `extern_of`/`extern_type`) are
-    read (`json/schema/scoped.ts`), but **the JSON front door takes its foreign schemas from the
-    caller**: an EXTERN value's schema is looked up through `compileJsonSchema(linked, {
-foreignSchemas })`, and a compile with no lookup reports `SCHEMA_NOT_PERMITTED`. There is no
-    JSON-side registry or loader; a caller passes its own lookup (a `Tson` instance's `schemas` map
-    serves). A template naming no `extension` — a genuine open template used bare, never applied —
-    still takes a `NOT_IMPLEMENTED` reader in JSON, where the text reader reads it.
+  - **§3.4's in-band root binding is not read.** A root led by `$import` is declined as a
+    non-verdict `NOT_IMPLEMENTED` at `/$import` (`json/inBandBinding.ts`), as the reference does;
+    every call to `readJsonTree`/`validateJson` requires `schema`/`root`, so binding is
+    out-of-band only. `$type` tag dispatch _inside_ a document already bound out of band
+    (subsumption, record families, choices) is implemented in full; what is missing is starting a
+    read with no binding at all.
+  - **§8.5's declared positions** (`meta.declared_type`) are read (`json/schema/declared.ts`)
+    against the closure of the schema the position belongs to; the encoding has no registry or
+    loader and fetches no schema. A template naming no `extension` — a genuine open template used
+    bare, never applied — still takes a `NOT_IMPLEMENTED` reader in JSON, where the text reader
+    reads it.
   - **The §3.5 `TSON-Schema`/`TSON-Accept-Schema` header fields are not implemented.** They are an
     HTTP-transport convention over §3.4's out-of-band route; nothing in this package or the CLI
     reads or writes them. A caller wiring an HTTP layer implements them itself, on top of the
@@ -506,7 +505,7 @@ foreignSchemas })`, and a compile with no lookup reports `SCHEMA_NOT_PERMITTED`.
   - **A reserved-member violation (§3.2/§3.3) has no code of its own and reports `UNKNOWN_TYPE_REF`
     instead, a stretched second use of a code whose primary meaning is "the name denotes nothing".**
     `json/schema/reservedMembers.ts`'s own top note lays out the reasoning at length: an unknown
-    `$foo`, a `$schema`/`$type` out of lead position, a `$value` with no leading `$type`, and extra
+    `$foo`, an `$import`/`$type` out of lead position, a `$value` with no leading `$type`, and extra
     members beside `$value` in wrapper form are all [TSON-JSON] §9.4's `resolver` category, and
     `UNKNOWN_TYPE_REF` is the closest of `core/diagnostic.ts`'s closed code set that fits both the
     category and (loosely) the meaning — no code here means "a reserved member sits where the
@@ -549,8 +548,7 @@ foreignSchemas })`, and a compile with no lookup reports `SCHEMA_NOT_PERMITTED`.
 
 - **A template's held application is re-serialised, not preserved as written.** §5.10 holds the
   application _as written_, and `compiler/heldBody.ts` builds the text with
-  `writeDataValue(application)` from the parsed form, so the author's own spacing does not survive
-  (`[ EXTERN ]` where `core.tn` wrote `[EXTERN]`). §5.10 and §8.2 make whitespace free for
+  `writeDataValue(application)` from the parsed form, so the author's own spacing does not survive. §5.10 and §8.2 make whitespace free for
   identity — comparison is over the parsed form — so nothing compares wrongly; the resolved output
   simply does not round-trip the source byte for byte. Closing it means carrying the source span
   through the schema parser to the held body.
@@ -623,46 +621,43 @@ record for 'base', found an array`) names the terminal regardless of how many al
   stack, which had no bound at all; and an annotation chain (`@a:@a:@a:…`), which is a real
   descent with no brace or bracket for a structural counter to see.
 
-- **Eleven of [TSON-DATA] §9.1's twelve document-side resource limits are not enforced.** §9.1
-  states a limits policy of twelve named counters, each MUST-enforced at its default or a
+- **Ten of [TSON-DATA] §9.1's eleven document-side resource limits are not enforced.** §9.1
+  states a limits policy of eleven named counters, each MUST-enforced at its default or a
   configured value; this port builds the refusal mechanism and the nesting-depth counter alone on
   the document side (`core/limits.ts`). A deliberate scope decision, not an oversight: the pinned
-  Java reference itself implements only `maxDepth` and leaves the other eleven, and `CLAUDE.md`'s
+  Java reference itself implements only `maxDepth` and leaves the other ten, and `CLAUDE.md`'s
   "structural parity is worth more than idiom while the reference moves" argument applies to limit
   _coverage_ too — a limit this port enforced and the reference did not would be a divergence
-  nobody asked for. No vector in the shared corpus exercises any of these eleven, so nothing here
+  nobody asked for. No vector in the shared corpus exercises any of these ten, so nothing here
   is measured red by it, but a document that exhausts one of them (a single 20 MB token, say)
   still reaches an unbounded read rather than a clean refusal. Unenforced, with §9.1's own
   defaults:
 
-  | Limit                  | Applies to                                                               | Default    |
-  | ---------------------- | ------------------------------------------------------------------------ | ---------- |
-  | token length           | one token's decoded text, in code points                                 | 1,048,576  |
-  | decoded text length    | one value's text after escape processing, in code points                 | 1,048,576  |
-  | numeric literal length | digits in one numeric token, annotated or not                            | 4,096      |
-  | decoded binary size    | one `!bytes` value's octets                                              | 16,777,216 |
-  | document size          | the document's bytes                                                     | 16,777,216 |
-  | elements               | one array or set                                                         | 1,048,576  |
-  | entries                | one map                                                                  | 1,048,576  |
-  | fields                 | one record                                                               | 65,536     |
-  | annotations            | on one value                                                             | 64         |
-  | total values           | all values in one document, containers and scalars alike                 | 16,777,216 |
-  | foreign schemas        | distinct schemas a document's scope pushes may load ([TSON-SCHEMA] §7.8) | 16         |
+  | Limit                  | Applies to                                               | Default    |
+  | ---------------------- | -------------------------------------------------------- | ---------- |
+  | token length           | one token's decoded text, in code points                 | 1,048,576  |
+  | decoded text length    | one value's text after escape processing, in code points | 1,048,576  |
+  | numeric literal length | digits in one numeric token, annotated or not            | 4,096      |
+  | decoded binary size    | one `!bytes` value's octets                              | 16,777,216 |
+  | document size          | the document's bytes                                     | 16,777,216 |
+  | elements               | one array or set                                         | 1,048,576  |
+  | entries                | one map                                                  | 1,048,576  |
+  | fields                 | one record                                               | 65,536     |
+  | annotations            | on one value                                             | 64         |
+  | total values           | all values in one document, containers and scalars alike | 16,777,216 |
 
-  **All five of [TSON-SCHEMA] §11.5's schema-side limits are now enforced** — import closure,
-  schema entries, reference chain, supertype chain, and materialisation depth, each at its own
-  §11.5 default (`core/limits.ts`'s own `import-closure`/`schema-entries`/`reference-chain`/
-  `supertype-chain`/`materialisation-depth` refusal builders, enforced in `config.ts`'s own
-  `resolveAgainstRegistry`, `compiler/referenceChain.ts`'s `walk`, `compiler/definitionResolver.ts`'s
-  `checkSupertypeChainLimit`, and `compiler/templates.ts`'s existing depth guard respectively). Unlike
-  the document-side eleven, this is not a coverage decision matched to the reference (§11.5 has no
-  Java analogue to match, being new in this revision) — §11.5 states all five as a Class 2 MUST on
-  the same terms as the document-side limits, so this port builds all five rather than one. **Not
-  independently configurable per instance yet**, unlike `maxNestingDepth` — every run enforces each
-  at its own spec default, and `Tson.limitsPolicy` reports all six thresholds regardless
-  (`core/limits.ts`'s own top note explains the narrower scope). The CLI's `tson policy` and every
-  `validate`/`compile` report now carry this whole six-limit policy too (`limits_policy`, beside
-  `policy`), reachable with no document in hand exactly as §9.1 asks.
+  **All six of [TSON-SCHEMA] §11.5's schema-side limits are enforced**: import closure, schema
+  entries, alias chain, supertype chain, materialisation depth and wait depth. Each has its own
+  refusal builder in `core/limits.ts`. They are enforced in these places, in that order:
+  `config.ts`'s `resolveAgainstRegistry` (import closure and schema entries), `link/aliasChain.ts`'s
+  `walk`, `compiler/definitionResolver.ts`'s `checkSupertypeChainLimit`, `compiler/templates.ts`'s
+  depth guard, and `compiler/schemaResolver.ts`'s wait-order lookup. §11.5 makes all six a Class 2
+  MUST on the same terms as the document-side limits. Each is configured on the instance through
+  `Config.limits` (`withLimits`), with one exception: the alias chain is walked at its §11.5 default,
+  `DEFAULT_MAX_ALIAS_CHAIN`, as the reference's `AliasChain` is, so a stated `max_alias_chain` is
+  reported but not consulted. `Tson.limitsPolicy` reports all seventeen thresholds, and so do the
+  CLI's `tson policy` and every `validate`/`compile` report (`limits_policy`, beside `policy`),
+  reachable with no document in hand, as §9.1 asks.
 
 - **`node10` type resolution fails for every subpath**, that resolver predating `exports`. The
   package targets Node 24+, so this is a deliberate floor rather than a defect, but a consumer on
@@ -696,9 +691,9 @@ record for 'base', found an array`) names the terminal regardless of how many al
   the oracle for their text, and the source is a stronger one.
   `packages/tson/test/bundled-schemas-resolve.test.ts` holds the difference as an assertion
   rather than a skip:
-  - `extern_of`/`extern_type`'s held `template` text is re-serialised from the parsed form
+  - A held `template` text is re-serialised from the parsed form
     (`compiler/heldBody.ts`'s `writeDataValue(application)`) rather than carried through as
-    written, so `[ EXTERN ]` loses its author's spacing. §5.10 and §8.2 make whitespace free for
+    written, so it loses its author's spacing. §5.10 and §8.2 make whitespace free for
     identity, so nothing compares wrongly; the resolved output just does not round-trip byte for
     byte. Closing it means carrying the source span through the schema parser to the held body.
 

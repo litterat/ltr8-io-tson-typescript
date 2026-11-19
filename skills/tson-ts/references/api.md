@@ -500,7 +500,7 @@ Real, and worth knowing before you write around them:
   on data, or one whose value does not match its declared type, passes. The schema side does
   enforce this.
 - **`@ltr8/tson/json` has no `objectReader`/bind counterpart and no schema-directed encoder, and it
-  has no registry of its own.** A `scoped` position's EXTERN `$schema` is looked up through the
-  `foreignSchemas` the caller passes to `compileJsonSchema(linked, { foreignSchemas })`; without
-  one the push reports `SCHEMA_NOT_PERMITTED`. See `STATUS.md`'s Part 3 section for the full,
+  fetches no schema.** A `meta.declared_type` position reads an object led by `$type` against the
+  closure of the `LinkedSchema` passed to `compileJsonSchema(linked)`; `$import` at a value
+  position is `SCOPE_NOT_ADMITTED`. See `STATUS.md`'s Part 3 section for the full,
   current list.

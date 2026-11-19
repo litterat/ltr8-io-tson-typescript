@@ -225,9 +225,9 @@ either way. A schemaless read exists only at the JSON-grammar level — `parseJs
 return a plain `JsonValue` tree with no type applied — because [TSON-JSON] §3.4 gives this encoding
 no vocabulary-only reading the way TSON text's base type resolution does.
 
-What this subpath does not do, today: read a document's own in-band `$schema`/`$type` binding with
-no schema supplied out of band, speak the
-§3.5 `TSON-Schema`/`TSON-Accept-Schema` HTTP header fields, or encode a schema-governed value back
+What this subpath does not do, today: read a document's own in-band binding (a root led by
+`$import` is declined as a non-verdict `NOT_IMPLEMENTED`, so the schema and root come out of band),
+speak the §3.5 `TSON-Schema`/`TSON-Accept-Schema` HTTP header fields, or encode a schema-governed value back
 to JSON. See [STATUS.md](STATUS.md)'s Part 3 section for the full list.
 
 ### Classifying a document
@@ -331,8 +331,8 @@ Parts 1 and 2, plus the shared conformance suite, are implemented in full — se
 output (§8.1) is written but not read back as a schema. Part 3, the JSON encoding, covers a schema-directed tree
 read and its CLI/package surface — narrower than the reference implementation's own scope, which
 also has an `objectReader` binding a JSON document straight into a host object; this port has no
-JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band-only
-binding, the §3.5 HTTP header fields, or a schema-directed encoder — see
+JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band
+binding (`$import` at the root), the §3.5 HTTP header fields, or a schema-directed encoder — see
 [STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps.
 
 ## Specification
