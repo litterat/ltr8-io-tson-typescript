@@ -389,20 +389,22 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
 }
 
 /**
- * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}. Six
- * members: [TSON-DATA] §9.1's `'nesting-depth'` (a document limit, applying to a schema document
- * as a document too, §11.5) plus [TSON-SCHEMA] §11.5's own five schema-side counters --
- * `'import-closure'`, `'schema-entries'`, `'reference-chain'`, `'supertype-chain'`, and
- * `'materialisation-depth'`, each named in §11.5's own table alongside its default. `STATUS.md`'s
- * known gaps names the other eleven §9.1 document-side limits this type is not raised for.
+ * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}.
+ * [TSON-DATA] §9.1's `'nesting-depth'` (a document limit, applying to a schema document as a
+ * document too, §11.5) and [TSON-SCHEMA] §11.5's own six schema-side counters --
+ * `'import-closure'`, `'schema-entries'`, `'alias-chain'`, `'supertype-chain'`,
+ * `'materialisation-depth'` and `'wait-depth'`, each named in §11.5's table alongside its default.
+ * The other ten §9.1 document-side limits are stated and reported by `LimitsPolicy` but not yet
+ * counted, so no refusal names them.
  */
 export type ResourceLimitName =
   | 'nesting-depth'
   | 'import-closure'
   | 'schema-entries'
-  | 'reference-chain'
+  | 'alias-chain'
   | 'supertype-chain'
-  | 'materialisation-depth';
+  | 'materialisation-depth'
+  | 'wait-depth';
 
 /**
  * A document refused under [TSON-DATA] §9.1's resource-limits policy ([TSON-SCHEMA] §11.5 for the
@@ -420,7 +422,7 @@ export type ResourceLimitName =
  * nothing further below that level to collect, and a schema that names a sixty-fifth import has
  * nothing further along that import chain to resolve), so every site that raises this class
  * throws it directly, under a fail-fast read and a collecting one alike -- see the throw sites
- * themselves (`core/limits.ts`'s own `nestingLimitRefusal` and its five schema-side siblings).
+ * themselves (`core/limits.ts`'s own `nestingLimitRefusal` and its six schema-side siblings).
  */
 export class TsonLimitRefusedError extends TsonRefusedError {
   override readonly name: string = 'TsonLimitRefusedError';

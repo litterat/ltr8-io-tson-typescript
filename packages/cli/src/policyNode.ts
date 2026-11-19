@@ -1,21 +1,23 @@
 /**
  * Renders a {@link ProcessorPolicy} -- `tson policy`'s own output, and the `policy` field every
  * `validate`/`compile` run carries once (`commands/policy.ts`, `render.ts`). The machine formats
- * are `policy.tn`'s `policy` type (spec/m/policy.tn): `identifier_policy` (`level`, `per_segment`,
- * `skeleton_distinctness`, `permitting`), `token_policy` (`level`, `permitting`),
- * `unicode_data_version`, and `limits` (`max_depth`). A report is therefore valid data under that
- * type, which `policyNode.test.ts` checks by reading one against it.
+ * are `policy.tn`'s `policy.processor` (spec/m/policy.tn): `identifier_policy`
+ * (`policy.identifier_policy`: `level`, `per_segment`, `skeleton_distinctness`, `permitting`),
+ * `token_policy` (`policy.script_policy`: `level`, `permitting`), `unicode_data_version`, and
+ * `limits` (`policy.limits`). A report is therefore valid data under that type, which
+ * `policyNode.test.ts` checks by reading one against it.
  *
  * **`permitting` carries every admitted combination**, each resolved from its `ScriptId`s to the
  * script's UAX #24 Script property value alias (`Latin`, `Old_Italic`, `SignWriting`) via
  * `@ltr8/tson`'s `scriptName`, in the order `--identifier-scripts`/`--token-scripts` added them.
  *
- * **`limits` states the one limit `policy.tn` declares**, `max_depth`: the nesting depth this
- * processor enforces. `Tson.processorPolicy.limits` also carries the fixed schema-side values of
- * [TSON-SCHEMA] §11.5, which `policy.tn` has no member for and which no flag configures, so they
- * are not reported.
+ * **`limits` states the whole of `policy.limits`**, every member in the schema's order: a limit
+ * this processor does not yet count is still its stated threshold, and a report that left it out
+ * would leave a sender guessing at it. Each is a `policy.limit`, an `int64`, so the TSON form
+ * writes it as a `bigint`-valued atom.
  */
 import { arrayNode, atomNode, recordNode, scriptName, type Value } from '@ltr8/tson';
+import { DEFAULT_LIMITS, type LimitsPolicy } from '@ltr8/tson';
 import type { ProcessorPolicy } from './policyOptions.js';
 
 interface ScriptPolicyJson {
@@ -28,11 +30,47 @@ interface IdentifierPolicyJson extends ScriptPolicyJson {
   readonly skeleton_distinctness: boolean;
 }
 
+/** `policy.limits`' members in the schema's order, each paired with the {@link LimitsPolicy} field that holds it. */
+const LIMIT_MEMBERS = [
+  ['max_depth', 'maxNestingDepth'],
+  ['max_token_length', 'maxTokenLength'],
+  ['max_text_length', 'maxTextLength'],
+  ['max_numeric_literal_length', 'maxNumericLiteralLength'],
+  ['max_binary_size', 'maxBinarySize'],
+  ['max_document_size', 'maxDocumentSize'],
+  ['max_elements', 'maxElements'],
+  ['max_entries', 'maxEntries'],
+  ['max_fields', 'maxFields'],
+  ['max_annotations', 'maxAnnotations'],
+  ['max_values', 'maxValues'],
+  ['max_import_closure', 'maxImportClosure'],
+  ['max_schema_entries', 'maxSchemaEntries'],
+  ['max_alias_chain', 'maxAliasChain'],
+  ['max_supertype_chain', 'maxSupertypeChain'],
+  ['max_materialisation_depth', 'maxMaterialisationDepth'],
+  ['max_wait_depth', 'maxWaitDepth'],
+] as const satisfies readonly (readonly [string, keyof LimitsPolicy])[];
+
+// Every `LimitsPolicy` field is a member: a limit added there without a row above stops this
+// line typechecking, rather than going unreported.
+type _LimitsAreExhaustive = keyof LimitsPolicy extends (typeof LIMIT_MEMBERS)[number][1]
+  ? true
+  : never;
+const _limitsAreExhaustive: _LimitsAreExhaustive = true;
+void _limitsAreExhaustive;
+
 export interface PolicyJson {
   readonly identifier_policy: IdentifierPolicyJson;
   readonly token_policy: ScriptPolicyJson;
   readonly unicode_data_version: string;
-  readonly limits: { readonly max_depth: number };
+  readonly limits: Readonly<Record<(typeof LIMIT_MEMBERS)[number][0], number>>;
+}
+
+/** `limits` as `policy.limits`' members, each a number. */
+function limitsJson(limits: LimitsPolicy): PolicyJson['limits'] {
+  return Object.fromEntries(
+    LIMIT_MEMBERS.map(([member, field]) => [member, limits[field]]),
+  ) as PolicyJson['limits'];
 }
 
 /** One `permittedScripts` combination, resolved from `ScriptId`s back to the names `scriptNamed` accepts. */
@@ -62,7 +100,7 @@ export function policyJson(policy: ProcessorPolicy): PolicyJson {
       permitting: permittingNames(tokenPolicy.permittedScripts),
     },
     unicode_data_version: policy.unicodeDataVersion,
-    limits: { max_depth: policy.limits.maxNestingDepth },
+    limits: limitsJson(policy.limits),
   };
 }
 
@@ -101,7 +139,12 @@ export function policyNode(policy: ProcessorPolicy): Value {
       [
         'limits',
         recordNode(
-          new Map<string, Value>([['max_depth', atomNode(BigInt(policy.limits.maxNestingDepth))]]),
+          new Map<string, Value>(
+            LIMIT_MEMBERS.map(([member, field]) => [
+              member,
+              atomNode(BigInt(policy.limits[field])),
+            ]),
+          ),
         ),
       ],
     ]),
@@ -142,13 +185,21 @@ function tokenSummary(policy: ProcessorPolicy): string {
   );
 }
 
-/** One line per surface, then the data version and depth limit: what differs between two deployments that disagree about one name -- `tson policy`'s own `--format text`. */
+/** Each limit other than the nesting depth that differs from its default, as `max wait depth 8` -- the defaults go unsaid. */
+function changedLimits(policy: ProcessorPolicy): readonly string[] {
+  return LIMIT_MEMBERS.filter(
+    ([member, field]) => member !== 'max_depth' && policy.limits[field] !== DEFAULT_LIMITS[field],
+  ).map(([member, field]) => `${member.replaceAll('_', ' ')} ${String(policy.limits[field])}`);
+}
+
+/** One line per surface, then the data version and depth limit (and any other limit changed from its default): what differs between two deployments that disagree about one name -- `tson policy`'s own `--format text`. */
 export function policyText(policy: ProcessorPolicy): string {
   return [
     `identifier policy: ${identifierSummary(policy)}`,
     `token policy:      ${tokenSummary(policy)}`,
     `unicode data:      ${policy.unicodeDataVersion}`,
     `max depth:         ${String(policy.limits.maxNestingDepth)}`,
+    ...changedLimits(policy).map((limit) => `limit:             ${limit}`),
   ].join('\n');
 }
 
@@ -156,11 +207,14 @@ export function policyText(policy: ProcessorPolicy): string {
 export function policySummary(policy: ProcessorPolicy): string {
   return (
     `identifier policy ${identifierSummary(policy)}, token policy ${tokenSummary(policy)}, ` +
-    `Unicode ${policy.unicodeDataVersion}, max depth ${String(policy.limits.maxNestingDepth)}`
+    `Unicode ${policy.unicodeDataVersion}, max depth ${String(policy.limits.maxNestingDepth)}` +
+    changedLimits(policy)
+      .map((limit) => `, ${limit}`)
+      .join('')
   );
 }
 
-/** §8.2's own defaults -- what a run configures by giving no policy flags at all. */
+/** §8.2's own defaults and §9.1's and §11.5's -- what a run configures by giving no policy flags at all. */
 export function isDefaultPolicy(policy: ProcessorPolicy): boolean {
   return (
     policy.identifierPolicy.restrictionLevel === 'HIGHLY_RESTRICTIVE' &&
@@ -168,7 +222,8 @@ export function isDefaultPolicy(policy: ProcessorPolicy): boolean {
     policy.identifierPolicy.skeletonDistinctness &&
     policy.identifierPolicy.permittedScripts.length === 0 &&
     policy.tokenPolicy.restrictionLevel === 'UNRESTRICTED' &&
-    policy.tokenPolicy.permittedScripts.length === 0
+    policy.tokenPolicy.permittedScripts.length === 0 &&
+    LIMIT_MEMBERS.every(([, field]) => policy.limits[field] === DEFAULT_LIMITS[field])
   );
 }
 

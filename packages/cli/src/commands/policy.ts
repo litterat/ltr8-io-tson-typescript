@@ -13,12 +13,13 @@
  * `tson policy --identifier-policy ascii-only` prints exactly what a `validate` under that flag
  * would apply. Always succeeds -- see `policyOptions.ts`'s own {@link processorPolicyOf}.
  *
- * The report includes [TSON-DATA] §9.1's depth limit (`limits.max_depth`), which §9.1 asks be
- * reachable with no document in hand -- exactly what this command is.
+ * The report includes the whole of [TSON-DATA] §9.1's and [TSON-SCHEMA] §11.5's limits
+ * (`policy.limits`), which §9.1 asks be reachable with no document in hand -- exactly what this
+ * command is.
  */
 import { processorPolicyOf, type PolicyOptions, type ProcessorPolicy } from '../policyOptions.js';
 
-/** `tson policy`'s result: the policy this run is judged under, limits included (`policy.tn`'s `policy`). */
+/** `tson policy`'s result: the policy this run is judged under, limits included (`policy.tn`'s `policy.processor`). */
 export function runPolicy(options: PolicyOptions): ProcessorPolicy {
   return processorPolicyOf(options);
 }

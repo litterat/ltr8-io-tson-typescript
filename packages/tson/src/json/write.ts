@@ -11,6 +11,12 @@
  * form costs bytes only for a human reader), {@link jsonValueToDisplayString} is the indented,
  * pretty-printed form.
  *
+ * **No annotation reaches this writer.** [TSON-JSON] §4.3 gives annotations no JSON carrier and
+ * makes encoding a value that carries them an encode error, stripping being admitted only as
+ * explicit configuration. A {@link JsonValue} is RFC 8259's own six kinds and holds no annotation,
+ * so the refusal has no site here: it belongs to a writer that takes a TSON value, and that
+ * writer states it.
+ *
  * **Never a BOM** (§3.1: "A byte order mark MUST NOT be emitted"). This module writes `string`
  * only through JavaScript's own UTF-16 text; `io/utf8.ts`'s `encodeUtf8` is what a caller reaches
  * for to get UTF-8 bytes, and it never prepends one.
