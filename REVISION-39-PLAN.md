@@ -516,6 +516,23 @@ zone.** Java: the `tson-json` diff between the pins, every file (`InBandBinding`
 
 **Gate:** the JSON unit tests, Class 1 and Class 2 unchanged, the browser bundle builds.
 
+### Stage 3 outcome
+
+Merged at `f550af8`. The JSON unit tests pass, the three declared-position tests included, and
+conformance did not move.
+
+What changed:
+
+- `$import` is refused at every value position, and a root led by `$import` is declined as a
+  non-verdict, as the reference does.
+- `json/schema/declared.ts` reads `meta.declared_type`.
+- A reference position reads its JSON string as an unquoted token.
+- `json/schema/foreign.ts` and the `foreignSchemas` option are gone.
+
+The dependent-member read is a hook, `readAgainst` in `json/schema/dependent.ts`, which WP2C wires
+together with §6.1.6's order exception. Until then, two parity cases sit in a `describe.skip`, and
+that skip must be gone before the final gate.
+
 ## Stage 4: CLI and sweep
 
 Runs as Stage 3 does, beside WP2C, for the parts that need no Stage 2 rule; finished after the merge.
@@ -574,3 +591,17 @@ a corpus item names the file.
   no Class 1 vector states one, and the harness reduces one to a reference named `kind!`.
 - **Change log §1, `policy.script_policy`.** A reader of `policy.tn` alone does not connect the record
   to Part 1 §8.2's "token policy"; a `@doc` sentence would.
+- **Part 3 §3.4, the in-band `$import` route.** The spec reads a root `$import` list and merges it
+  into one namespace, and requires a supplied binding to agree with it as sets. The reference
+  declines every root `$import` as `NOT_IMPLEMENTED`, whatever its value. This port follows the
+  reference, so neither the list's shape nor the agreement rule is enforced.
+- **Part 3 §5.6, a reference written as a JSON string.** The spec says "the same text" but does not
+  say whether the string reads as an unquoted token or a quoted one, and Part 1 §7.4 makes a quoted
+  token never a reference. This port reads it unquoted, as the reference does.
+- **Part 3 §9.4, `$import` at a value position.** The table lists it as a resolver error without
+  naming a code. The reference reports `SCOPE_NOT_ADMITTED`, and so does this port.
+- **`strip` and `policy.tn`.** The reference shortens `meta`, `numeric`, `temporal`, `net` and
+  `core`, but not `policy`, although `policy.tn` is bundled. Part 2 could state which.
+- **An unregistered import in a data document.** Part 2 §2.2.3 and §11.2 read this as a refusal
+  ("will not supply"). The library reports a schema error, and the CLI maps it to
+  `SCHEMA_NOT_PERMITTED`.
