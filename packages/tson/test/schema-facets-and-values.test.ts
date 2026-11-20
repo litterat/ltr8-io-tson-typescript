@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { LinkedSchema } from '../src/link/link.js';
-import { referenceText } from '../src/schema/meta/typedef.js';
 import { standardLibrary } from '../src/stdlib/index.js';
 import { kindOfEntry } from './linked-entries.js';
 
@@ -177,17 +176,15 @@ describe('a qualified name walks from the root (§5.12)', () => {
   });
 });
 
-describe('a template over a value’s type closes to a value (§4.1, §5.10)', () => {
-  it('names the application it is the instantiation of on its key and holds a value, no type', () => {
-    const linked = link(`{
+describe('a parameter list stands before a record body alone (§5.10)', () => {
+  it('a parameter list before a value of a namespace type is refused: there are no parametric values', () => {
+    expect(() =>
+      link(`{
       order     => { id: text }
       interface => !meta.namespace { key_type: meta.identifier  value_type: meta.type_ref }
       orders    => <T> !interface { get => T }
-      order_api => orders<order>
-    }`);
-    expect(kindOfEntry(linked, 'order_api')).toBe('value_entry');
-    const closes = linked.facts.get('order_api')?.closes ?? [];
-    expect(closes.map((application) => referenceText(application))).toEqual(['orders<order>']);
+    }`),
+    ).toThrow();
   });
 });
 
@@ -195,7 +192,7 @@ describe('a constructor pinning an optional facet states it where the instance o
   it('an instance of a refinement of unicode.text_type with `max_length?: = 4` carries the four', () => {
     const linked = link(`{
       meta => !schema {
-        code_type => unicode.text_type ^ { max_length?: = 4 }
+        code_type => unicode.text_type & { max_length?: = 4 }
       }
       code => !meta.code_type {}
     }`);

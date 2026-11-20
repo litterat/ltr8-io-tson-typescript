@@ -58,6 +58,8 @@
  * this fix is about the variant's own name, never about admitting a name the choice does not
  * otherwise admit.
  */
+import type { TypeExpr } from '../../schema/meta/typedef.js';
+import { typeExprText } from '../../schema/meta/bodies.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import { choiceDisjoint, type Top } from '../../schema/meta/typedef.js';
@@ -108,19 +110,20 @@ export function buildChoiceReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader {
-  const variantNames = body.variants.map((v) => v.name);
-  const namesList = variantNames.join(' | ');
+  // A type written in place is named by no tag (§4.2): only a named variant is reached by `$type`.
+  const variantNames = body.variants.flatMap((v) => (v.kind === 'inline' ? [] : [v.name]));
+  const namesList = body.variants.map(typeExprText).join(' | ');
   const disjoint = isDisjoint(ctx, name);
 
-  const byClass = new Map<DiscriminationClass, string>();
+  const byClass = new Map<DiscriminationClass, TypeExpr>();
   if (disjoint) {
-    for (const variantName of variantNames) {
-      const variantClass = discriminationClassOf(variantName, ctx.linkedSchema.entries);
+    for (const variant of body.variants) {
+      const variantClass = discriminationClassOf(variant, ctx.linkedSchema.entries);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass.clear();
         break;
       }
-      byClass.set(variantClass, variantName);
+      byClass.set(variantClass, variant);
     }
   }
   const classNames = Array.from(byClass.keys())

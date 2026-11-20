@@ -14,7 +14,13 @@ import { toDataValue, type AtomEncoder } from '../src/bind/encode.js';
 import { headed, topBinding } from '../src/schema/bindings.js';
 import { defaultAtomEncoder } from '../src/write/bindingWriter.js';
 import { isNestedMap } from '../src/schema/meta/schemaPaths.js';
-import { subtypesOf, type Annotation } from '../src/schema/meta/typedef.js';
+import {
+  subtypesOf,
+  type Annotation,
+  type ApplyBody,
+  type Completion,
+  type Top,
+} from '../src/schema/meta/typedef.js';
 import {
   CORE_TN,
   META_TN,
@@ -359,6 +365,15 @@ function renderAnnotationValue(value: unknown): Canonical {
     const node = value as { kind: string; value?: unknown };
     if (node.kind === 'atom') return String(node.value);
     if (node.kind === 'void') return NO_VALUE;
+    // `@meta.application`'s value, a `meta.apply` (§8.2).
+    if (node.kind === 'apply') {
+      const apply = value as ApplyBody;
+      return { head: apply.head.name, arguments: apply.arguments.map((a) => a.name) };
+    }
+  }
+  // `@meta.completion`'s value, `{ of: [text; 1..] }` (§8.1).
+  if (typeof value === 'object' && value !== null && Array.isArray((value as Completion).of)) {
+    return { of: [...(value as Completion).of] };
   }
   if (typeof value === 'object' && value !== null && 'text' in value) {
     return (value as { text: string }).text;
@@ -533,6 +548,9 @@ function differences(name: string): string[] {
   const ours = new Map<string, string>();
   for (const [key, value] of schema.entries) {
     if (schema.origins.get(key) !== selfId || isNestedMap(value)) continue;
+    // A resolved form holds complete entries only (§8.1): an incomplete entry, and an alias of one, is held
+    // in the namespace and written nowhere.
+    if (isIncompleteOrItsAlias(value, schema.entries)) continue;
     ours.set(canonicalName(key), key);
   }
   const out: string[] = [];
@@ -573,6 +591,17 @@ function differences(name: string): string[] {
     );
   }
   return out;
+}
+
+/** Whether `value` is an incomplete entry, or an alias whose chain ends at one (§5.5). */
+function isIncompleteOrItsAlias(value: Top, entries: ReadonlyMap<string, Top>): boolean {
+  let current: Top | undefined = value;
+  for (let hop = 0; hop < 16 && current !== undefined; hop++) {
+    if (current.kind === 'incomplete') return true;
+    if (current.kind !== 'alias') return false;
+    current = entries.get(current.target.name);
+  }
+  return false;
 }
 
 /** Every way the written resolved output of `name` differs from its fixture, one entry per difference. */

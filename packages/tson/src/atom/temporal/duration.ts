@@ -13,15 +13,15 @@
  * one that parses but whose magnitude exceeds the ceiling is a {@link TsonAtomValidationError} --
  * the token denoted a real ISO 8601 span, it is simply longer than this value space carries.
  *
- * **`min`/`exclusive_min`/`max`/`exclusive_max`/`multiple_of`/`precision` are all enforced
+ * **`min`/`exclusive_min`/`max`/`exclusive_max`/`multiple_of`/`fraction_digits` are all enforced
  * against the *value* — the exact nanosecond count, never the written form** ([TSON-SCHEMA] §5.5,
  * §5.7): the value space is totally ordered, which is exactly what the split from `period` bought.
  * `duration_type`'s bounds and step are read under `duration`'s own atom at schema load
  * (`schema/metaReader.ts`/`schema/bindings.ts`'s own `durationBoundBinding`), so `DurationType`'s
  * fields (`schema/meta/atoms-temporal.ts`) already hold the resolved `bigint` this module compares
- * against directly. `multiple_of` tests the magnitude with the sign ignored (§5.7); `precision`
+ * against directly. `multiple_of` tests the magnitude with the sign ignored (§5.7); `fraction_digits`
  * admits a value that is a whole number of 10⁻ᴺ seconds (§5.5) — tested on the nanosecond count
- * itself, since `precision` constrains the *value*, not a spelling: `formatIsoDuration`'s own
+ * itself, since `fraction_digits` constrains the *value*, not a spelling: `formatIsoDuration`'s own
  * trailing-zero trimming already writes at most `N` digits for any value that passes this check.
  */
 
@@ -44,7 +44,14 @@ export function createDurationParser(
   constraints: DurationType,
 ): AtomType<TsonDuration> {
   function validate(nanoseconds: bigint, text: string): void {
-    const { min, exclusiveMin, max, exclusiveMax, multipleOf, precision } = constraints;
+    const {
+      min,
+      exclusiveMin,
+      max,
+      exclusiveMax,
+      multipleOf,
+      fractionDigits: precision,
+    } = constraints;
     if (min !== undefined && nanoseconds < min) {
       const bound = formatIsoDuration(min);
       throw new TsonAtomValidationError(
@@ -96,7 +103,7 @@ export function createDurationParser(
         throw new TsonAtomValidationError(
           typeRef,
           `'${text}' is not a whole number of 10^-${precision.toString()} seconds`,
-          `on the precision-${precision.toString()} grid`,
+          `on the fraction-digits-${precision.toString()} grid`,
         );
       }
     }

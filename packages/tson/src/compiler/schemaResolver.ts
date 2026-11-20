@@ -1,34 +1,28 @@
 /**
  * Resolves a whole {@link SchemaDocument} into a {@link Schema}: `!!id`/`!!import` handling, merging every
- * import's entries into the schema's one namespace before any local declaration resolves (Part 2 §2.2.3,
- * §3.3), driving `definitionResolver.ts` over every declaration on demand (dependency order, not source
- * order, so a declaration may compose or refine one declared later in the same schema), and the
- * `@meta.synthetic` and `@meta.application` key markers (§8.2). A type position naming an `alias` entry is
- * left exactly as the author wrote it (§8.3) -- nothing here walks or rewrites a use site past one; a
- * consumer that needs the type at the end of a chain does its own ephemeral walk
- * (`link/aliasChain.ts`'s shared function).
+ * import's entries into the schema's one namespace before any local declaration resolves (Part 2 §2.2.3, §3.3),
+ * driving `definitionResolver.ts` over every declaration on demand (dependency order, not source order, §3.4.1),
+ * and the derived `@meta.application` and `@meta.completion` key annotations (§8.1, §8.2). A type position naming
+ * an `alias` entry is left exactly as the author wrote it (§8.3).
  *
- * **One namespace per schema (§3.3).** Every name -- a construction head, a refinement source, a type
- * position, an annotation -- resolves in the document's own entries and its import closure's, from the
- * root; there is no governing meta. A schema map nested as an entry (`geo => !schema { ... }`) declares its
- * members under their paths, and a map of one path declared by several documents of one closure is the
- * union of their members.
+ * **One namespace per schema (§3.3).** Every name -- a construction head, a refinement source, a type position,
+ * an annotation -- resolves in the document's own entries and its import closure's, from the root. A schema map
+ * nested as an entry (`geo => !schema { ... }`) declares its members under their paths, and a map of one path
+ * declared by several documents of one closure is the union of their members.
  *
- * **This module does not fetch, link, or register anything.** It takes each import's already-resolved
- * entries ({@link SchemaResolverDeps.resolveImport}) and the readers a body is read through
- * ({@link SchemaResolverDeps.readers}) as caller-supplied dependencies, the same dependency-injection shape
- * `definitionResolver.ts` uses for its own. A caller with no loader simply omits `resolveImport`; this
- * module then reports {@link TsonNotImplementedError} the moment a document actually writes `!!import`.
+ * **Nothing is lifted or minted (§4.2).** A sugar form is written in place where it stands, so the entries out
+ * are the declarations in; an incomplete entry (§5.5) is among them, held so an import carries it, and written in
+ * no resolved form.
  *
- * **The kernel resolves through the same lookup (§3.4).** Every construction head in `meta.tn` names an
- * entry `meta.tn` declares, and a head is made ready, on demand, before an instance that applies it is
- * read, so the kernel needs no imported vocabulary and no special case beyond being handed no import.
+ * **This module does not fetch, link, or register anything.** It takes each import's already-resolved entries
+ * ({@link SchemaResolverDeps.resolveImport}) and the readers a body is read through
+ * ({@link SchemaResolverDeps.readers}) as caller-supplied dependencies. A caller with no loader omits
+ * `resolveImport`; this module then reports {@link TsonNotImplementedError} the moment a document writes
+ * `!!import`.
  *
- * **§5.10 materialisation runs exactly where the reference runs it.** One `templates.ts`
- * `TemplateMaterialiser` is constructed per call, before the driving loop -- its `closeApplication` is
- * wired into `definitionResolver.ts` as its own on-demand `ApplicationCloser`, and its batch `materialise`
- * pass runs once every local declaration has resolved. Sharing one instance for both is what makes an
- * on-demand closing and a later batch closing of the same application land on one entry.
+ * **The kernel resolves through the same lookup (§3.4).** Every construction head in `meta.tn` names an entry
+ * `meta.tn` declares, and a head is made ready, on demand, before an instance that applies it is read, so the
+ * kernel needs no imported vocabulary and no special case beyond being handed no import.
  */
 import {
   TsonBindMismatchError,
@@ -42,31 +36,23 @@ import { diagnosticCodeForFetch, diagnosticCodeForMechanism } from '../core/diag
 import type { Diagnostic, DiagnosticsReceiver } from '../core/diagnostic.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
-import type { DataValue } from '../ast/value.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { FieldNameType } from '../link/fieldNames.js';
-import type { TemplateParam } from '../schema/meta/bodies.js';
-import { NO_FIELDS, TYPE_KIND } from '../schema/meta/bodies.js';
-import type { Annotations, EntryFacts, Top, TypeRef } from '../schema/meta/typedef.js';
+import { NO_FIELDS } from '../schema/meta/bodies.js';
+import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
 import {
   APPLICATION_ANNOTATION,
-  SYNTHETIC_ANNOTATION,
-  applicationOf,
+  COMPLETION_ANNOTATION,
   chainOf,
-  isConstructor,
-  isOpen,
-  isType,
-  supertypesOf,
-  typeChain,
+  isParametric,
   typeParameters,
-  withApplication,
+  isType,
+  typeChain,
   withChain,
+  withCompletion,
 } from '../schema/meta/typedef.js';
-import { areOneSynthetic, unifiedFacts } from '../link/importedSynthetics.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_MAX_WAIT_DEPTH, waitDepthLimitRefusal } from '../core/limits.js';
-import { terminal } from '../link/aliasChain.js';
-import { canonicalApplication } from './derivedName.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -80,12 +66,10 @@ import type {
   EntryFactsTable,
   SourceBodyEncoder,
 } from './resolverTypes.js';
-import { desugar, lifted, typeParamsOf, type DesugarFailureReporter } from './desugar.js';
-import { heldOf, withParametersOf } from './heldBody.js';
+import { checkParameterBounds } from './parameterBounds.js';
+import { applicationsOf } from '../schema/meta/typeInline.js';
+import { desugar, typeParamsOf, type DesugarFailureReporter } from './desugar.js';
 import { looseAnnotationValue } from './looseAnnotation.js';
-import { createTemplateMaterialiser, type MaterialisationFailureReporter } from './templates.js';
-import { inferAll, kinds as parameterKindsOf } from './parameterTypes.js';
-import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syntheticMerge.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -99,7 +83,7 @@ import { renames as syntheticRenames, rewrite as rewriteSynthetics } from './syn
  * `facts` holds what an entry's value cannot (§8.1's {@link EntryFacts}): where it was declared, the
  * annotations written on its value, the constructor its tag names -- present only for an entry with any to
  * record. `keyAnnotations` are the key's: those written before the name, and the resolver-attached
- * `@meta.synthetic` and `@meta.application` (§8.2).
+ * `@meta.application` and `@meta.completion` (§8.1, §8.2).
  *
  * `id` is a plain `string`, not optional -- the grammar itself marks `!!id` optional (a raw parsed
  * {@link SchemaDocument} can genuinely lack one), but a *resolved* schema always needs a real identity;
@@ -118,7 +102,7 @@ export interface Schema {
   readonly imports: readonly string[];
   /** Every resolved entry's value, local-only (imported entries are visible during resolution but never part of this). */
   readonly entries: ReadonlyMap<string, Top>;
-  /** `entries.get(name)`'s own key-position annotations (§6, §8.2) -- present only for a name that carries at least one. */
+  /** `entries.get(name)`'s own key-position annotations (§6, §8.1, §8.2) -- present only for a name that carries at least one. */
   readonly keyAnnotations: ReadonlyMap<string, Annotations>;
   /** `entries.get(name)`'s facts beyond its value (§8.1) -- present only for a name with any recorded. */
   readonly facts: ReadonlyMap<string, EntryFacts>;
@@ -224,31 +208,6 @@ function positionOf(
   return positions?.get(declaration) ?? declaration.position;
 }
 
-/**
- * Resolves every declaration in `document`'s body, on demand and dependency-following rather than strict
- * source order (§3.4.1), and carries `document`'s own header directives (`!!id`?/`!!import*`) into the
- * result's `id`/`imports`.
- *
- * **`document.id` must be present** (§2.2.1: "publishing a schema... REQUIRES `!!id`"), thrown as
- * {@link TsonSchemaValidationError} before any declaration is resolved.
- *
- * **`!!import` is merged into the one namespace before any local declaration resolves.** Collision handling
- * mirrors what the reference implementation's linker does one phase later (§2.2.3): a name declared by more
- * than one import, or by an import *and* a local declaration, is a {@link TsonSchemaValidationError}, but for
- * a schema map of one path, which is open: this document's contribution to an imported one is no collision,
- * its members colliding by path as any name does. **Merged entries keep their home namespace** -- an
- * imported entry is copied in exactly as its own schema resolved it, never re-resolved or re-materialised
- * against the importer.
- *
- * §5.10 materialisation runs once every local declaration has resolved. Nothing runs after it to rewrite a
- * use site (§8.3): a reference is a hop, not a rewrite, so what materialisation and the synthetic merge
- * leave in the namespace is the resolved schema's own final shape.
- *
- * **§6: an annotation written before a declared name binds to the name, not the definition.** A resolved
- * schema is `{type_name => declared}`, so the name is the *key* of `entries` -- which is where
- * {@link Schema.keyAnnotations} keeps them, alongside the derived `@meta.synthetic` and `@meta.application`
- * markers (§8.2).
- */
 export function resolveSchema(
   document: SchemaDocument,
   deps: SchemaResolverDeps,
@@ -266,20 +225,10 @@ export function resolveSchema(
   // Every entry's facts -- an import's as its schema recorded them, a local one's as resolution learns
   // them. Shared with the definition resolver, which records each declaration's here.
   const facts: EntryFactsTable = new Map<string, EntryFacts>();
-  // The application each imported entry closes, from its `@meta.application` -- what the applied-parent
-  // fold keys an imported instantiation on, as it keys a local one (§8.2).
-  const importedApplications = new Map<string, TypeRef>();
   // Which schema declared each imported entry, and the readers its annotation values come through.
   const origins = new Map<string, string>();
   const annotationReaders = new Map<string, AnnotationValueReader>();
-  const namespace = mergeImports(
-    document,
-    deps,
-    facts,
-    importedApplications,
-    origins,
-    annotationReaders,
-  );
+  const namespace = mergeImports(document, deps, facts, origins, annotationReaders);
 
   const reporter: DesugarFailureReporter | undefined =
     receiver === undefined
@@ -291,18 +240,11 @@ export function resolveSchema(
             );
           },
         };
-  const reused = new Map<string, Declaration>();
-  const desugared = desugar(document, new Set(namespace.keys()), {
+  const desugared = desugar(document, {
     ...(reporter === undefined ? {} : { reporter }),
     ...(positions === undefined ? {} : { positions }),
-    reused,
   });
   const declarations = desugared.body.declarations;
-  // Mutable, not the plain `ReadonlySet` `lifted` returns: the synthetic merge below removes an
-  // eagerly lifted name and adds the closed name it merged onto, so this set stays the current
-  // truth for the rest of this function (in particular the `@synthetic` key-marker loop near the
-  // end, which asks it per entry).
-  const generated = new Set(lifted(document, desugared));
 
   // Local-vs-import collisions, up front (local names are already unique -- SchemaMap dedupes them). A
   // schema map of one path is open: this document's contribution to an imported one is no collision, its
@@ -323,34 +265,30 @@ export function resolveSchema(
     }
   }
 
-  // The names the imports bring in, which a template's parameter may not be spelled like (§5.10).
+  // The names the imports bring in, which a parametric record's parameter may not be spelled like (§5.10).
   const imported = new Set(namespace.keys());
 
   /**
-   * §5.10: within a template's body a parameter's name is read before the schema's, so a parameter spelled
-   * like an entry the schema's namespace holds -- a type or a value entry, its own or an import's -- makes
-   * that entry unreachable there, and is a resolver error at the declaration rather than a silent capture.
-   * Judged by the name alone, before anything resolves, so no entry is waited on. A parameter list the
-   * desugarer wrote for a lifted form is its own renaming (`p0`, `p1`), and is not asked.
+   * §5.10: within a parametric record a parameter's name is read before the schema's, so a parameter spelled like
+   * an entry the schema's namespace holds makes that entry unreachable there, and is a resolver error at the
+   * declaration rather than a silent capture. Judged by the name alone, before anything resolves.
    */
   const refuseShadowingParameters = (name: string, parameters: readonly string[]): void => {
     for (const parameter of parameters) {
       if (declarations.has(parameter) || imported.has(parameter)) {
         throw new TsonSchemaValidationError(
           `'${name}': parameter '${parameter}' shadows the entry '${parameter}' this schema's ` +
-            `namespace holds -- inside a template a parameter's name is read before the schema's, so ` +
-            `the entry would be unreachable there (§5.10). Rename the parameter`,
+            "namespace holds -- inside a parametric record a parameter's name is read before the schema's, " +
+            'so the entry would be unreachable there (§5.10). Rename the parameter',
         );
       }
     }
   };
 
-  // Resolve on demand, following dependencies rather than source order (§3.4.1). `resolving`
-  // catches a cycle through a composition/refinement/atom-refinement edge; ordinary recursion
-  // through field references never enters it. `resolverBox` breaks the construction cycle
-  // between this getter and the `DefinitionResolver` that needs it as its own `namespaceDefinitions`.
+  // Resolve on demand, following dependencies rather than source order (§3.4.1). `resolving` catches a cycle
+  // through a wait; ordinary recursion through field references never enters it. `resolverBox` breaks the
+  // construction cycle between this getter and the `DefinitionResolver` that needs it.
   const resolving = new Set<string>();
-  const failed = new Set<string>();
   const resolverBox: { current?: DefinitionResolver } = {};
   const maxWaitDepth = deps.maxWaitDepth ?? DEFAULT_MAX_WAIT_DEPTH;
   // For each entry being made ready, the declarations of this document it has waited on so far, and each ready
@@ -415,7 +353,7 @@ export function resolveSchema(
         );
       }
       const position = positionOf(declaration, positions);
-      if (!generated.has(name)) refuseShadowingParameters(name, typeParamsOf(declaration.typeDef));
+      refuseShadowingParameters(name, typeParamsOf(declaration.typeDef));
       const resolved = resolver.resolve(declaration, position);
       refuseHeadAbstraction(name, resolved);
       measure(name);
@@ -430,7 +368,6 @@ export function resolveSchema(
       }
       const position = positionOf(declaration, positions);
       receiver.report(schemaProblem(id, name, e, position));
-      failed.add(name);
       const placeholder = unresolvedPlaceholder(typeParamsOf(declaration.typeDef));
       if (position !== undefined) facts.set(name, { position });
       namespace.set(name, placeholder);
@@ -442,14 +379,35 @@ export function resolveSchema(
     }
   };
 
-  // One materialiser for the whole schema, built before the driving loop because resolution
-  // itself closes applications on demand (a supertype or refinement source absorbing a *closed*
-  // application's fields cannot wait for the batch pass below). `generated` is `templates.ts`'s
-  // own `generatedNames`: the desugar lift's synthetic names, so a generated head closing its own
-  // intermediate form is told apart from an authored one.
-  // Where a construction head and an annotation type resolve: the whole namespace, each entry made ready
-  // on demand, in dependency order. The kernel resolves through the same lookup: every head it applies is
-  // one of its own entries, ready before the instance that applies it is read (§3.4).
+  /**
+   * Whether `head`, past its alias hops, is a parametric record, asked without making it ready: a parametric
+   * record's application orders nothing (§3.4.1). A declaration of this document answers by its parameter list.
+   */
+  const opens = (head: string): boolean => {
+    let current = head;
+    for (let hop = 0; hop < 64; hop++) {
+      const ready = namespace.get(current);
+      if (ready !== undefined) {
+        if (ready.kind !== 'alias') return isParametric(ready);
+        current = ready.target.name;
+        continue;
+      }
+      const declaration = declarations.get(current);
+      if (declaration === undefined) return false;
+      if (typeParamsOf(declaration.typeDef).length > 0) return true;
+      const typeDef = declaration.typeDef;
+      if (typeDef.kind === 'typeExprDef' && typeDef.ref.kind === 'nameRef') {
+        current = typeDef.ref.name;
+        continue;
+      }
+      return false;
+    }
+    return false;
+  };
+
+  // Where a construction head and an annotation type resolve: the whole namespace, each entry made ready on
+  // demand, in dependency order. The kernel resolves through the same lookup: every head it applies is one of
+  // its own entries, ready before the instance that applies it is read (§3.4).
   const heads: DefinitionGetter = namespaceGetter;
   const readers = deps.readers(heads);
   // An annotation's value is read through the compiled readers of the import that declared its type, else
@@ -462,30 +420,6 @@ export function resolveSchema(
       ? readers.annotation(type, value)
       : looseAnnotationValue(value);
   };
-  // A held body closes to whatever its head builds: a type where the head is a constructor, and a value entry
-  // where it is an ordinary type (`fetch => <T> !operations { ... }`, then `get_order => fetch<order>`). An
-  // alias of a constructor is applied as its target is (§3.3.1).
-  const closingReader: DefinitionMetaReader = (written, value) => {
-    const type = terminal(written, heads);
-    const head = heads(type);
-    if (head === undefined || isConstructor(head, type) || readers.value === undefined) {
-      return readers.meta(written, value);
-    }
-    return {
-      kind: 'value_entry',
-      type,
-      value: readers.value(type, retagged(value, written, type)),
-    };
-  };
-  const materialiser = createTemplateMaterialiser({
-    namespaceDefinitions: namespaceGetter,
-    publish: (name, definition) => namespace.set(name, definition),
-    definitionMetaReader: closingReader,
-    generatedNames: generated,
-    metaTypes: heads,
-    resolving: () => [...resolving].at(-1),
-    heads: (name) => facts.get(name)?.head,
-  });
 
   resolverBox.current = createDefinitionResolver({
     definitionMetaReader: readers.meta,
@@ -493,11 +427,8 @@ export function resolveSchema(
     metaDefinitions: heads,
     namespaceDefinitions: namespaceGetter,
     facts,
-    applicationCloser: (application) => materialiser.closeApplication(application),
-    applicationChecker: (application) => materialiser.checkApplication(application),
-    declaredApplicationCloser: (declaredName, application) =>
-      materialiser.closeApplicationAs(declaredName, application),
     annotationValueReader,
+    opens,
     ...(deps.encodeSourceBody === undefined ? {} : { encodeSourceBody: deps.encodeSourceBody }),
   } satisfies DefinitionResolverDeps);
   const resolver: DefinitionResolver = resolverBox.current;
@@ -506,200 +437,32 @@ export function resolveSchema(
     namespaceGetter(name);
   }
 
-  // §5.10 materialisation, after every declaration has resolved: a template application reaches
-  // here as a type-ref carrying arguments, and closing it needs the template's own *resolved* open
-  // form, which only exists once the loop above has run.
-  const beforeMaterialise = new Map<string, Top>();
+  // §5.10's written bounds, each declaration once, now that every callee's bound is ready: that a bound names a
+  // type, and that a parameter passed to a bounded parameter is written with a bound IS-A it.
+  checkParameterBounds(namespace, new Set(declarations.keys()), heads, (name, error) => {
+    if (receiver === undefined) throw error;
+    const declaration = requiredGet(declarations, name, 'resolveSchema');
+    receiver.report(schemaProblem(id, name, error, positionOf(declaration, positions)));
+  });
+
+  // Every chain closed transitively, now that every entry is ready, and a closed type's written parents dropped
+  // (§4.1, §5.8).
+  const resolvedLocals = new Map<string, Top>();
   for (const name of declarations.keys()) {
-    beforeMaterialise.set(name, requiredGet(namespace, name, 'resolveSchema'));
+    resolvedLocals.set(name, requiredGet(namespace, name, 'resolveSchema'));
   }
+  closeChains(namespace, resolvedLocals);
 
-  // §5.10's parameters, typed by use, before anything closes: an argument is "read by the
-  // position it lands in", and once a parameter's type is known that position is known at the
-  // application rather than after substitution. Here because it needs every declaration resolved
-  // (a slot's declared type comes from the constructor's own vocabulary) and nothing yet closed.
-  // The declared templates' parameters are stamped here too, not only their kinds.
-  const unkinded = new Set<string>();
-  const written = writtenParameterTypes(declarations, resolver, (name, error) => {
-    if (receiver === undefined) {
-      throw error;
-    }
-    const declaration = declarations.get(name);
-    receiver.report(
-      schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
-    );
-  });
-  const declaredParameters = inferAll(namespace, new Set(declarations.keys()), written, heads, {
-    report(name, error): void {
-      if (receiver === undefined) {
-        throw error;
-      }
-      unkinded.add(name);
-      const declaration = declarations.get(name);
-      receiver.report(
-        schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
-      );
-    },
-  });
-  stampParameters(declaredParameters, [beforeMaterialise, namespace]);
-  materialiser.setParameterKinds(parameterKindsOf(declaredParameters));
-  // An application closed during the driving loop was checked against parameters carrying no
-  // bound yet, so its check runs again now that they are stamped (§5.10). A declaration that
-  // already failed has its verdict, so a replayed check is not a second one.
-  materialiser.recheckEarly((name, error) => {
-    if (receiver === undefined) {
-      throw error;
-    }
-    if (failed.has(name)) return;
-    failed.add(name);
-    const declaration = declarations.get(name);
-    receiver.report(
-      schemaProblem(id, name, error, declaration && positionOf(declaration, positions)),
-    );
-  });
-  // Condemned on the same terms as a declaration that failed to resolve: the verdict is in, and
-  // closing an application of a template whose parameters cannot be classified only reports the
-  // consequence -- the substituted body failing its constructor's vocabulary -- against whichever
-  // entry happened to apply it.
-  condemn(unkinded, beforeMaterialise, namespace);
-
-  const materialiseReporter: MaterialisationFailureReporter | undefined =
-    receiver === undefined
-      ? undefined
-      : {
-          reportFailedApplication(entryName, error): void {
-            const declaration = declarations.get(entryName);
-            receiver.report(
-              schemaProblem(
-                id,
-                entryName,
-                error,
-                declaration && positionOf(declaration, positions),
-              ),
-            );
-          },
-        };
-  const materialised = materialiser.materialise(beforeMaterialise, materialiseReporter);
-  const resolvedLocals = new Map(materialised.entries);
-  const instantiations = new Map(materialised.materialised);
-  const mintedSynthetic = materialised.synthetics;
-  for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
-  for (const [name, definition] of instantiations) namespace.set(name, definition);
-
-  // §5.8's IS-A edge for a parent written as an application, derived once every declaration has
-  // resolved, and every closed chain then dropped of the applications it no longer needs.
-  const applicationOfEntry = (name: string): TypeRef | undefined =>
-    materialiser.mintedFacts(name)?.application ?? importedApplications.get(name);
-  appliedParentEdges(
-    namespace,
-    [resolvedLocals, instantiations],
-    applicationOfEntry,
-    materialiser.expansionsByApplication(),
-    mintedSynthetic,
-  );
-  closeChains(namespace, [resolvedLocals, instantiations]);
-
-  // §8.2's merge, at the moment that section names -- "identity settles after Pass 2, when
-  // references have resolved". A form the desugar phase lifted with an application in one of its
-  // slots was named before that application had an entry to be named for; every application is
-  // closed now, so it re-derives to the name the other channel already gave the same form.
-  const merged = syntheticRenames(declarations, generated, materialiser);
-  if (merged.size > 0) {
-    rewriteSynthetics(resolvedLocals, merged);
-    rewriteSynthetics(instantiations, merged);
-    for (const [from, to] of merged) {
-      // Dropped where the other channel already published the form, moved where it did not: the
-      // eager name was this schema's only one for it, and an entry nothing names is not an entry.
-      const eager = resolvedLocals.get(from);
-      resolvedLocals.delete(from);
-      namespace.delete(from);
-      generated.delete(from);
-      generated.add(to);
-      if (!namespace.has(to) && eager !== undefined) {
-        resolvedLocals.set(to, eager);
-      }
-    }
-    for (const [name, definition] of resolvedLocals) namespace.set(name, definition);
-    for (const [name, definition] of instantiations) namespace.set(name, definition);
-  }
-
-  // §5.10's parameters, recorded on every open entry this schema produced -- the materialiser
-  // mints open entries of its own, which is why this runs once everything has closed as well as
-  // before. A failure was reported by the first pass against the declaration that wrote it; one
-  // here is the same verdict, and the entry keeps what it had.
-  stampParameters(
-    inferAll(
-      namespace,
-      new Set([...resolvedLocals.keys(), ...instantiations.keys()]),
-      written,
-      heads,
-      {
-        report(): void {
-          // Already reported against the declaration that wrote it, by the pass before.
-        },
-      },
-    ),
-    [resolvedLocals, instantiations, namespace],
-  );
-
-  // §8.3: a type position naming a REFERENCE entry keeps that name -- a reference is a hop, not a
-  // rewrite, so resolved output states the chain exactly as the author wrote it and nothing here
-  // rewrites a use site past one. `namespace`/`resolvedLocals`/`instantiations` therefore need no
-  // further pass once materialisation and the synthetic merge above have settled.
-
-  // §6: a declaration's own name-annotations bind to the *name*, never hoisted onto the
-  // definition -- so they, and the derived @synthetic and @application markers, land on entries'
-  // key, not its value.
+  // §6: a declaration's own name-annotations bind to the *name*, never hoisted onto the definition -- so they,
+  // and the derived `@meta.completion`, land on the entry's key, not its value.
   const entries = new Map<string, Top>();
   const keyAnnotations = new Map<string, Annotations>();
   const localFacts = new Map<string, EntryFacts>();
-  // Every application this schema closed, recorded on the entry it denotes (§4.2, §8.2): an entry's own
-  // application, and an expansion's, which carries no `@meta.application`. A reference read in data is resolved
-  // against these by structural identity, and they travel with the facts to every importer.
-  const closes = new Map<string, TypeRef[]>();
-  for (const { entry, application } of materialiser.closedApplications()) {
-    const name = merged.get(entry) ?? entry;
-    const held = closes.get(name);
-    if (held === undefined) closes.set(name, [application]);
-    else held.push(application);
-  }
-  /** `name`'s facts as resolution recorded them, with the head the materialiser knows where it closed the entry. */
-  const factsFor = (name: string): EntryFacts => {
-    const known = facts.get(name) ?? {};
-    const head = materialiser.mintedFacts(name)?.head;
-    const withHead = head === undefined || known.head !== undefined ? known : { ...known, head };
-    const closed = closes.get(name);
-    const closing = closed === undefined ? withHead : { ...withHead, closes: closed };
-    // A form no author named is synthetic (§8.2): an importer reaching it by two routes unifies it.
-    return generated.has(name) || mintedSynthetic.has(name)
-      ? { ...closing, synthetic: true }
-      : closing;
-  };
-  /** `annotations` with the application `name` closes recorded as its `@application` (§8.2). */
-  const withAppliedKey = (name: string, annotations: Annotations): Annotations => {
-    const application = materialiser.mintedFacts(name)?.application;
-    return application === undefined ? annotations : withApplication(annotations, application);
-  };
-  const keep = (name: string): void => {
-    const recorded = factsFor(name);
-    if (Object.keys(recorded).length > 0) localFacts.set(name, recorded);
-  };
-  for (const name of declarations.keys()) {
+  for (const [name, value] of resolvedLocals) {
     let nameAnnotations: Annotations;
     const declaration = requiredGet(declarations, name, 'resolveSchema');
     try {
-      // `@application` is the resolver's (§8.2): it states the application an entry closes, and
-      // a declaration never writes it, as it never writes `chain`. `bx => box<text>` is the
-      // declaration that means it.
-      if (
-        declaration.nameAnnotations.some((annotation) => annotation.name === APPLICATION_ANNOTATION)
-      ) {
-        throw new TsonSchemaValidationError(
-          `'${name}' writes '@${APPLICATION_ANNOTATION}' on its key, which the resolver attaches ` +
-            'wherever an entry closes an application and no declaration writes (§8.2) -- declare ' +
-            "the entry as the application itself ('name => template<args>')",
-        );
-      }
+      refuseDerivedAnnotation(name, declaration);
       nameAnnotations = resolver.annotationsFor(name, declaration.nameAnnotations);
     } catch (e: unknown) {
       if (!isReportable(e)) {
@@ -711,24 +474,12 @@ export function resolveSchema(
       receiver.report(schemaProblem(id, name, e, positionOf(declaration, positions)));
       nameAnnotations = [];
     }
-    // A merged form is keyed by the name it merged onto, and contributes nothing at all where
-    // that name belongs to the materialised half -- the entry is there, marked, and this is its
-    // old key.
-    const key = merged.get(name) ?? name;
-    if (!resolvedLocals.has(key)) {
-      continue;
-    }
-    entries.set(key, requiredGet(resolvedLocals, key, 'resolveSchema'));
-    keep(key);
-    const annotated = withAppliedKey(key, generated.has(key) ? SYNTHETIC : nameAnnotations);
-    if (annotated.length > 0) keyAnnotations.set(key, annotated);
-  }
-  // An entry the materialiser minted has no declared name to carry author annotations from; the
-  // synthetic half still gets the derived marker (§8.2), and an instantiation its application.
-  for (const [name, value] of instantiations) {
     entries.set(name, value);
-    keep(name);
-    const annotated = withAppliedKey(name, mintedSynthetic.has(name) ? SYNTHETIC : []);
+    const recorded = facts.get(name);
+    if (recorded !== undefined && Object.keys(recorded).length > 0) localFacts.set(name, recorded);
+    const completion = resolver.completionOf(name);
+    const annotated =
+      completion === undefined ? nameAnnotations : withCompletion(nameAnnotations, completion);
     if (annotated.length > 0) keyAnnotations.set(name, annotated);
   }
 
@@ -744,114 +495,77 @@ export function resolveSchema(
   };
 }
 
+/**
+ * §5.10 admits no head abstraction: a parameter stands for a type, never for a parametric record, so `<T> { v: T<text>
+ * }` is no form. Refused as the declaration resolves, over every application the parametric record writes, while the
+ * author's own spelling is still what fails -- closing substitutes the parameter away.
+ */
+function refuseHeadAbstraction(name: string, resolved: Top): void {
+  if (!isParametric(resolved)) return;
+  const parameters = typeParameters(resolved);
+  for (const application of applicationsOf(resolved)) {
+    const head = application.head.name;
+    if (!parameters.includes(head)) continue;
+    throw new TsonSchemaValidationError(
+      `'${name}': '${head}' is a type parameter applied to arguments -- a parameter stands for a type, never for ` +
+        `a parametric record, and §5.10 admits no head abstraction, so '${head}<...>' is no form. Take the ` +
+        'applied type as the parameter instead',
+    );
+  }
+}
+
+/**
+ * Refuses an author writing a derived key annotation (§8.1, §8.2): `@meta.application` states the application an
+ * entry closes and `@meta.completion` the incomplete entries a completion closed, and a declaration never writes
+ * either, as it never writes `chain`.
+ */
+function refuseDerivedAnnotation(name: string, declaration: Declaration): void {
+  for (const derived of [APPLICATION_ANNOTATION, COMPLETION_ANNOTATION]) {
+    if (declaration.nameAnnotations.some((annotation) => annotation.name === derived)) {
+      throw new TsonSchemaValidationError(
+        `'${name}' writes '@${derived}' on its key, which the resolver attaches and no declaration writes ` +
+          (derived === APPLICATION_ANNOTATION
+            ? "(§8.2) -- declare the entry as the application itself ('name => head<args>')"
+            : "(§8.1) -- declare the entry as the completion itself ('name => !incomplete { ... }')"),
+      );
+    }
+  }
+}
+
 // ── Applied parents (§5.8) ───────────────────────────────────────────────────────────────────
 
 /**
- * §5.8's IS-A edge for a **parent written as an application**, derived once every declaration has
- * resolved, and the chains made complete through it.
- *
- * Composition needs the operand's *fields* and nothing else, so a closed declaration and a closed
- * template both keep the application in their chain's `parents` and mint no entry for it (§8.2).
- * The edge is the half that has to wait: the entry an application denotes is whichever declaration
- * names the same application, and asking that *during* materialisation would make the answer depend
- * on declaration order -- `text_box` declared before the composition found, declared after it not.
- *
- * **Nothing is created here.** The pass derives an index over entries that already exist, keyed on
- * §8.2's canonical application so two spellings of one application agree -- the application each
- * instantiation records, an imported one's included, and for a use site's minted expansion (which
- * records none) the materialiser's own index. Where no entry denotes the application there is no
- * name to record, and that is the right answer: nobody declared that type, so nothing can be
- * declared as it. {@link closeChains} then drops every application left standing.
- *
- * **Complete means transitively closed**: an entry IS-A every entry its supertypes are IS-A, so a
- * declaration composing `okt => ok<text>` reaches the edge `okt` gained here, though it holds no
- * application of its own. The fold runs to a fixed point over every local chain, bounded by the
- * entry count since each round adds at least one name or stops. A minted synthetic gains no edge:
- * it is a member of nothing (`templates.ts`'s `refuseMintedMember`).
+ * Every local chain closed transitively -- an entry IS-A every entry its supertypes are IS-A -- and a closed type's
+ * written parents dropped: a closed type's parents are not part of it (§4.1). A parametric record keeps its written
+ * parents, which may name its own parameters.
  */
-function appliedParentEdges(
-  namespace: Map<string, Top>,
-  maps: readonly Map<string, Top>[],
-  applicationOf: (name: string) => TypeRef | undefined,
-  expansions: ReadonlyMap<string, string>,
-  synthetics: ReadonlySet<string>,
-): void {
-  const byApplication = new Map<string, string>();
-  for (const name of namespace.keys()) {
-    const application = applicationOf(name);
-    if (application === undefined || application.arguments.length === 0) continue;
-    const key = canonicalApplication(application.name, application.arguments);
-    if (!byApplication.has(key)) byApplication.set(key, name);
-  }
-  for (const [key, name] of expansions) if (!byApplication.has(key)) byApplication.set(key, name);
-  const bound = [...maps].reduce((total, map) => total + map.size, 0);
+function closeChains(namespace: Map<string, Top>, locals: Map<string, Top>): void {
+  const bound = locals.size + 1;
   for (let round = 0; round <= bound; round++) {
     let changed = false;
-    for (const entries of maps) {
-      for (const [name, definition] of entries) {
-        if (synthetics.has(name)) continue;
-        const folded = completed(definition, byApplication, namespace);
-        if (folded !== definition) {
-          entries.set(name, folded);
-          namespace.set(name, folded);
-          changed = true;
+    for (const [name, definition] of locals) {
+      if (!isType(definition)) continue;
+      const chain = chainOf(definition);
+      const names = new Set(chain.supertypes);
+      for (const member of chain.supertypes) {
+        const ancestor = namespace.get(member);
+        for (const further of ancestor === undefined ? [] : chainOf(ancestor).supertypes) {
+          names.add(further);
         }
       }
+      const parents = isParametric(definition) ? chain.parents : [];
+      if (names.size === chain.supertypes.length && parents.length === chain.parents.length)
+        continue;
+      const closed = withChain(definition, typeChain([...names], parents, chain.subtypes));
+      locals.set(name, closed);
+      namespace.set(name, closed);
+      changed = true;
     }
     if (!changed) return;
   }
 }
 
-/**
- * One chain made complete: a type's every applied parent's owning entry folded in, and for any
- * chain every member's own supertypes. The application stays in `parents` until
- * {@link closeChains}, so a later round still finds it when the owner's chain has grown.
- * `definition` itself where nothing grew.
- */
-function completed(
-  definition: Top,
-  byApplication: ReadonlyMap<string, string>,
-  namespace: ReadonlyMap<string, Top>,
-): Top {
-  if (!isType(definition)) return definition;
-  const chain = chainOf(definition);
-  const names = new Set(chain.supertypes);
-  for (const parent of chain.parents) {
-    if (parent.arguments.length === 0) continue;
-    const owner = byApplication.get(canonicalApplication(parent.name, parent.arguments));
-    if (owner !== undefined) names.add(owner);
-  }
-  for (const member of [...names]) {
-    for (const ancestor of supertypesOf(namespace.get(member))) names.add(ancestor);
-  }
-  return names.size === chain.supertypes.length
-    ? definition
-    : withChain(definition, typeChain([...names], chain.parents, chain.subtypes));
-}
-
-/**
- * Every closed chain with the applications the fold left standing dropped: an application no
- * entry denotes is one nothing can be declared as, so it reaches no edge, and a closed type's
- * parents are not part of it ([TSON-SCHEMA] §4.1). A template keeps its written parents: they may
- * still name its own parameters, and closing each application completes that application's chain
- * from them.
- */
-function closeChains(namespace: Map<string, Top>, maps: readonly Map<string, Top>[]): void {
-  for (const entries of maps) {
-    for (const [name, definition] of entries) {
-      const chain = chainOf(definition);
-      if (!isType(definition) || chain.parents.length === 0 || isOpen(definition)) continue;
-      const closed = withChain(definition, typeChain(chain.supertypes, [], chain.subtypes));
-      entries.set(name, closed);
-      namespace.set(name, closed);
-    }
-  }
-}
-
 // ── Small helpers ────────────────────────────────────────────────────────────────────────────
-
-/** [TSON-SCHEMA] §8.2's derived marker, attached to the key of every entry this resolver materialised from a sugar form. */
-const SYNTHETIC: Annotations = [{ name: SYNTHETIC_ANNOTATION }];
 
 /**
  * The exception types a failed declaration is ever reported under. Every case is a positive
@@ -876,24 +590,15 @@ function isReportable(e: unknown): e is ReportableSchemaError {
   );
 }
 
-function requiredEntry(entries: ReadonlyMap<string, Top>, name: string): Top {
-  const entry = entries.get(name);
-  if (entry === undefined) throw new TsonInternalError(`no entry '${name}' in the merged imports`);
-  return entry;
-}
-
 /**
- * Stage 1 of {@link resolveSchema} -- every `!!import`'s whole namespace, in declaration order,
- * merged as-is (never re-resolved against the importer). Mirrors the reference implementation's
- * own `mergeImports`, including its collision rule (§2.2.3): a route repeating one already-merged
- * URI is skipped (transitivity means the second mention contributes nothing new), and a name two
- * *different* origins both declare is a {@link TsonSchemaValidationError}.
+ * Stage 1 of {@link resolveSchema} -- every `!!import`'s whole namespace, in declaration order, merged as-is (never
+ * re-resolved against the importer). A route repeating one already-merged URI is skipped, and a name two
+ * *different* origins both declare is a {@link TsonSchemaValidationError} (§2.2.3).
  */
 function mergeImports(
   document: SchemaDocument,
   deps: SchemaResolverDeps,
   facts: EntryFactsTable,
-  applications: Map<string, TypeRef>,
   origins: Map<string, string>,
   annotationReaders: Map<string, AnnotationValueReader>,
 ): Map<string, Top> {
@@ -919,27 +624,6 @@ function mergeImports(
         continue;
       }
       if (incumbent !== undefined) {
-        const incumbentFacts = facts.get(name);
-        const arrivingFacts = imported.facts?.get(name);
-        if (
-          incumbent !== origin &&
-          merged.get(name) !== undefined &&
-          areOneSynthetic(
-            name,
-            incumbentFacts,
-            requiredEntry(merged, name),
-            incumbent,
-            arrivingFacts,
-            definition,
-            origin,
-          )
-        ) {
-          // One synthetic minted by two documents is one entry (§8.2): the first arrival is kept.
-          if (incumbentFacts !== undefined && arrivingFacts !== undefined) {
-            facts.set(name, unifiedFacts(incumbentFacts, arrivingFacts));
-          }
-          continue;
-        }
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ('${incumbent}' and ` +
@@ -956,8 +640,6 @@ function mergeImports(
       }
       const recorded = imported.facts?.get(name);
       if (recorded !== undefined) facts.set(name, recorded);
-      const application = applicationOf(imported.keyAnnotations?.get(name));
-      if (application !== undefined) applications.set(name, application);
     }
   }
   // Each nested map holds the union of the members its closure declares.
@@ -965,87 +647,11 @@ function mergeImports(
 }
 
 /**
- * §5.10 admits no head abstraction: a type parameter stands for a type, never for a template, so
- * `<T> { v: T<text> }` is no form. Refused here, over every application a held body writes, rather
- * than waiting for materialisation (which, by the time it ran, would have already substituted the
- * parameter away and left either an arity error against a content-derived name nobody typed, or a
- * wire-vocabulary mismatch -- neither naming what the author did).
- */
-function refuseHeadAbstraction(name: string, resolved: Top): void {
-  const body = heldOf(resolved);
-  if (body === undefined) {
-    return; // a closed entry
-  }
-  for (const application of body.applications()) {
-    if (body.parameterNames.includes(application.name)) {
-      throw new TsonSchemaValidationError(
-        `'${name}': '${application.name}' is a type parameter applied to arguments -- a parameter stands for a ` +
-          `type, never for a template, and §5.10 admits no head abstraction, so '${application.name}<...>' is no ` +
-          'form. Take the applied type as the parameter instead',
-      );
-    }
-  }
-}
-
-/**
- * What each declaration's parameter list wrote after a name (`<T: text>`), as the type-refs
- * resolution uses, keyed by declaration then parameter. A written type that is not a reference to
- * a type is reported against the declaration that wrote it and left out.
- */
-function writtenParameterTypes(
-  declarations: ReadonlyMap<string, Declaration>,
-  resolver: DefinitionResolver,
-  report: (name: string, error: TsonSchemaValidationError) => void,
-): ReadonlyMap<string, ReadonlyMap<string, TypeRef>> {
-  const written = new Map<string, ReadonlyMap<string, TypeRef>>();
-  for (const [name, declaration] of declarations) {
-    if (declaration.parameterTypes === undefined) continue;
-    const types = new Map<string, TypeRef>();
-    for (const [parameter, ref] of declaration.parameterTypes) {
-      try {
-        types.set(parameter, resolver.parameterType(parameter, ref));
-      } catch (e: unknown) {
-        if (!(e instanceof TsonSchemaValidationError)) throw e;
-        report(name, e);
-      }
-    }
-    if (types.size > 0) written.set(name, types);
-  }
-  return written;
-}
-
-/**
- * Stamps each named open entry's parameters (`parameterTypes.ts`) in every view of it, so every
- * view of an entry agrees.
- */
-function stampParameters(
-  parameters: ReadonlyMap<string, ReadonlyMap<string, TemplateParam>>,
-  views: readonly Map<string, Top>[],
-): void {
-  for (const view of views) {
-    for (const [name, value] of view) {
-      const settled = parameters.get(name);
-      if (settled !== undefined && isOpen(value)) {
-        view.set(name, withParametersOf(value, settled));
-      }
-    }
-  }
-}
-
-/**
- * The placeholder a declaration that failed to resolve leaves behind, so declarations that
- * reference it -- and ones merely queued after it -- still resolve instead of collapsing into a
- * cascade of consequences of one original error. An empty record, because the point is to absorb
- * rather than to be recognised: a dependent that composes with a failed declaration
- * (`parent => child & { ... }`) resolves cleanly, contributing no fields.
- *
- * **It keeps the failed declaration's own type parameters.** Answering "how many type
- * parameters?" with zero is answering wrongly, not absorbing -- a downstream `bl<text>` would then
- * be told `bl` "declares no type parameters", which is a wrong fix for someone else's error.
+ * The placeholder a declaration that failed to resolve leaves behind, so declarations that reference it still
+ * resolve instead of collapsing into a cascade of consequences of one original error: an empty record. It keeps
+ * the failed declaration's own type parameters, so a downstream `bl<text>` is not told `bl` takes none.
  */
 function unresolvedPlaceholder(parameters: readonly string[]): Top {
-  // An open placeholder is an open empty record, closing by the process every record template
-  // does, so nothing downstream has to keep a second substitution path for it.
   return {
     kind: 'record',
     fields: NO_FIELDS,
@@ -1053,37 +659,8 @@ function unresolvedPlaceholder(parameters: readonly string[]): Top {
     extension: 'OPEN',
     ...(parameters.length === 0
       ? {}
-      : {
-          parameters: parameters.map((parameter) => ({
-            name: parameter,
-            type: { name: TYPE_KIND, arguments: [], annotations: [] },
-          })),
-        }),
+      : { parameters: parameters.map((parameter) => ({ name: parameter })) }),
   };
-}
-
-/**
- * Replaces each named entry with {@link unresolvedPlaceholder}, keeping its position and its type
- * parameters -- the same treatment a declaration that failed to resolve gets, applied to a
- * template whose verdict is already in (§5.10's parameter-kind classification, today the only
- * caller).
- *
- * **Both maps, because the two halves are read by different phases**: `templates.ts`'s own
- * `materialise` walks `resolvedLocals`, while an application's head is looked up through
- * `namespaceGetter` over `namespace`. Leaving one behind would close applications against the
- * condemned template through whichever map was missed.
- */
-function condemn(
-  names: ReadonlySet<string>,
-  resolvedLocals: Map<string, Top>,
-  namespace: Map<string, Top>,
-): void {
-  for (const name of names) {
-    const condemned = requiredGet(resolvedLocals, name, 'condemn');
-    const placeholder = unresolvedPlaceholder(typeParameters(condemned));
-    resolvedLocals.set(name, placeholder);
-    namespace.set(name, placeholder);
-  }
 }
 
 /**
@@ -1131,9 +708,4 @@ function requiredGet<K, V>(map: ReadonlyMap<K, V>, key: K, context: string): V {
     throw new TsonInternalError(`${context}: missing expected key '${String(key)}'`);
   }
   return value;
-}
-
-/** `value` tagged with `type` where it was written under the alias `written` of it. */
-function retagged(value: DataValue, written: string, type: string): DataValue {
-  return type !== written && value.typeRef === written ? { ...value, typeRef: type } : value;
 }

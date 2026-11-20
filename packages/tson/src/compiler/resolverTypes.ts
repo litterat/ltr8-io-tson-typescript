@@ -6,7 +6,7 @@
  * for the Java's `TsonObjectWriter` field (see this file's own note on it below).
  */
 import type { CoreValue, DataValue } from '../ast/value.js';
-import type { EntryFacts, MetaValue, Top, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
+import type { EntryFacts, MetaValue, Top } from '../schema/meta/typedef.js';
 
 /**
  * A single-name entry lookup -- the entry's value (§8.1: an entry is its value), `undefined` when
@@ -66,15 +66,7 @@ export type DefinitionMetaReader = (type: string, value: DataValue) => Top;
  *
  * Throws to report a read failure, as {@link DefinitionMetaReader} does.
  */
-export type DefinitionValueReader = (
-  type: string,
-  value: DataValue,
-  /**
-   * Closes an application a field the value is read against is typed by, to the entry it denotes: a record
-   * type resolved before the schema materialises holds such a type as written (§5.10).
-   */
-  close?: (application: TypeRef) => string,
-) => MetaValue;
+export type DefinitionValueReader = (type: string, value: DataValue) => MetaValue;
 
 /**
  * Reads an annotation's value through the type its name refers to (Part 2 §6: "an annotation
@@ -93,54 +85,6 @@ export type DefinitionValueReader = (
  * `annotationsResolve` note.
  */
 export type AnnotationValueReader = (type: string, value: DataValue) => unknown;
-
-/**
- * Closes a fully-bound §5.10 template application into the entry it denotes, returning that
- * entry's name — `TemplateMaterialiser`'s on-demand half (a later work package's own file), seen
- * by `definitionResolver.ts` as a dependency the way its two `DefinitionGetter`s are.
- *
- * Exists because two positions absorb a supertype's *fields* rather than merely naming a type: a
- * composition supertype (§5.8) and a refinement source (§5.7). Both resolve per declaration,
- * while the rest of §5.10 materialisation is a whole-schema pass that runs afterwards — so
- * without this the entry an application denotes does not exist yet at the moment its fields are
- * needed.
- *
- * Optional: omitted for a caller that resolves a declaration outside a whole-schema pass (the
- * meta-kernel bootstrap, and a standalone test) — there is no materialiser in those, and no
- * schema for an instantiation entry to land in. `definitionResolver.ts` reports
- * `TsonNotImplementedError` if a closed application is ever needed with none supplied.
- */
-export type ApplicationCloser = (application: TypeRef) => string;
-
-/**
- * §8.2's "a declaration whose body denotes a type is that type's entry": closes `application` (as
- * {@link ApplicationCloser} would) but, when the application's own template admits it, publishes
- * the result *as* `name` — the declaring entry itself, no content-derived name minted beside it and
- * no `!reference` hop (§5.10, §8.2) — and returns the resulting value directly so
- * `definitionResolver.ts` can use it as the declaration's own resolved entry.
- *
- * Returns `undefined` for a case this owns nothing of: the head is not a template, the arity
- * disagrees (left for the ordinary path's own diagnostic), or the template is reference-headed
- * (§5.10's partial application composes away and mints no entry to own) — `definitionResolver.ts`
- * falls back to its ordinary, lazy `!reference` handling in every such case.
- *
- * Optional on the same terms as {@link ApplicationCloser}: omitted for a caller with no
- * whole-schema materialiser to hand.
- */
-export type DeclaredApplicationCloser = (name: string, application: TypeRef) => Top | undefined;
-
-/**
- * §5.10's argument check for an application that denotes no entry: a composition operand absorbs
- * its template's fields by value and mints nothing, so it never reaches the materialiser's closing
- * path, which is where an application's arguments are otherwise judged against the parameters they
- * bind. Throws a `TsonSchemaValidationError` when an argument is outside its parameter's bound or
- * type; an argument it cannot judge is left to the position, as everywhere else. Returns the
- * arguments as §5.10 classifies them by the parameter each binds -- what the operand's chain
- * records, so the applied-parent fold keys it as the owning declaration's `@application` is keyed.
- *
- * Optional on the same terms as {@link ApplicationCloser}.
- */
-export type ApplicationChecker = (application: TypeRef) => readonly TypeArgument[];
 
 /**
  * Converts an already-bound `Top` body back to a bare wire `CoreValue` — this port's own

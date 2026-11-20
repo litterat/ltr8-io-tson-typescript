@@ -41,7 +41,7 @@ const CYCLIC_SCHEMA = linkedSchema(
         fields: fieldMapOf([
           {
             name: 'value',
-            type: { name: 'text', arguments: [], annotations: [] },
+            type: { name: 'text', annotations: [] },
             optional: false,
             voidable: false,
             role: 'FREE',
@@ -49,7 +49,7 @@ const CYCLIC_SCHEMA = linkedSchema(
           },
           {
             name: 'next',
-            type: { name: 'node', arguments: [], annotations: [] },
+            type: { name: 'node', annotations: [] },
             optional: true,
             voidable: true,
             role: 'FREE',

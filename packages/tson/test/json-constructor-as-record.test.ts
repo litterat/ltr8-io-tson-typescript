@@ -20,8 +20,6 @@ const LINKED = resolveUserSchema(`
   holder   => { spec: net.uuid_type }
   pick     => { t: meta.ref<meta.record> }
   tpick    => { t: meta.type_ref }
-  boxed    => <T> { v: T }
-  box_spec => boxed<net.uuid_type>
   specs    => [net.uuid_type]
 }
 `);
@@ -38,10 +36,28 @@ describe('§4.1 a constructor is a type a field may be typed by', () => {
     expect(fromTson('holder', '{ spec: { version: 4 } }')).toEqual([]);
     expect(fromTson('holder', '{ spec: !net.uuid_type { version: 4 } }')).toEqual([]);
     expect(fromTson('specs', '[{ version: 4 } {}]')).toEqual([]);
-    expect(fromTson('box_spec', '{ v: { version: 4 } }')).toEqual([]);
     expect(fromJson('holder', '{"spec": {"version": 4}}')).toEqual([]);
     expect(fromJson('specs', '[{"version": 4}, {}]')).toEqual([]);
-    expect(fromJson('box_spec', '{"v": {"version": 4}}')).toEqual([]);
+  });
+
+  it('a parametric record applied over a constructor holds a declaration where its parameter stood (§5.10)', () => {
+    const linked = resolveUserSchema(`
+!!id:"https://example.test/constructor-as-argument.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
+!schema {
+  boxed    => <T> { v: T }
+  box_spec => boxed<net.uuid_type>
+}
+`);
+    const tson = validateText(new TextEncoder().encode('{ v: { version: 4 } }'), {
+      schema: compile(linked),
+      root: 'box_spec',
+    }).diagnostics;
+    expect(tson).toEqual([]);
+    expect(
+      validateJson('{"v": {"version": 4}}', { schema: compileJsonSchema(linked), root: 'box_spec' })
+        .diagnostics,
+    ).toEqual([]);
   });
 
   it('a member the constructor does not declare is refused, on one code in both encodings', () => {

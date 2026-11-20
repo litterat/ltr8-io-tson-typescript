@@ -31,13 +31,13 @@ import { TsonReadError } from '../src/core/errors.js';
 import { fromBytes, runSync } from '../src/io/bytes.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import type { RecordBody } from '../src/schema/meta/bodies.js';
-import { entryKind } from '../src/schema/meta/typedef.js';
+import { typeExprText } from '../src/schema/meta/bodies.js';
 import { tsonDocument } from '../src/tree/nodes.js';
 import { writeDocument } from '../src/write/astWriter.js';
 import { writeTree, writeTreeValue } from '../src/write/treeWriter.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
 import { requireValue } from './reader-tree-helpers.js';
-import { entry } from './model-fixtures.js';
+import { entry, entryClass } from './model-fixtures.js';
 
 // ── The user schema, and the two documents it governs ─────────────────────────────────────────
 
@@ -95,10 +95,9 @@ const linked: LinkedSchema = resolveUserSchema(USER_SCHEMA);
 const compiled: CompiledSchema = compile(linked);
 
 /**
- * The type name `typeName`'s own field `field` declares. Used instead of hard-coding the two
- * desugarer-injected names (`[text]` and `{text => float64}` are lifted to structurally-named
- * entries, §5.3/§8.2), so the expectations below assert the compiler's own output against the
- * schema rather than against a hash spelling.
+ * The type `typeName`'s own field `field` declares, as the compiled reader names it: a name, or a type written in
+ * place spelled as written (`[text]`, `{text => float64}`, §4.2) -- so the expectations below assert the
+ * compiler's own output against the schema rather than against a spelling restated here.
  */
 function fieldTypeName(typeName: string, field: string): string {
   const body = linked.entries.get(typeName);
@@ -107,9 +106,7 @@ function fieldTypeName(typeName: string, field: string): string {
   if (record === undefined) throw new Error(`'${typeName}' is not a record in the linked schema`);
   const declared = record.fields.entries.get(field);
   if (declared === undefined) throw new Error(`'${typeName}' declares no field '${field}'`);
-  if (declared.type.kind === 'sibling')
-    throw new Error(`'${typeName}.${field}' is a dependent field`);
-  return declared.type.name;
+  return declared.type.kind === 'inline' ? typeExprText(declared.type) : declared.type.name;
 }
 
 /**
@@ -125,7 +122,6 @@ function declaredTypeAt(pointer: string): string {
 }
 
 const TAGS_TYPE = fieldTypeName('reading', 'tags');
-const LIMITS_TYPE = fieldTypeName('reading', 'limits');
 
 const NO_ANNOTATIONS = { values: [] };
 const atom = (value: unknown, typeRef: string): unknown => ({
@@ -176,8 +172,8 @@ const EXPECTED_TREE = {
     [
       'tags',
       {
+        // A type written in place is no entry, so the node carries no tag (§4.2).
         kind: 'array',
-        typeRef: TAGS_TYPE,
         annotations: NO_ANNOTATIONS,
         elements: [atom('alpine', 'text'), atom('hourly', 'text')],
       },
@@ -186,7 +182,6 @@ const EXPECTED_TREE = {
       'limits',
       {
         kind: 'map',
-        typeRef: LIMITS_TYPE,
         annotations: NO_ANNOTATIONS,
         entries: [
           { key: atom('low', 'text'), value: atom(-40, 'float64') },
@@ -240,7 +235,7 @@ describe('the import chain is three schemas deep', () => {
     const int32 = linked.entries.get('int32');
     if (int32 === undefined) throw new Error('unreachable');
     const kernel = resolvedBundled('meta');
-    expect(entryKind(int32)).toBe('ATOM');
+    expect(entryClass(int32)).toBe('ATOM');
     expect(int32).toMatchObject(
       entry({ kind: 'integer_type', size: { bits: 32n, signed: true } }, ['integer']),
     );

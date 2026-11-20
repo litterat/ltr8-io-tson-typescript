@@ -15,19 +15,11 @@
  *
  * **The walk stops at three things**, and the second is the one worth knowing:
  * - an entry whose body is not an {@link Alias} -- the type at the end;
- * - an **argument-bearing** target, which is an application rather than a hop to another entry:
- *   there is no entry at the end of one until materialisation mints it (§5.10);
  * - a name the namespace does not declare, and a cycle. {@link terminal} answers both with the
- *   name it stopped at (an undeclared name may be a template parameter to its own caller, and a
+ *   name it stopped at (an undeclared name may be a parameter of the record naming it, and a
  *   cycle's answer depends on where the walk began, so no false equality follows from it);
  *   {@link terminalDefinition} answers both with `undefined`, having been asked for an entry and
  *   having none to give.
- *
- * **Not every walk over references is this one.** A held body's own substitution (`templates.ts`)
- * follows a slot to its declared *vocabulary*, and deliberately does not stop at an argument-
- * bearing target -- it is after the constructor applied there, where the template is the answer.
- * It keeps its own loop, and this note exists so a future reader does not assume there were only
- * ever these five.
  *
  * **[TSON-SCHEMA] §11.5's "alias chain" limit lives here**, since every caller shares this
  * one walk: a chain that has not reached a terminal (or an undeclared name, or closed a cycle
@@ -40,7 +32,6 @@
  */
 import { DEFAULT_MAX_ALIAS_CHAIN, aliasChainLimitRefusal } from '../core/limits.js';
 import type { Alias, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 
 /** A single-name lookup -- a finished `Map`'s `get`, or a namespace still being built one declaration at a time (`definitionResolver.ts`'s own `DefinitionGetter`). */
 export type EntryLookup = (name: string) => Top | undefined;
@@ -51,10 +42,9 @@ interface Stop {
   readonly reached: boolean;
 }
 
-// An `Alias` value is ALIAS-kind by its shape alone (`schema/meta/typedef.ts`'s `entryKind`), with no
-// further lookup needed.
+// An `Alias` value is a hop by its shape alone, with no further lookup needed.
 function isAliasBody(body: Top): body is Alias {
-  return !isTemplateBody(body) && body.kind === 'alias';
+  return body.kind === 'alias';
 }
 
 function walk(name: string, entries: EntryLookup, maxHops: number = DEFAULT_MAX_ALIAS_CHAIN): Stop {
@@ -70,7 +60,7 @@ function walk(name: string, entries: EntryLookup, maxHops: number = DEFAULT_MAX_
       return { name: current, reached: false };
     }
     const body = definition;
-    if (isAliasBody(body) && body.target.arguments.length === 0) {
+    if (isAliasBody(body)) {
       current = body.target.name;
       continue;
     }
@@ -122,7 +112,7 @@ export function resolvesToConstructor(
   constructor: 'void_type',
 ): boolean {
   const definition = terminalDefinition(name, entries);
-  return definition !== undefined && !isTemplateBody(definition) && definition.kind === constructor;
+  return definition?.kind === constructor;
 }
 
 /**
@@ -131,9 +121,7 @@ export function resolvesToConstructor(
  */
 export function resolvesToDeclared(name: string, entries: EntryLookup): boolean {
   const definition = terminalDefinition(name, entries);
-  return (
-    definition !== undefined && !isTemplateBody(definition) && definition.kind === 'declared_type'
-  );
+  return definition?.kind === 'declared_type';
 }
 
 // ── §7.2's alias flattening: the written names that mean one declared type ─────────────────────

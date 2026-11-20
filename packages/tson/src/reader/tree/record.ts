@@ -43,7 +43,7 @@ import { valuesEqual } from './equality.js';
 import { abandonedValue, readSchemaLiteral, renderValue } from './support.js';
 import { FIELD_NAME_RULE, judgeFieldName, matchKey, type FieldNameRule } from './fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../../unicode/policy.js';
-import type { Reference } from '../../schema/meta/typedef.js';
+import type { TypeRef } from '../../schema/meta/typedef.js';
 import { writtenBeforeItsSibling, writtenWithoutItsSibling } from '../../link/dependentFields.js';
 import { isDependentReader, referenceOfValue, type DependentReader } from './dependent.js';
 
@@ -312,14 +312,14 @@ export function recordTreeReader(
 
   /** What one read of a record with a dependent field keeps: each sibling's value as this instance wrote it, and each dependent field reached before its sibling was written. */
   interface Dependents {
-    readonly named: (Reference | undefined)[];
+    readonly named: (TypeRef | undefined)[];
     readonly readBefore: (string | undefined)[];
     readonly readBeforeAt: (ReadContext | undefined)[];
   }
 
   function newDependents(): Dependents {
     return {
-      named: new Array<Reference | undefined>(fields.length).fill(undefined),
+      named: new Array<TypeRef | undefined>(fields.length).fill(undefined),
       readBefore: new Array<string | undefined>(fields.length).fill(undefined),
       readBeforeAt: new Array<ReadContext | undefined>(fields.length).fill(undefined),
     };
@@ -371,7 +371,7 @@ export function recordTreeReader(
     const siblingField = at(fields, sibling, 'field');
     const fieldCtx = ctx.schemaField(written);
     const siblingCtx = ctx.schemaField(siblingField.schema.name);
-    let named: Reference | undefined;
+    let named: TypeRef | undefined;
     if (fixedCheck[sibling] !== undefined) {
       named = referenceOfValue(precomputedValue[sibling]);
     } else if (seen[sibling] === true) {

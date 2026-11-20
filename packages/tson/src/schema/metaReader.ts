@@ -67,13 +67,22 @@ import { resolveBaseType, type BaseToken } from '../base/baseTypeResolver.js';
 import { readFullDate, readFullTime } from '../atom/temporal/rfc3339.js';
 import { referenceOfWire } from './referenceAtoms.js';
 import {
+  arrayBodyBinding,
+  applyBodyBinding,
+  choiceBodyBinding,
+  dependentBodyBinding,
+  enumBodyBinding,
   fieldGroupBinding,
   integerSizeBinding,
+  mapBodyBinding,
   metaBindings,
+  namespaceBodyBinding,
+  paramBinding,
+  recordBodyBinding,
   recordFieldBinding,
-  recordTemplateFieldBinding,
-  templateParamBinding,
+  refBodyBinding,
   tokenFormToWire,
+  tupleBodyBinding,
   tupleElementBinding,
   typeChainBinding,
 } from './bindings.js';
@@ -87,7 +96,6 @@ import {
   type RecordField,
 } from './meta/bodies.js';
 import type { Top } from './meta/typedef.js';
-import { isTemplateBody } from './meta/typedef.js';
 import { inheritedBindingName } from './inheritedBinding.js';
 
 // -------------------------------------------------------------------------------------------
@@ -123,19 +131,10 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
     case 'text':
       return wire.text;
 
-    // `meta.type_ref`, a position that names a type, and `meta.field_type_ref`, a record field's type
-    // (§4.2, [TSON-DATA] §7.4): the wire token is the reference's canonical text, and a sibling
-    // reference stands only at the second.
+    // `meta.type_ref` and every `meta.ref`, a position that names something (§4.2, §5.12): the wire token is
+    // the qualified name, whatever its form.
     case 'type_ref':
-    case 'reference': {
-      const reference = referenceOfWire(wire.text, wire.form);
-      if (reference.kind === 'sibling' && binding.wireType === 'type_ref') {
-        throw readError(
-          `a sibling reference ('${reference.field}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not here`,
-        );
-      }
-      return reference;
-    }
+      return referenceOfWire(wire.text, wire.form);
 
     case 'boolean':
       if (wire.text === 'true') return true;
@@ -259,8 +258,7 @@ function readError(message: string): TsonReadError {
 
 /** `def`'s own `RecordBody`, or `undefined` when `def` is unknown or not record-shaped. */
 function recordBodyOf(value: Top | undefined): RecordBody | undefined {
-  if (value === undefined || isTemplateBody(value)) return undefined;
-  return value.kind === 'record' ? value : undefined;
+  return value?.kind === 'record' ? value : undefined;
 }
 
 function singleRequiredField(fields: readonly NamedField[]): string | undefined {
@@ -306,12 +304,23 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
   string
 >([
   [recordFieldBinding, metaName('record_field')],
-  [recordTemplateFieldBinding, metaName('record_template_field')],
   [tupleElementBinding, metaName('tuple_element')],
   [fieldGroupBinding, metaName('field_group')],
   [integerSizeBinding, kernelName(NUMERIC_MAP, 'integer_size')],
   [typeChainBinding, metaName('type_chain')],
-  [templateParamBinding, metaName('template_param')],
+  [paramBinding, metaName('param')],
+  // The bodies a type written in place holds, `{ of: !meta.array { ... } }`, each read with its constructor's
+  // defaults.
+  [recordBodyBinding, metaName('record')],
+  [arrayBodyBinding, metaName('array')],
+  [mapBodyBinding, metaName('map')],
+  [namespaceBodyBinding, metaName('namespace')],
+  [tupleBodyBinding, metaName('tuple')],
+  [choiceBodyBinding, metaName('choice')],
+  [enumBodyBinding, metaName('enum_type')],
+  [refBodyBinding, metaName('ref')],
+  [applyBodyBinding, metaName('apply')],
+  [dependentBodyBinding, metaName('dependent')],
 ]);
 
 // -------------------------------------------------------------------------------------------

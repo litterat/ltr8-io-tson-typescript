@@ -45,7 +45,7 @@ import { createIdentifierParser } from '../atom/text/identifier.js';
 import { createEnumParser } from '../atom/enum.js';
 import { createReferenceParser, TYPE_NAME_GRAMMAR } from '../atom/reference.js';
 import { identifierProfileOf } from '../unicode/identifier-profile.js';
-import { parseReference, referenceNames } from '../atom/referenceGrammar.js';
+import { parseReference } from '../atom/referenceGrammar.js';
 import { DEFAULT_IDENTIFIER_POLICY, judgeName, type IdentifierPolicy } from '../unicode/policy.js';
 import { reportNameViolations } from '../reader/tree/refusal.js';
 import { createUuidParser } from '../atom/network/uuid.js';
@@ -226,7 +226,7 @@ export function buildAtomReader(
       return wrap(createIpv6Parser(name, atom), name);
     case 'complex_type':
       return wrap(createComplexParser(name), name);
-    case 'reference_type': {
+    case 'ref': {
       // A reference's value is a name (§4.2, §5.12): read by the name grammar, a name under §8.2's
       // policy, and -- where it names types -- a member of the reference's linked members where the
       // document's names resolve in the closure it was linked over. What a name reaches is judged
@@ -238,15 +238,12 @@ export function buildAtomReader(
           createReferenceParser(name, atom, options.judgesKindMembers ?? false),
           name,
           (ctx, value) => {
-            // Name hygiene judges each name an application writes, as it judges a bare name (§8.2).
-            let refused = false;
-            for (const written of namesWritten(value)) {
-              const violations = judgeName(written, profile, policy);
-              if (violations.length === 0) continue;
-              reportNameViolations(ctx, written, violations);
-              refused = true;
-            }
-            return refused;
+            // Name hygiene judges the name, as it judges any name (§8.2).
+            const written = nameWritten(value);
+            const violations = judgeName(written, profile, policy);
+            if (violations.length === 0) return false;
+            reportNameViolations(ctx, written, violations);
+            return true;
           },
         ),
         name,
@@ -261,12 +258,11 @@ export function buildAtomReader(
   }
 }
 
-/** The names a reference's canonical text writes: its head and every reference among its arguments. A sibling reference writes a field, no name. */
-function namesWritten(text: string): readonly string[] {
+/** The name a reference's text spells (§5.12), or the text itself where it spells none. */
+function nameWritten(text: string): string {
   try {
-    const reference = parseReference(text);
-    return reference.kind === 'sibling' ? [] : referenceNames(reference);
+    return parseReference(text);
   } catch {
-    return [text];
+    return text;
   }
 }

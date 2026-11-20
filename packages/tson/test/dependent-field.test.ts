@@ -26,7 +26,7 @@ function schema(declarations: string, id = ID): string {
 const CELLS = schema(`
   point     => { x: int32  y: int32 }
   cell      => { kind: meta.type_ref  v?: kind! }
-  int_cell  => cell ^ { kind?: = int32 }
+  int_cell  => cell & { kind?: = int32 }
   defaulted => { kind?: meta.type_ref ~ int32  v?: kind! }
   box       => <T> { item: T }
   slot      => abstract { kind: meta.type_ref =?  v?: kind! }
@@ -77,16 +77,20 @@ describe('§5.2 the sibling’s rules', () => {
     for (const declarations of [
       'cell => { kind: meta.type_ref  v?: kind!  w: kind! }',
       'cell => { kind?: meta.type_ref ~ int32  v?: kind! }',
-      'cell => { kind: meta.type_ref  v?: kind! }\n pinned => cell ^ { kind?: = int32 }',
-      'cell => { kind: meta.type_ref  v?: kind! }\n strict => cell ^ { v: kind! }',
+      'cell => { kind: meta.type_ref  v?: kind! }\n pinned => cell & { kind?: = int32 }',
+      'cell => { kind: meta.type_ref  v?: kind! }\n strict => cell & { v: kind! }',
       'records => meta.ref<meta.record>\n shape => { kind: records  v?: kind! }',
       'base => { kind: meta.type_ref }\n cell => base & { v?: kind! }',
-      'pair => <T> { kind: meta.type_ref  v?: kind!  w: T }\n p => pair<text>',
-      'cell => !meta.record { fields: { kind => meta.type_ref  v => !meta.record_field { type: kind! } } }',
+      'cell => !meta.record { fields: { kind => meta.type_ref  v => !meta.record_field { type: { of: !meta.dependent { on: kind } } } } }',
       'cell => abstract { kind: meta.type_ref =?  v?: kind! }\n int_cell => cell & { kind?: = int32 }',
     ]) {
       expect(refusal(declarations), declarations).toBeUndefined();
     }
+  });
+
+  it('a dependent field in a parametric record resolves where the record is applied (§5.10)', () => {
+    const declarations = 'pair => <T> { kind: meta.type_ref  v?: kind!  w: T }\n p => pair<text>';
+    expect(refusal(declarations), declarations).toBeUndefined();
   });
 
   it('the sibling is declared before its dependent field', () => {
@@ -127,18 +131,18 @@ describe('§5.2 the sibling’s rules', () => {
     );
     expect(
       refusal(
-        'cell => { ( kind: meta.type_ref | name: text )  v?: kind! }\n must => cell ^ { v: kind! }',
+        'cell => { ( kind: meta.type_ref | name: text )  v?: kind! }\n must => cell & { v: kind! }',
       ),
     ).toContain("a member of a field group, and 'v' is required");
   });
 
-  it('a sibling’s pin or default names no template', () => {
+  it('a sibling’s pin or default names no parametric record', () => {
     expect(
       refusal('box => <T> { item: T }\n cell => { kind?: meta.type_ref = box  v?: kind! }'),
-    ).toContain("'box' is a template");
+    ).toContain("'box' is a parametric record");
     expect(
       refusal('box => <T> { item: T }\n cell => { kind?: meta.type_ref ~ box  v?: kind! }'),
-    ).toContain("'box' is a template");
+    ).toContain("'box' is a parametric record");
   });
 
   it('a dependent field is never voidable and carries no value', () => {
@@ -149,7 +153,7 @@ describe('§5.2 the sibling’s rules', () => {
     expect(
       refusal(
         'cell => !meta.record { fields: { kind => meta.type_ref  v => !meta.record_field { ' +
-          'type: kind!  optional: true  voidable: true } } }',
+          'type: { of: !meta.dependent { on: kind } }  optional: true  voidable: true } } }',
       ),
     ).toContain('is voidable');
   });
@@ -157,7 +161,7 @@ describe('§5.2 the sibling’s rules', () => {
   it('a dependent field is restated only as itself', () => {
     expect(
       refusal(
-        'cell => { kind: meta.type_ref  v?: kind! }\n int_cell => cell ^ { kind?: = int32  v?: int32 }',
+        'cell => { kind: meta.type_ref  v?: kind! }\n int_cell => cell & { kind?: = int32  v?: int32 }',
       ),
     ).toContain('a dependent field is restated only as itself');
   });
@@ -227,8 +231,10 @@ describe('§5.2 reading, tree mode', () => {
 
   it('a sibling naming no readable type is refused at the sibling', async () => {
     expect((await only('!cell { kind: box  v: { item: 5 } }')).path).toBe('/kind');
-    expect((await only('!cell { kind: kind!  v: 5 }')).path).toBe('/kind');
-    expect(await validated('!cell { kind: box }')).toEqual([]);
+    // `kind!` is schema grammar, and no value spells it ([TSON-DATA] §7.2.5).
+    expect((await validated('!cell { kind: kind!  v: 5 }')).map((d) => d.path)).toContain('/kind');
+    // A parametric record is no member of `meta.type_ref`: no reference names one bare (§4.2, §5.10).
+    expect((await only('!cell { kind: box }')).path).toBe('/kind');
   });
 });
 
@@ -254,41 +260,17 @@ describe('§5.2 the kernel’s own dependent fields', () => {
       ),
     ).toContain('is not a value of');
   });
-
-  it('record_template_field.value is the same dependent field, its sibling a group member', () => {
-    const tson = standardLibrary();
-    const check = (body: string): readonly Diagnostic[] =>
-      tson.validateDocument(encodeUtf8(META + body)).diagnostics;
-    expect(
-      check(
-        '!meta.record_template_field { type: integer  optional: true  role: DEFAULT  value: 5 }',
-      ),
-    ).toEqual([]);
-    expect(
-      check(
-        '!meta.record_template_field { type_param: T  optional: true  role: DEFAULT  value_param: V }',
-      ),
-    ).toEqual([]);
-    expect(
-      check(
-        '!meta.record_template_field { type: boolean  optional: true  role: DEFAULT  value: 5 }',
-      ).map((d) => d.path),
-    ).toEqual(['/value']);
-    const literal = check(
-      '!meta.record_template_field { type_param: T  optional: true  role: DEFAULT  value: 5 }',
-    );
-    expect(literal).toHaveLength(1);
-    expect(literal[0]?.path).toBe('/value');
-    expect(literal[0]?.message).toContain("is written without 'type'");
-  });
 });
 
-describe('§5.10 a template’s literal needs a closed type', () => {
-  it('is judged at the declaration, and refused on an open type', () => {
+describe('§5.10 a parametric record’s literal needs a closed type', () => {
+  it('a literal on a closed field type is judged where the record is applied', () => {
     expect(refusal('box => <T> { n?: int32 ~ 5  w: T }\n b => box<text>')).toBeUndefined();
     expect(refusal('box => <T> { n?: int32 ~ nope  w: T }\n b => box<text>')).toContain(
       'is not a value of',
     );
+  });
+
+  it('is refused at the declaration on a field typed by a parameter, whole or as an argument', () => {
     expect(refusal('box => <T> { v?: T ~ 5 }')).toContain(
       "typed by the parameter 'T' and carries the literal value '5'",
     );

@@ -9,15 +9,15 @@
  * sibling named, as the reference grammar reads it (`link/dependentFields.ts`'s `referenceIn`),
  * and the reader of the member's value is the named entry's. The rule for what a sibling's value
  * types the member by is `link/dependentFields.ts`'s `typeNamed`, the one the text encoding's
- * reader and a value entry's link judgement apply too: a sibling reference, a template or an
- * application the closure does not hold names no type a value can be read against, is refused at
+ * reader and a value entry's link judgement apply too: a name reaching no type, a parametric record, or an
+ * incomplete entry names no type a value can be read against, is refused at
  * the sibling, and the member is skipped unjudged.
  */
 import { TsonInternalError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
 import { siblingNamesNoType, typeNamed } from '../../link/dependentFields.js';
-import type { ReferenceBody } from '../../schema/meta/bodies.js';
-import { referenceText, type Reference, type Top } from '../../schema/meta/typedef.js';
+import type { RefBody } from '../../schema/meta/bodies.js';
+import type { Top, TypeRef } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue } from './eventSkip.js';
@@ -36,7 +36,7 @@ export interface DependentReader extends JsonTypeReader {
    */
   readAgainst(
     ctx: JsonReadContext,
-    named: Reference | undefined,
+    named: TypeRef | undefined,
     siblingCtx: JsonReadContext,
   ): Task<unknown>;
 }
@@ -56,7 +56,7 @@ export function buildDependentReader(
   field: string,
   sibling: string,
   ctx: CompileContext,
-  siblingType: ReferenceBody | undefined,
+  siblingType: RefBody | undefined,
 ): DependentReader {
   const entries = (name: string): Top | undefined => ctx.linkedSchema.entries.get(name);
   return {
@@ -70,7 +70,7 @@ export function buildDependentReader(
     },
     *readAgainst(
       at: JsonReadContext,
-      named: Reference | undefined,
+      named: TypeRef | undefined,
       siblingCtx: JsonReadContext,
     ): Task<unknown> {
       if (named === undefined) {
@@ -79,13 +79,7 @@ export function buildDependentReader(
       }
       const typed = typeNamed(named, siblingType, entries);
       if (typed.kind === 'none') {
-        const refusal = siblingNamesNoType(
-          displayName,
-          sibling,
-          field,
-          typed.held,
-          referenceText(named),
-        );
+        const refusal = siblingNamesNoType(displayName, sibling, field, typed.held, named.name);
         siblingCtx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
         yield* skipNextValue(at);
         return undefined;

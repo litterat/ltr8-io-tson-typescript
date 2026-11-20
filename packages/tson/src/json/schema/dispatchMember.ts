@@ -61,7 +61,7 @@ export interface DispatchMemberOptions {
   readonly displayName: string;
   /** The discriminator field names, in declaration order (`RecordBody.discriminators`). */
   readonly discriminators: readonly string[];
-  /** The base's own declared fields -- a closed record's, or a record template's (§5.10), whose selectors mention no parameter; `undefined` reads each selector off a member instead. */
+  /** The base's own declared fields; `undefined` reads each selector off a member instead. */
   readonly baseFields: Namespace<RecordField> | undefined;
   readonly entries: ReadonlyMap<string, Top>;
   readonly schemaLocation: SchemaLocation;

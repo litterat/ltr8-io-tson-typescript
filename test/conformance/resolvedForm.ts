@@ -34,7 +34,7 @@ import { createDefinitionMetaReader } from '../../packages/tson/src/schema/metaR
 import { canonicalizeIdentity } from '../../packages/tson/src/link/identity.js';
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
 import type { Annotation, Top } from '../../packages/tson/src/schema/meta/typedef.js';
-import { isConstructor, isTemplateBody } from '../../packages/tson/src/schema/meta/typedef.js';
+import { isConstructor } from '../../packages/tson/src/schema/meta/typedef.js';
 import { createDefinitionValueReader } from '../../packages/tson/src/schema/namespaceReader.js';
 import { isNestedMap } from '../../packages/tson/src/schema/meta/schemaPaths.js';
 
@@ -140,7 +140,7 @@ function canonicalJson(value: unknown): string {
     for (const key of Object.keys(record).sort()) {
       if (key === 'position') continue; // no §8 output counterpart -- see this module's own doc
       // A reference's `index` is derived by the linker and written by no document (§4.2, §8.1).
-      if (key === 'index' && (record as { kind?: unknown }).kind === 'reference_type') continue;
+      if (key === 'index' && (record as { kind?: unknown }).kind === 'ref') continue;
       const fieldValue = record[key];
       if (fieldValue === undefined) continue; // "absent" in this model's own convention
       parts.push(`${JSON.stringify(key)}:${canonicalJson(fieldValue)}`);
@@ -148,19 +148,6 @@ function canonicalJson(value: unknown): string {
     return `{${parts.join(',')}}`;
   }
   return JSON.stringify(value);
-}
-
-/**
- * A held template's text reduced to the structure it denotes. The kernel's `template` doc: what is
- * compared is the parsed form, never the text, so two spellings that differ in whitespace are one
- * template (Part 2 §5.10, §8.2). The reference's `ResolvedForm.parsedForComparison` does the same
- * on both sides.
- */
-function parsedTemplate(text: string): string {
-  const { document } = runSync(parseDocument(fromBytes(encodeUtf8(text))));
-  return JSON.stringify(document.root, (_key, value: unknown) =>
-    typeof value === 'bigint' ? value.toString() : value,
-  );
 }
 
 /** An annotation value reduced to comparable text: a data value's token, or a bound atom's value. */
@@ -178,8 +165,7 @@ function annotationValueText(value: unknown): unknown {
 
 /**
  * `entry`, reduced to what a comparison is about: its value-position annotations other than `doc`
- * (whose text a fixture abbreviates), a held template as the structure its text parses to, and a
- * canonical rendering.
+ * (whose text a fixture abbreviates), and a canonical rendering.
  */
 export function renderDefinition(entry: ResolvedEntry): string {
   const { value } = entry;
@@ -190,17 +176,22 @@ export function renderDefinition(entry: ResolvedEntry): string {
         name: annotation.name,
         value: annotationValueText(annotation.value),
       })),
-    value: isTemplateBody(value) ? { ...value, template: parsedTemplate(value.template) } : value,
+    value,
   };
   return canonicalJson(compared);
 }
 
 /**
  * Whether the entry `name` names is an incomplete entry ([TSON-SCHEMA] §5.5), or an alias whose chain
- * ends at one: what a resolved form leaves out. The schema model carries no incomplete entry, so
- * none is.
+ * ends at one: what a resolved form leaves out.
  */
-function isIncomplete(_linked: LinkedSchema, _name: string): boolean {
+function isIncomplete(linked: LinkedSchema, name: string): boolean {
+  let current: Top | undefined = linked.entries.get(name);
+  for (let hop = 0; hop < 64 && current !== undefined; hop++) {
+    if (current.kind === 'incomplete') return true;
+    if (current.kind !== 'alias') return false;
+    current = linked.entries.get(current.target.name);
+  }
   return false;
 }
 
@@ -224,8 +215,18 @@ export function ownEntries(linked: LinkedSchema): Map<string, ResolvedEntry> {
   return own;
 }
 
-/** The names `annotation`'s `{ of: [capped bounded] }` value lists, in order; `undefined` where it is no such record. */
+/**
+ * The names `annotation`'s `{ of: [capped bounded] }` value lists, in order; `undefined` where it is no such
+ * record. A resolver's own value is the `meta.completion` it bound; a resolved form's is the data written.
+ */
 function completionNames(value: unknown): readonly string[] | undefined {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as { of?: unknown }).of)
+  ) {
+    return (value as { of: readonly string[] }).of;
+  }
   if (typeof value !== 'object' || value === null || !('coreValue' in value)) return undefined;
   const core = (value as DataValue).coreValue;
   if (core.kind !== 'record') return undefined;
@@ -277,6 +278,71 @@ export function ourCompletions(linked: LinkedSchema): Map<string, readonly strin
       if (annotation.name !== 'meta.completion') continue;
       const names = completionNames(annotation.value);
       if (names !== undefined) marked.set(name, names);
+    }
+  }
+  return marked;
+}
+
+/**
+ * An application as a comparison sees it: its head and arguments, each a name ([TSON-SCHEMA] §8.2). A resolver's
+ * own value is the `meta.apply` it bound; a resolved form's is the data written, `{ head: H  arguments: [A …] }`.
+ */
+function applicationText(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  if ((value as { kind?: unknown }).kind === 'apply') {
+    const apply = value as { head: { name: string }; arguments: readonly { name: string }[] };
+    return `${apply.head.name}<${apply.arguments.map((argument) => argument.name).join(' ')}>`;
+  }
+  if (!('coreValue' in value)) return undefined;
+  const core = (value as DataValue).coreValue;
+  if (core.kind !== 'record') return undefined;
+  const head = core.fields.find((field) => field.name === 'head')?.value.coreValue;
+  const listed = core.fields.find((field) => field.name === 'arguments')?.value.coreValue;
+  if (head?.kind !== 'token' || listed?.kind !== 'array') return undefined;
+  const names = listed.elements.map((element) =>
+    element.coreValue.kind === 'token' ? element.coreValue.text : '',
+  );
+  return `${head.text}<${names.join(' ')}>`;
+}
+
+/**
+ * The application each schema-map key's `@meta.application` states in a §8 resolved-schema document, keyed by
+ * entry name -- read from the text parsed as data, as {@link markedCompletions} reads its annotation.
+ */
+export function markedApplications(resolvedText: string): Map<string, string> {
+  const { document } = runSync(
+    parseDocument(fromBytes(encodeUtf8(resolvedText)), { resolvedForm: true }),
+  );
+  const marked = new Map<string, string>();
+  const root = document.root.coreValue;
+  if (root.kind !== 'map') return marked;
+  const walk = (prefix: string, entries: readonly { key: DataValue; value: DataValue }[]): void => {
+    for (const entry of entries) {
+      const path = `${prefix}${tokenTextOf(entry.key)}`;
+      for (const annotation of entry.key.annotations) {
+        if (annotation.name !== 'meta.application') continue;
+        const text = applicationText(annotation.value);
+        if (text !== undefined) marked.set(path, text);
+      }
+      if (entry.value.typeRef === 'meta.schema' && entry.value.coreValue.kind === 'map') {
+        walk(`${path}.`, entry.value.coreValue.entries);
+      }
+    }
+  };
+  walk('', root.entries);
+  return marked;
+}
+
+/** The same, from this resolver: the `@meta.application` on the keys of the schema's own entries. */
+export function ourApplications(linked: LinkedSchema): Map<string, string> {
+  const selfId = canonicalizeIdentity(linked.id);
+  const marked = new Map<string, string>();
+  for (const name of linked.entries.keys()) {
+    if (linked.origins.get(name) !== selfId) continue;
+    for (const annotation of linked.keyAnnotations.get(name) ?? []) {
+      if (annotation.name !== 'meta.application') continue;
+      const text = applicationText(annotation.value);
+      if (text !== undefined) marked.set(name, text);
     }
   }
   return marked;

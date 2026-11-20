@@ -47,7 +47,7 @@ export function tupleTreeReader(
 ): TypeReader<Value> {
   const slots: readonly CompiledSlot[] = body.elements.map((schema) => ({
     schema,
-    parser: resolveType(schema.elementType.name),
+    parser: resolveType(schema.elementType),
   }));
 
   function* expectTupleStart(ctx: ReadContext): Task<boolean> {

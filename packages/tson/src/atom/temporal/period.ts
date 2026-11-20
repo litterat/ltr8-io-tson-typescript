@@ -11,7 +11,7 @@
  * (`schema/metaReader.ts`/`schema/bindings.ts`'s own `periodBoundBinding`), so `PeriodType`'s
  * fields (`schema/meta/atoms-temporal.ts`) already hold the resolved `bigint` this module
  * compares against directly. `multiple_of` tests the magnitude with the sign ignored (§5.7). No
- * `precision` facet: a month count has no fractional part to bound.
+ * `fraction_digits` facet: a month count has no fractional part to bound.
  */
 
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';

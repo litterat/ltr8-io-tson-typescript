@@ -125,7 +125,7 @@ describe('§5.4 !duration -- magnitude errors (TsonAtomValidationError, category
   });
 });
 
-describe('§5.5/§5.7 !duration -- min/max/multiple_of/precision, enforced against the value', () => {
+describe('§5.5/§5.7 !duration -- min/max/multiple_of/fraction_digits, enforced against the value', () => {
   it('below the declared minimum is refused', () => {
     const bounded: DurationType = { kind: 'duration_type', min: 1_800_000_000_000n }; // PT30M
     expect(() => createDurationParser('duration', bounded).read(token('PT10M'))).toThrow(
@@ -153,8 +153,8 @@ describe('§5.5/§5.7 !duration -- min/max/multiple_of/precision, enforced again
     );
   });
 
-  it('precision admits a value that is a whole number of 10^-N seconds, not a written digit count', () => {
-    const tenths: DurationType = { kind: 'duration_type', precision: 1n };
+  it('fraction_digits admits a value that is a whole number of 10^-N seconds, not a written digit count', () => {
+    const tenths: DurationType = { kind: 'duration_type', fractionDigits: 1n };
     // 0.51s is not a whole number of tenths.
     expect(() => createDurationParser('duration', tenths).read(token('PT0.51S'))).toThrow(
       TsonAtomValidationError,

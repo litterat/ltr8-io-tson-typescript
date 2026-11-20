@@ -43,7 +43,7 @@ describe('stripSchema', () => {
   }
 }
 `;
-    expect(stripSchema(schema)).toBe(`!!import:"39/core"
+    expect(stripSchema(schema)).toBe(`!!import:"40/core"
 !!import:"https://example.test/shapes-1.tn"
 !schema {
 thing => int32
@@ -94,11 +94,11 @@ thing => int32
 !!import:"https://tson.io/2026/40/m/policy.tn"
 !schema { thing => int32 }
 `;
-    expect(stripSchema(schema)).toBe(`!!import:"39/meta"
+    expect(stripSchema(schema)).toBe(`!!import:"40/meta"
 !!import:"https://tson.io/2026/40/m/meta-kernel.tn"
 !!import:"https://tson.io/2026/40/x/core.tn"
 !!import:"https://example.test/2026/40/m/core.tn"
-!!import:"39/net"
+!!import:"40/net"
 !!import:"https://tson.io/2026/40/m/policy.tn"
 !schema {
 thing => int32

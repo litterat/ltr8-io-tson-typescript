@@ -1,12 +1,19 @@
 /**
- * The kernel's structural (PRODUCT) constructors' resolved vocabularies — `meta.record`,
- * `meta.record_template`, `meta.array`, `meta.map`, `meta.namespace`, `meta.tuple` — plus the atoms
- * `meta.enum_type` and `meta.reference_type`, `meta.choice` (SUM-kind) and the held body of an open template
- * (§4.2, §5.2–§5.4, §5.10, §8.1).
+ * The kernel's structural (PRODUCT) constructors' resolved vocabularies — `meta.record`, `meta.array`,
+ * `meta.map`, `meta.namespace`, `meta.tuple` — plus the atoms `meta.enum_type` and `meta.ref` and the sum
+ * `meta.choice` (§4.2, §5.2–§5.4, §5.10, §8.1).
  */
-import type { Annotations, Namespace, Reference, Token, TypeBase, TypeRef } from './typedef.js';
+import type {
+  Annotations,
+  Namespace,
+  Param,
+  Token,
+  TypeBase,
+  TypeExpr,
+  TypeRef,
+} from './typedef.js';
 import { namespaceOf } from './typedef.js';
-import { FIELD_MAP, RECORD_TEMPLATE_FIELD_MAP, FIELD_NAME, metaName } from './kernel.js';
+import { FIELD_MAP, metaName } from './kernel.js';
 
 /**
  * the kernel's `meta.field_role` enum (§5.2, §8.1) — what a written value at a field may be:
@@ -33,11 +40,11 @@ export type FieldRole = 'FREE' | 'DEFAULT' | 'FIXED';
  * kernel's `field_map` namespace ({@link RecordBody.fields}), so the name is said once, by the
  * position that declares it.
  *
- * `type` is typed `meta.field_type_ref` by the kernel: a type's name, judged a member of the types
- * when the schema links, or a sibling reference (`kind!`), which makes the field a dependent field
- * whose type each instance's `kind` chooses (§5.2). It is closed: a record's `type` names a type and
- * its `value` is a literal, never a parameter -- a field that may carry one is a
- * {@link RecordTemplateField}, which only a record template holds.
+ * `type` is typed `meta.type_expr` by the kernel: a type's name, judged a member of the types when the
+ * schema links, or a type written in place -- among them `{ of: !meta.dependent { on: kind } }`, `kind!`
+ * in source, which makes the field a dependent field whose type each instance's `kind` chooses (§5.2).
+ * Inside a parametric record a name may be one of its parameters (§5.10), and a field typed by one takes
+ * no value.
  *
  * **`value` is a literal read against the field's own type** (typed `type!` by the kernel). A
  * schema document holds a dependent field's value as written. `value` is present exactly when `role`
@@ -49,7 +56,7 @@ export type FieldRole = 'FREE' | 'DEFAULT' | 'FIXED';
  * carry supplies `[]`.
  */
 export interface RecordField {
-  readonly type: Reference;
+  readonly type: TypeExpr;
   readonly optional: boolean;
   readonly voidable: boolean;
   readonly role: FieldRole;
@@ -292,8 +299,8 @@ export type RecordExtensionType = 'ABSTRACT' | 'FINAL' | 'OPEN';
  *
  * **`fields` is the kernel's `field_map`**: a namespace value mapping each field's name to its
  * facts, in declaration order, which is part of the value. A name is written once, as its key.
- * The keys are values of the record's {@link nameType} -- `field_name` where neither the record
- * nor a supertype states one.
+ * The keys are values of the record's {@link nameType} -- `meta.identifier` where neither the record
+ * nor a supertype states one (§5.2).
  *
  * **`groups` is conceptually OPTIONAL** but modelled as a bare, always-present array: absent and
  * empty are the same list.
@@ -303,12 +310,11 @@ export type RecordExtensionType = 'ABSTRACT' | 'FINAL' | 'OPEN';
  * `discriminators` names the fields (in declaration order) this record's members are selected by,
  * absent when the family, if any, is tag-dispatched; each is judged by the record's name type.
  *
- * **`parameters`, where present, make the record a template** (§5.10) and a **family base**: a
- * type a position may name, ABSTRACT by construction, a value there being a value of one of its
- * declared members, each IS-A it. Its fields are resolved with parameters standing in a field's
- * `type`, a field's `value`, or an argument of an application in either, as written; its chain
- * keeps the parents as written in {@link TypeChain.parents}. The record's own `extension` is each
- * application's.
+ * **`parameters`, where present, make the record a parametric record** (§5.10): no type a position
+ * names, applied by `H<args>`. A parameter stands at a field's type, at a slot of a type written in place
+ * there, or as an argument of an application at either or in a parent, as a reference marked `param`;
+ * its chain keeps the parents as written in {@link TypeChain.parents}. The record's own `extension` and
+ * `discriminators` are each application's.
  *
  * Named `RecordBody`, not `Record` -- `Record` is a built-in TypeScript utility type and importing
  * that name here would shadow it for the whole module.
@@ -320,67 +326,13 @@ export interface RecordBody extends TypeBase {
   readonly extension: RecordExtensionType;
   readonly discriminators?: readonly string[];
   readonly nameType?: string;
+  readonly parameters?: readonly Param[];
 }
 
 /**
- * The kernel's `meta.record_template_field` (§5.10, §8.1): a field of a record template, a
- * {@link RecordField}'s four facts where the type and the value may each be one of the template's
- * parameters, and the label says which. `typeParam` names a parameter standing for the whole type and
- * `valueParam` one standing for the whole value; `type` and `value` are as on a record field. Exactly
- * one of `type` and `typeParam` is present, and at most one of `value` and `valueParam`: the kernel's two
- * field groups.
- *
- * A parameter may still stand inside `type`, as an argument of an application (`list<T>`), recognised
- * there because its text resolves into the template's `parameters` (§5.10's shadowing rule). A
- * whole-type parameter is never spelled that way: `type: T` with `T` a parameter is `type_param: T`. A
- * literal `value` needs a closed type, so a field whose type is a parameter, or an application over one,
- * takes `valueParam` or nothing.
- *
- * An application substitutes every parameter away, and each of its fields is then a {@link RecordField}
- * ({@link closedField}): `typeParam` becomes `type` and `valueParam` becomes `value`, carrying the
- * argument, and no other fact changes.
- */
-export interface RecordTemplateField {
-  readonly type?: Reference;
-  readonly typeParam?: string;
-  readonly optional: boolean;
-  readonly voidable: boolean;
-  readonly role: FieldRole;
-  readonly value?: Token;
-  readonly valueParam?: string;
-  readonly annotations: Annotations;
-}
-
-/**
- * The kernel's `meta.record_template` constructor's own vocabulary, resolved (§5.10, §8.1): a record
- * body over `parameters`, whose fields are {@link RecordTemplateField}s and may carry them. Each
- * application substitutes its arguments for the parameters and closes to a `meta.record`, its member.
- *
- * A record template is a **family base**: a type a position may name, ABSTRACT by construction, a value
- * there being a value of one of its members, each IS-A it. Nothing reads or writes a value against it, so
- * no reader or writer is built for it. `extension` states how each application is realised, the
- * template's own being ABSTRACT whatever it says; `discriminators` is the family's; `groups` and
- * `nameType` are each application's, unchanged by substitution. Its chain's `parents` are the parents
- * as written, one of which may be an application (`<T> result<T> & { ... }`).
- *
- * `parameters` is never empty: a record with none is a closed record. Each is provisionally a type
- * parameter until its type is derived from where it stands ({@link TemplateParam}).
- */
-export interface RecordTemplateBody extends TypeBase {
-  readonly kind: 'record_template';
-  readonly fields: Namespace<RecordTemplateField>;
-  readonly groups: readonly FieldGroup[];
-  readonly extension: RecordExtensionType;
-  readonly discriminators?: readonly string[];
-  readonly nameType?: string;
-  readonly parameters: readonly TemplateParam[];
-}
-
-/**
- * What a record and a record template state at the record level (§5.2, §5.10, §5.11): the name type its
- * field names are values of, those names in declaration order, the fields its members are selected by,
- * the field groups, and how it may be realised. A phase that reads only these facts reads them here, with
- * one question for both shapes ({@link recordHead}).
+ * What a record states at the record level (§5.2, §5.10, §5.11): the name type its field names are values
+ * of, those names in declaration order, the fields its members are selected by, the field groups, and how
+ * it may be realised.
  */
 export interface RecordHead {
   readonly nameType?: string;
@@ -390,10 +342,10 @@ export interface RecordHead {
   readonly extension: RecordExtensionType;
 }
 
-/** The head of a record or a record template, and `undefined` for any other value. */
+/** The head of a record, and `undefined` for any other value. */
 export function recordHead(value: { readonly kind?: string } | undefined): RecordHead | undefined {
-  if (value?.kind !== 'record' && value?.kind !== 'record_template') return undefined;
-  const body = value as RecordBody | RecordTemplateBody;
+  if (value?.kind !== 'record') return undefined;
+  const body = value as RecordBody;
   return {
     ...(body.nameType === undefined ? {} : { nameType: body.nameType }),
     fieldNames: [...body.fields.entries.keys()],
@@ -403,151 +355,19 @@ export function recordHead(value: { readonly kind?: string } | undefined): Recor
   };
 }
 
-/** A record template's field once no parameter is left in it: what an application's substitution ends in. */
-export function closedField(field: RecordTemplateField): RecordField {
-  if (field.typeParam !== undefined || field.valueParam !== undefined || field.type === undefined) {
-    throw new Error(
-      `a field naming the parameter '${field.typeParam ?? field.valueParam ?? ''}' is a record ` +
-        "template's, and a record's fields carry no parameter",
-    );
-  }
-  return {
-    type: field.type,
-    optional: field.optional,
-    voidable: field.voidable,
-    role: field.role,
-    ...(field.value === undefined ? {} : { value: field.value }),
-    annotations: field.annotations,
-  };
-}
-
 /**
- * A record template's body with each label written out as the plain `type`/`value` a parameter stands as
- * (§5.10's shadowing rule): `type_param: T` is `type: T` and `value_param: P` is `value: P`, an unquoted
- * token. The record a template body is before an application substitutes its parameters away -- the form
- * absorption, substitution and the held spelling work over.
+ * A record field's type as a name: the type's name, or for a type written in place its source spelling,
+ * which names no entry (§4.2). What a consumer that looks a field's type up by name asks, so a type in place
+ * falls out as a lookup that finds nothing rather than a failure.
  */
-export function unlabelled(template: RecordTemplateBody): RecordBody {
-  const fields = [...template.fields.entries].map(([name, field]) => {
-    const type: Reference =
-      field.typeParam !== undefined
-        ? { name: field.typeParam, arguments: [], annotations: [] }
-        : (field.type ?? { name: '', arguments: [], annotations: [] });
-    const value: Token | undefined =
-      field.valueParam !== undefined ? { text: field.valueParam, form: 'UNQUOTED' } : field.value;
-    const closed: RecordField = {
-      type,
-      optional: field.optional,
-      voidable: field.voidable,
-      role: field.role,
-      ...(value === undefined ? {} : { value }),
-      annotations: field.annotations,
-    };
-    return [name, closed] as const;
-  });
-  return {
-    kind: 'record',
-    fields: namespaceOf(FIELD_MAP, fields, template.fields.keyAnnotations),
-    groups: template.groups,
-    extension: template.extension,
-    ...(template.discriminators === undefined ? {} : { discriminators: template.discriminators }),
-    ...(template.nameType === undefined ? {} : { nameType: template.nameType }),
-    ...(template.chain === undefined ? {} : { chain: template.chain }),
-  };
+export function typeNameOf(field: { readonly type: TypeExpr }): string {
+  return typeExprText(field.type);
 }
 
-/**
- * A record body as the record template it is over `parameters`: a field whose type is a bare parameter
- * name takes it as its `type_param`, and one whose value is an unquoted parameter token as its
- * `value_param` (§5.10's shadowing rule over the source spelling). Sound because a parameter spelled like
- * an entry of the schema is refused where the template is declared. The inverse of {@link unlabelled}.
- *
- * A value token in `literals` is one a closed source contributed, which the shadowing rule never
- * classifies: it stays a `value` whatever it is spelled (§5.10).
- */
-export function labelFields(
-  body: RecordBody,
-  parameters: readonly TemplateParam[],
-  literals?: { has(token: Token): boolean },
-): RecordTemplateBody {
-  const names = parameters.map((parameter) => parameter.name);
-  const fields = [...body.fields.entries].map(([name, field]) => {
-    const wholeType =
-      field.type.kind !== 'sibling' &&
-      field.type.arguments.length === 0 &&
-      names.includes(field.type.name)
-        ? field.type.name
-        : undefined;
-    const valueParam =
-      field.value?.form === 'UNQUOTED' &&
-      names.includes(field.value.text) &&
-      literals?.has(field.value) !== true
-        ? field.value.text
-        : undefined;
-    const template: RecordTemplateField = {
-      ...(wholeType === undefined ? { type: field.type } : { typeParam: wholeType }),
-      optional: field.optional,
-      voidable: field.voidable,
-      role: field.role,
-      ...(valueParam === undefined
-        ? field.value === undefined
-          ? {}
-          : { value: field.value }
-        : { valueParam }),
-      annotations: field.annotations,
-    };
-    return [name, template] as const;
-  });
-  const { fields: _fields, ...rest } = body;
-  void _fields;
-  return {
-    ...rest,
-    kind: 'record_template',
-    fields: recordTemplateFieldMap(fields, body.fields.keyAnnotations),
-    parameters,
-  };
+/** A record field's type as the type it names, or `undefined` for a type written in place (§4.2). */
+export function namedTypeOf(field: { readonly type: TypeExpr }): TypeRef | undefined {
+  return field.type.kind === 'inline' ? undefined : field.type;
 }
-
-/**
- * A record field's type as a name: the type's name, or for a dependent field the spelling of its sibling
- * reference (`kind!`), which names no entry (§5.2). What a consumer that looks a field's type up by name
- * asks, so a dependent field falls out as a lookup that finds nothing rather than a failure.
- */
-export function typeNameOf(field: { readonly type: Reference }): string {
-  return field.type.kind === 'sibling' ? `${field.type.field}!` : field.type.name;
-}
-
-/** A record field's type as the type it names, or `undefined` for a dependent field (§5.2). */
-export function namedTypeOf(field: { readonly type: Reference }): TypeRef | undefined {
-  return field.type.kind === 'sibling' ? undefined : field.type;
-}
-
-/** The parameter that types `field`, whole or as an argument at any depth, or `undefined` where the type means the same in every application. */
-export function parameterInType(
-  field: RecordTemplateField,
-  parameters: readonly string[],
-): string | undefined {
-  if (field.typeParam !== undefined) return field.typeParam;
-  if (field.type === undefined || field.type.kind === 'sibling') return undefined;
-  return parameterIn(field.type, parameters);
-}
-
-/** The first of `parameters` that `type` names, as its head or in an argument at any depth. */
-export function parameterIn(type: TypeRef, parameters: readonly string[]): string | undefined {
-  if (parameters.includes(type.name)) return type.name;
-  for (const argument of type.arguments) {
-    const found =
-      argument.kind === 'ref'
-        ? parameterIn(argument.ref, parameters)
-        : parameters.includes(argument.value.text)
-          ? argument.value.text
-          : undefined;
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-export { FIELD_NAME };
 
 /** A `field_map` value holding `fields`, in the order given (§5.2, §8.1). */
 export function fieldMap(
@@ -581,14 +401,6 @@ export function unnamed(field: NamedField): RecordField {
   const { name: _name, ...facts } = field;
   void _name;
   return facts;
-}
-
-/** A `record_template_field_map` value holding `fields`, in the order given (§5.10, §8.1). */
-export function recordTemplateFieldMap(
-  fields: Iterable<readonly [string, RecordTemplateField]>,
-  keyAnnotations?: ReadonlyMap<string, Annotations>,
-): Namespace<RecordTemplateField> {
-  return namespaceOf(RECORD_TEMPLATE_FIELD_MAP, fields, keyAnnotations);
 }
 
 /** A `field_map` of `fields`, each keyed by its name, in the order given. */
@@ -633,7 +445,7 @@ export function mapFields(
  */
 export interface ArrayBody extends TypeBase {
   readonly kind: 'array';
-  readonly elementType: TypeRef;
+  readonly elementType: TypeExpr;
   readonly voidable: boolean;
   readonly ordered: boolean;
   readonly uniqueItems: boolean;
@@ -655,7 +467,7 @@ export interface ArrayBody extends TypeBase {
 export interface MapBody extends TypeBase {
   readonly kind: 'map';
   readonly keyType: TypeRef;
-  readonly valueType: TypeRef;
+  readonly valueType: TypeExpr;
   readonly voidable: boolean;
   readonly ordered: boolean;
   readonly minItems?: bigint;
@@ -668,7 +480,7 @@ export interface MapBody extends TypeBase {
  * `(T?, U)`; a tuple position is never missing.
  */
 export interface TupleElement {
-  readonly elementType: TypeRef;
+  readonly elementType: TypeExpr;
   readonly voidable: boolean;
 }
 
@@ -686,7 +498,7 @@ export interface TupleBody extends TypeBase {
 /**
  * The kernel's `choice` constructor's own vocabulary, resolved (§4.1, §5.4, §8.1): a SUM-kind
  * body backing every declared choice type (`contact_method => (email | phone | address)` and
- * similar). `variants` is ordered as written, each typed `meta.type_ref`.
+ * similar). `variants` is ordered as written, each typed `meta.type_expr`.
  *
  * `disjoint` is a resolver-derived index over `variants`: `true` or `false` by
  * discrimination-class distinctness (§5.4). Declarations never set it; on ingest it is discarded
@@ -695,7 +507,7 @@ export interface TupleBody extends TypeBase {
  */
 export interface ChoiceBody extends TypeBase {
   readonly kind: 'choice';
-  readonly variants: readonly TypeRef[];
+  readonly variants: readonly TypeExpr[];
   readonly disjoint?: boolean;
 }
 
@@ -722,55 +534,8 @@ export interface EnumBody extends TypeBase {
   readonly members: readonly string[];
 }
 
-/**
- * One parameter of an open entry -- the kernel's `template_param` (§5.10, §8.1): its name, the type
- * an argument for it is read as, and, for a type parameter, the bound an argument's type must IS-A.
- *
- * **`type` is derived from the positions the parameter stands in**: a type slot gives
- * `meta.type_ref`, a scalar slot of the applied constructor gives that slot's declared type, a routed
- * default or fixed value gives the field's own declared type, and a parameter riding another
- * template's argument list takes that template's recorded type for the position. It is a type
- * parameter exactly when `type` is `meta.type_ref`.
- *
- * **A declaration may narrow what it derives** (`<T: text, N: int8>`), read by the kind the
- * positions give: on a value parameter it narrows `type`; on a type parameter it is `bound`. A
- * `type` may name an earlier parameter of the same template.
- */
-export interface TemplateParam {
-  readonly name: string;
-  readonly type: TypeRef;
-  readonly bound?: TypeRef;
-}
-
-/** The kernel's `meta.type_ref`, the reference over the types, which a type parameter's `type` names (§4.2, §5.10). */
+/** The kernel's `meta.type_ref`, the reference over the types (§4.2). */
 export const TYPE_KIND = metaName('type_ref');
-
-/**
- * The kernel's `template` constructor's own vocabulary, resolved (§5.10, §8.1) -- the held body of
- * an entry that declares type parameters and applies any constructor but `record` (a record
- * template is a {@link RecordBody} with `parameters`). Composes `top` alone: it is no type, and
- * naming it at a type position is an error.
- *
- * `template` is the constructor application as written, held as **text** and unread until
- * materialisation substitutes the parameters away: a parameter stands wherever a token stands
- * (`min_items: N` in a value slot as readily as `element_type: T` in a type slot), so a body
- * carrying one is typed by no constructor's vocabulary until it closes.
- *
- * **The text is authoritative; the parsed form is what compares.** Identity is derived from the
- * parsed application, never the text itself, so whitespace is free (§5.10, §8.2). Parsing it is
- * the compiler's held-body cache's job, never this package's.
- *
- * **It carries no `kind` tag of its own**, because the kernel's `template` declares only
- * `parameters` and `template`, so code switching on `kind` narrows with `isTemplateBody` (in
- * `./typedef.js`) first.
- */
-export interface TemplateBody {
-  /** The parameters this entry binds, in declaration order, each with the type its argument is read as. */
-  readonly parameters: readonly TemplateParam[];
-
-  /** The constructor application as written, held and unread (§5.10). */
-  readonly template: string;
-}
 
 /**
  * The kernel's `meta.namespace` constructor's own vocabulary, resolved (§4.1, §5.7, §8.1): a map type
@@ -789,7 +554,7 @@ export interface TemplateBody {
 export interface NamespaceBody extends TypeBase {
   readonly kind: 'namespace';
   readonly keyType: TypeRef;
-  readonly valueType: TypeRef;
+  readonly valueType: TypeExpr;
   readonly ordered: boolean;
   readonly minItems?: bigint;
   readonly maxItems?: bigint;
@@ -798,11 +563,8 @@ export interface NamespaceBody extends TypeBase {
 /**
  * What the linker derives for one reference (§4.2, §5.12): whether `of` names a constructor, so the
  * values admitted are types, and the members where it does -- the names of the closure the slot admits,
- * sorted -- with the entry each application the closure closed denotes, an expansion's included, so a
- * value written as an application is judged through the entry it names, each alias entry of the closure
- * to the entry at the end of its chain, which an argument written as an alias is followed to, and the
- * closure's entries, which a reference read here names. `shown` is the members as a message names them:
- * a minted entry by the application that closed to it, as written, and one with no spelling left out.
+ * sorted -- with each alias entry of the closure to the entry at the end of its chain, and the closure's
+ * entries, which a reference read here names. `shown` is the members as a message names them.
  *
  * Derived and never written: no document states an index, so it is no part of what a reference is.
  * Absent where linking has not run.
@@ -810,8 +572,6 @@ export interface NamespaceBody extends TypeBase {
 export interface ReferenceIndex {
   readonly namesTypes: boolean;
   readonly members: readonly string[];
-  /** The entry each application the closure closed denotes, keyed by the application's canonical text (`referenceText`). */
-  readonly applications: ReadonlyMap<string, string>;
   /** Each alias entry of the closure, to the entry at the end of its chain. */
   readonly aliases: ReadonlyMap<string, string>;
   /** The closure's entries, as the link that derived this index finally assembled them. */
@@ -841,19 +601,98 @@ export interface EntryAccess {
 export type ReferenceValues = (where: string, name: string) => unknown;
 
 /**
- * The kernel's `meta.reference_type` constructor's own vocabulary, resolved (§4.2, §5.12, §8.1): the one
- * atom whose values are names, each naming an entry whose value's type, past the entry's alias hops
- * (§8.3), is `of` or IS-A it. `of` names any type or constructor of the writer's namespace, never a value
- * or an open entry: over a constructor the slot holds a type's name, over any other type a value's
- * qualified name. `allowSibling` is a permission, true by default, that a refinement may withdraw and
- * never grant back: it is true only at a record field's type (`meta.field_type_ref`) and every other
- * reference sets it false and refuses a sibling reference. `meta.ref<T>` is its one spelling.
+ * The kernel's `meta.ref => meta.atom & { of: meta.type_ref }` constructor's own vocabulary, resolved (§4.2,
+ * §5.12, §8.1): the one atom whose values are names, each naming an entry whose value's type, past the
+ * entry's alias hops (§8.3), is `of` or IS-A it. Where `of` is a constructor the names are types', and
+ * otherwise values'. `meta.ref<T>` is its construction sugar.
  *
  * `index` is the linker's derived {@link ReferenceIndex}, excluded from identity.
  */
-export interface ReferenceBody extends TypeBase {
-  readonly kind: 'reference_type';
+export interface RefBody extends TypeBase {
+  readonly kind: 'ref';
   readonly of: TypeRef;
-  readonly allowSibling: boolean;
   readonly index?: ReferenceIndex;
+}
+
+/**
+ * The source spelling of a type expression, for a message: a name as written; a type in place as an author
+ * writes it -- `[text]`, `{text => money}`, `[a, b]`, `(a | b)`, `set<text>`, `kind!`, an application as
+ * `head<args>`, a record by the application it closes or its fields, and any other construction as its
+ * constructor's application over its type slots.
+ */
+export function typeExprText(expr: TypeExpr): string {
+  if (expr.kind !== 'inline') return expr.name;
+  const of = expr.of;
+  const head = expr.head;
+  switch (of.kind) {
+    case 'record':
+      if (expr.application !== undefined) return applicationText(expr.application);
+      return recordText(of);
+    case 'dependent':
+      return `${of.on}!`;
+    case 'apply':
+      return applicationText(of);
+    case 'array':
+      if (head === metaName('array') && isSetShape(of))
+        return `set<${typeExprText(of.elementType)}>`;
+      if (head === metaName('array')) {
+        return `[${typeExprText(of.elementType)}${of.voidable ? '?' : ''}${sizeText(of.minItems, of.maxItems)}]`;
+      }
+      return `${head}<${typeExprText(of.elementType)}>`;
+    case 'map':
+      if (head === metaName('map')) {
+        return `{${of.keyType.name} => ${typeExprText(of.valueType)}${of.voidable ? '?' : ''}${sizeText(of.minItems, of.maxItems)}}`;
+      }
+      return `${head}<${of.keyType.name}, ${typeExprText(of.valueType)}>`;
+    case 'tuple': {
+      const elements = of.elements.map(
+        (element) => `${typeExprText(element.elementType)}${element.voidable ? '?' : ''}`,
+      );
+      return head === metaName('tuple')
+        ? `[${elements.join(', ')}]`
+        : `${head}<${elements.join(', ')}>`;
+    }
+    case 'choice': {
+      const variants = of.variants.map(typeExprText);
+      return head === metaName('choice')
+        ? `(${variants.join(' | ')})`
+        : `${head}<${variants.join(', ')}>`;
+    }
+    case 'ref':
+      return `${head}<${of.of.name}>`;
+    default:
+      return `!${head} { ... }`;
+  }
+}
+
+function applicationText(apply: {
+  readonly head: TypeRef;
+  readonly arguments: readonly TypeRef[];
+}): string {
+  return `${apply.head.name}<${apply.arguments.map((argument) => argument.name).join(' ')}>`;
+}
+
+function recordText(record: RecordBody): string {
+  const written = [...record.fields.entries].map(
+    ([name, field]) =>
+      `${name}${field.optional ? '?' : ''}: ${typeExprText(field.type)}${field.voidable ? '?' : ''}`,
+  );
+  return written.length === 0 ? '{}' : `{ ${written.join('  ')} }`;
+}
+
+/** Whether `array` is what `set<T>` completes to, which the bracket form cannot spell. */
+function isSetShape(array: ArrayBody): boolean {
+  return (
+    !array.ordered &&
+    array.uniqueItems &&
+    !array.voidable &&
+    array.minItems === undefined &&
+    array.maxItems === undefined
+  );
+}
+
+function sizeText(min: bigint | undefined, max: bigint | undefined): string {
+  if (min === undefined && max === undefined) return '';
+  if (min !== undefined && min === max) return `; ${String(min)}`;
+  return `; ${min === undefined ? '' : String(min)}..${max === undefined ? '' : String(max)}`;
 }

@@ -9,8 +9,8 @@ import { standardLibrary } from '../src/stdlib/index.js';
 
 /**
  * A reference in a data document ([TSON-SCHEMA] §4.2, §5.12, §8.2, [TSON-DATA] §2.2): a data document is read under
- * the one namespace its own `!!import`s merge into (§2.2.3), a name at a reference slot is judged over that
- * namespace, and an application is judged through the entry the schema closed it to.
+ * the one namespace its own `!!import`s merge into (§2.2.3), and a name at a reference slot is judged over that
+ * namespace. A reference is a name: an argument list is schema grammar, which no data value spells.
  */
 
 const META = '!!import:"https://tson.io/2026/40/m/meta.tn"';
@@ -34,8 +34,7 @@ ${CORE}
   box        => <T> { v: T }
   user_id    => uuid
   uid        => user_id
-  boxed      => box<uuid>
-  holder     => { t: meta.type_ref  field?: meta.field_type_ref }
+  holder     => { t: meta.type_ref }
 }`;
 
 const SHIPPING = `!!id:"https://example.test/shipping.tn"
@@ -101,33 +100,33 @@ describe('a name at a reference over a type names a value of it (§4.2, §5.12)'
   });
 });
 
-describe('a name or application at a reference over a constructor names a type (§4.2, §8.2)', () => {
-  it('an applied type the schema closed is a member, written unquoted', async () => {
-    expect(await validated(instance(ALL), [ORDERS_ID], '!holder { t: set<text> }')).toEqual([]);
+describe('a name at a reference over a constructor names a type (§4.2, §5.10)', () => {
+  it('a completion is a type, named by its declaration', async () => {
+    expect(await validated(instance(ALL), [ORDERS_ID], '!holder { t: names }')).toEqual([]);
   });
 
-  it('an application compares its arguments past their aliases, at every level', async () => {
+  it('an alias of a type is a member through its hops (§8.3)', async () => {
+    expect(await validated(instance(ALL), [ORDERS_ID], '!holder { t: uid }')).toEqual([]);
+  });
+
+  it('an argument list is schema grammar, and no data value spells one ([TSON-DATA] §7.2.5)', async () => {
     const tson = instance(ALL);
-    // `uid` reaches `uuid` through `user_id`, so `box<uid>` is `box<uuid>`, which the schema closed as `boxed`.
-    expect(await validated(tson, [ORDERS_ID], '!holder { t: box<uid> }')).toEqual([]);
-    expect(await validated(tson, [ORDERS_ID], '!holder { t: box<user_id> }')).toEqual([]);
+    expect((await validated(tson, [ORDERS_ID], '!holder { t: set<text> }')).length).toBeGreaterThan(
+      0,
+    );
+    // A quoted token is the reference its text spells, and that text is no name.
+    const quoted = await validated(tson, [ORDERS_ID], '!holder { t: "set<text>" }');
+    expect(codes(quoted)).toEqual(['ATOM_FORM_INVALID']);
   });
 
-  it('an application nothing in the closure closed names no type and is refused: data never creates one', async () => {
-    const found = await validated(instance(ALL), [ORDERS_ID], '!holder { t: box<int32> }');
+  it('a dependent type’s mark is schema grammar, and no data value spells one (§5.2)', async () => {
+    const found = await validated(instance(ALL), [ORDERS_ID], '!holder { t: "kind!" }');
+    expect(codes(found)).toEqual(['ATOM_FORM_INVALID']);
+  });
+
+  it('a parametric record named bare is no member: no reference names one until it is applied (§5.10)', async () => {
+    const found = await validated(instance(ALL), [ORDERS_ID], '!holder { t: box }');
     expect(codes(found)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
-  });
-
-  it('a quoted token is never a reference', async () => {
-    const found = await validated(instance(ALL), [ORDERS_ID], '!holder { t: "set<text>" }');
-    expect(found.length).toBeGreaterThan(0);
-  });
-
-  it('a sibling reference stands only where the reference allows one (allow_sibling, §5.2)', async () => {
-    const tson = instance(ALL);
-    expect(await validated(tson, [ORDERS_ID], '!holder { t: text  field: kind! }')).toEqual([]);
-    const refused = await validated(tson, [ORDERS_ID], '!holder { t: kind! }');
-    expect(codes(refused)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
   });
 
   it('a name that is no member of the kind is refused, naming the kind', async () => {

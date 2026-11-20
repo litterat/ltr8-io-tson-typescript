@@ -23,7 +23,14 @@
 import type { AtomToken } from './contract.js';
 import type { Normalization, RegexType, TextType } from '../schema/meta/atoms-text.js';
 import type { Product, Sum } from '../schema/meta/algebra.js';
-import type { Alias, Atom, ValueEntry } from '../schema/meta/typedef.js';
+import type {
+  Alias,
+  ApplyBody,
+  Atom,
+  Extern,
+  IncompleteEntry,
+  ValueEntry,
+} from '../schema/meta/typedef.js';
 
 import { createIntegerParser } from './numeric/integer.js';
 import { createDecimalParser } from './numeric/decimal.js';
@@ -51,14 +58,10 @@ import { createDurationParser } from './temporal/duration.js';
 import { createPeriodParser } from './temporal/period.js';
 
 /**
- * Every non-held `Top` member this module ever receives, {@link Data} excluded. A held
- * `TemplateBody` carries no `kind` of its own and a {@link Data} body's `kind` is a bare `string`
- * that no literal `case` can exclude by exhaustion (`link/bodyKind.ts`'s own note on why that
- * needs a real type-predicate, not a switch) -- so both are the caller's to rule out before
- * reaching here. `link/referenceValidation.ts`'s own `checkFieldValue` does exactly that (via
- * `bodyKind.ts`'s `isDataBody`) before calling either function below.
+ * Every `Top` member this module ever receives.
  */
-type ScalarCandidate = Atom | Product | Sum | Alias | ValueEntry;
+type ScalarCandidate =
+  Atom | Product | Sum | ApplyBody | Alias | Extern | ValueEntry | IncompleteEntry;
 
 /** The half of {@link AtomType} a bare "does this token satisfy this type" check needs -- see this module's own top note on why `write` never enters into it. */
 export interface ScalarParser {
@@ -100,13 +103,13 @@ export function isScalarBody(body: ScalarCandidate): boolean {
     case 'ipv4_type':
     case 'ipv6_type':
     case 'complex_type':
-    case 'reference_type':
+    case 'ref':
     case 'hostname_type':
     case 'host_type':
     case 'media_type_type':
       return true;
     default:
-      return false; // record, record template, array, map, namespace, tuple, choice, declared type, alias, value entry
+      return false; // record, array, map, namespace, tuple, choice, declared type, dependent, apply, alias, extern, value entry
   }
 }
 
@@ -193,7 +196,7 @@ export function atomParserFor(
       return createIpv6Parser(declaredName, body);
     case 'complex_type':
       return createComplexParser(declaredName);
-    case 'reference_type':
+    case 'ref':
       // A reference's value is a qualified name (§4.2, §5.12): read here by the name grammar, and
       // judged against the linked closure, which a bare-token parser cannot see.
       return createQualifiedNameParser(declaredName);

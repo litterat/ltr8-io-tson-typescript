@@ -245,6 +245,35 @@ package below that owns their rule). Unit tests for removed concepts (templates 
 constructor, synthetics, sibling references in data) are deleted or rewritten to Revision 40's
 rule, never skipped.
 
+### WP2A outcome
+
+The kernel bootstraps; the five libraries load; all five resolved fixtures compare equal in written
+form. Class 1 319/319; Class 2 **783/1119** (schema 410/516, link 160/222, validate 213/381); unit
+tests 40 failing of 4052, all on closing or composing an application. The synthetic machinery,
+held template bodies, record templates, `meta.reference_type`, `allow_sibling` and `ast/reference.ts`
+are deleted; `compiler/{constructionRewrite,constructionSugar,incompleteEntries,parameterBounds}.ts`
+and `schema/meta/typeInline.ts` are new; the harness compares `@meta.application`. Readings to
+confirm: an alias of a value entry is admitted (§8.3); a value read at a type in place carries no
+tag in the tree; a default or pin on a field typed in place only on a reference (item 42); a
+reference's `of` refuses incomplete entries and parametric records (§4.2); parametric records are
+left out of `subtypes`. What the remaining 336 Class 2 failures need:
+
+- **WP2B (183):** closing an application in place (held as `{inline, of: ApplyBody}`), a declared
+  application, an operand application and `<T> !meta.record { … }` (each `NotImplemented`, so no
+  `@meta.application` is produced) and the rules a use-site application breaks — 166; held
+  recursion — 3; references and qualified names (items 117–118, spaced and decomposed segments,
+  segments in the family's form) — 14. `ParameterTypes.checkSlots`'s walk is not ported;
+  `compiler/heldValues.ts` survives in its smallest form for dependent held values.
+- **WP2C (99):** `!T ^` over an array, map or namespace type (`NotImplemented`) — 54; facets
+  (exclusive bounds, the offset-carried instant bound) — 24; choices (items 125–129, a nested choice
+  disjoint) — 12; an incomplete entry's per-field read (it holds only the written value) — 5;
+  other (an enum `name_type` restated through an alias, a subtraction's restatement, item 101, item 111) — 4. `asWritten` restores annotations only at a record-in-place's top level.
+- **WP2D (52):** externs. Also the two import-cycle vectors (`a-schema-importing-its-own-identity`,
+  `two-schemas-importing-each-other`): preload detects no cycle and reports `SCHEMA_NOT_FOUND`.
+- **Stage 3:** the JSON reader neither refuses a tag at a position typed in place nor drops its
+  type name, and a record in place with its own `name_type` gets no reader name type in either
+  encoding.
+
 ### WP2B: parametric records and applications (#3, #18, #20; references #2, #14, §5.12)
 
 Change log §1's six steps, §4.5 "Parametric records", "Applications", "References and qualified

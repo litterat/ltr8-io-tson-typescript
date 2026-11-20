@@ -348,6 +348,14 @@ export interface VariantBinding<T> extends BindingBase<T> {
   readonly discriminant?: PropertyKey;
   /** Which member a host value belongs to, for writing. `undefined` is a write error: the value matches no member. */
   memberFor(value: unknown): VariantMember | undefined;
+  /**
+   * Members told apart by form rather than by a tag -- a choice disjoint by class ([TSON-SCHEMA] §5.4): written
+   * with no `!type-ref`, and read by the class of the value written, a token by the one atom member and a braced
+   * record by the one record member.
+   */
+  readonly untagged?: boolean;
+  /** The host value a member's decoded value becomes, given the member's wire name -- the tag the value carried. */
+  fromMember?(value: unknown, wireName: string): unknown;
   /** Register another implementation at runtime. Present only on an open ({@link sealed} `false`) variant. */
   addMember?(member: VariantMember): void;
 }

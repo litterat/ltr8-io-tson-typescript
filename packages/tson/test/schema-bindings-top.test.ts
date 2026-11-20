@@ -35,8 +35,10 @@ describe("an entry's value can be written, not just read (§8.1)", () => {
 
   it("writes a value under the constructor its entry's facts name (§8.1)", () => {
     const enumeration: Top = { kind: 'enum', nameType: 'meta.identifier', members: ['A', 'B'] };
-    // `enum` and `enum_type` share one body shape: the head, never the shape, says which.
-    expect(toDataValue(topBinding, headed(enumeration, 'enum')).typeRef).toBe('enum');
+    // A completion of the incomplete entry `enum` is built by `meta.enum_type`, and written under it.
+    expect(toDataValue(topBinding, headed(enumeration, 'meta.enum_type')).typeRef).toBe(
+      'meta.enum_type',
+    );
     expect(toDataValue(topBinding, enumeration).typeRef).toBe('meta.enum_type');
   });
 });

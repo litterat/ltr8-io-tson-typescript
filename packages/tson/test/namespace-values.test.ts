@@ -115,10 +115,6 @@ describe('a value of a meta layer’s namespace type ([TSON-SCHEMA] §4.1)', () 
       `bad => !bindings { b => { method: x.y  verb: PUT  route: "/" } }`,
     ],
     [
-      'a quoted token at a name slot',
-      `bad => !bindings { b => { method: "x.y"  verb: GET  route: "/" } }`,
-    ],
-    [
       'an annotated name',
       `bad => !bindings { b => { method: @doc:"m" x.y  verb: GET  route: "/" } }`,
     ],
@@ -128,6 +124,16 @@ describe('a value of a meta layer’s namespace type ([TSON-SCHEMA] §4.1)', () 
     expect(() =>
       withLayer().resolveSchema(governed(`order => { sku: text }\nbox => <T> { v: T }\n${entry}`)),
     ).toThrow(/not valid data for|no value of the type/);
+  });
+
+  it('§2.4, §5.12: a quoted token at a name slot is the name it spells, judged as one', () => {
+    expect(() =>
+      withLayer().resolveSchema(
+        governed(
+          `order => { sku: text }\nbad => !bindings { b => { method: "x.y"  verb: GET  route: "/" } }`,
+        ),
+      ),
+    ).toThrow(/'x' is no entry of this schema/);
   });
 
   it('§8.3: resolved output writes the value as written, a value by name as the name', () => {
@@ -215,7 +221,9 @@ describe('values by name ([TSON-SCHEMA] §5.12)', () => {
     expect(named('alias')).not.toThrow();
     expect(named('method')).not.toThrow(); // the layer's own `method` is in the one namespace, and is a record
     expect(named('user_id')).toThrow(/is no 'meta.record'/);
-    expect(named('box')).toThrow(/open entry/);
+    expect(named('box')).toThrow(
+      /is a parametric record, which denotes no type until it is applied/,
+    );
   });
 
   it('§4.1: a namespace entry is a member of no reference over types', () => {
@@ -274,13 +282,11 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
 
   it('§4.2: a reference over a constructor reads a member where its names resolve, and the grammar alone elsewhere', () => {
     const reference = {
-      kind: 'reference_type',
-      of: { name: 'net.uuid_type', arguments: [], annotations: [] },
-      allowSibling: false,
+      kind: 'ref',
+      of: { name: 'net.uuid_type', annotations: [] },
       index: {
         namesTypes: true,
         members: ['customer_id', 'net.uuid_type'],
-        applications: new Map<string, string>(),
         aliases: new Map<string, string>(),
         entries: new Map<string, unknown>(),
         shown: [],
@@ -302,13 +308,11 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
 
   it('§2.4, §7.1: a quoted token at a reference position is the reference its text spells', () => {
     const reference = {
-      kind: 'reference_type',
-      of: { name: 'net.uuid_type', arguments: [], annotations: [] },
-      allowSibling: false,
+      kind: 'ref',
+      of: { name: 'net.uuid_type', annotations: [] },
       index: {
         namesTypes: true,
         members: ['customer_id', 'net.uuid_type'],
-        applications: new Map<string, string>(),
         aliases: new Map<string, string>(),
         entries: new Map<string, unknown>(),
         shown: [],
@@ -323,13 +327,11 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
 
   it('§4.1, [TSON-JSON] §5.6: text spelling an application or a dependent type is no reference, quoted or not', () => {
     const reference = {
-      kind: 'reference_type',
-      of: { name: 'net.uuid_type', arguments: [], annotations: [] },
-      allowSibling: false,
+      kind: 'ref',
+      of: { name: 'net.uuid_type', annotations: [] },
       index: {
         namesTypes: true,
         members: ['customer_id'],
-        applications: new Map<string, string>(),
         aliases: new Map<string, string>(),
         entries: new Map<string, unknown>(),
         shown: [],

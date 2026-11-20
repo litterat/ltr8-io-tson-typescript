@@ -1,5 +1,5 @@
 /**
- * The atom whose values are names (Part 2 §4.2, §5.12), `meta.reference_type`: a type's name where its
+ * The atom whose values are names (Part 2 §4.2, §5.12), `meta.ref`: a type's name where its
  * `of` is a constructor, and a value's qualified name otherwise. It is no part of Part 1's built-in
  * vocabulary (§5): what a name denotes is the linked closure's, so these parsers judge the spelling
  * alone and leave the referent to whoever holds the closure.
@@ -10,8 +10,7 @@ import {
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import type { IdentifierType } from '../schema/meta/atoms-text.js';
-import type { ReferenceBody } from '../schema/meta/bodies.js';
-import { referenceEntryOf } from '../schema/meta/referenceIndex.js';
+import type { RefBody } from '../schema/meta/bodies.js';
 import type { AtomToken, AtomType } from './contract.js';
 import { createIdentifierParser } from './text/identifier.js';
 
@@ -32,7 +31,7 @@ export const TYPE_NAME_GRAMMAR: IdentifierType = {
 const QUALIFIED_NAME = 'a qualified name';
 
 /**
- * A `meta.reference_type` instance's value (§5.12): a qualified name, segments joined by `.`, each a
+ * A `meta.ref` instance's value (§5.12): a qualified name, segments joined by `.`, each a
  * [TSON-DATA] §7.7 identifier read as `type_name` reads it, none empty. So `orders.1x`, `.orders`
  * and `orders.` are no names. The value is the name as written; what it reaches is judged where
  * it resolves, when the schema holding it links.
@@ -67,7 +66,7 @@ export function createQualifiedNameParser(typeRef: string): AtomType<string> {
 }
 
 /**
- * The atom a `meta.reference_type` instance reads (§4.2, §5.12): a value is a name -- a type's where `of`
+ * The atom a `meta.ref` instance reads (§4.2, §5.12): a value is a name -- a type's where `of`
  * is a constructor, a value's qualified name where it is any other type. A reference is a name whatever
  * the token's form (§2.4, §7.1): no argument list and no sibling mark is data syntax (§4.1). Not part of Part 1's built-in vocabulary (§5): what a name denotes is the
  * linked closure's, and the host form is the reference's canonical text.
@@ -78,7 +77,7 @@ export function createQualifiedNameParser(typeRef: string): AtomType<string> {
  */
 export function createReferenceParser(
   typeRef: string,
-  reference: ReferenceBody,
+  reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
   // An unlinked reference reads as one over a constructor with no members, as a kind with none.
@@ -119,7 +118,7 @@ function readName(segment: AtomType<string>, text: string, typeRef: string): str
  */
 function createTypeNameParser(
   typeRef: string,
-  reference: ReferenceBody,
+  reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
   const segment = createIdentifierParser(typeRef, TYPE_NAME_GRAMMAR);
@@ -131,11 +130,7 @@ function createTypeNameParser(
       // its text spells, and a text no segment grammar reads is no reference.
       const canonical = readName(segment, token.text, typeRef);
       if (!judges) return canonical;
-      const entry = referenceEntryOf(reference, {
-        name: canonical,
-        arguments: [],
-        annotations: [],
-      });
+      const entry = reference.index === undefined ? undefined : canonical;
       const listing = shown.length === 0 ? 'none' : shown.join(', ');
       if (entry === undefined) {
         throw new TsonAtomValidationError(
@@ -167,7 +162,7 @@ function createTypeNameParser(
  */
 function createValueNameParser(
   typeRef: string,
-  reference: ReferenceBody,
+  reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
   const segment = createIdentifierParser(typeRef, TYPE_NAME_GRAMMAR);

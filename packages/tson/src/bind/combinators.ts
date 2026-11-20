@@ -109,6 +109,16 @@ export function map<T, K, V>(options: MapOptions<T, K, V>): MapBinding<T> {
   return binding as unknown as MapBinding<T>;
 }
 
+/** What a {@link variant} may say beyond its members and discriminant -- see {@link VariantBinding}. */
+export interface VariantOptions {
+  /** Members told apart by form, a choice disjoint by class: written with no tag, read by the value's class. */
+  readonly untagged?: boolean;
+  /** Which member a host value belongs to, for writing, in place of the discriminant's answer. */
+  readonly memberFor?: (value: unknown) => VariantMember | undefined;
+  /** The host value a member's decoded value becomes, given the member's wire name. */
+  readonly fromMember?: (value: unknown, wireName: string) => unknown;
+}
+
 /**
  * Build a {@link VariantBinding} from a shape literal of members keyed by wire type name, inferring
  * the host union type via a `const` type parameter. Pass `discriminant` for a shared tag property;
@@ -120,6 +130,7 @@ export function map<T, K, V>(options: MapOptions<T, K, V>): MapBinding<T> {
 export function variant<const M extends Shape>(
   members: M,
   discriminant?: PropertyKey,
+  options: VariantOptions = {},
 ): VariantBinding<InferShape<M>[keyof M]> {
   const memberList: VariantMember[] = Object.entries(members).map(([wireName, binding]) => ({
     wireName,
@@ -149,8 +160,10 @@ export function variant<const M extends Shape>(
     kind: 'variant',
     members: memberList,
     sealed: true,
-    memberFor,
+    memberFor: options.memberFor ?? memberFor,
     ...(discriminant !== undefined ? { discriminant } : {}),
+    ...(options.untagged === true ? { untagged: true } : {}),
+    ...(options.fromMember !== undefined ? { fromMember: options.fromMember } : {}),
   };
   return binding as unknown as VariantBinding<InferShape<M>[keyof M]>;
 }

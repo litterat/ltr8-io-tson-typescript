@@ -13,7 +13,8 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
 import { typeNameOf } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
-import { isTemplateBody, supertypesOf } from '../schema/meta/typedef.js';
+import { dependentOn, supertypesOf } from '../schema/meta/typedef.js';
+import { sameTypeExpr } from '../schema/meta/typeInline.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
 import { restatesDependent } from './dependentFields.js';
 
@@ -32,24 +33,25 @@ export function isA(sub: string, sup: string, namespace: EntryLookup): boolean {
   );
 }
 
-/** Whether `restated`'s type narrows `inherited`'s: the same entry or one IS-A it, or `void` at a voidable position. */
+/**
+ * Whether `restated`'s type narrows `inherited`'s: two names when the same entry or one IS-A it, or `void` at a
+ * voidable position; two types written in place only when equal; and a name and a type in place never (§8.2).
+ */
 function narrows(inherited: RecordField, restated: RecordField, namespace: EntryLookup): boolean {
   // A dependent field is restated only as itself, which `restatesDependent` judges before this is asked.
-  if (inherited.type.kind === 'sibling' || restated.type.kind === 'sibling') return true;
+  if (dependentOn(inherited.type) !== undefined || dependentOn(restated.type) !== undefined) {
+    return true;
+  }
   const from = inherited.type;
   const to = restated.type;
-  if (
-    from.arguments.length > 0 ||
-    to.arguments.length > 0 ||
-    namespace(from.name) === undefined ||
-    namespace(to.name) === undefined
-  ) {
-    // A field typed by an application not yet closed, or by a name no entry holds, is the reference checks' to report.
+  if (from.kind === 'inline' || to.kind === 'inline') return sameTypeExpr(from, to);
+  if (namespace(from.name) === undefined || namespace(to.name) === undefined) {
+    // A field typed by a name no entry holds is the reference checks' to report.
     return true;
   }
   if (isA(to.name, from.name, namespace)) return true;
   const end = namespace(terminal(to.name, namespace));
-  return restated.voidable && end !== undefined && !isTemplateBody(end) && end.kind === 'void_type';
+  return restated.voidable && end?.kind === 'void_type';
 }
 
 /**
@@ -74,7 +76,7 @@ export function checkRestatedFieldTypes(
         other === supertype || !supertypesOf(lookup(terminal(other, lookup))).includes(supertype),
     );
     const source = lookup(terminal(supertype, lookup));
-    if (!nearest || source === undefined || isTemplateBody(source) || source.kind !== 'record') {
+    if (!nearest || source?.kind !== 'record') {
       continue;
     }
     const violations: string[] = [];
@@ -93,7 +95,7 @@ export function checkRestatedFieldTypes(
     }
     if (violations.length > 0) {
       throw new TsonSchemaValidationError(
-        `'${entryName}': not a valid refinement of '${shown(supertype)}' (§5.7): ${violations.join('; ')}`,
+        `'${entryName}': not a valid restatement of '${shown(supertype)}''s fields (§5.8): ${violations.join('; ')}`,
       );
     }
   }

@@ -14,8 +14,8 @@
  * segment through this schema's own entries and imports, alias hops followed (§8.3), never through
  * the meta's namespace (§3.3.2); each further segment selects in the value reached -- a key of a
  * namespace value, a field of a record value, never a position in a list nor a key of a map that
- * is no namespace -- and a type entry admits none. An open entry is no referent: a template denotes
- * no value until it is applied (§5.10). Found first, judged after, never a choice among candidates.
+ * is no namespace -- and a type entry admits none. A parametric record is no referent: it denotes no type until
+ * it is applied (§5.10). Found first, judged after, never a choice among candidates.
  *
  * **An entry's declared type is the constructor that built its body**: its tag, as its facts
  * record it, where that names a constructor of the governing meta, and otherwise the kernel
@@ -38,14 +38,19 @@ import {
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import { createQualifiedNameParser } from '../atom/reference.js';
-import type { EntryFacts, MetaValue, NameSlot, Reference, Top } from '../schema/meta/typedef.js';
-import { typeNameOf, type RecordBody, type RecordField } from '../schema/meta/bodies.js';
+import type { EntryFacts, MetaValue, NameSlot, Top, TypeRef } from '../schema/meta/typedef.js';
+import {
+  typeExprText,
+  typeNameOf,
+  type RecordBody,
+  type RecordField,
+} from '../schema/meta/bodies.js';
 import {
   constructorOf,
   isConstructor,
-  isOpen,
-  isTemplateBody,
-  referenceText,
+  dependentOn,
+  isParametric,
+  nameOf,
   supertypesOf,
   typeParameters,
 } from '../schema/meta/typedef.js';
@@ -63,7 +68,7 @@ export interface ValuesByNameOptions {
   readonly facts: ReadonlyMap<string, EntryFacts>;
   /** The schema's one namespace, where every slot's declared type is named. */
   readonly structureNamespace: ReadonlyMap<string, Top>;
-  /** The entry facts of that namespace, so a slot type the resolver minted is named as its author wrote it. */
+  /** The entry facts of that namespace, where a slot type's applied constructor is recorded (§8.1). */
   readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   readonly receiver?: DiagnosticsReceiver;
 }
@@ -126,13 +131,6 @@ function namesIn(entry: Top): readonly HeldName[] {
     switch (meta.form) {
       case 'token':
         if (meta.slot !== undefined) found.push({ name: meta.token.text, path, slot: meta.slot });
-        return;
-      case 'reference':
-        // An application or a sibling reference at a name slot: the head is judged as a name resolving
-        // with the arity it is applied at; a sibling names a field and no entry (§5.2).
-        if (meta.slot !== undefined && meta.reference.kind !== 'sibling') {
-          found.push({ name: meta.reference.name, path, slot: meta.slot, application: true });
-        }
         return;
       case 'schema_map':
       case 'void':
@@ -260,9 +258,11 @@ export class ValuesByName {
       );
     }
     const entry = end === head ? `'${head}'` : `'${head}' (an alias of '${end}')`;
-    if (isOpen(referent) || isTemplateBody(referent)) {
+    if (isParametric(referent) || referent.kind === 'incomplete') {
       throw new TsonSchemaValidationError(
-        `${where} names '${name}', and ${entry} is an open entry: a template denotes no value until it is applied (§5.10), so nothing is there to name`,
+        referent.kind === 'incomplete'
+          ? `${where} names '${name}', and ${entry} is an incomplete entry, which is no type and no value (§5.5), so nothing is there to name`
+          : `${where} names '${name}', and ${entry} is a parametric record, which denotes no type until it is applied (§5.10), so nothing is there to name`,
       );
     }
     if (types) {
@@ -336,11 +336,13 @@ export class ValuesByName {
     let value: MetaValue | undefined = isValueEntry(referent) ? referent.value : undefined;
     let absent: string | undefined;
     let reached = segments[0] ?? name;
+    // The type the walk stands in where it is written in place, which has no entry to look up by name (§4.2).
+    let inPlace: Top | undefined;
     for (const segment of segments.slice(1)) {
       // A dependent field's value is held as written; a segment selects in the tree it is.
       value = value?.form === 'held' ? value.value : value;
-      const atName = terminal(at, this.structure);
-      const body = this.structure(atName);
+      const body = inPlace ?? this.structure(terminal(at, this.structure));
+      inPlace = undefined;
       const namespaceType = body !== undefined && isNamespaceType(body) ? body : undefined;
       if (namespaceType !== undefined) {
         const map = namespaceMapOf(namespaceType);
@@ -355,8 +357,9 @@ export class ValuesByName {
           }
           value = found;
         }
-        at = map.valueType;
-      } else if (body !== undefined && !isTemplateBody(body) && body.kind === 'record') {
+        at = nameOf(map.valueType) ?? typeExprText(map.valueType);
+        if (map.valueType.kind === 'inline') inPlace = map.valueType.of;
+      } else if (body?.kind === 'record') {
         const field = body.fields.entries.get(segment);
         if (field === undefined) {
           throw new TsonSchemaValidationError(
@@ -372,23 +375,25 @@ export class ValuesByName {
           }
           value = held;
         }
-        if (field.type.kind === 'sibling') {
+        const sibling = dependentOn(field.type);
+        if (sibling !== undefined) {
           const naming =
             `${where} names '${name}', and '${reached}.${segment}' is a dependent field, typed by ` +
-            `its sibling '${field.type.field}'`;
+            `its sibling '${sibling}'`;
           const unreached =
             absent === undefined
               ? undefined
               : `${where} names '${name}', and ${absent}, so the name reaches no value`;
-          at = this.dependentType(naming, body, field.type.field, holder, unreached);
+          at = this.dependentType(naming, body, sibling, holder, unreached);
         } else {
           at = typeNameOf(field);
+          if (field.type.kind === 'inline') inPlace = field.type.of;
         }
-      } else if (body !== undefined && !isTemplateBody(body) && body.kind === 'map') {
+      } else if (body?.kind === 'map') {
         throw new TsonSchemaValidationError(
           `${where} names '${name}', and '${reached}' is ${a(at)}, a map that is no namespace, so it is not entered by name -- a segment selects a key of a namespace value or a field of a record value (§5.12)`,
         );
-      } else if (body !== undefined && !isTemplateBody(body) && body.kind === 'array') {
+      } else if (body?.kind === 'array') {
         throw new TsonSchemaValidationError(
           `${where} names '${name}', and '${reached}' is a list, whose elements have no names -- a segment selects a field of a record or a key of a map, never a position (§5.12)`,
         );
@@ -517,7 +522,7 @@ export class ValuesByName {
  * value entry naming no type either.
  */
 export function typeNamedIn(
-  named: Reference,
+  named: TypeRef,
   sibling: RecordField,
   merged: ReadonlyMap<string, Top>,
 ): TypeNamed {
@@ -526,17 +531,15 @@ export function typeNamedIn(
   if (typed.kind === 'entry') {
     const body = terminalDefinition(typed.name, lookup);
     if (body !== undefined && isValueEntry(body)) {
-      return { kind: 'none', held: `'${referenceText(named)}', ${aValueNoType(body)}` };
+      return { kind: 'none', held: `'${named.name}', ${aValueNoType(body)}` };
     }
   }
   return typed;
 }
 
-/** The text a name-or-reference value spells, `undefined` for any other form. */
+/** The text a name value spells, `undefined` for any other form. */
 function metaText(value: MetaValue): string | undefined {
-  if (value.form === 'token') return value.token.text;
-  if (value.form === 'reference') return referenceText(value.reference);
-  return undefined;
+  return value.form === 'token' ? value.token.text : undefined;
 }
 
 /** The map a value of a namespace type holds, by key. */

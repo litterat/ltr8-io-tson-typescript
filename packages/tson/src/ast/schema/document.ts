@@ -49,21 +49,15 @@ export interface SchemaMap {
 }
 
 /**
- * `schema-map-entry = *(annotation ws) type-name ws "=>" ws *(annotation ws) [ definition-mark ws
- * ] type-def` (§12.1, §2.1) — one entry of a {@link SchemaMap}: a type name bound to a type
- * definition.
+ * `schema-map-entry = *(annotation ws) type-name ws "=>" ws *(annotation ws) type-def` (§12.1, §2.1) —
+ * one entry of a {@link SchemaMap}: a type name bound to a type definition.
  *
  * `nameAnnotations` bind to the key — the `type_name` token itself; the resolver does not
  * hoist annotations from key to value (§2.1). `typeDefAnnotations` bind to the type
  * definition, after `=>`.
  *
- * `mark` is §5.2's definition mark — `abstract` or `final`, read unconditionally at this one
- * slot and an ordinary identifier everywhere else ([TSON-DATA] §7.7): `abstract => { ... }`
- * declares a type of that name (the mark position is never reached, since it sits *before* the
- * type-def this slot introduces, at the previous token), and `f: abstract` references it. A
- * declaration whose whole type-def is the bare mark word is a declaration missing its
- * definition — a parse error the parser building this type raises, never represented here. A
- * mark on a non-record definition is a resolver error, not a parse error.
+ * A definition mark (`abstract`, `final`) is the record definition's own
+ * (`StructuralTypeDef.mark`): it stands before a record definition alone (§12.1, item 136).
  *
  * `position` is the name token's own source position — this package's diagnostic addition, with
  * no counterpart in the grammar itself. `compiler/schemaResolver.ts` copies it onto the resolved
@@ -77,7 +71,6 @@ export interface Declaration {
   readonly nameAnnotations: readonly Annotation[];
   readonly name: string;
   readonly typeDefAnnotations: readonly Annotation[];
-  readonly mark?: 'abstract' | 'final';
   readonly typeDef: TypeDef;
   /**
    * The types the declaration's parameter list wrote — `<T: text, N: int8>` — keyed by parameter

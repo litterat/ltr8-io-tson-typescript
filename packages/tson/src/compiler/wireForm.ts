@@ -1,37 +1,16 @@
 /**
- * How schema vocabulary is spelled as data, in both directions — the one place that knows what a
- * `type_ref` and a held `!record { ... }` look like on the wire, and the one that rewrites a
- * parameter standing inside one.
+ * How schema vocabulary is spelled as data -- the one place that knows what a reference and a type written in
+ * place look like in a binding record, and the vocabulary's member names a binding record writes.
  *
- * **Why one module rather than a producer over here and a consumer over there.** A held body is
- * written by two phases and read by several: `desugar.ts` lifts a sugar form and
- * `definitionResolver.ts` holds a composition or refinement template; `templates.ts` closes one,
- * `heldBody.ts` answers §5.10's declaration-time questions about one. A second opinion about what
- * an application looks like is what makes one of those wrong — this project has already drifted
- * once, `desugar.ts` and `heldBody.ts` each hand-maintaining their own copy of the member-name
- * constants and the `isApplication`/`typeRefOf` pair.
+ * **Why one module.** A binding record is written by two phases -- `desugar.ts` rewriting a sugar form into
+ * the construction it denotes, and `constructionRewrite.ts` spelling an applied constructor's arguments -- and
+ * read by the resolver. A second opinion about what a reference looks like in a slot is what makes one of them
+ * wrong.
  *
- * **Nothing here is canonical output.** A canonical writer is fully quoted, which is a different
- * language from the one a held body is written in: `HeldBody.names()` and
- * `templateSubstitution.ts`'s own `substitute` both key on a token being *unquoted*, so a quoted
- * body references no parameters at all. What is written here is what an author would have
- * written — an unquoted token where a canonical writer would quote, a bare name where it would
- * state `{ name: X  arguments: [] }`, and nothing at all where the constructor's own default says
- * it.
- *
- * **One spelling per shape is the requirement, not the tidiness.** An entry name derives from what
- * is written (`derivedName.ts`'s `ofBinding`/`ofApplication`), so a second spelling of one
- * reference splits one type across two entries. That is why {@link refValue} is what every
- * producer of a *resolved* `schema/meta` reference goes through, and why {@link typeRefOf} — its
- * inverse — lives beside it rather than in whichever phase happens to read.
- *
- * **What this module does not cover.** `desugar.ts` walks the *unresolved* AST
- * (`ast/schema/typeref.ts`'s own `TypeRef`, before resolution has run at all) and keeps its own
- * `refValueOf`/`refRecordOf` for that reason — the shape it produces is identical to
- * {@link refValue}'s by construction, but the input type is a different one this module has no
- * reason to know about.
+ * **Nothing here is canonical output.** What is written here is what an author would have written -- an
+ * unquoted token where a canonical writer would quote, and nothing at all where the constructor's own default
+ * says it.
  */
-import { TsonInternalError } from '../core/errors.js';
 import type {
   Annotation,
   CoreValue,
@@ -41,59 +20,42 @@ import type {
   TokenValue,
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
-import type {
-  FieldGroup,
-  RecordBody,
-  RecordField as RecordField_,
-  RecordTemplateBody,
-  RecordTemplateField,
-} from '../schema/meta/bodies.js';
-import type { TypeRef } from '../schema/meta/typedef.js';
-import { parentsOf } from '../schema/meta/typedef.js';
-import { isIdentifierText } from '../unicode/identifier-profile.js';
-import { referenceToWire } from '../schema/referenceAtoms.js';
+import type { FieldGroup } from '../schema/meta/bodies.js';
 import { metaName } from '../schema/meta/kernel.js';
-import { lexerFormOfMeta } from './tokenForms.js';
+import type { TypeRef } from '../schema/meta/typedef.js';
+import { referenceToWire } from '../schema/referenceAtoms.js';
+import { isIdentifierText } from '../unicode/identifier-profile.js';
 
-// ── The vocabulary's own member names ───────────────────────────────────────────────────────────
+// ── The vocabulary's own member names ────────────────────────────────────────────────────────
 
-/**
- * The `name` member of `type_ref` (and of `template_param`). What tells an application from
- * anything else is never this member alone but its pairing with {@link ARGUMENTS}; see
- * {@link isApplication}. A field's name is no member: it is the field's key in `fields`.
- */
-export const NAME = 'name';
-
-/** `type_ref.arguments` — the second half of what makes a record an application. */
-export const ARGUMENTS = 'arguments';
-
-/** `record_field.value` and `type_argument.value`: §8.1's literal channel. */
+/** `meta.record_field.value`: §8.1's literal channel. */
 export const VALUE = 'value';
 
-/** The constructor a held record body carries. */
+/** `meta.record`: the constructor a parametric record applies. */
 export const RECORD = metaName('record');
+
+/** `meta.apply`: the construction an application is (§5.10). */
+export const APPLY = metaName('apply');
 
 export const FIELDS = 'fields';
 export const GROUPS = 'groups';
 export const MEMBERS = 'members';
 export const TYPE = 'type';
-/** `field_group.optional_members` — the members marked `?` within their option (§5.11). */
 export const OPTIONAL_MEMBERS = 'optional_members';
-/** `type`'s one field, `chain`, and `type_chain.parents` -- the parents as written (§4.1). */
 export const CHAIN = 'chain';
-export const PARENTS = 'parents';
-/** `record.name_type` -- the identifier family the record's field names are drawn from (§5.2). */
+export const PARAMETERS = 'parameters';
+export const NAME = 'name';
+export const HEAD = 'head';
+export const ARGUMENTS = 'arguments';
+/** `record.name_type` -- written exactly where the record states one. */
 export const NAME_TYPE = 'name_type';
-/** `record_field.optional` — the name's own `?` (§5.2). */
 export const OPTIONAL = 'optional';
-/** `record_field.voidable` — the type's own `?` (§5.2). */
 export const VOIDABLE = 'voidable';
-/** `record_field.role` — `field_role` (§5.2, §8.1). */
 export const ROLE = 'role';
-/** `record.extension` — `record_extension_type` (§5.2, §8.1). */
 export const EXTENSION = 'extension';
-/** `record.discriminators` — the base's own selector fields, in declaration order (§5.2, §8.1). */
 export const DISCRIMINATORS = 'discriminators';
+/** `meta.type_inline.of`: the construction a type written in place holds, tagged with its constructor. */
+export const OF = 'of';
 
 // ── Building blocks ──────────────────────────────────────────────────────────────────────────
 
@@ -103,10 +65,8 @@ export function tokenValue(text: string, form: TokenForm = 'unquoted'): TokenVal
 }
 
 /**
- * A bare value in a field or element position — no annotations and no type-ref of its own — or,
- * given annotations, the same value carrying the annotations written on the construct it stands
- * for. §6 puts a field's own annotations on the resolved record, and a held body reaches that
- * through the wire value, so they travel here rather than being re-attached after the fact.
+ * A bare value in a field or element position — no annotations and no type-ref of its own — or, given
+ * annotations, the same value carrying the annotations written on the construct it stands for.
  */
 export function scoped(value: CoreValue, annotations: readonly Annotation[] = []): DataValue {
   return { annotations, coreValue: value };
@@ -121,13 +81,10 @@ export function rescope(original: DataValue, rewritten: CoreValue): DataValue {
   return { ...original, coreValue: rewritten };
 }
 
-// ── Writing: a resolved value as the wire form it was written in ───────────────────────────────
-
 /**
- * A declared field name as a `field_map` key writes it: unquoted where it is an identifier, and
- * single-line quoted otherwise (`"@id"`, `"first name"`), or the text would not parse back
- * (§12.1: a declared field name is any single-line token). Quoting never hides a parameter, whose
- * name is an identifier.
+ * A declared field name as a `field_map` key writes it: unquoted where it is an identifier, and single-line
+ * quoted otherwise (`"@id"`, `"first name"`), or the text would not parse back (§12.1: a declared field name
+ * is any single-line token).
  */
 export function declaredName(name: string): DataValue {
   return {
@@ -136,182 +93,17 @@ export function declaredName(name: string): DataValue {
   };
 }
 
-/**
- * A `field_map` value as the wire writes it: a map from each declared name to its field, in
- * declaration order, `{}` where there is none.
- */
-export function fieldsValue(fields: readonly (readonly [string, DataValue])[]): CoreValue {
-  if (fields.length === 0) return { kind: 'empty-brace' };
-  return {
-    kind: 'map',
-    entries: fields.map(([name, value]) => ({ key: declaredName(name), value })),
-  };
-}
-
-/**
- * The held body an *error placeholder* carries — `!record { fields: {} }`, the zero-field record
- * both absorbing stand-ins stand for: an open empty record, so a placeholder keeps its
- * declaration's type parameters (answering "how many?" with zero sends a downstream `bl<text>` to
- * fix the wrong declaration) and closes by the process every record template does.
- */
-export function heldEmptyRecord(): DataValue {
-  return {
-    annotations: [],
-    typeRef: RECORD,
-    coreValue: {
-      kind: 'record',
-      fields: [{ name: FIELDS, value: scoped(fieldsValue([])) }],
-    },
-  };
-}
-
-/**
- * Unbinds one resolved annotation value back to wire form — the one leaf {@link heldRecord} cannot
- * do generically, since a bound annotation value's real host shape depends on the type its name
- * resolved against. The default handles the scalar shapes a schema-level constraint value ever
- * actually carries (a boolean, a bigint, a string, or an already-wire `Token`/`CoreValue`); a
- * caller with a richer binding layer in scope may supply a fuller one.
- */
-export type AnnotationValueEncoder = (value: unknown) => DataValue;
-
-export function defaultAnnotationValueEncoder(value: unknown): DataValue {
-  if (value === null || value === undefined) {
-    return { annotations: [], coreValue: { kind: 'void' } };
-  }
-  if (typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'number') {
-    return { annotations: [], coreValue: tokenValue(String(value)) };
-  }
-  if (typeof value === 'string') {
-    return { annotations: [], coreValue: { kind: 'token', text: value, form: 'single-line' } };
-  }
-  if (typeof value === 'object' && 'kind' in value) {
-    return { annotations: [], coreValue: value as CoreValue };
-  }
-  throw new TsonInternalError(
-    `defaultAnnotationValueEncoder has no wire spelling for a bound annotation value of type ${typeof value}`,
-  );
-}
-
-/**
- * A record template's held tree, built from the record it is (§5.10) -- what closing substitutes
- * and reads back through the `record` constructor, so a record template closes by the process
- * every other held body does.
- *
- * Its parents as written travel in `chain.parents`, substituted and closed with everything else,
- * so an application closing reaches an IS-A edge to the instantiation its own arguments name; the
- * closed chain is recomputed from them. The record's own `extension` (each application's) is
- * stated where it is not OPEN, and a non-default `name_type` is written too.
- *
- * **Two producers of the held wire form are fine; two spellings of it are not.** This one and
- * `desugar.ts`'s own record binding both go through {@link refValue}, {@link declaredName} and
- * {@link nameField}, which is what makes them one spelling by construction rather than by two
- * authors agreeing.
- *
- * A canonical writer's output cannot serve here: a held body's own grammar is
- * unquoted-token-as-parameter, and a canonical writer quotes everything, which would make every
- * parameter reference in the held body indistinguishable from a literal.
- */
-export function heldRecord(
-  body: RecordBody | RecordTemplateBody,
-  encodeAnnotation: AnnotationValueEncoder = defaultAnnotationValueEncoder,
-): DataValue {
-  const entries: (readonly [string, RecordField_ | RecordTemplateField])[] = [
-    ...body.fields.entries,
-  ];
-  const fields = entries.map(([name, f]) => {
-    // A parameter stands wherever a token stands in a held body: the labelled `type_param`/`value_param`
-    // is written as the plain `type`/`value` it will be once an application substitutes it away.
-    const typeParam = 'typeParam' in f ? f.typeParam : undefined;
-    const valueParam = 'valueParam' in f ? f.valueParam : undefined;
-    const type: CoreValue | undefined =
-      typeParam !== undefined
-        ? tokenValue(typeParam)
-        : f.type === undefined
-          ? undefined
-          : f.type.kind === 'sibling'
-            ? tokenValue(`${f.type.field}!`)
-            : refValue(f.type);
-    const members: RecordField[] = type === undefined ? [] : [{ name: TYPE, value: scoped(type) }];
-    if (f.optional) {
-      members.push(nameField(OPTIONAL, 'true'));
-    }
-    if (f.voidable) {
-      members.push(nameField(VOIDABLE, 'true'));
-    }
-    if (f.role !== 'FREE') {
-      members.push(nameField(ROLE, f.role));
-    }
-    if (valueParam !== undefined) {
-      members.push({ name: VALUE, value: scoped(tokenValue(valueParam)) });
-    } else if (f.value !== undefined) {
-      // A literal spelled like one of the template's parameters is written quoted, so the held form's
-      // unquoted-token-as-parameter rule never reads it as the parameter (§5.10: the shadowing rule
-      // classifies what the template writes, and a literal a closed source contributed is not that).
-      const spelledAsParameter =
-        'parameters' in body &&
-        f.value.form === 'UNQUOTED' &&
-        body.parameters.some((parameter) => parameter.name === f.value?.text);
-      const form = spelledAsParameter ? 'single-line' : lexerFormOfMeta(f.value.form);
-      members.push({ name: VALUE, value: scoped({ kind: 'token', text: f.value.text, form }) });
-    }
-    return [
-      name,
-      scoped(
-        { kind: 'record' as const, fields: members },
-        f.annotations.map((a) => ({
-          name: a.name,
-          ...(a.value === undefined ? {} : { value: encodeAnnotation(a.value) }),
-        })),
-      ),
-    ] as const;
-  });
-  const groups = body.groups.map((group: FieldGroup) => groupValue(group));
-  const binding: RecordField[] = [];
-  const parents = parentsOf(body);
-  if (parents.length > 0) {
-    binding.push({
-      name: CHAIN,
-      value: scoped({
-        kind: 'record',
-        fields: [
-          {
-            name: PARENTS,
-            value: scoped({ kind: 'array', elements: parents.map((p) => scoped(refValue(p))) }),
-          },
-        ],
-      }),
-    });
-  }
-  binding.push({ name: FIELDS, value: scoped(fieldsValue(fields)) });
-  if (groups.length > 0) {
-    binding.push({ name: GROUPS, value: scoped({ kind: 'array', elements: groups }) });
-  }
-  if (body.extension !== 'OPEN') {
-    binding.push(nameField(EXTENSION, body.extension));
-  }
-  if (body.discriminators !== undefined) {
-    binding.push({
-      name: DISCRIMINATORS,
-      value: scoped({
-        kind: 'array',
-        elements: body.discriminators.map((d) => scoped(tokenValue(d))),
-      }),
-    });
-  }
-  if (body.nameType !== undefined) {
-    binding.push(nameField(NAME_TYPE, body.nameType));
-  }
-  return { annotations: [], typeRef: RECORD, coreValue: { kind: 'record', fields: binding } };
-}
-
-/** A list of field names as the array of bare names a resolved document writes. */
+/** A list of names as the array of quoted text a binding record writes. */
 function namesValue(names: readonly string[]): CoreValue {
-  return { kind: 'array', elements: names.map((name) => scoped(tokenValue(name))) };
+  return {
+    kind: 'array',
+    elements: names.map((name) => scoped(tokenValue(name, 'single-line'))),
+  };
 }
 
 /**
- * A `field_group` as a held body writes it (§5.11): `optional_members` only where it names a
- * member, and `optional` only where it is set.
+ * A `field_group` as a binding record writes it (§5.11): `optional_members` only where it names a member, and
+ * `optional` only where it is set.
  */
 export function groupValue(group: FieldGroup, annotations: readonly Annotation[] = []): DataValue {
   const members: RecordField[] = [
@@ -332,34 +124,17 @@ export function groupValue(group: FieldGroup, annotations: readonly Annotation[]
   return scoped({ kind: 'record', fields: members }, annotations);
 }
 
-/**
- * A *resolved* `schema/meta` {@link TypeRef} in the held spelling: a bare name as one token, an
- * application as the data grammar's reference value, `pair<uuid B>` ([TSON-DATA] §7.4).
- *
- * **The `arguments.length === 0` branch is load-bearing, not an optimisation.** A held body is read by
- * later phases as wire form, and a no-argument reference stated as a reference value would give one type
- * two spellings and so two entry names, since a name derives from what is written. That is why
- * `templateSubstitution.ts`'s own substitution writes a bound reference through this rather than spelling
- * one of its own: the open form needs one spelling however many phases produce it.
- */
+/** A reference in the wire spelling: its name, one token. */
 export function refValue(ref: TypeRef): CoreValue {
   return referenceToWire(ref);
 }
-
-// ── Reading: the wire form back as the reference it spells ─────────────────────────────────────
 
 /** One field of a wire `RecordValue`, by name — `undefined` when absent. */
 export function field(record: RecordValue, name: string): CoreValue | undefined {
   return record.fields.find((f) => f.name === name)?.value.coreValue;
 }
 
-/**
- * The application `value` spells, if it is one: a reference value with an argument list. A held body is
- * written by one phase and read by several, and a second opinion about what an application looks like is
- * what makes one of them wrong. A quoted token is never an application, so a held body's text literal
- * (`pattern: "box<T>"`) is text whatever it spells.
- */
-export function applicationIn(_value: CoreValue): TypeRef | undefined {
-  // A data value holds no application (§4.1): the argument list is no data syntax.
-  return undefined;
+/** One field of a wire `RecordValue` as the data value written, by name — `undefined` when absent. */
+export function member(record: RecordValue, name: string): DataValue | undefined {
+  return record.fields.find((f) => f.name === name)?.value;
 }

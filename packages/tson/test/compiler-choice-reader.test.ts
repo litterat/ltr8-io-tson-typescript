@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { SchemaLocation } from '../src/core/diagnostic.js';
 import type { ChoiceBody } from '../src/schema/meta/bodies.js';
-import type { Top } from '../src/schema/meta/typedef.js';
 import { choiceTreeReader } from '../src/compiler/choiceReader.js';
 import { compile, validate } from '../src/compiler/compile.js';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
 import type { TypeReader } from '../src/reader/contracts.js';
 import type { Value } from '../src/tree/nodes.js';
+import type { Top, TypeExpr } from '../src/schema/meta/typedef.js';
+import { nameOf } from '../src/schema/meta/typedef.js';
 import {
   bodyContextOver,
   collectingContextOver,
@@ -38,12 +39,13 @@ function variantReader(typeRef: string, kind: 'int' | 'text'): TypeReader<Value>
 const BODY: ChoiceBody = {
   kind: 'choice',
   variants: [
-    { name: 'phone', arguments: [], annotations: [] },
-    { name: 'email', arguments: [], annotations: [] },
+    { name: 'phone', annotations: [] },
+    { name: 'email', annotations: [] },
   ],
 };
 
-function resolveType(name: string): TypeReader<Value> {
+function resolveType(type: string | TypeExpr): TypeReader<Value> {
+  const name = typeof type === 'string' ? type : (nameOf(type) ?? '');
   return name === 'phone' ? variantReader('phone', 'int') : variantReader('email', 'text');
 }
 
@@ -157,7 +159,7 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
         'phone_of',
         entry({
           kind: 'alias',
-          target: { name: 'phone', arguments: [], annotations: [] },
+          target: { name: 'phone', annotations: [] },
         }),
       ],
     ]);

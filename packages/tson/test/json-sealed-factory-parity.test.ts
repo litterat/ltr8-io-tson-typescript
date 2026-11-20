@@ -1,15 +1,10 @@
 /**
  * A port of the Java reference's `SealedFactoryEncodingParityTest`
  * (`tson-json/src/test/java/io/ltr8/tson/json/SealedFactoryEncodingParityTest.java`) -- a sealed
- * family whose members a subtype-template factory mints reads alike in both encodings
- * ([TSON-JSON] §9.4): the pin a factory writes from a type parameter (`kind: = T`) places a value
- * exactly as a hand-written pin does, and a payload nested under a single field is read the same
- * way in both.
- *
- * The shape is distinct from `json-cross-encoding-parity.test.ts`'s own template-family cases:
- * here the base is a closed `abstract` record and every member is minted, which is what puts
- * [TSON-SCHEMA] §5.7's fixation on the dispatch path -- `kind: = T` is an ordinary REQUIRED_FIXED
- * field of the closed member by the time either encoding reads it.
+ * family whose members compose an application of a parametric record reads alike in both encodings
+ * ([TSON-JSON] §9.4): each member pins the selector where it is declared, a value differing per
+ * application being written there and never taken from a parameter ([TSON-SCHEMA] §5.10), and a
+ * payload nested under a single field is read the same way in both.
  *
  * As `json-cross-encoding-parity.test.ts`'s own top note explains, this port's `sameRule` compares
  * the code and the data pointer, not `expected`/`message`: each stack's prose is independently
@@ -32,28 +27,36 @@ const SCHEMA_SOURCE = `
 !!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   msg    => abstract { kind: text =? }
-  msg_of => <T, V> msg & { kind?: = T  body: V }
+  msg_of => <V> msg & { body: V }
 
-  ping_body => { seq: int32 }
-  pong_body => { seq: int32  latency: int32 }
+  ping_body  => { seq: int32 }
+  pong_body  => { seq: int32  latency: int32 }
+  pong_bodies => [pong_body]
 
-  ping => msg_of<"ping", ping_body>
-  pong => msg_of<"pong", [pong_body]>
+  ping => msg_of<ping_body> & { kind?: = "ping" }
+  pong => msg_of<pong_bodies> & { kind?: = "pong" }
 
   channel => { m: msg }
 }
 `;
 
-const LINKED = resolveUserSchema(SCHEMA_SOURCE);
-const JSON_SCHEMA: JsonCompiledSchema = compileJsonSchema(LINKED);
-const TEXT_SCHEMA: CompiledSchema = compile(LINKED);
+let schemas: { readonly text: CompiledSchema; readonly json: JsonCompiledSchema } | undefined;
+
+/** The schema compiled once on first use, so a schema that fails to load fails each test that reads it. */
+function compiled(): { readonly text: CompiledSchema; readonly json: JsonCompiledSchema } {
+  if (schemas === undefined) {
+    const linked = resolveUserSchema(SCHEMA_SOURCE);
+    schemas = { text: compile(linked), json: compileJsonSchema(linked) };
+  }
+  return schemas;
+}
 
 function tson(rootType: string, body: string): readonly Diagnostic[] {
-  return validateText(bytesOf(body), { schema: TEXT_SCHEMA, root: rootType }).diagnostics;
+  return validateText(bytesOf(body), { schema: compiled().text, root: rootType }).diagnostics;
 }
 
 function json(rootType: string, body: string): readonly Diagnostic[] {
-  return validateJson(body, { schema: JSON_SCHEMA, root: rootType }).diagnostics;
+  return validateJson(body, { schema: compiled().json, root: rootType }).diagnostics;
 }
 
 function verdictsOf(diagnostics: readonly Diagnostic[]): readonly { code: string; path: string }[] {
@@ -76,8 +79,8 @@ function sameRule(rootType: string, tsonBody: string, jsonBody: string): void {
   expect(verdictsOf(json(rootType, jsonBody))).toEqual(verdictsOf(fromTson));
 }
 
-describe('a sealed family a subtype-template factory mints', () => {
-  it('the pin the factory wrote from T selects the member, with no tag in either encoding', () => {
+describe('a sealed family whose members compose an application of a parametric record', () => {
+  it('the pin a member writes selects it, with no tag in either encoding', () => {
     bothAccept(
       'channel',
       '!channel { m: { kind: ping  body: { seq: 1 } } }',
@@ -85,7 +88,7 @@ describe('a sealed family a subtype-template factory mints', () => {
     );
   });
 
-  it('the other member, whose payload is a container -- minted over a synthetic of its own', () => {
+  it('the other member, whose payload is a container', () => {
     bothAccept(
       'channel',
       '!channel { m: { kind: pong  body: [ { seq: 1  latency: 7 } ] } }',

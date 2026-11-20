@@ -2,29 +2,17 @@
  * Small builders for hand-made resolved-schema values in unit tests: an entry is its value (Part 2
  * §8.1), a type carries its chain (§4.1), and a record's fields are a map keyed by name (§5.2).
  */
-import type {
-  NamedField,
-  RecordBody,
-  RecordField,
-  RecordTemplateBody,
-  RecordTemplateField,
-} from '../src/schema/meta/bodies.js';
+import type { NamedField, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import { fieldMapOf, namedFields } from '../src/schema/meta/bodies.js';
 import type {
   MetaValue,
   Namespace,
-  Reference,
   Top,
+  TypeExpr,
   ValueEntry,
 } from '../src/schema/meta/typedef.js';
-import {
-  isTemplateBody,
-  namespaceOf,
-  subtypesOf,
-  supertypesOf,
-  typeChain,
-  withChain,
-} from '../src/schema/meta/typedef.js';
+import { withParametersMarked } from '../src/schema/meta/typeInline.js';
+import { subtypesOf, supertypesOf, typeChain, withChain } from '../src/schema/meta/typedef.js';
 
 export { fieldMapOf };
 
@@ -55,38 +43,16 @@ export function record(
 }
 
 /**
- * `<params> => { field: type ... }` -- a record template (§5.10): its fields label a parameter standing for
- * a whole type (`type_param`), and it carries its parameters.
+ * `name => <params> { field: type ... }` -- a parametric record (§5.10): `body` taking `parameters`, each reference
+ * to one of them at any depth marked as that parameter.
  */
-export function recordTemplate(
-  parameters: readonly string[],
-  body: RecordBody,
-): RecordTemplateBody {
-  const fields = [...body.fields.entries].map(([name, f]): [string, RecordTemplateField] => {
-    const { type, ...rest } = f;
-    return [
-      name,
-      type.kind !== 'sibling' && type.arguments.length === 0 && parameters.includes(type.name)
-        ? { ...rest, typeParam: type.name }
-        : { ...rest, type },
-    ];
-  });
-  return {
-    kind: 'record_template',
-    fields: namespaceOf(body.fields.type, fields, body.fields.keyAnnotations),
-    groups: body.groups,
-    extension: body.extension,
-    ...(body.discriminators === undefined ? {} : { discriminators: body.discriminators }),
-    parameters: parameters.map((name) => ({
-      name,
-      type: { name: 'meta.type_ref', arguments: [], annotations: [] },
-    })),
-  };
+export function parametricRecord(parameters: readonly string[], body: RecordBody): RecordBody {
+  return withParametersMarked({ ...body, parameters: parameters.map((name) => ({ name })) });
 }
 
 /** `body`'s fields with their names, in declaration order. */
 export function fieldsOf(body: Top | undefined): readonly NamedField[] {
-  if (body === undefined || isTemplateBody(body) || body.kind !== 'record') return [];
+  if (body?.kind !== 'record') return [];
   return namedFields(body);
 }
 
@@ -107,11 +73,12 @@ export function unnamedField(field: NamedField): RecordField {
   return rest;
 }
 
-/** The name of the type `field` names, `undefined` for no field or a dependent one, whose type is its sibling's value (§5.2). */
-export function fieldTypeName(
-  field: { readonly type?: Reference } | undefined,
-): string | undefined {
-  return field?.type === undefined || field.type.kind === 'sibling' ? undefined : field.type.name;
+/**
+ * The name of the type `field` names, `undefined` for no field or one typed by a type written in place -- a
+ * dependent one among them, whose type is its sibling's value (§5.2).
+ */
+export function fieldTypeName(field: { readonly type?: TypeExpr } | undefined): string | undefined {
+  return field?.type === undefined || field.type.kind === 'inline' ? undefined : field.type.name;
 }
 
 /** `value`'s closed IS-A chain (§4.1), empty for no value at all. */
@@ -122,4 +89,43 @@ export function supertypesIn(value: Top | undefined): readonly string[] {
 /** `value`'s linker-derived subtypes (§8.1), empty for no value at all. */
 export function subtypesIn(value: Top | undefined): readonly string[] {
   return value === undefined ? [] : subtypesOf(value);
+}
+
+/**
+ * What `value` is, as a test states it: an alias, a value entry, an incomplete entry, or a type by the base kind
+ * its constructor reaches (§4.1, §5.5, §8.1) -- a record whose chain reaches `meta.atom`, `meta.product` or
+ * `meta.sum` classed by it, a constructor of atoms being an atom's kind.
+ */
+export function entryClass(
+  value: Top,
+): 'ALIAS' | 'VALUE' | 'INCOMPLETE' | 'EXTERN' | 'ATOM' | 'PRODUCT' | 'SUM' | 'APPLY' {
+  switch (value.kind) {
+    case 'alias':
+      return 'ALIAS';
+    case 'value_entry':
+      return 'VALUE';
+    case 'incomplete':
+      return 'INCOMPLETE';
+    case 'extern':
+      return 'EXTERN';
+    case 'apply':
+      return 'APPLY';
+    case 'record': {
+      const supertypes = supertypesOf(value);
+      if (supertypes.includes('meta.atom')) return 'ATOM';
+      if (supertypes.includes('meta.sum')) return 'SUM';
+      return 'PRODUCT';
+    }
+    case 'array':
+    case 'map':
+    case 'namespace':
+    case 'tuple':
+      return 'PRODUCT';
+    case 'choice':
+    case 'declared_type':
+    case 'dependent':
+      return 'SUM';
+    default:
+      return 'ATOM';
+  }
 }

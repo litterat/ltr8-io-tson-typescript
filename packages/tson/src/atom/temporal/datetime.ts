@@ -10,7 +10,7 @@
  * inherit their own strictness from `rfc3339.ts` -- the four-digit no-sign year, the ±18:00
  * offset bound, the refused leap second -- with nothing extra to add here.
  *
- * **`precision` bounds the *value*, and no `requireTimezone` facet exists** -- the same contract
+ * **`fraction_digits` bounds the *value*, and no `requireTimezone` facet exists** -- the same contract
  * `time.ts` implements and documents in full (§5.5); this module shares its own local
  * `onPrecisionGrid` check rather than importing it, for the same reason `rfc3339.ts`'s own
  * `nanosecond` field can't stand in for it there either.
@@ -29,7 +29,7 @@ import {
   readFullTime,
 } from './rfc3339.js';
 
-/** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `precision: N` value grid (§5.5), identical to `time.ts`'s own check. */
+/** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `fraction_digits: N` value grid (§5.5), identical to `time.ts`'s own check. */
 function onPrecisionGrid(nanosecond: number, precision: bigint): boolean {
   const divisor = 10 ** (9 - Number(precision));
   return nanosecond % divisor === 0;
@@ -93,13 +93,13 @@ export function createDateTimeParser(
     };
 
     if (
-      constraints.precision !== undefined &&
-      !onPrecisionGrid(value.time.nanosecond, constraints.precision)
+      constraints.fractionDigits !== undefined &&
+      !onPrecisionGrid(value.time.nanosecond, constraints.fractionDigits)
     ) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is not a whole number of 10^-${constraints.precision.toString()} seconds (§5.5)`,
-        `on the precision-${constraints.precision.toString()} grid`,
+        `'${text}' is not a whole number of 10^-${constraints.fractionDigits.toString()} seconds (§5.5)`,
+        `on the fraction-digits-${constraints.fractionDigits.toString()} grid`,
       );
     }
     if (constraints.min !== undefined) {

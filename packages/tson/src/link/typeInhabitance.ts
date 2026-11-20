@@ -24,8 +24,7 @@
  * **One simplification from the Java: the reported chain names entries directly, never through
  * the reference implementation's `EntryDisplayName`.** `link/referenceValidation.ts`'s own note
  * makes the identical simplification for the identical reason: this port reports every failure
- * against the entry (or, here, the chain link) it was found on, synthetic name and all, rather
- * than rendering a synthetic entry by the form or application that produced it.
+ * against the entry (or, here, the chain link) it was found on.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
@@ -33,8 +32,8 @@ import { resolvesToConstructor } from './aliasChain.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
 import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
 import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
-import type { Reference, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
+import type { Top, TypeExpr } from '../schema/meta/typedef.js';
+import { isParametric, nameOf } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -116,14 +115,9 @@ function deriveInhabited(namespace: ReadonlyMap<string, Top>): ReadonlySet<strin
 /**
  * Whether one definition is satisfied by the entries marked so far.
  *
- * **An open entry is judged too, with its parameters assumed inhabited.** A template is not a
- * type and no document ever has one, so the question could have been left to its closures -- but
- * then a template nobody applies would ship broken. Assuming the parameters inhabited makes the
- * verdict sound in the direction that matters: if the body cannot be satisfied even when every
- * argument can, then no application of it can be either. A parameter is not an entry, so {@link
- * refInhabited} already treats one as inhabited (it is not a key `namespace` holds), and an
- * application `tree<p0>` already depends on `tree` -- both fall out of looking the reference's
- * own name up.
+ * **A parametric record is not walked**: its parameters mean nothing until an application supplies the arguments,
+ * so each application is judged where it closes (§5.10.1). An incomplete entry is no type, and is not walked
+ * either.
  */
 function isInhabited(
   def: Top,
@@ -131,12 +125,9 @@ function isInhabited(
   inhabited: ReadonlySet<string>,
 ): boolean {
   const body = def;
-  if (isTemplateBody(body)) {
-    // A held body is not walked: its element type and bounds are tokens that mean nothing until
-    // substitution supplies the arguments, so a template is inhabited here and the closure that
-    // does supply them is judged on its own -- it is an ordinary entry in this namespace by the
-    // time linking runs, materialisation having minted it. A template nobody applies is judged
-    // nowhere, which is the same answer §5.10 gives everywhere else for that case.
+  if (body.kind === 'incomplete' || isParametric(body)) {
+    // An incomplete entry is no type, and a parametric record is judged where each application closes
+    // (§5.10.1): neither is walked here.
     return true;
   }
   switch (body.kind) {
@@ -185,7 +176,7 @@ function isInhabited(
     // A reference that names types admits the names of its members, whatever the types they name admit, so it is
     // inhabited exactly when linking found a member. One that names values admits a name whose referent only
     // the linker judges.
-    case 'reference_type':
+    case 'ref':
       return body.index?.namesTypes === false || (body.index?.members.length ?? 0) > 0;
     default:
       return true; // an atom's own satisfiability is its family's question, not this one
@@ -325,11 +316,17 @@ function isEmptyAllowed(minItems: bigint | undefined): boolean {
  * too would report the same defect twice, in words that name a different problem.
  */
 function refInhabited(
-  ref: Reference,
+  ref: TypeExpr,
   namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
-  if (ref.kind === 'sibling') return true; // the type a dependent field is read as is each instance's (§5.2)
+  // A type written in place is judged where it stands; the type a dependent field is read as is each
+  // instance's (§5.2). An abstract record in place has no direct instance, and nothing is IS-A a type in place, so
+  // it has no member either: no value is one of it (§4.2, §5.2).
+  if (ref.kind === 'inline') {
+    if (ref.of.kind === 'record' && ref.of.extension === 'ABSTRACT') return false;
+    return ref.of.kind === 'dependent' || isInhabited(ref.of, namespace, inhabited);
+  }
   return !namespace.has(ref.name) || inhabited.has(ref.name);
 }
 
@@ -341,8 +338,8 @@ function refInhabited(
  * atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
  * one position-specific exemption from it, not a fact `void`'s own entry carries.
  */
-function refIsVoid(ref: Reference, namespace: ReadonlyMap<string, Top>): boolean {
-  if (ref.kind === 'sibling') return false;
+function refIsVoid(ref: TypeExpr, namespace: ReadonlyMap<string, Top>): boolean {
+  if (ref.kind === 'inline') return false;
   return resolvesToConstructor(ref.name, (n) => namespace.get(n), 'void_type');
 }
 
@@ -425,7 +422,7 @@ function firstUnsatisfiedDependency(
     return undefined;
   }
   const body = def;
-  if (isTemplateBody(body)) {
+  if (body.kind === 'incomplete') {
     return undefined;
   }
   switch (body.kind) {
@@ -436,14 +433,16 @@ function firstUnsatisfiedDependency(
     case 'array':
       return refInhabited(body.elementType, namespace, inhabited)
         ? undefined
-        : body.elementType.name;
+        : nameOf(body.elementType);
     case 'map':
-      return refInhabited(body.valueType, namespace, inhabited) ? undefined : body.valueType.name;
+      return refInhabited(body.valueType, namespace, inhabited)
+        ? undefined
+        : nameOf(body.valueType);
     case 'tuple': {
       const bad = body.elements.find(
         (element) => !positionInhabited(element, namespace, inhabited),
       );
-      return bad?.elementType.name;
+      return bad === undefined ? undefined : nameOf(bad.elementType);
     }
     case 'alias':
       return refInhabited(body.target, namespace, inhabited) ? undefined : body.target.name;

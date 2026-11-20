@@ -40,9 +40,9 @@ import { createDataStream } from '../stream/dataStream.js';
 import { createReadContext } from '../reader/context.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import type { LinkedSchema } from '../link/link.js';
-import type { Alias, Top } from '../schema/meta/typedef.js';
+import type { Alias, Top, TypeExpr, TypeInline } from '../schema/meta/typedef.js';
 import type { DeclaredType } from '../schema/meta/algebra.js';
-import { choiceDisjoint, entryKind, isFamilyBase, isTemplateBody } from '../schema/meta/typedef.js';
+import { choiceDisjoint, dependentOn, isParametric } from '../schema/meta/typedef.js';
 import { isNamespaceType, namespaceAsMap } from '../schema/meta/namespaces.js';
 import type {
   ArrayBody,
@@ -51,6 +51,7 @@ import type {
   RecordBody,
   TupleBody,
 } from '../schema/meta/bodies.js';
+import { typeExprText } from '../schema/meta/bodies.js';
 import type { Value } from '../tree/nodes.js';
 import { recordTreeReader } from '../reader/tree/record.js';
 import { dependentFieldReader } from '../reader/tree/dependent.js';
@@ -65,6 +66,7 @@ import { buildAtomReader } from './atomBuilder.js';
 import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
 import { terminalDefinition } from '../link/aliasChain.js';
+import { isChoiceDisjoint } from '../link/disjointness.js';
 import { fieldNameRule } from '../reader/tree/fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
@@ -90,11 +92,12 @@ export interface CompiledSchema {
    * that does not resolve, so a caller reaching this with an unresolved name is asking this
    * schema a question its own linking already answered "no" to, not presenting a document
    * problem. Throws {@link TsonNotImplementedError} for a well-formed entry this compiler has no
-   * reader for yet (an unmaterialised `TemplateBody`, or a `DATA`-kind entry named where a type
-   * is expected) -- see this module's own top note and `atomBuilder.ts`'s for the two atom-level
-   * cases (every one of those is fully covered).
+   * reader for yet (a parametric record, or a value entry named where a type is expected).
+   *
+   * Given a type written in place (§4.2), the reader of its body, built where it stands and cached by
+   * identity, named by its spelling.
    */
-  reader(name: string): TypeReader<Value>;
+  reader(type: string | TypeExpr): TypeReader<Value>;
 }
 
 /** `name`'s own {@link SchemaLocation} within `schema` -- its origin schema id (§2.2.3: local or imported, `LinkedSchema.origins` says which) and an RFC 6901 pointer naming it directly, plus its source position when the entry carries one. */
@@ -111,25 +114,25 @@ function locationOf(schema: LinkedSchema, name: string): SchemaLocation {
 // One runtime guard per shape, so each branch below narrows `Top` on its own -- the held template
 // body carries no `kind` to switch on.
 function isRecordBody(body: Top): body is RecordBody {
-  return !isTemplateBody(body) && body.kind === 'record';
+  return body.kind === 'record';
 }
 function isMapBody(body: Top): body is MapBody {
-  return !isTemplateBody(body) && body.kind === 'map';
+  return body.kind === 'map';
 }
 function isArrayBody(body: Top): body is ArrayBody {
-  return !isTemplateBody(body) && body.kind === 'array';
+  return body.kind === 'array';
 }
 function isTupleBody(body: Top): body is TupleBody {
-  return !isTemplateBody(body) && body.kind === 'tuple';
+  return body.kind === 'tuple';
 }
 function isChoiceBody(body: Top): body is ChoiceBody {
-  return !isTemplateBody(body) && body.kind === 'choice';
+  return body.kind === 'choice';
 }
 function isAlias(body: Top): body is Alias {
-  return !isTemplateBody(body) && body.kind === 'alias';
+  return body.kind === 'alias';
 }
 function isDeclared(body: Top): body is DeclaredType {
-  return !isTemplateBody(body) && body.kind === 'declared_type';
+  return body.kind === 'declared_type';
 }
 
 /** {@link compile}'s own dependencies. */
@@ -162,9 +165,10 @@ function buildReader(
   schema: LinkedSchema,
   name: string,
   definition: Top,
-  resolve: (name: string) => TypeReader<Value>,
+  resolve: (type: string | TypeExpr) => TypeReader<Value>,
   policy: IdentifierPolicy,
   judgesMembers: boolean,
+  inPlace = false,
 ): TypeReader<Value> {
   const body = definition;
   // Whether `typeName` is an identifier family (§8.3 followed to its constructor): a name wherever
@@ -172,37 +176,22 @@ function buildReader(
   const isNameType = (typeName: string): boolean => {
     if (!policy.skeletonDistinctness) return false;
     const terminalBody = terminalDefinition(typeName, (n) => schema.entries.get(n));
-    return (
-      terminalBody !== undefined &&
-      !isTemplateBody(terminalBody) &&
-      terminalBody.kind === 'identifier_type'
-    );
+    return terminalBody?.kind === 'identifier_type';
   };
   const location = (): SchemaLocation => locationOf(schema, name);
+  // A type written in place is a member of nothing and named by no tag (§4.2, §7.2): it admits no tag at all.
+  const guard = (
+    built: TypeReader<Value>,
+    fieldNameForm?: Parameters<typeof guardSubsumption>[5],
+  ) =>
+    inPlace
+      ? guardInPlace(name, definition, built, schema.entries)
+      : guardSubsumption(name, definition, built, schema.entries, resolve, fieldNameForm);
 
-  // §5.10: a record template is a family base and MAY be named bare at a type position --
-  // dispatching exactly as an ABSTRACT record's own position does, over its members, and never
-  // reading the template itself (a value at such a position is always a value of some member).
-  if (isFamilyBase(body)) {
-    // `guardSubsumption` never invokes this, zero discriminators or many: it either reports a
-    // validation error, refuses a tag naming the base, or dispatches to a subtype's/member's own
-    // reader -- so there is no "own" record to read and none to build here.
-    const neverRead: TypeReader<Value> = {
-      read(): Task<Value> {
-        throw new TsonInternalError(
-          `'${name}': a template family base has no reader of its own -- this should be unreachable`,
-        );
-      },
-    };
-    return guardSubsumption(name, definition, neverRead, schema.entries, resolve);
-  }
-  if (isTemplateBody(body)) {
-    // An open entry that is no type at all (reference, container, constructor-application, atom
-    // template) was named directly rather than through a closed application -- §5.10's
-    // materialisation should have produced a closed entry for every use site before linking;
-    // naming this declaration itself has no reader of its own.
+  if (isParametric(body)) {
+    // A parametric record is no type a position names (§5.10): its applications are.
     throw new TsonNotImplementedError(
-      `'${name}' declares type parameters and has no reader of its own -- apply it (§5.10) before reading against it`,
+      `'${name}' is a parametric record and has no reader of its own -- apply it (§5.10) before reading against it`,
     );
   }
 
@@ -221,7 +210,7 @@ function buildReader(
       location(),
       isNameType(body.keyType.name),
     );
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guard(built);
   }
   if (isRecordBody(body)) {
     const fieldNames = fieldNameRule(schema.nameTypes.get(name));
@@ -230,13 +219,14 @@ function buildReader(
       name,
       body,
       (field) => {
-        if (field.type.kind !== 'sibling') return resolve(field.type.name);
+        const on = dependentOn(field.type);
+        if (on === undefined) return resolve(field.type);
         const lookup = (entry: string): Top | undefined => schema.entries.get(entry);
-        const sibling = body.fields.entries.get(field.type.field);
+        const sibling = body.fields.entries.get(on);
         return dependentFieldReader(
           name,
           field.name,
-          field.type.field,
+          on,
           sibling === undefined ? undefined : siblingType(sibling, lookup),
           lookup,
           resolve,
@@ -246,7 +236,7 @@ function buildReader(
       fieldNames,
       policy,
     );
-    return guardSubsumption(name, definition, built, schema.entries, resolve, fieldNames.form);
+    return guard(built, fieldNames.form);
   }
   if (isArrayBody(body)) {
     const built = arrayTreeReader(
@@ -255,9 +245,9 @@ function buildReader(
       body,
       resolve,
       location(),
-      body.uniqueItems && isNameType(body.elementType.name),
+      body.uniqueItems && body.elementType.kind !== 'inline' && isNameType(body.elementType.name),
     );
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guard(built);
   }
   if (isMapBody(body)) {
     const built = mapTreeReader(
@@ -268,22 +258,18 @@ function buildReader(
       location(),
       isNameType(body.keyType.name),
     );
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guard(built);
   }
   if (isTupleBody(body)) {
     const built = tupleTreeReader(name, name, body, resolve, location());
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guard(built);
   }
   if (isChoiceBody(body)) {
-    return choiceTreeReader(
-      name,
-      name,
-      body,
-      resolve,
-      location(),
-      choiceDisjoint(definition) === true,
-      schema.entries,
-    );
+    // A choice in place carries no derived `disjoint` of its own: it is derived here, as the linker derives a
+    // declared one's (§5.4).
+    const disjoint = choiceDisjoint(definition) ?? isChoiceDisjoint(body.variants, schema.entries);
+    // A tag at a choice names a variant (§5.4, §7.2), so a choice in place takes tags as a declared one does.
+    return choiceTreeReader(name, name, body, resolve, location(), disjoint, schema.entries);
   }
   if (isAlias(body)) {
     // A closed alias reads exactly as its target does (§8.3) -- no framing of its own to add, so
@@ -301,16 +287,91 @@ function buildReader(
       judgesKindMembers: judgesMembers,
       ...(enumForm === undefined ? {} : { enumForm }),
     });
-    return guardSubsumption(name, definition, built, schema.entries, resolve);
+    return guard(built);
   }
-  // A namespace value (a meta layer's own vocabulary, a value and never a type, §4.1) named where a
-  // type is expected -- a resolver error checked at schema load, so reaching it here through an
-  // already-linked schema means something upstream let it through; reported as this module's own
-  // gap rather than silently misread as a type.
+  if (body.kind === 'apply') {
+    throw new TsonNotImplementedError(
+      `'${name}' is an application of a parametric record no resolution closed, and has no reader (§5.10)`,
+    );
+  }
+  // A value entry, an incomplete entry, an extern or a dependent type named where a type is expected -- a
+  // resolver error checked at schema load, so reaching it here through an already-linked schema means
+  // something upstream let it through; reported as this module's own gap rather than silently misread.
   throw new TsonNotImplementedError(
-    `'${name}' (kind ${entryKind(definition)}) is not a data type -- it is a value of a meta ` +
-      "layer's vocabulary, not a type, and has no compiled reader",
+    `'${name}' (a '${body.kind}' entry) is not a data type a value is read against, and has no compiled reader`,
   );
+}
+
+/**
+ * A reader for a type written in place (§4.2, §7.2): it has no name, so a value at its position carries no tag,
+ * whatever the tag names -- a declared type of the same shape included, nothing being IS-A a type in place -- and
+ * an abstract record in place has no direct instance and no member, so no value is one of it.
+ */
+function guardInPlace(
+  displayName: string,
+  definition: Top,
+  built: TypeReader<Value>,
+  entries: ReadonlyMap<string, Top>,
+): TypeReader<Value> {
+  function* refuse(
+    ctx: ReadContext,
+    message: string,
+    expected: string,
+    found: string,
+    code: 'TYPE_MISMATCH' | 'UNKNOWN_TYPE_REF' = 'TYPE_MISMATCH',
+  ): Task<Value> {
+    ctx.report(code, message, expected, found);
+    yield* skipDataValue(ctx);
+    return abandonedValue();
+  }
+  return {
+    *read(ctx: ReadContext): Task<Value> {
+      const tag = yield* typeRefAhead(ctx);
+      if (tag !== undefined && !entries.has(tag)) {
+        // §7.2's two steps: a tag naming nothing in the namespace fails the first, before admission is asked.
+        return yield* refuse(
+          ctx,
+          `'!${tag}' does not resolve in the governing schema's namespace (§7.2) -- a type written in place ` +
+            'admits no tag at all',
+          'a value with no tag',
+          `!${tag}`,
+          'UNKNOWN_TYPE_REF',
+        );
+      }
+      if (tag !== undefined) {
+        return yield* refuse(
+          ctx,
+          `'${displayName}' is a type written in place, which has no name, so no tag names it and nothing ` +
+            `is IS-A it: '!${tag}' is refused here (§4.2, §7.2)`,
+          'a value with no tag',
+          `!${tag}`,
+        );
+      }
+      if (definition.kind === 'record' && definition.extension === 'ABSTRACT') {
+        return yield* refuse(
+          ctx,
+          `'${displayName}' is an abstract record written in place: it has no direct instances and no ` +
+            'member, so no value is one of it (§4.2, §5.2)',
+          'no value',
+          'a value',
+        );
+      }
+      return untagged(yield* built.read(ctx));
+    },
+  };
+}
+
+/**
+ * `value` carrying no tag: a type written in place is no entry, so a tree's tag names none (§4.2), and a written
+ * value read at its position states no `!type-ref` a re-read could resolve.
+ */
+function untagged(value: Value): Value {
+  // An abandoned read is carried as `undefined` (`abandonedValue`), and stays so.
+  const read = value as (Value & { readonly typeRef?: string }) | undefined;
+  if (read?.typeRef === undefined) return value;
+  const { typeRef: _tag, ...rest } = read;
+  void _tag;
+  return rest;
 }
 
 /**
@@ -325,7 +386,7 @@ function buildReader(
 function buildDeclaredReader(
   displayName: string,
   entries: ReadonlyMap<string, Top>,
-  resolve: (name: string) => TypeReader<Value>,
+  resolve: (type: string | TypeExpr) => TypeReader<Value>,
 ): TypeReader<Value> {
   function* abandon(ctx: ReadContext): Task<Value> {
     yield* skipDataValue(ctx);
@@ -373,10 +434,30 @@ function buildDeclaredReader(
  */
 export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledSchema {
   const cache = new Map<string, TypeReader<Value>>();
+  const inPlace = new WeakMap<TypeInline, TypeReader<Value>>();
   const policy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
   const judgesMembers = deps.judgesReferenceMembers ?? true;
 
-  function resolve(name: string): TypeReader<Value> {
+  function resolve(type: string | TypeExpr): TypeReader<Value> {
+    if (typeof type !== 'string') {
+      if (type.kind !== 'inline') return resolve(type.name);
+      const held = inPlace.get(type);
+      if (held !== undefined) return held;
+      // A type written in place names nothing that could reach back to it, so no knot is tied here: what it
+      // names is resolved through the cache.
+      const built = buildReader(
+        schema,
+        typeExprText(type),
+        type.of,
+        resolve,
+        policy,
+        judgesMembers,
+        true,
+      );
+      inPlace.set(type, built);
+      return built;
+    }
+    const name = type;
     const cached = cache.get(name);
     if (cached !== undefined) return cached;
 

@@ -338,83 +338,70 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
   });
 });
 
-// ── §5.10 "A record-bodied template is a family base": member dispatch reuses the record ────
-// family's own reader (§5.2), over a template's *instantiations* rather than over a record's
-// composers/refiners, matching the Java reference's `AbstractTemplateReader`'s own member
-// -dispatch path.
+// ── §5.10: a family entered through a parametric record's written parent ────────────────────
+// A member composes an application of the parametric record, and is IS-A the family base through the parent the
+// parametric record wrote; dispatch at the base is §5.2's own, over those members.
 
 const TEMPLATE_FAMILY_SCHEMA = `
 !!id:"test://subsumption-template-family.tn"
 !!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
-  pet    => <N, T> { type: text = N  pet: T }
-  dog    => pet<"dog", text> & { note: text }
-  cat    => pet<"cat", text> & { note: text }
+  pet    => abstract { type: text =?  name: text }
+  pet_of => <T> pet & { pet: T }
+  dog    => pet_of<text> & { type?: = "dog"  note: text }
+  cat    => pet_of<text> & { type?: = "cat"  note: text }
 
   holder => { p: pet }
 }
 `;
 
-const templateFamilyCompiled = compile(resolveUserSchema(TEMPLATE_FAMILY_SCHEMA));
+let templateFamily: CompiledSchema | undefined;
 
-function readTemplateFamilyHolder(document: string) {
-  return validate(templateFamilyCompiled, 'holder', bytes(document));
+/** The family schema, compiled once on first use, so a schema that fails to load fails each test that reads it. */
+function templateFamilyCompiled(): CompiledSchema {
+  templateFamily ??= compile(resolveUserSchema(TEMPLATE_FAMILY_SCHEMA));
+  return templateFamily;
 }
 
-describe(
-  '§5.10 a record-bodied template family base dispatches over its instantiations, never ' +
-    'reading a held body of its own',
-  () => {
-    it('places a member with no tag at all, reading the selector the closing fixed on it (§5.7)', () => {
-      const result = readTemplateFamilyHolder(`{ p: { type: dog  pet: "x"  note: "n" } }`);
-      expect(result.diagnostics).toEqual([]);
-    });
+function readTemplateFamilyHolder(document: string) {
+  return validate(templateFamilyCompiled(), 'holder', bytes(document));
+}
 
-    it('a selector may arrive after the fields it selects ([TSON-DATA] §2.5)', () => {
-      const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n"  type: dog } }`);
-      expect(result.diagnostics).toEqual([]);
-    });
+describe('§5.10 a family entered through a parametric record’s written parent dispatches over its members', () => {
+  it('places a member with no tag at all, reading the selector it pins (§5.2)', () => {
+    const result = readTemplateFamilyHolder(`{ p: { type: dog  name: "n"  pet: "x"  note: "n" } }`);
+    expect(result.diagnostics).toEqual([]);
+  });
 
-    it('an agreeing tag is admitted and changes nothing', () => {
-      const result = readTemplateFamilyHolder(`{ p: !dog { type: dog  pet: "x"  note: "n" } }`);
-      expect(result.diagnostics).toEqual([]);
-    });
+  it('a selector may arrive after the fields it selects ([TSON-DATA] §2.5)', () => {
+    const result = readTemplateFamilyHolder(`{ p: { name: "n"  pet: "x"  note: "n"  type: dog } }`);
+    expect(result.diagnostics).toEqual([]);
+  });
 
-    it('refuses a tag naming the template base itself, regardless of what the fields say', () => {
-      const result = readTemplateFamilyHolder(`{ p: !pet { type: dog  pet: "x"  note: "n" } }`);
-      expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
-      expect(result.diagnostics[0]?.message).toContain("'!pet'");
-    });
-
-    it('refuses a tag contradicting the discriminator -- a tag may agree, never overrule', () => {
-      const result = readTemplateFamilyHolder(`{ p: !cat { type: dog  pet: "x"  note: "n" } }`);
-      expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
-      expect(result.diagnostics[0]?.message).toContain('contradicts');
-    });
-
-    it('a discriminator value no instantiation pins is a validation error naming the alternatives', () => {
-      const result = readTemplateFamilyHolder(`{ p: { type: bird  pet: "x" } }`);
-      expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
-      expect(result.diagnostics[0]?.message).toContain('dog');
-      expect(result.diagnostics[0]?.message).toContain('cat');
-    });
-
-    it(
-      'a missing selector is a required-field error: `type: text = N` is a marker every ' +
-        'document writes (§5.7), dispatch is decided by what is written, never by what a member ' +
-        'would inject (§7.2), and nothing else about the record is inspected once that refusal ' +
-        'fires',
-      () => {
-        const result = readTemplateFamilyHolder(`{ p: { pet: "x"  note: "n" } }`);
-        expect(result.diagnostics.map((d) => d.code)).toEqual(['FIELD_REQUIRED']);
-        expect(result.diagnostics[0]?.path).toBe('/p/type');
-        expect(result.diagnostics[0]?.message).toContain("discriminator 'type'");
-      },
+  it('an agreeing tag is admitted and changes nothing', () => {
+    const result = readTemplateFamilyHolder(
+      `{ p: !dog { type: dog  name: "n"  pet: "x"  note: "n" } }`,
     );
+    expect(result.diagnostics).toEqual([]);
+  });
 
-    it('no instantiation entry is minted for a bare member reference -- dog and cat are named applications, in place (§8.2)', () => {
-      const linked = resolveUserSchema(TEMPLATE_FAMILY_SCHEMA);
-      expect([...linked.entries.keys()].some((k) => k.startsWith('pet_'))).toBe(false);
-    });
-  },
-);
+  it('refuses a tag contradicting the discriminator -- a tag may agree, never overrule', () => {
+    const result = readTemplateFamilyHolder(
+      `{ p: !cat { type: dog  name: "n"  pet: "x"  note: "n" } }`,
+    );
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+    expect(result.diagnostics[0]?.message).toContain('contradicts');
+  });
+
+  it('a discriminator value no member pins is a validation error naming the alternatives', () => {
+    const result = readTemplateFamilyHolder(`{ p: { type: bird  name: "n" } }`);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
+    expect(result.diagnostics[0]?.message).toContain('dog');
+    expect(result.diagnostics[0]?.message).toContain('cat');
+  });
+
+  it('no entry is minted for an application a member composes (§8.2)', () => {
+    const linked = resolveUserSchema(TEMPLATE_FAMILY_SCHEMA);
+    expect([...linked.entries.keys()].some((k) => k.startsWith('pet_of_'))).toBe(false);
+  });
+});

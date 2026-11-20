@@ -31,26 +31,26 @@ function refused(body: string): string {
 }
 
 describe('a restated field narrows by IS-A (§5.7, §5.8, §7.2)', () => {
-  it('§5.7: a refinement restating a field as an unrelated type is refused', () => {
-    expect(refused('{ a => { x: text }  b => a ^ { x: int32 } }')).toContain(
-      "'b': not a valid refinement of 'a' (§5.7): field 'x' is typed 'int32', which is not 'text' or IS-A it",
+  it('§5.8: a composition restating a field as an unrelated type is refused', () => {
+    expect(refused('{ a => { x: text }  b => a & { x: int32 } }')).toContain(
+      "'b': not a valid restatement of 'a''s fields (§5.8): field 'x' is typed 'int32', which is not 'text' or IS-A it",
     );
   });
 
-  it('§5.7, §7.2: a refinement restating a field as its supertype is refused', () => {
+  it('§5.8, §7.2: a composition restating a field as its supertype is refused', () => {
     expect(
       refused(`{
         person   => { name: text }
         employee => person & { badge: text }
         team     => { lead: employee }
-        loose    => team ^ { lead: person }
+        loose    => team & { lead: person }
       }`),
     ).toContain("field 'lead' is typed 'person', which is not 'employee' or IS-A it");
   });
 
   it("§5.8: a composition's tightening entry follows the same rule", () => {
     expect(refused('{ a => { x: text }  b => a & { x: int32  y: text } }')).toContain(
-      "'b': not a valid refinement of 'a' (§5.7): field 'x' is typed 'int32'",
+      "'b': not a valid restatement of 'a''s fields (§5.8): field 'x' is typed 'int32'",
     );
   });
 
@@ -59,7 +59,7 @@ describe('a restated field narrows by IS-A (§5.7, §5.8, §7.2)', () => {
       person    => { name: text }
       employee  => person & { badge: text }
       team      => { lead: person  size: integer }
-      staffed   => team ^ { lead: employee }
+      staffed   => team & { lead: employee }
       counted   => team & { size: count  label: text }
       count     => !integer ^ { min: 0 }
     }`);
@@ -72,15 +72,15 @@ describe('a restated field narrows by IS-A (§5.7, §5.8, §7.2)', () => {
       link(`{
         label     => text
         a         => { x: text  y?: text?  z: [int32] }
-        same      => a ^ { x: text  z: [int32] }
-        renamed   => a ^ { x: label }
-        forbidden => a ^ { y?: void? }
+        same      => a & { x: text  z: [int32] }
+        renamed   => a & { x: label }
+        forbidden => a & { y?: void? }
       }`),
     ).not.toThrow();
   });
 
   it('§5.7: no structural IS-A holds between two containers -- a container of a subtype is no narrowing', () => {
-    expect(refused('{ a => { x: [int32] }  b => a ^ { x: [int8] } }')).toContain(
+    expect(refused('{ a => { x: [int32] }  b => a & { x: [int8] } }')).toContain(
       "field 'x' is typed",
     );
   });
@@ -90,18 +90,20 @@ describe('a restated field narrows by IS-A (§5.7, §5.8, §7.2)', () => {
       refused(`{
         either => (int32 | text)
         a      => { x: either }
-        b      => a ^ { x: int32 }
+        b      => a & { x: int32 }
       }`),
     ).toContain("field 'x' is typed 'int32', which is not 'either' or IS-A it");
   });
 
-  it('§5.7: a refinement of a closed application is judged against the fields it closed with', () => {
+  it('§5.8: a composition over a declared application is judged against the fields it closed with', () => {
     expect(
       refused(`{
         box  => <T> { v: T }
         held => box<text>
-        b    => held ^ { v: int32 }
+        b    => held & { v: int32 }
       }`),
-    ).toContain("'b': not a valid refinement of 'held' (§5.7): field 'v' is typed 'int32'");
+    ).toContain(
+      "'b': not a valid restatement of 'held''s fields (§5.8): field 'v' is typed 'int32'",
+    );
   });
 });

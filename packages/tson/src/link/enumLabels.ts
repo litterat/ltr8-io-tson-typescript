@@ -19,18 +19,16 @@
  * fact, which the caller supplies with the value.
  *
  * **An identifier family is a type built with `identifier_type`**: an instance, a refinement of
- * one, an instantiation of a template over the constructor, and an alias of any of them. An enum's
+ * one, and an alias of either. An enum's
  * members are names under a naming vocabulary's equality, and carry §8.2's per-name rules under its
  * profile; a closed set of values on any other family, `text` included, is that family's own
  * `members` facet.
  */
 import { atomParserFor } from '../atom/forType.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../core/errors.js';
-import { isHeldBody } from '../compiler/heldBody.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 import { identifierProfileOf, type IdentifierProfile } from '../unicode/identifier-profile.js';
 import { nfcFloor } from '../unicode/normalization.js';
 import { nameTypeFormRefusal } from './nameType.js';
@@ -57,7 +55,7 @@ export interface EnumLabel {
 }
 
 function enumBodyOf(value: Top): EnumBody | undefined {
-  return !isTemplateBody(value) && value.kind === 'enum' ? value : undefined;
+  return value.kind === 'enum' ? value : undefined;
 }
 
 /**
@@ -92,10 +90,8 @@ export function enumLabelType(
 }
 
 /**
- * Whether `body.nameType` is the value the enum's constructor pins -- found through its `head`,
- * through a template's held body to the constructor it applies (an entry instantiating `names =>
- * <M> !enum [a b M]` records the template as its head and not `enum`), and through an enum entry
- * it refines to the constructor that entry applied.
+ * Whether `body.nameType` is the value the enum's constructor pins -- found through its `head`, and through an
+ * enum entry it refines to the constructor that entry applied.
  */
 function pinned(
   first: string | undefined,
@@ -109,10 +105,6 @@ function pinned(
     seen.add(head);
     const constructor = lookup(head);
     if (constructor === undefined) return false;
-    if (isTemplateBody(constructor)) {
-      head = isHeldBody(constructor) ? constructor.application.typeRef : undefined;
-      continue;
-    }
     if (constructor.kind === 'enum') {
       head = heads(head);
       continue;
@@ -139,7 +131,7 @@ export function enumLabelForm(
   const label = enumLabelType(enumeration, local, structure, heads);
   if (label === undefined) return 'NONE';
   const body = label.definition;
-  if (isTemplateBody(body) || body.kind === 'namespace') return 'NONE';
+  if (body.kind === 'namespace') return 'NONE';
   switch (body.kind) {
     case 'text_type':
     case 'identifier_type':
@@ -173,7 +165,7 @@ export function enumLabelProfile(
 ): EnumLabelProfile | undefined {
   const label = enumLabelType(enumeration, local, structure, heads);
   const body = label?.definition;
-  if (body === undefined || isTemplateBody(body) || body.kind === 'namespace') return undefined;
+  if (body === undefined || body.kind === 'namespace') return undefined;
   if (body.kind !== 'identifier_type') return undefined;
   return { profile: identifierProfileOf(body), form: body.normalization };
 }
@@ -223,7 +215,7 @@ function checkEnum(
     return `'${name}': its name_type '${body.nameType}' names nothing in scope (§7.4)`;
   }
   const labelBody = label.definition;
-  if (isTemplateBody(labelBody) || labelBody.kind !== 'identifier_type') {
+  if (labelBody.kind !== 'identifier_type') {
     return (
       `'${name}': its name_type '${body.nameType}' is not an identifier family -- an enum's ` +
       'members are names drawn from an atom-family instance whose constructor IS-A ' +

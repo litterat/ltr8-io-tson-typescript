@@ -43,7 +43,7 @@ export function arrayTreeReader(
   schemaLocation: SchemaLocation,
   elementsAreNames = false,
 ): TypeReader<Value> {
-  const elementParser = resolveType(body.elementType.name);
+  const elementParser = resolveType(body.elementType);
 
   function validateSize(size: number, ctx: ReadContext): void {
     const count = BigInt(size);

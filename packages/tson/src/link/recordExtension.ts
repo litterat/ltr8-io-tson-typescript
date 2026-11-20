@@ -43,29 +43,18 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import { isAtom } from '../compiler/atomChecks.js';
 import { buildAtomReader } from '../compiler/atomBuilder.js';
 import { terminal, terminalDefinition } from './aliasChain.js';
-import { collectBodyNames } from './referenceValidation.js';
 import type { TypeReader } from '../reader/contracts.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
-import type { RecordBody, RecordField, RecordTemplateBody } from '../schema/meta/bodies.js';
+import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
 import { typeNameOf } from '../schema/meta/bodies.js';
-import {
-  applicationOf,
-  isConstructor,
-  isFamilyBase,
-  isOpen,
-  isTemplateBody,
-  supertypesOf,
-  typeParameters,
-  type Annotations,
-  type Top,
-} from '../schema/meta/typedef.js';
+import { isParametric, supertypesOf, type Annotations, type Top } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import type { FactsTable } from './facts.js';
 
-/** Whether `body` is a record -- a closed one or a record template (§5.10). */
+/** Whether `body` is a record. */
 function isRecordBody(body: Top): body is RecordBody {
-  return !isTemplateBody(body) && body.kind === 'record';
+  return body.kind === 'record';
 }
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
@@ -84,185 +73,28 @@ export interface CheckRecordExtensionOptions {
    * fail-fast: the first {@link TsonSchemaValidationError} propagates.
    */
   readonly receiver?: DiagnosticsReceiver;
-  /** Each entry's recorded facts (§8.1): a minted entry is one with no source position. */
+  /** Each entry's recorded facts (§8.1). */
   readonly facts?: FactsTable;
-  /** Each entry's key annotations, where a minted entry records its `@application` (§8.2). */
+  /** Each entry's key annotations. */
   readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
 }
 
-/**
- * §5.2's family coherence, checked over every record entry `merged` can see that names
- * `discriminators` — imported and local alike, since a member added by *this* schema can break a
- * family whose base an import declared.
- *
- * **A family is judged over the closure that holds it (§3.3.4).** Two members brought together
- * only by an import merge are the importing schema's error, so every family is judged here, not
- * only one with a part declared in this schema; a collision between two imported members is
- * reported against the schema itself, naming where each came from. And a record a use site minted
- * that composes onto another is refused, since a family member is declared (§5.2, §8.2).
- *
- * Must run after reference validation, so an unresolved selector type is already reported and
- * never re-diagnosed as "not an atom or enum". Does **not** depend on
- * {@link import('./subtypes.js').computeSubtypes}: {@link directMembers} finds a family's members
- * by scanning `merged` directly (see its own note on why `the chain's `subtypes`` is not a safe
- * shortcut here), so this check needs no particular pass to have run before it beyond that.
- */
 export function checkRecordExtension(
   merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
 ): void {
-  const minted = (name: string): boolean => isMintedApplication(name, options);
-  for (const name of localNames) {
-    const def = merged.get(name);
-    if (def !== undefined && isUndeclaredMember(name, def, options)) {
-      checkDeclared(name, def, merged, localNames, options);
-    }
-  }
   // Every family in the closure is judged, not only one with a part declared here (§3.3.4): two
   // schemas that each link cleanly can each add a member to one imported family, and the schema
-  // importing both holds a family neither did.
+  // importing both holds a family neither did. A parametric record's selectors are each application's,
+  // judged where an application closes (§5.10).
   for (const [name, def] of merged) {
-    if (!(isRecordBody(def) || isFamilyBase(def)) || def.discriminators === undefined) continue;
-    if (isRecordBody(def) && !isOpen(def)) {
-      checkFamily(name, def.discriminators, selectorOf(def), merged, localNames, options, minted);
-      continue;
-    }
-    if (def.discriminators.length === 0) continue;
-    // A record template family base (§5.10) declares its selectors itself, but one typed by a
-    // parameter has its type only on each member: a selector's declared type is the one every
-    // member carries. A base with no member yet has no pins to judge.
-    const members = directMembers(name, merged, minted);
-    const own = isFamilyBase(def) ? templateSelectorOf(def) : selectorOf(def);
-    checkFamily(
-      name,
-      def.discriminators,
-      (fieldName) => {
-        const field = own(fieldName);
-        if (field !== undefined) return field;
-        return members
-          .map((member) => member.body.fields.entries.get(fieldName))
-          .find((candidate) => candidate !== undefined);
-      },
-      merged,
-      localNames,
-      options,
-      minted,
-    );
+    if (!isRecordBody(def) || def.discriminators === undefined || isParametric(def)) continue;
+    checkFamily(name, def.discriminators, selectorOf(def), merged, localNames, options);
   }
-}
-
-/** A record template's selector field by name, where it states its own type: one labelled by a parameter has its type on each member only (§5.10). */
-function templateSelectorOf(
-  template: RecordTemplateBody,
-): (fieldName: string) => RecordField | undefined {
-  return (fieldName) => {
-    const field = template.fields.entries.get(fieldName);
-    if (field === undefined || field.typeParam !== undefined || field.type === undefined) {
-      return undefined;
-    }
-    const parameters = new Set(typeParameters(template));
-    if (field.type.kind !== 'sibling' && parameters.has(field.type.name)) return undefined;
-    // The selector's own pin rides `value_param` (`kind: text = N`): each member pins it, so only the type is the base's to state.
-    return {
-      type: field.type,
-      optional: field.optional,
-      voidable: field.voidable,
-      role: field.role,
-      ...(field.value === undefined ? {} : { value: field.value }),
-      annotations: field.annotations,
-    };
-  };
 }
 
 // ── A family member is declared (§5.2, §8.2) ─────────────────────────────────────────────────
-
-/**
- * Whether `name` is an entry a use site minted from a template application: its facts record no
- * position (nothing declared it) and its key records the application it is the instantiation of
- * (§8.2). Such an entry is a type read where it is written, never a member of a family.
- */
-function isMintedApplication(name: string, options: CheckRecordExtensionOptions): boolean {
-  const application = applicationOf(options.keyAnnotations?.get(name));
-  return (
-    options.facts?.get(name)?.position === undefined &&
-    application !== undefined &&
-    application.arguments.length > 0
-  );
-}
-
-/**
- * A record a use-site template application minted that composes onto another: a family member
- * with no declared name. A constructor (`top` in its chain) is no member of anything.
- */
-function isUndeclaredMember(name: string, def: Top, options: CheckRecordExtensionOptions): boolean {
-  return (
-    isMintedApplication(name, options) &&
-    isRecordBody(def) &&
-    supertypesOf(def).length > 0 &&
-    !isConstructor(def, name)
-  );
-}
-
-/** `name` as the author wrote it: a minted entry as the application that produced it. */
-function shown(name: string, options: CheckRecordExtensionOptions): string {
-  const application = applicationOf(options.keyAnnotations?.get(name));
-  if (application === undefined || !isMintedApplication(name, options)) return name;
-  const args = application.arguments.map((argument) =>
-    argument.kind === 'ref' ? shown(argument.ref.name, options) : argument.value.text,
-  );
-  return `${application.name}<${args.join(', ')}>`;
-}
-
-/**
- * The nearest of `chain`'s members -- the first no other member IS-A, which is a parent the
- * declaration wrote or reached through one hop -- for a message naming what an entry composes onto.
- */
-function nearest(chain: readonly string[], merged: ReadonlyMap<string, Top>): string {
-  const found = chain.find((member) =>
-    chain.every((other) => {
-      const value = merged.get(other);
-      return other === member || value === undefined || !supertypesOf(value).includes(member);
-    }),
-  );
-  return found ?? chain[0] ?? '';
-}
-
-/**
- * Reports a member minted at a use site against the declaration that wrote the application — the
- * first local declared entry whose body names it, or the one whose closing minted it, which is the
- * declaration naming the template whose held body wrote it (§8.2). Names the fix.
- */
-function checkDeclared(
-  name: string,
-  def: Top,
-  merged: ReadonlyMap<string, Top>,
-  localNames: ReadonlySet<string>,
-  options: CheckRecordExtensionOptions,
-): void {
-  const base = nearest(supertypesOf(def), merged);
-  let writer: string | undefined;
-  for (const candidate of localNames) {
-    const entry = merged.get(candidate);
-    if (entry === undefined || candidate === name) continue;
-    const mentioned = new Set<string>();
-    collectBodyNames(entry, mentioned);
-    if (mentioned.has(name)) {
-      writer = candidate;
-      // A declared entry is the author's own line; a minted one is a closing, so keep looking.
-      if (options.facts?.get(candidate)?.position !== undefined) break;
-    }
-  }
-  fail(
-    options,
-    `'${shown(name, options)}' composes onto '${shown(base, options)}', so it is a member of that ` +
-      'family, and a member is declared: a read reports the member it selects, a tag names it and ' +
-      'a binding maps it, all by a name an application at a use site does not have (§3.3.4, §8.2). ' +
-      `Declare it -- 'my_name => ${shown(name, options)}' -- and use that name in place of the ` +
-      'application',
-    writer ?? name,
-  );
-}
 
 // ── Direct membership ────────────────────────────────────────────────────────────────────────
 
@@ -306,22 +138,20 @@ export function directMembers(
   const members: Member[] = [];
   for (const [candidateName, candidate] of merged) {
     if (candidateName === baseName) continue;
-    // A record template IS-A the base is no member: its applications are, each pinned once closed.
-    if (!isRecordBody(candidate) || isOpen(candidate)) continue;
-    // An application minted at a use site is a type read where it is written and no member.
+    // A parametric record IS-A the base is no member: its applications are, each pinned once closed.
+    if (!isRecordBody(candidate) || isParametric(candidate)) continue;
     if (excluded(candidateName)) continue;
     const chain = supertypesOf(candidate);
     if (!chain.some((ref) => terminal(ref, lookup) === baseName)) continue;
-    // The direct edge: no other entry of the chain is itself a member below the base. A record
-    // template in the chain is no member (its applications are), so an application of one
-    // composing the base is a direct member through it.
+    // The direct edge: no other entry of the chain is itself a member below the base. A parametric
+    // record in the chain is no member (its applications are).
     const throughAnother = chain.some((ref) => {
       const end = terminal(ref, lookup);
       if (end === baseName) return false;
       const value = merged.get(end);
       return (
         value !== undefined &&
-        !isOpen(value) &&
+        !isParametric(value) &&
         supertypesOf(value).some((above) => terminal(above, lookup) === baseName)
       );
     });
@@ -344,7 +174,6 @@ function checkFamily(
   merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
   options: CheckRecordExtensionOptions,
-  minted: (name: string) => boolean,
 ): void {
   const fieldReaders = new Map<string, TypeReader<Value>>();
   let selectorsOk = true;
@@ -370,7 +199,7 @@ function checkFamily(
     return;
   }
 
-  const members = directMembers(baseName, merged, minted);
+  const members = directMembers(baseName, merged);
   const pinned: { readonly name: string; readonly values: readonly Value[] }[] = [];
   for (const member of members) {
     const values = pinsFor(baseName, member, discriminators, fieldReaders, options);
@@ -487,9 +316,6 @@ function checkSelectorType(
   options: CheckRecordExtensionOptions,
 ): TypeReader<Value> | undefined {
   if (field === undefined) {
-    // A template base with no member yet has no selector type to read; a pin has nothing to be
-    // judged against and the first member that arrives brings the type.
-    if (isTemplateBase(baseName, merged)) return undefined;
     // `discriminators` is populated by the same resolver pass that populates `fields`
     // (`definitionResolver.ts`'s own `resolveEntry`), always from a name it just pushed into
     // `fields` -- this is an invariant of that resolver, never a document-level defect.
@@ -499,7 +325,7 @@ function checkSelectorType(
     );
   }
   const terminalDef = terminalDefinition(typeNameOf(field), (n) => merged.get(n));
-  if (terminalDef === undefined || isTemplateBody(terminalDef) || !isAtom(terminalDef)) {
+  if (terminalDef === undefined || !isAtom(terminalDef)) {
     fail(
       options,
       `'${baseName}': the discriminator '${fieldName}' is typed '${typeNameOf(field)}', which is ` +
@@ -512,10 +338,6 @@ function checkSelectorType(
   return buildAtomReader(typeNameOf(field), terminalDef);
 }
 
-function isTemplateBase(name: string, merged: ReadonlyMap<string, Top>): boolean {
-  return isFamilyBase(merged.get(name));
-}
-
 // ── Reporting ────────────────────────────────────────────────────────────────────────────────
 
 function fail(
@@ -526,8 +348,7 @@ function fail(
   const { schemaId, receiver } = options;
   if (receiver === undefined) {
     // A thrown error has no pointer to carry, so the declaration it is reported against is named
-    // in the message: for a member minted at a use site, the declaration that wrote it (or whose
-    // closing minted it, change log §8.2 item 2).
+    // in the message.
     throw new TsonSchemaValidationError(
       pointerName === undefined ? message : `${message} (in the declaration of '${pointerName}')`,
     );

@@ -13,12 +13,9 @@
  * resolves to is the position's to judge. No regular expression stands in it -- the first segment is
  * matched by the identifier grammar (§7.7).
  */
-import type { Reference, TypeReference } from '../ast/reference.js';
 import { TsonAtomParseError } from '../core/errors.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import { toNfc } from '../unicode/nfc.js';
-
-export { argumentText, referenceText } from '../ast/reference.js';
 
 /** The `expected` fragment every failure of this grammar reports. */
 const A_REFERENCE = 'a reference';
@@ -45,12 +42,11 @@ export function isSiblingField(field: string): boolean {
 
 /**
  * `text` as the reference it spells: a qualified name, in NFC as a quoted name is read at every naming
- * position (§7.7), so a decomposed spelling is the name its composed one is. The result is always a
- * name; the wider return type is the schema layer's reference model.
+ * position (§7.7), so a decomposed spelling is the name its composed one is.
  *
  * @throws TsonAtomParseError where it spells no qualified name, naming what failed
  */
-export function parseReference(text: string): Reference {
+export function parseReference(text: string): string {
   const name = toNfc(text);
   const detail = malformed(name);
   if (detail !== undefined) {
@@ -60,7 +56,7 @@ export function parseReference(text: string): Reference {
       A_REFERENCE,
     );
   }
-  return { kind: 'name', name };
+  return name;
 }
 
 /** Why `text` is no qualified name, or `undefined` where it is one. */
@@ -89,18 +85,4 @@ function malformed(text: string): string | undefined {
   return isIdentifierText(first)
     ? undefined
     : `'${first}' is no name: a name is an identifier (§7.7)`;
-}
-
-/**
- * The names `reference` writes -- its head and every reference among its arguments, at any depth --
- * which a position's name hygiene judges one by one, as it judges a bare name (§8.2).
- */
-export function referenceNames(reference: TypeReference): string[] {
-  const names = [reference.name];
-  if (reference.kind === 'application') {
-    for (const argument of reference.arguments) {
-      if (argument.kind === 'reference') names.push(...referenceNames(argument.reference));
-    }
-  }
-  return names;
 }

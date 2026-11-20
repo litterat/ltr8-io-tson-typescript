@@ -103,7 +103,7 @@ export function buildMapReader(
   const optionalValues = body.voidable;
   const minItems = body.minItems;
   const maxItems = body.maxItems;
-  const valueReader = ctx.resolve(body.valueType.name);
+  const valueReader = ctx.resolve(body.valueType);
   const keyParser = scalarKeyParser(ctx, body.keyType.name);
 
   return keyParser !== undefined

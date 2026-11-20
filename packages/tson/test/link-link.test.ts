@@ -8,7 +8,7 @@ import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
 import { entry, fieldMapOf, subtypesIn } from './model-fixtures.js';
 
 function ref(name: string): TypeRef {
-  return { name, arguments: [], annotations: [] };
+  return { name, annotations: [] };
 }
 
 function def(

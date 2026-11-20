@@ -225,6 +225,12 @@ export function fromDataValue<T>(
     // same reasoning -- no schema namespace in view to ask whether an unadmitted `typeRef`
     // resolves to some other entry), so every unadmitted name is reported the same way regardless
     // of whether it happens to resolve somewhere this decode cannot see.
+    if (value.typeRef === undefined && resolved.untagged === true) {
+      const byClass = memberByClass(resolved.members, value.coreValue);
+      if (byClass !== undefined) {
+        return fromDataValue(byClass.binding, value, decodeAtom, fieldsFor) as T;
+      }
+    }
     if (value.typeRef === undefined) {
       // A variant whose members are a field group's options (`type_argument`'s `name` | `value`,
       // §5.11) is told apart by which field the record writes, not by a `!type-ref`.
@@ -241,12 +247,38 @@ export function fromDataValue<T>(
     if (member === undefined) {
       throw readError('TYPE_MISMATCH', `'!${value.typeRef}' names no member of this variant`);
     }
-    return fromDataValue(member.binding, value, decodeAtom, fieldsFor) as T;
+    const decoded = fromDataValue(member.binding, value, decodeAtom, fieldsFor);
+    return (
+      resolved.fromMember === undefined ? decoded : resolved.fromMember(decoded, member.wireName)
+    ) as T;
   }
   if (resolved.kind === 'bridge') {
     return resolved.fromWire(fromDataValue(resolved.wire, value, decodeAtom, fieldsFor));
   }
   return fromCoreValue(resolved, value.coreValue, decodeAtom, fieldsFor);
+}
+
+/**
+ * The one variant member whose binding reads `value`'s class -- a token an atom member, a braced record a record
+ * member -- or `undefined` when none or several do: the dispatch of a choice disjoint by class (§5.4).
+ */
+function memberByClass(
+  members: readonly VariantMember[],
+  value: CoreValue,
+): VariantMember | undefined {
+  const wanted =
+    value.kind === 'token'
+      ? 'atom'
+      : value.kind === 'record' || value.kind === 'empty-brace'
+        ? 'record'
+        : undefined;
+  if (wanted === undefined) return undefined;
+  const matching = members.filter((member) => {
+    let binding = resolveRef(member.binding);
+    while (binding.kind === 'annotated') binding = resolveRef(binding.value);
+    return binding.kind === wanted;
+  });
+  return matching.length === 1 ? matching[0] : undefined;
 }
 
 /**

@@ -52,6 +52,7 @@ import type { SchemaLocation } from '../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
 import { lookingAhead } from '../reader/context.js';
 import type { ChoiceBody } from '../schema/meta/bodies.js';
+import { typeExprText } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
@@ -115,8 +116,9 @@ export function choiceTreeReader(
   namespace: ReadonlyMap<string, Top>,
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
-    name: variant.name,
-    parser: resolveType(variant.name),
+    name: typeExprText(variant),
+    expr: variant,
+    parser: resolveType(variant),
   }));
   const names = variants.map((variant) => variant.name).join(' | ');
 
@@ -128,7 +130,9 @@ export function choiceTreeReader(
   // further flattening `json/schema/dispatchChoice.ts`'s own top note explains.
   const byWrittenName = new Map<string, (typeof variants)[number]>();
   for (const variant of variants) {
-    const target = terminal(variant.name, (n) => namespace.get(n));
+    // A type written in place is named by no tag (§4.2).
+    if (variant.expr.kind === 'inline') continue;
+    const target = terminal(variant.expr.name, (n) => namespace.get(n));
     for (const written of admitting([target], namespace)) {
       if (!byWrittenName.has(written)) byWrittenName.set(written, variant);
     }
@@ -143,7 +147,7 @@ export function choiceTreeReader(
   if (disjoint) {
     byClass = new Map();
     for (const variant of variants) {
-      const variantClass = discriminationClassOf(variant.name, namespace);
+      const variantClass = discriminationClassOf(variant.expr, namespace);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass = undefined;
         break;

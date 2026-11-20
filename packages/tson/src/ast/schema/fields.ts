@@ -1,6 +1,6 @@
 import type { Annotation, DataValue, TokenValue } from '../value.js';
 
-import type { TypeExpr } from './typeref.js';
+import type { FieldTypeExpr } from './typeref.js';
 
 /**
  * `record-entry = field-def / group-def` (Part 2 §12.1) — one entry inside a `RecordDef`'s
@@ -40,9 +40,12 @@ export interface FieldDef {
   readonly modifier?: FieldModifier;
 }
 
-/** `field-type = type-expr ["?"]` (§12.1, §5.2) — `voidable` is the type's own `?`: a written `_` is admitted at this field when `true`. */
+/**
+ * `field-type = type-expr ["?"] / dependent-type` (§12.1, §5.2) — `voidable` is the type's own `?`: a written `_`
+ * is admitted at this field when `true`.
+ */
 export interface FieldType {
-  readonly typeRef: TypeExpr;
+  readonly typeRef: FieldTypeExpr;
   readonly voidable: boolean;
 }
 
@@ -106,7 +109,7 @@ export interface GroupDef {
 export type GroupQuantifier = 'EXACTLY_ONE' | 'AT_MOST_ONE' | 'AT_LEAST_ONE';
 
 /**
- * `group-member = *annotation field-name ["?"] ws ":" ws type-expr ["?"]` (§12.1, §5.11) — one
+ * `group-member = *annotation field-name ["?"] ws ":" ws field-type` (§12.1, §5.11) — one
  * member of a {@link GroupDef} option. The name's `?` (`omittable`) makes the member optional once
  * its option is chosen; the type's (`voidable`) admits `_`, and a voidable member written `_` is
  * present and chooses its option. A member takes no `~`/`=`/`=?` value modifier, since a group
@@ -116,7 +119,7 @@ export interface GroupMember {
   readonly annotations: readonly Annotation[];
   readonly name: string;
   readonly omittable: boolean;
-  readonly typeRef: TypeExpr;
+  readonly typeRef: FieldTypeExpr;
   readonly voidable: boolean;
 }
 
@@ -128,10 +131,8 @@ export interface GroupMember {
  * `N` into `N..N` is a resolution-time equivalence (§5.3: "two spellings of the same
  * application"), not a grammar fact, and this layer only builds the grammar's own AST.
  *
- * Each bound is preserved as raw token text, not parsed to a number: within a template body a
- * bound MAY be a value-parameter name instead of a `decimal-natural` literal (§5.3), and
- * classifying which is a later, semantic-layer step ("parameters cannot be numeric" is the
- * disambiguation rule, but nothing at this layer needs to act on it).
+ * Each bound is preserved as raw token text; `size-bound` is `decimal-natural` (§12.1), which the desugar
+ * phase checks, naming a parameter written there as the slot a parameter cannot stand at (§5.10).
  */
 export type SizeSpec = SizeSpecExact | SizeSpecRanged | SizeSpecMin | SizeSpecMax;
 
@@ -174,31 +175,15 @@ export interface RemovalSet {
 
 /**
  * `instance = [type-params] "!" qualified-name ws core-value` (§12.1, §5.5) — constructor
- * application: produces a fresh atom-family instance filled with `value`'s own core-value.
+ * application: a fresh instance filled with `value`'s own core-value, or over a type that is no
+ * constructor a value entry of that type. The payload is a `core-value`, the data grammar's, so it
+ * holds no argument list and no dependent type ([TSON-DATA] §7.2.5).
  *
- * The payload is deliberately narrower than a full `data-value` (`*annotation [type-ref]
- * core-value`, [TSON-DATA] §2.3), which would let it carry its own further annotations and a
- * second, competing type-ref; §12.1 states that no production of the schema grammar takes the
- * full `data-value`.
+ * **A parameter list is admitted before `!meta.record` alone** (§5.10), the explicit spelling of a
+ * parametric record; which head it precedes is the resolver's question, not the grammar's.
  *
- * **A parameter list makes it a template, and changes nothing else.**
- * `<T> !array { element_type: T }` is this same shape with `typeParams` non-empty, and its
- * payload is unrestricted for the same reason the closed form's is: an open entry's body is
- * held rather than read against its constructor's vocabulary until materialisation has
- * substituted the parameters away, so a collection payload — `<T> !choice { variants: [T
- * error] }` — is as ordinary here as a scalar one. A parameterized atom refinement is not a
- * form at all: the atom-refinement production has no parameter list, a refinement of an atom
- * instance having no parameter to take (§5.10).
- *
- * **No separate `target` field.** `value` (a `DataValue`, imported from `../value.js`) already
- * has exactly the right shape to carry the constructor name via its own `typeRef` — always
- * present here, populated from the `"!" qualified-name` prefix at parse time — and `value`'s own
- * `annotations` are always empty (the grammar has no room for any). A reader wanting the
- * constructor name reads `value.typeRef`.
- *
- * `value.typeRef`'s name MUST resolve to a constructor (a semantic-layer check, not enforced
- * here). This form establishes no IS-A — construction transfers only the constructor's kind
- * (§4.1, §5.5), unlike {@link AtomRefinement}.
+ * **No separate `target` field.** `value.typeRef` carries the constructor name, populated from the
+ * `"!" qualified-name` prefix at parse time, and `value`'s own `annotations` are always empty.
  */
 export interface Instance {
   readonly kind: 'instance';
@@ -207,23 +192,15 @@ export interface Instance {
 }
 
 /**
- * `atom-refinement = "!" qualified-name ws "^" ws data-value` (§12.1, §5.5) — refines an
- * atom-family instance by tightening its constructor's constraint fields. `target` MUST
- * resolve to a non-constructor atom-family instance and `bindings` is a braced record of
- * constraint values (both semantic-layer checks, not enforced here); this establishes IS-A
- * with `target`, unlike {@link Instance}.
+ * `atom-refinement = "!" qualified-name ws "^" ws record-def` (§12.1, §5.5, §5.7) — `^` follows `!name` and
+ * takes values: over a type built by an atom constructor, `meta.array`, `meta.map` or a constructor IS-A either,
+ * it refines the type and establishes IS-A with `target`; over a constructor of types it declares an
+ * incomplete entry, and over an incomplete entry a further one (§5.5). Which, is the resolver's question.
  *
- * `bindings` is a {@link DataValue}, not a `RecordDef`, and the difference is not
- * cosmetic. A refinement body is braced constraint bindings, but the *values* bound are ordinary
- * data — including nested records. `RecordDef` is a schema production whose members are type
- * definitions, so it cannot represent `{ size: { bits: 8  signed: true } }`, which is
- * `spec/m/core.tn` line 105 and the shape §5.5's own worked example uses. Typed as a
- * `RecordDef`, the bundled `core.tn` does not parse at all. The reference implementation carries
- * it the same way: `AtomRefinement(String target, DataValue bindings)`, built from
- * `parseCoreValue()`.
+ * `bindings` is a {@link DataValue}: the braces hold constraint values — ordinary data, nested records
+ * included (`{ size: { bits: 8  signed: true } }`) — which no schema production represents.
  *
- * No parameter list — a parameterized atom refinement is not a grammar production (§5.10): a
- * refinement of an atom instance has no parameter slot to route through.
+ * No parameter list — a parameterized refinement is not a grammar production (§5.10).
  */
 export interface AtomRefinement {
   readonly kind: 'atomRefinement';

@@ -4,7 +4,6 @@
  * position takes them as a table.
  */
 import type { EntryFacts, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 
 /** The facts a linked schema records, by entry name. */
 export type FactsTable = ReadonlyMap<string, EntryFacts>;
@@ -20,18 +19,16 @@ export function schemaPositionOf(
 
 /**
  * What a diagnostic calls the entry `name`: the author's own name wherever they declared one, and
- * otherwise the form they wrote -- `meta.ref<record>`, `meta.ref<order>` -- since an inline reference
- * lifts to an entry named for its content (§8.2), a name that appears nowhere in the author's file
- * and is not normative. An entry with no source position is one the resolver minted.
+ * otherwise the form they wrote -- `meta.ref<record>`, `meta.ref<order>`.
  */
 export function spellingOf(
   name: string,
   value: Top | undefined,
   facts: FactsTable | undefined,
 ): string {
-  if (value === undefined || isTemplateBody(value) || facts?.get(name)?.position !== undefined) {
+  if (value === undefined || facts?.get(name)?.position !== undefined) {
     return name;
   }
-  if (value.kind === 'reference_type') return `meta.ref<${value.of.name}>`;
+  if (value.kind === 'ref') return `meta.ref<${value.of.name}>`;
   return name;
 }

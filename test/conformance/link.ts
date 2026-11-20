@@ -12,7 +12,6 @@ import { expect } from 'vitest';
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
 import {
   choiceDisjoint,
-  isTemplateBody,
   subtypesOf,
   type Top,
 } from '../../packages/tson/src/schema/meta/typedef.js';
@@ -83,7 +82,7 @@ function assertLinkedNamespaceMatches(
   if (expected.members !== undefined) {
     for (const claim of expected.members) {
       const definition = definitionOf(vector, entries, claim.name);
-      if (isTemplateBody(definition) || definition.kind !== 'reference_type') {
+      if (definition.kind !== 'ref') {
         throw new Error(`${vector.name}: '${claim.name}' is not a reference (§4.2)`);
       }
       expect(new Set(definition.index?.members ?? [])).toEqual(new Set(claim.members));

@@ -37,7 +37,9 @@ import type { Top } from '../../packages/tson/src/schema/meta/typedef.js';
 import { BUNDLED_SCHEMA_IDS } from './bundled-ids.js';
 import { loadSchema, newClass2Tson } from './class2Tson.js';
 import {
+  markedApplications,
   markedCompletions,
+  ourApplications,
   ourCompletions,
   ownEntries,
   readResolved,
@@ -206,6 +208,8 @@ export async function checkSchemaVector(
       // keys/body comparison above cannot make it: each declared completion states, on its key, the
       // incomplete entries it closed.
       expect(ourCompletions(linked)).toEqual(markedCompletions(sidecar.resolved));
+      // Likewise `@meta.application`, on the key of each declared application (§8.2).
+      expect(ourApplications(linked)).toEqual(markedApplications(sidecar.resolved));
       return;
     }
     case 'error': {

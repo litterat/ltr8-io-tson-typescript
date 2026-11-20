@@ -8,17 +8,17 @@
  * this instance holds -- written, defaulted or pinned -- and hands it to {@link DependentReader.readAgainst};
  * {@link DependentReader.read} is reached only where no record stands around the field, an invariant broken.
  *
- * **The sibling's value names a type a value can be read against**, or the value is not read: a sibling
- * reference names a field and no type, a template is no type until it is applied and reading never starts a
- * materialisation, and an application the closure does not hold names nothing. Each is refused naming the
+ * **The sibling's value names a type a value can be read against**, or the value is not read: a parametric
+ * record is no type until it is applied, an incomplete entry is no type at all, and a name reaching nothing
+ * names nothing. Each is refused naming the
  * sibling, since that is the value the author has to change; the dependent value is skipped unjudged. The
  * rule is `link/dependentFields.ts`'s `typeNamed`, which a qualified name going on through a dependent field
  * is judged by too.
  */
 import type { Task } from '../../io/bytes.js';
 import { TsonInternalError } from '../../core/errors.js';
-import type { ReferenceBody } from '../../schema/meta/bodies.js';
-import { referenceText, type Reference } from '../../schema/meta/typedef.js';
+import type { RefBody } from '../../schema/meta/bodies.js';
+import type { TypeRef } from '../../schema/meta/typedef.js';
 import type { EntryLookup } from '../../link/aliasChain.js';
 import { referenceIn, siblingNamesNoType, typeNamed } from '../../link/dependentFields.js';
 import type { Value } from '../../tree/nodes.js';
@@ -37,7 +37,7 @@ export interface DependentReader extends TypeReader<Value> {
    */
   readAgainst(
     ctx: ReadContext,
-    named: Reference | undefined,
+    named: TypeRef | undefined,
     siblingCtx: ReadContext,
   ): Task<Value | undefined>;
 }
@@ -57,7 +57,7 @@ export function dependentFieldReader(
   record: string,
   field: string,
   sibling: string,
-  siblingType: ReferenceBody | undefined,
+  siblingType: RefBody | undefined,
   entries: EntryLookup,
   resolve: (name: string) => TypeReader<Value>,
 ): DependentReader {
@@ -77,13 +77,7 @@ export function dependentFieldReader(
       }
       const typed = typeNamed(named, siblingType, entries);
       if (typed.kind === 'none') {
-        const refusal = siblingNamesNoType(
-          record,
-          sibling,
-          field,
-          typed.held,
-          referenceText(named),
-        );
+        const refusal = siblingNamesNoType(record, sibling, field, typed.held, named.name);
         siblingCtx.report(refusal.code, refusal.message, refusal.expected, refusal.found);
         yield* skipDataValue(ctx);
         return undefined;
@@ -97,7 +91,7 @@ export function dependentFieldReader(
  * The reference a sibling's read produced: a reference position delivers its value as the canonical text,
  * which an atom node holds; `undefined` where the read produced nothing.
  */
-export function referenceOfValue(value: Value | undefined): Reference | undefined {
+export function referenceOfValue(value: Value | undefined): TypeRef | undefined {
   if (value?.kind !== 'atom' || typeof value.value !== 'string') {
     return undefined;
   }

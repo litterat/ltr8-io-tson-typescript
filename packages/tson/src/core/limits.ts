@@ -272,14 +272,14 @@ export function importClosureLimitRefusal(
   );
 }
 
-/** The refusal thrown when a schema's own resolved map holds more than `limit` entries, synthetic and instantiation entries included. */
+/** The refusal thrown when a schema's own resolved map holds more than `limit` entries, its declarations. */
 export function schemaEntriesLimitRefusal(
   limit: number,
   documentId: string,
 ): TsonLimitRefusedError {
   return new TsonLimitRefusedError(
-    `'${documentId}' resolves to more than ${String(limit)} declarations (synthetic and ` +
-      `instantiation entries included), exceeding the configured '${SCHEMA_ENTRIES_LIMIT}' limit ` +
+    `'${documentId}' resolves to more than ${String(limit)} declarations, exceeding the ` +
+      `configured '${SCHEMA_ENTRIES_LIMIT}' limit ` +
       `of ${String(limit)} ([TSON-SCHEMA] §11.5)`,
     { limit: SCHEMA_ENTRIES_LIMIT, configuredThreshold: limit },
   );

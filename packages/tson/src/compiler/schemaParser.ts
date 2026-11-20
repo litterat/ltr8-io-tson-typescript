@@ -49,20 +49,22 @@ import type {
 import type {
   ConstructionDef,
   RecordDef,
-  ReferenceTypeDef,
   SchemaMapDef,
   StructuralTypeDef,
   TypeDef,
+  TypeExprDef,
 } from '../ast/schema/typedef.js';
 import type {
   ArrayExpr,
   ChoiceExpr,
+  DependentType,
   ElementType,
+  FieldTypeExpr,
   MapExpr,
-  Reference,
+  RecordExpr,
   TupleExpr,
-  TypeArg,
   TypeExpr,
+  TypeRef,
 } from '../ast/schema/typeref.js';
 import {
   advance,
@@ -78,12 +80,12 @@ import {
   nested,
   peekSecond,
   peekToken,
-  tokenFormOf,
 } from './cursor.js';
 import type { NestingLimitOptions } from '../core/limits.js';
 import { parseAnnotationList, parseCoreValue } from './dataValueGrammar.js';
 import { parseHeader, parseTypeRefName, requireQualifiedName } from '../stream/dataStream.js';
-import { isQualifiedName, isSiblingField } from '../atom/referenceGrammar.js';
+import { isSiblingField } from '../atom/referenceGrammar.js';
+import { tryParseNumber } from '../base/numberGrammar.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 
 /**
@@ -200,16 +202,23 @@ function* parseDeclaration(state: CursorState, parse: SchemaParse): Task<Declara
   const name = prefix + nameToken.text;
   yield* expect(state, 'map-arrow-token', "a declaration's '=>'");
   const typeDefAnnotations = yield* parseAnnotationList(state);
+  const markToken = yield* peekToken(state);
   const mark = yield* parseDefinitionMarkOpt(state);
   const parameterTypes = new Map<string, TypeExpr>();
   parse.prefix = `${name}.`;
-  const typeDef = yield* parseTypeDef(state, parameterTypes, parse);
+  const typeDef = yield* parseTypeDef(state, parameterTypes, parse, mark);
   parse.prefix = prefix;
+  if (mark !== undefined && typeDef.kind !== 'structuralTypeDef') {
+    throw parseError(
+      markToken,
+      `'${mark}' marks a record definition -- a record body, a composition or a subtraction -- and none ` +
+        'follows it (§5.2, §12.1)',
+    );
+  }
   return {
     nameAnnotations,
     name,
     typeDefAnnotations,
-    ...(mark !== undefined ? { mark } : {}),
     typeDef,
     ...(parameterTypes.size > 0 ? { parameterTypes } : {}),
     position: nameToken.start,
@@ -227,11 +236,46 @@ function* parseDeclaration(state: CursorState, parse: SchemaParse): Task<Declara
 function* parseDefinitionMarkOpt(state: CursorState): Task<'abstract' | 'final' | undefined> {
   if (!(yield* check(state, 'unquoted-token'))) return undefined;
   const t = yield* peekToken(state);
-  if (t.type === 'unquoted-token' && (t.text === 'abstract' || t.text === 'final')) {
-    yield* advance(state);
-    return t.text;
+  if (t.type !== 'unquoted-token' || (t.text !== 'abstract' && t.text !== 'final'))
+    return undefined;
+  const mark = t.text;
+  yield* advance(state);
+  const next = yield* peekToken(state);
+  if (next.type === 'unquoted-token' && (next.text === 'abstract' || next.text === 'final')) {
+    throw parseError(
+      next,
+      `'${mark}' and '${next.text}' on one declaration -- a record states how it may be realised once, ` +
+        'and the marks are alternatives rather than companions (§5.2)',
+    );
   }
-  return undefined;
+  if (next.type === 'unquoted-token' && (yield* peekSecond(state)).type === 'map-arrow-token') {
+    throw missingDefinition(next, mark);
+  }
+  return mark;
+}
+
+/**
+ * A declaration that wrote a mark and then no type definition. The mark is the reading, so the diagnostic
+ * names what the author most likely meant instead: the one thing the two words give up at this position.
+ */
+function missingDefinition(at: Token, mark: 'abstract' | 'final'): TsonParseError {
+  return parseError(
+    at,
+    `'${mark}' here marks how the type that follows may be realised (§5.2), and no definition follows -- ` +
+      `a type or parametric record named '${mark}' may be declared and referenced anywhere else, but not ` +
+      'named as a whole declaration body',
+  );
+}
+
+/** Whether the cursor is on a token that can open a `type-def` (§12.1) -- the five alternatives' heads. */
+function* startsTypeDef(state: CursorState): Task<boolean> {
+  return (
+    (yield* check(state, 'bang')) ||
+    (yield* check(state, 'lbrace')) ||
+    (yield* check(state, 'lparen')) ||
+    (yield* check(state, 'lbracket')) ||
+    (yield* check(state, 'unquoted-token'))
+  );
 }
 
 // ── Type Definitions (§5, §12.1) ────────────────────────────────────────
@@ -240,11 +284,17 @@ function* parseTypeDef(
   state: CursorState,
   parameterTypes: Map<string, TypeExpr>,
   parse: SchemaParse,
+  mark: 'abstract' | 'final' | undefined,
 ): Task<TypeDef> {
   // The parameter list comes first, so one token then decides the alternative: `!` with no
-  // parameters is an instance or an atom refinement, `!` with parameters an instance-template
+  // parameters is an instance or an atom refinement, `!` with parameters an instance carrying them
   // (§12.1). `<` only ever starts a parameter list, so consuming it costs no lookahead.
   const typeParams = yield* parseTypeParamsOpt(state, parameterTypes);
+  if (mark !== undefined && !(yield* startsTypeDef(state))) {
+    // Reached both by a bare `pet => abstract` and by `pet => abstract<text>`, which applies a
+    // parametric record of that name: what separates them is whether a definition follows.
+    throw missingDefinition(yield* peekToken(state), mark);
+  }
 
   if (yield* check(state, 'bang')) {
     return yield* parseAtomRefinementOrInstance(state, typeParams, parse);
@@ -264,94 +314,101 @@ function* parseTypeDef(
     );
   }
   if (yield* check(state, 'lbrace')) {
-    return yield* braceTypeDef(state, typeParams);
+    return yield* braceTypeDef(state, typeParams, mark);
   }
   if (yield* check(state, 'lparen')) {
     return {
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams,
       ref: yield* parseTypeExpr(state),
-    } satisfies ReferenceTypeDef;
+    } satisfies TypeExprDef;
   }
   if (yield* check(state, 'lbracket')) {
     return {
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams,
       ref: yield* parseBracket(state),
-    } satisfies ReferenceTypeDef;
+    } satisfies TypeExprDef;
   }
 
   const head = yield* parseTypeRefHead(state);
   if (yield* check(state, 'caret')) {
-    yield* advance(state);
-    return {
-      kind: 'structuralTypeDef',
-      typeParams,
-      body: { kind: 'refinedDef', target: head, body: yield* parseRecordDef(state) },
-    } satisfies StructuralTypeDef;
+    // `refined-def` is gone (§12.1): `^` follows `!name` and takes values, and a record is derived by
+    // composition alone.
+    const written = head.kind === 'nameRef' ? head.name : `${head.name}<...>`;
+    throw parseError(
+      yield* peekToken(state),
+      `'^' follows '!name' and takes values (§5.5, §5.7), and '${written}' has no '!': a record's ` +
+        `fields are restated in a composition, '${written} & { ... }' (§5.8)`,
+    );
   }
   if ((yield* check(state, 'ampersand')) || (yield* check(state, 'minus'))) {
     return {
       kind: 'structuralTypeDef',
+      ...(mark !== undefined ? { mark } : {}),
       typeParams,
       body: yield* parseConstructionDefContinuation(state, head),
     } satisfies StructuralTypeDef;
   }
   if (yield* check(state, 'lbrace')) {
     const here = yield* peekToken(state);
-    throw parseError(
-      here,
-      "expected '^' (refinement) or '&' (composition) after a bare type-ref, found '{'",
-    );
+    throw parseError(here, "expected '&' (composition) after a bare type-ref, found '{'");
   }
-  return { kind: 'referenceTypeDef', typeParams, ref: head } satisfies ReferenceTypeDef;
+  return { kind: 'typeExprDef', typeParams, ref: head } satisfies TypeExprDef;
+}
+
+/** A brace at a type-def position: a record body is the declaration's structural-def, a map its type-expr. */
+function* braceTypeDef(
+  state: CursorState,
+  typeParams: readonly string[],
+  mark: 'abstract' | 'final' | undefined,
+): Task<TypeDef> {
+  const form = yield* parseBraceType(state);
+  if (form.kind === 'recordExpr') {
+    return {
+      kind: 'structuralTypeDef',
+      ...(mark !== undefined ? { mark } : {}),
+      typeParams,
+      body: form.body,
+    } satisfies StructuralTypeDef;
+  }
+  return { kind: 'typeExprDef', typeParams, ref: form } satisfies TypeExprDef;
 }
 
 /**
- * §12.2's brace dispatch at a type-def position, where `'{'` opens either a record body or the
- * map sugar. The token is consumed and the decision made on what follows -- the
- * consume-one-then-inspect idiom [TSON-DATA] §2.8 already fixes for the data grammar's own
- * brace, within the same budget of one consumed token plus one of lookahead.
+ * §12.2's brace dispatch, one rule at every position a brace opens a type (`brace-type = map-type /
+ * record-def`): a record body or the map sugar. The token is consumed and the decision made on what
+ * follows -- the consume-one-then-inspect idiom [TSON-DATA] §2.8 fixes for the data grammar's own brace,
+ * within the same budget of one consumed token plus one of lookahead. A brace or bracket after the brace
+ * opens neither, a map's key being a name.
  */
-function* braceTypeDef(state: CursorState, typeParams: readonly string[]): Task<TypeDef> {
+function* parseBraceType(state: CursorState): Task<MapExpr | RecordExpr> {
   yield* expect(state, 'lbrace', "a record body's or map type's opening '{'");
-  if (yield* braceOpensMap(state)) {
-    return {
-      kind: 'referenceTypeDef',
-      typeParams,
-      ref: yield* parseMapBody(state),
-    } satisfies ReferenceTypeDef;
+  if ((yield* check(state, 'lbrace')) || (yield* check(state, 'lbracket'))) {
+    const here = yield* peekToken(state);
+    throw parseError(
+      here,
+      `a map type's key is a type name (§5.3), and ${describe(here)} opens a type written in place, ` +
+        'which no key is: declare the key type under a name and write that name',
+    );
   }
-  return {
-    kind: 'structuralTypeDef',
-    typeParams,
-    body: yield* parseRecordBody(state),
-  } satisfies StructuralTypeDef;
+  if (yield* braceOpensMap(state)) {
+    return yield* parseMapBody(state);
+  }
+  return { kind: 'recordExpr', body: yield* parseRecordBody(state) };
 }
 
-/** The dispatch decision itself, with the `'{'` already consumed -- see {@link braceTypeDef}. */
+/** The dispatch decision itself, with the `'{'` already consumed -- see {@link parseBraceType}. */
 function* braceOpensMap(state: CursorState): Task<boolean> {
   if (!(yield* check(state, 'unquoted-token'))) return false;
   const first = yield* peekToken(state);
   const second = yield* peekSecond(state);
-  // A sibling reference is a map's key like any reference: `{kind! => V}` (§12.2).
+  // An adjacent `!` commits to a map too, so the key refuses `kind!` by name (§12.2).
   return (
     second.type === 'map-arrow-token' ||
     second.type === 'less-than' ||
     (second.type === 'bang' && adjacentTo(first, second))
   );
-}
-
-/** Everywhere except a type-def position, `'{'` opens the map sugar and nothing else (§5.2). */
-function* requireMapBrace(state: CursorState): Task<void> {
-  if (!(yield* braceOpensMap(state))) {
-    const here = yield* peekToken(state);
-    throw parseError(
-      here,
-      "'{' here opens the map sugar '{K => V}'; a record body is not permitted at a type " +
-        'position (§5.2), so declare a named record type and reference it by name',
-    );
-  }
 }
 
 /**
@@ -440,10 +497,10 @@ function* parseAtomRefinementOrInstance(
   }
   // instance = [type-params] "!" type-name ws core-value (§12.1) -- the constructor name goes
   // straight into the wrapping DataValue's own typeRef; there is no room in this production for
-  // the payload to carry further annotations or a second, competing type-ref. A parameter list
-  // makes it a template and changes nothing else: the payload is held rather than read against
-  // the constructor's own vocabulary, so every core-value the closed form admits the open one
-  // admits too -- a collection included.
+  // the payload to carry further annotations or a second, competing type-ref. A parameter list is
+  // parsed here and judged where the declaration resolves: before a construction it is the explicit
+  // spelling of a parametric record, `<T> !meta.record { … }`, and before any other a resolver error
+  // (§5.10).
   const value: DataValue = {
     annotations: [],
     typeRef: target,
@@ -469,9 +526,9 @@ function* parseAtomRefinementOrInstance(
  */
 function* parseConstructionDefContinuation(
   state: CursorState,
-  first: Reference,
+  first: TypeRef,
 ): Task<ConstructionDef> {
-  const supertypes: Reference[] = [first];
+  const supertypes: TypeRef[] = [first];
   let body: RecordDef | undefined;
   while (yield* check(state, 'ampersand')) {
     yield* advance(state);
@@ -501,7 +558,7 @@ function* parseConstructionDefContinuation(
   }
   return {
     kind: 'constructionDef',
-    supertypes: supertypes as [Reference, ...Reference[]],
+    supertypes: supertypes as [TypeRef, ...TypeRef[]],
     ...(body !== undefined ? { body } : {}),
     ...(removal !== undefined ? { removal } : {}),
   } satisfies ConstructionDef;
@@ -554,7 +611,7 @@ function* parseFieldDef(state: CursorState, annotations: readonly Annotation[]):
     throw parseError(
       here,
       "a record body's entries are 'name: type'; '=>' begins a map type only where a type is " +
-        'expected (§12.2), not in a refinement body, a composition tail or a constructor vocabulary',
+        'expected (§12.2), not in a composition tail or a constructor vocabulary',
     );
   }
   yield* expect(state, 'colon', "a record field's ':'");
@@ -564,7 +621,7 @@ function* parseFieldDef(state: CursorState, annotations: readonly Annotation[]):
   if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
     modifier = yield* parseFieldModifier(state);
   } else {
-    const ref = yield* parseTypeExpr(state);
+    const ref = yield* parseFieldType(state);
     const voidable = yield* consumeAdjacentQuestion(state);
     type = { typeRef: ref, voidable };
     if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
@@ -617,6 +674,13 @@ function* parseFieldModifier(state: CursorState): Task<FieldModifier> {
       );
   }
   yield* advance(state);
+  if (
+    form === 'unquoted' &&
+    (yield* check(state, 'bang')) &&
+    adjacentTo(t, yield* peekToken(state))
+  ) {
+    throw dependentTypeOffAFieldsType(t);
+  }
   const token: TokenValue = { kind: 'token', text: t.text, form };
   return isDefault ? { kind: 'default', token } : { kind: 'fixed', token };
 }
@@ -741,7 +805,7 @@ function* parseGroupMember(state: CursorState): Task<GroupMember> {
   // Optional once the member's option is chosen: the option, not the record, is what the mark is about.
   const omittable = yield* consumeAdjacentQuestion(state);
   yield* expect(state, 'colon', "a field group member's ':'");
-  const typeRef = yield* parseTypeExpr(state);
+  const typeRef = yield* parseFieldType(state);
   const voidable = yield* consumeAdjacentQuestion(state);
   if ((yield* check(state, 'tilde')) || (yield* check(state, 'equal'))) {
     // §5.11: a member's presence is the group's and a group never injects, so `~`, `=` and `=?`
@@ -777,7 +841,7 @@ function* parseTypeExpr(state: CursorState): Task<TypeExpr> {
     return yield* nested(state, here, () => parseBracket(state));
   }
   if (yield* check(state, 'lbrace')) {
-    return yield* nested(state, here, () => parseMap(state));
+    return yield* nested(state, here, () => parseBraceType(state));
   }
   if (yield* check(state, 'bang')) {
     const here = yield* peekToken(state);
@@ -792,37 +856,80 @@ function* parseTypeExpr(state: CursorState): Task<TypeExpr> {
 }
 
 /**
- * Whether the token just consumed, `head`, is marked as a sibling reference ([TSON-SCHEMA] §12.1's
- * `dependent-type = unquoted-token "!"`): the next token is a `!` adjacent to it. A prefix `!` is
- * adjacent to the token after it and so is never adjacent to the one before. A quoted token is no
- * identifier, so a `!` after one is refused.
+ * A record field's or a field group member's type: a type-ref, or `kind!`, a {@link DependentType}, which
+ * the grammar admits here and nowhere else (§5.2, §12.1). One token of lookahead after the name decides it.
  */
-function* marksSibling(state: CursorState, head: Token): Task<boolean> {
-  const next = yield* peekToken(state);
-  // A multi-line token's end is past its closing line's terminator, where the next line starts, so
-  // a prefix `!` opening that line would read as adjacent to it.
-  if (next.type !== 'bang' || !adjacentTo(head, next) || head.type === 'multi-line-token') {
-    return false;
+function* parseFieldType(state: CursorState): Task<FieldTypeExpr> {
+  const head = yield* peekToken(state);
+  const second = yield* peekSecond(state);
+  if (second.type === 'bang' && adjacentTo(head, second) && head.type !== 'multi-line-token') {
+    if (head.type === 'unquoted-token') {
+      yield* advance(state);
+      return yield* parseDependentType(state, head);
+    }
+    if (head.type === 'single-line-token') {
+      throw parseError(
+        second,
+        "a dependent field's '!' follows the name of a field of the same record, one unquoted " +
+          'identifier, and a quoted token is none (§12.1)',
+      );
+    }
   }
-  if (head.type !== 'unquoted-token') {
-    throw parseError(
-      next,
-      "a quoted token cannot be marked with '!': a dependent type is a field named by one unquoted identifier",
-    );
-  }
-  return true;
+  return yield* inPlace(state, yield* parseTypeExpr(state));
 }
 
 /**
- * The field name `head` and the `!` next at the cursor spell: `dependent-type = unquoted-token "!"`,
- * the token one identifier (a single segment), and the `!` followed by whitespace or the end of the
- * document, which keeps a postfix `!` apart from a prefix one.
+ * A type at a slot, past which nothing composes or subtracts: those are written at a declaration and never
+ * in place (§5.2), since what they make would be named by nothing. `at: point & { z: int32 }` is refused
+ * naming the declaration to write, and so is a name followed by `'{'`, the same reach without the operator,
+ * or a definition mark, which marks a declaration alone. A `'^'` there is refused as at a declaration: it
+ * follows `!name`.
  */
-function* siblingField(state: CursorState, head: Token): Task<string> {
+function* inPlace<T extends TypeExpr>(state: CursorState, written: T): Task<T> {
+  if (yield* check(state, 'caret')) {
+    throw parseError(
+      yield* peekToken(state),
+      "'^' follows '!name' and takes values (§5.5, §5.7), and a record's fields are restated in a " +
+        "composition, declared under a name ('my_type => base & { ... }') and named here (§5.2)",
+    );
+  }
+  const ampersand = yield* check(state, 'ampersand');
+  if (ampersand || (yield* check(state, 'minus'))) {
+    const operator = ampersand ? '&' : '-';
+    const what = ampersand
+      ? 'composes a type, and a composition'
+      : 'removes fields from a type, and a subtraction';
+    throw parseError(
+      yield* peekToken(state),
+      `'${operator}' ${what} is declared, never written in place (§5.2): declare it under a name ` +
+        `('my_type => base ${operator} { ... }') and write that name`,
+    );
+  }
+  if (written.kind === 'nameRef' && (yield* check(state, 'lbrace'))) {
+    const marked = written.name === 'abstract' || written.name === 'final';
+    throw parseError(
+      yield* peekToken(state),
+      marked
+        ? `'${written.name}' marks how a declared record may be realised (§5.2), and a record written ` +
+            "in place is its bare body, '{ ... }': declare the record to mark it"
+        : `'${written.name}' followed by '{' is no type: a record written in place is its bare body, ` +
+            "'{ ... }', and a composition ('&') of a named type is declared (§5.2)",
+    );
+  }
+  return written;
+}
+
+/**
+ * `kind!` past its token, the `!` next at the cursor: the token one identifier, a single segment, and the `!`
+ * followed by whitespace or the end of the document (§12.3). The whitespace is what keeps a postfix `!` apart
+ * from a prefix one, so `a!b`, `kind!}` and `kind!?` do not parse.
+ */
+function* parseDependentType(state: CursorState, head: Token): Task<DependentType> {
   if (!isSiblingField(head.text)) {
     throw parseError(
       head,
-      `'${head.text}!' is no dependent type -- the '!' marks one field of the same record, named by one identifier, a single segment`,
+      `'${head.text}!' types no dependent field -- the '!' follows the name of one field of the same ` +
+        'record, one identifier, a single segment (§12.1)',
     );
   }
   const bang = yield* advance(state);
@@ -830,23 +937,30 @@ function* siblingField(state: CursorState, head: Token): Task<string> {
   if (next.type !== 'eof' && adjacentTo(bang, next)) {
     throw parseError(
       next,
-      `a dependent type's '!' must be followed by whitespace: write '${head.text}! ' before ${describe(next)}`,
+      `a dependent field's '!' must be followed by whitespace (§12.3): write '${head.text}! ' before ${describe(next)}`,
     );
   }
-  return head.text;
+  return { kind: 'dependentType', on: head.text };
+}
+
+/** `head` followed by an adjacent `!` where no field's type is written. */
+function dependentTypeOffAFieldsType(head: Token): TsonParseError {
+  return parseError(
+    head,
+    `'${head.text}!' is a dependent field's type, and stands only as a record field's type, a field ` +
+      "group member's included -- never inside a type, nor at any other position (§5.2, §12.1)",
+  );
 }
 
 /**
- * `sibling-ref / qualified-name ["<" type-args ">"]` -- the name-based tail shared by every type-expr
- * position and by refinement/construction heads. One token of lookahead after the name picks the
- * alternative: an adjacent `!` a sibling reference, an adjacent `<` an application, neither a bare
- * name. Where a sibling reference may stand is §5.2's position rule, stated by the desugar phase and
- * never by the parser.
+ * `qualified-name ["<" type-args ">"]` -- the name-based tail shared by every type-ref position and by
+ * construction heads. An adjacent `<` makes it an application; an adjacent `!` is a dependent field's type
+ * off a field's type ({@link parseFieldType}), refused naming where it stands.
  */
-function* parseTypeRefHead(state: CursorState): Task<Reference> {
+function* parseTypeRefHead(state: CursorState): Task<TypeRef> {
   const head = yield* expect(state, 'unquoted-token', 'a type reference');
-  if (yield* marksSibling(state, head)) {
-    return { kind: 'siblingRef', field: yield* siblingField(state, head) };
+  if ((yield* check(state, 'bang')) && adjacentTo(head, yield* peekToken(state))) {
+    throw dependentTypeOffAFieldsType(head);
   }
   requireQualifiedName(head, 'type', '§12.1');
   const name = head.text;
@@ -871,14 +985,14 @@ function* parseTypeRefHead(state: CursorState): Task<Reference> {
  * {@link parseTypeRefHead} builds, named separately so every call site that must not admit a
  * paren/bracket/map operand says so.
  */
-function* parseSupertypeRef(state: CursorState): Task<Reference> {
+function* parseSupertypeRef(state: CursorState): Task<TypeRef> {
   return yield* parseTypeRefHead(state);
 }
 
 function* parseChoiceRef(state: CursorState): Task<ChoiceExpr> {
   const start = (yield* peekToken(state)).start;
   yield* expect(state, 'lparen', "a choice type's opening '('");
-  const variants: TypeExpr[] = [yield* parseTypeExpr(state)];
+  const variants: TypeExpr[] = [yield* inPlace(state, yield* parseTypeExpr(state))];
   if (!(yield* check(state, 'pipe'))) {
     throw new TsonParseError(
       "a choice type requires at least two variants separated by '|' (§5.4)",
@@ -887,7 +1001,7 @@ function* parseChoiceRef(state: CursorState): Task<ChoiceExpr> {
   }
   while (yield* check(state, 'pipe')) {
     yield* advance(state);
-    variants.push(yield* parseTypeExpr(state));
+    variants.push(yield* inPlace(state, yield* parseTypeExpr(state)));
   }
   yield* expect(state, 'rparen', "a choice type's closing ')'");
   return { kind: 'choiceExpr', variants: variants as [TypeExpr, TypeExpr, ...TypeExpr[]] };
@@ -917,15 +1031,8 @@ function* parseBracket(state: CursorState): Task<ArrayExpr | TupleExpr> {
     : { kind: 'tupleExpr', elementTypes: elements as [ElementType, ElementType, ...ElementType[]] };
 }
 
-/** `map-type` (§12.1) including its opening brace -- {@link braceTypeDef} reaches the body directly, having consumed one already. */
-function* parseMap(state: CursorState): Task<MapExpr> {
-  yield* expect(state, 'lbrace', "a map type's opening '{'");
-  yield* requireMapBrace(state);
-  return yield* parseMapBody(state);
-}
-
 /** `map-key = type-ref` (§12.1) -- a plain reference, optionally carrying type arguments, never a bracket or paren form. */
-function* parseMapKey(state: CursorState): Task<Reference> {
+function* parseMapKey(state: CursorState): Task<TypeRef> {
   const key = yield* parseTypeRefHead(state);
   yield* rejectMapQuestion(state, 'key');
   return key;
@@ -954,61 +1061,39 @@ function* requireMapClose(state: CursorState): Task<void> {
   }
 }
 
-function* parseTypeArgs(state: CursorState): Task<[TypeArg, ...TypeArg[]]> {
-  const args: TypeArg[] = [yield* parseTypeArg(state)];
+function* parseTypeArgs(state: CursorState): Task<[TypeExpr, ...TypeExpr[]]> {
+  const args: TypeExpr[] = [yield* inPlace(state, yield* parseTypeArg(state))];
   while (yield* consumeSeparatorOrCloseCheck(state, 'greater-than')) {
-    args.push(yield* parseTypeArg(state));
+    args.push(yield* inPlace(state, yield* parseTypeArg(state)));
   }
-  return args as [TypeArg, ...TypeArg[]];
+  return args as [TypeExpr, ...TypeExpr[]];
 }
 
 /**
- * `type-arg = type-ref / value-literal` (§12.1, §5.10). A quoted token or a numeric unquoted
- * token is unambiguously a {@link TypeArg} `value`; any other unquoted token parses as a `ref`
- * -- §12.1's own prose defers that classification to the semantic layer, which has the applied
- * signature's parameter kinds to consult.
+ * `type-arg = type-expr` (§12.1, §5.10): an argument is a type, so a quoted or numeric token, which names
+ * none, is refused here rather than read as a value.
  */
-function* tokenMarksSibling(state: CursorState): Task<boolean> {
-  const head = yield* peekToken(state);
-  const next = yield* peekSecond(state);
-  return next.type === 'bang' && adjacentTo(head, next);
-}
-
-function* parseTypeArg(state: CursorState): Task<TypeArg> {
+function* parseTypeArg(state: CursorState): Task<TypeExpr> {
   const t = yield* peekToken(state);
-  if (t.type === 'single-line-token' || t.type === 'multi-line-token') {
-    yield* advance(state);
-    return { kind: 'value', value: { kind: 'token', text: t.text, form: tokenFormOf(t.type) } };
+  if (
+    t.type === 'single-line-token' ||
+    t.type === 'multi-line-token' ||
+    (t.type === 'unquoted-token' && tryParseNumber(t.text) !== undefined)
+  ) {
+    throw parseError(
+      t,
+      `'${t.text}' is no type argument: an argument is a type, written as a reference -- a name or an ` +
+        'application -- and never a literal token (§5.10)',
+    );
   }
-  if (t.type === 'unquoted-token') {
-    // A token that is no qualified name (a number) is unambiguously a value; one that is stays a
-    // reference until the applied signature's parameter kinds classify it (§5.10).
-    if (!isQualifiedName(t.text) && !(yield* tokenMarksSibling(state))) {
-      yield* advance(state);
-      return { kind: 'value', value: { kind: 'token', text: t.text, form: 'unquoted' } };
-    }
-    const reference = yield* parseTypeRefHead(state);
-    if (reference.kind === 'siblingRef') {
-      throw parseError(
-        t,
-        `a sibling reference ('${reference.field}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not at a type argument`,
-      );
-    }
-    return { kind: 'ref', ref: reference };
-  }
-  if (t.type === 'lparen') {
-    return { kind: 'ref', ref: yield* parseChoiceRef(state) };
-  }
-  if (t.type === 'lbracket') {
-    return { kind: 'ref', ref: yield* parseBracket(state) };
-  }
-  if (t.type === 'lbrace') {
-    return { kind: 'ref', ref: yield* parseMap(state) };
-  }
+  if (t.type === 'unquoted-token') return yield* parseTypeRefHead(state);
+  if (t.type === 'lparen') return yield* parseChoiceRef(state);
+  if (t.type === 'lbracket') return yield* parseBracket(state);
+  if (t.type === 'lbrace') return yield* parseBraceType(state);
   if (t.type === 'void-token') {
     throw parseError(t, "the void sentinel '_' is not valid in a type argument position (§7.6)");
   }
-  throw mismatch('a type argument (a type reference or a scalar value)', t);
+  throw mismatch('a type argument (a type reference)', t);
 }
 
 // ── Declaration-Level Container Forms (§5.3, §12.1) ─────────────────────
@@ -1035,7 +1120,7 @@ function* parseMapBody(state: CursorState): Task<MapExpr> {
 
 /** `element-type = type-expr ["?"]` (§12.1). Nesting needs no case of its own: a bracket or map form *is* a type-expr. */
 function* parseElementType(state: CursorState): Task<ElementType> {
-  const ref = yield* parseTypeExpr(state);
+  const ref = yield* inPlace(state, yield* parseTypeExpr(state));
   return { typeRef: ref, voidable: yield* consumeAdjacentQuestion(state) };
 }
 

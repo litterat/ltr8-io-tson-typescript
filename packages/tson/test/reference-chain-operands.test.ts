@@ -23,11 +23,11 @@ const HEAD = `!!id:"test://chain.tn"
 `;
 
 describe('§4.3/§5.5/§5.7: an operand is judged after following its alias chain (§8.3)', () => {
-  it('a refinement source may be an alias to a record', () => {
+  it('a composition restating a field may name an alias to a record', () => {
     const linked = resolveUserSchema(`${HEAD}!schema {
   base => { a?: text  b: text }
   base_alias => base
-  derived => base_alias ^ { a?: text ~ "x" }
+  derived => base_alias & { a?: text ~ "x" }
 }`);
     expect(supertypesIn(linked.entries.get('derived'))).toContain('base_alias');
   });
@@ -65,13 +65,13 @@ describe('§4.3/§5.5/§5.7: an operand is judged after following its alias chai
     expect(diagnostics).toEqual([]);
   });
 
-  it('an alias to a binding record is still finished and refuses ^', () => {
+  it('an alias to a binding record is still finished, and composes nothing (§5.8)', () => {
     expect(() =>
       resolveUserSchema(`${HEAD}!schema {
   made => !numeric.integer_type {}
   made_alias => made
-  bad => made_alias ^ { c: text }
+  bad => made_alias & { c: text }
 }`),
-    ).toThrow(/finished|no vocabulary to tighten/);
+    ).toThrow(/binding record, not a vocabulary/);
   });
 });

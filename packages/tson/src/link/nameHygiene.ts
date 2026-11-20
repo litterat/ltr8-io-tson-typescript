@@ -18,10 +18,10 @@
  *   profile** (§5.2, §7.4, §11.4): every enum's and every record's name type is an identifier
  *   family, so all three mechanisms apply, and what the profile adds (`json_name`'s `@`, a medial
  *   space) is the profile's own and meets no `Identifier_Status` rule. A record that states no
- *   name type has the kernel's `field_name`, §7.7's profile.
+ *   name type has `meta.identifier`'s, §7.7's profile.
  *
- * **A fifth scope §11.4 declines to make one: a template's own type parameters.** §11.4 says so
- * outright — "A template's parameter list is not a scope either (§5.10): one author writes it
+ * **A fifth scope §11.4 declines to make one: a parametric record's own parameters.** §11.4 says so
+ * outright — "A parameter list is not a scope either (§5.10): one author writes it
  * whole on one line, and the list stays short so that it stays reviewable" — and this module
  * checks it anyway (`typeParameters`, `schema/meta/typedef.ts`, over every entry that declares
  * any), against the spec's own text rather than in a gap it leaves. The reference implementation's
@@ -69,7 +69,8 @@ import type { EnumLabelProfile } from './enumLabels.js';
 import type { FieldNameType } from './fieldNames.js';
 import type { SourcePosition } from '../schema/meta/position.js';
 import type { Top } from '../schema/meta/typedef.js';
-import { isTemplateBody, typeParameters } from '../schema/meta/typedef.js';
+import { recordsInPlace } from '../schema/meta/typeInline.js';
+import { typeParameters } from '../schema/meta/typedef.js';
 import type { FactsTable } from './facts.js';
 import { terminalDefinition } from './aliasChain.js';
 
@@ -109,7 +110,7 @@ export interface CheckNameHygieneOptions {
    * The records that state a `name_type`, with the identifier family their field names are values
    * of ([TSON-SCHEMA] §5.2, §11.4): each name is judged under that family's profile and in its form,
    * so what the profile adds (`json_name`'s `@`, a medial space) is exempt as it is for a value of
-   * the family. A record absent here has the kernel's `field_name`, §7.7's profile.
+   * the family. A record absent here has `meta.identifier`'s, §7.7's profile.
    */
   readonly nameTypes?: ReadonlyMap<string, FieldNameType>;
 }
@@ -172,6 +173,17 @@ export function checkNameHygiene(
         reportOrThrow(refusal, message, schemaId, name, positionOf(name), receiver);
       }
     }
+    // A record written in place is a scope of its own field names, reported at the entry holding it (§4.2,
+    // §11.4).
+    for (const inPlace of recordsInPlace(def)) {
+      const refusal = nameHygieneRefusal([...inPlace.fields.entries.keys()], identifierPolicy);
+      if (refusal === undefined) continue;
+      const message =
+        `'${name}' has a record written in place whose field names are refused under [TSON-DATA] §8.2's ` +
+        `name-hygiene policy ([TSON-SCHEMA] §11.4's field names scope): ${refusal.detail} (computed ` +
+        `against UTS #39 version ${UTS39_VERSION})`;
+      reportOrThrow(refusal, message, schemaId, name, positionOf(name), receiver);
+    }
     checkFieldValues(name, def, positionOf(name), merged, identifierPolicy, schemaId, receiver);
     const parameters = typeParameters(def);
     if (parameters.length > 0) {
@@ -213,7 +225,7 @@ function checkProfiledNames(
   receiver: DiagnosticsReceiver | undefined,
 ): void {
   const body = def;
-  if (isTemplateBody(body) || (body.kind !== 'enum' && body.kind !== 'record')) return;
+  if (body.kind !== 'enum' && body.kind !== 'record') return;
   const names = body.kind === 'enum' ? body.members : [...body.fields.entries.keys()];
   const noun = body.kind === 'enum' ? 'enum members' : 'field names';
   const values = names.map((member) => applyNormalization(label.form, member));
@@ -257,11 +269,6 @@ function entryScope(
   isRefused: boolean,
 ): { readonly names: readonly string[]; readonly noun: string } | undefined {
   const body = def;
-  if (isTemplateBody(body)) {
-    // A held TemplateBody is unresolved (no field/member list exists yet to check) -- §11.4 names
-    // no scope for one.
-    return undefined;
-  }
   switch (body.kind) {
     case 'record':
       // Group labels are already ordinary `record_field`s here (§5.11's own resolution rule:
@@ -298,13 +305,12 @@ function checkFieldValues(
   receiver: DiagnosticsReceiver | undefined,
 ): void {
   const body: Top = def;
-  if (isTemplateBody(body) || (body.kind !== 'record' && body.kind !== 'record_template')) return;
-  // A template's literal values are every application's, so they are judged here, once; a value
-  // parameter is an argument's, judged where the application writes it (§5.10).
+  if (body.kind !== 'record') return;
+  // A parametric record's literal values are every application's, so they are judged here, once (§5.10).
   for (const [fieldName, field] of body.fields.entries) {
-    if (field.value === undefined || field.type === undefined) continue;
+    if (field.value === undefined) continue;
     const family = terminalDefinition(typeNameOf({ type: field.type }), (n) => merged.get(n));
-    if (family === undefined || isTemplateBody(family) || family.kind !== 'identifier_type') {
+    if (family?.kind !== 'identifier_type') {
       continue;
     }
     const value = applyNormalization(family.normalization, field.value.text);

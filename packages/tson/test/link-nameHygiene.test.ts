@@ -12,10 +12,9 @@ import {
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
 import type { Top, TypeRef } from '../src/schema/meta/typedef.js';
-import { isTemplateBody } from '../src/schema/meta/typedef.js';
 import type { NamedField } from '../src/schema/meta/bodies.js';
 import { fieldMapOf } from '../src/schema/meta/bodies.js';
-import { entry, recordTemplate } from './model-fixtures.js';
+import { entry, parametricRecord } from './model-fixtures.js';
 
 /**
  * `link/nameHygiene.ts`'s implementation of [TSON-SCHEMA] §11.4's schema-layer name-hygiene
@@ -67,7 +66,7 @@ const ID_POLZOVATELYA =
   );
 
 function ref(name: string): TypeRef {
-  return { name, arguments: [], annotations: [] };
+  return { name, annotations: [] };
 }
 
 function def(
@@ -78,13 +77,10 @@ function def(
     readonly parameters?: readonly string[];
   } = {},
 ): Top {
-  // A non-empty `parameters` makes a record a record template (§5.10): the record it is, with
-  // its parameters, each a type parameter.
+  // A non-empty `parameters` makes a record a parametric record (§5.10).
   const parameters = options.parameters ?? [];
   const value: Top =
-    parameters.length === 0 || isTemplateBody(body) || body.kind !== 'record'
-      ? body
-      : recordTemplate(parameters, body);
+    parameters.length === 0 || body.kind !== 'record' ? body : parametricRecord(parameters, body);
   return entry(value, options.supertypes ?? [], options.subtypes ?? []);
 }
 
@@ -296,7 +292,7 @@ describe('checkNameHygiene: choice variants are not a scope of their own', () =>
   });
 });
 
-describe("checkNameHygiene: a template's own type parameters (this implementation's own scope, against §11.4's own text declining to make one)", () => {
+describe("checkNameHygiene: a parametric record's own type parameters (this implementation's own scope, against §11.4's own text declining to make one)", () => {
   // Both parameters referenced by the body's own fields, so a policy relaxation is what admits
   // the schema and not the unrelated `TsonSchemaValidationError` `validateReferences` (run after
   // this check) would otherwise raise over a declared-but-unused parameter (§5.10).

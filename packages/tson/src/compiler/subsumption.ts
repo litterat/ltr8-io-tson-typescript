@@ -74,7 +74,7 @@ import {
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
 import { typeNameOf } from '../schema/meta/bodies.js';
 import type { Namespace, Token, Top } from '../schema/meta/typedef.js';
-import { isFamilyBase, isTemplateBody, subtypesOf } from '../schema/meta/typedef.js';
+import { subtypesOf } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { valuesEqual } from '../reader/tree/equality.js';
 import { abandonedValue, readSchemaLiteral } from '../reader/tree/support.js';
@@ -87,7 +87,6 @@ import { applyNormalization } from '../unicode/normalization.js';
 
 const PRODUCT_KINDS: ReadonlySet<string> = new Set([
   'record',
-  'record_template',
   'namespace',
   'array',
   'map',
@@ -95,17 +94,15 @@ const PRODUCT_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether `body` is `Atom`- or `Product`-shaped -- the bodies §7.2's rule governs. A record
- * template is one of them: a family base (§5.10) may be named bare at a type position, and a
- * position typed by one dispatches exactly as an ABSTRACT record's own does, over its members.
+ * Whether `body` is `Atom`- or `Product`-shaped -- the bodies §7.2's rule governs.
  */
 function isGuardedBody(body: Top): boolean {
   if (isAtom(body)) return true;
-  return !isTemplateBody(body) && PRODUCT_KINDS.has(body.kind);
+  return PRODUCT_KINDS.has(body.kind);
 }
 
 function isRecordBody(body: Top): body is RecordBody {
-  return !isTemplateBody(body) && body.kind === 'record';
+  return body.kind === 'record';
 }
 
 /**
@@ -158,10 +155,8 @@ export function guardSubsumption(
     subtypeNames.map((subtype) => [terminal(subtype, (n) => entries.get(n)), subtype] as const),
   );
   const subtypeList = subtypeNames.join(', ');
-  // §5.10: a record template is a family base, ABSTRACT by construction whatever its own
-  // `extension` (each application's) says; its selector fields live on its members.
-  const recordBody = isRecordBody(definition) || isFamilyBase(definition) ? definition : undefined;
-  const isAbstract = recordBody?.extension === 'ABSTRACT' || isFamilyBase(recordBody);
+  const recordBody = isRecordBody(definition) ? definition : undefined;
+  const isAbstract = recordBody?.extension === 'ABSTRACT';
   const discriminators = recordBody?.discriminators ?? [];
 
   if (discriminators.length > 0) {
@@ -328,8 +323,7 @@ const EMPTY_TOKENS: ReadonlyMap<string, Token> = new Map();
 
 /**
  * Builds the member-dispatch reader for `name`, an ABSTRACT base with a non-empty
- * `discriminators` (§5.2) -- a record base's own, or a record-bodied template family base's own
- * (§5.10), whose selector fields live only on its instantiations, never on the base itself. Reads
+ * `discriminators` (§5.2). Reads
  * each discriminator in declaration order and refuses at the first one this dispatch cannot place
  * (this file's own top note has the rationale and the reference this mirrors); a family base has
  * no reader of its own for a value this dispatch places to be validated against besides the
@@ -356,10 +350,7 @@ function buildMemberDispatchReader(
   // for every member's own pin (below) and for whatever the document states (read time). A record
   // base declares the field itself (`baseFields`), which also covers a family with no members yet
   // (§5.2's "empty family" case: there is nothing to scan, but there is still a base to read the
-  // type from). A template family base declares no fields of its own (§5.10 never reads the held
-  // body), so its selector's type is read off any member instead -- identical across every one by
-  // §5.10's own condition on a selector (it mentions no type parameter, so substitution never
-  // touches it).
+  // type from). Where no base fields are given, the selector's type is read off any member instead.
   const fieldReaders = new Map(
     discriminators.map((fieldName) => {
       const typedField =

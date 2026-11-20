@@ -11,7 +11,7 @@
  * not tree-reader work -- see this package's own work-package report.
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
-import { isTemplateBody, type Top } from '../../schema/meta/typedef.js';
+import { type Top } from '../../schema/meta/typedef.js';
 import type { ArrayBody, MapBody, RecordBody, TupleBody } from '../../schema/meta/bodies.js';
 import { typeNameOf } from '../../schema/meta/bodies.js';
 import type { ValueReaderFactory } from '../contracts.js';
@@ -31,25 +31,25 @@ export interface TreeReaderContext {
   readonly locationOf: (name: string, definition: Top) => SchemaLocation;
 }
 
-/** A body's own constructor name for an error message -- `Top`'s one member with none, `TemplateBody`, renders as a fixed label instead. */
+/** A body's own constructor name for an error message. */
 function bodyKindLabel(body: Top): string {
-  return isTemplateBody(body) ? 'an open template body' : body.kind;
+  return body.kind;
 }
 
 function isRecordBody(body: Top): body is RecordBody {
-  return !isTemplateBody(body) && body.kind === 'record';
+  return body.kind === 'record';
 }
 
 function isMapBody(body: Top): body is MapBody {
-  return !isTemplateBody(body) && body.kind === 'map';
+  return body.kind === 'map';
 }
 
 function isArrayBody(body: Top): body is ArrayBody {
-  return !isTemplateBody(body) && body.kind === 'array';
+  return body.kind === 'array';
 }
 
 function isTupleBody(body: Top): body is TupleBody {
-  return !isTemplateBody(body) && body.kind === 'tuple';
+  return body.kind === 'tuple';
 }
 
 /** Builds the tree reader for one `record`-shaped resolved entry. */

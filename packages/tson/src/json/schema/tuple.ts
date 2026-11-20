@@ -25,7 +25,7 @@ export function buildTupleReader(
   ctx: CompileContext,
 ): JsonTypeReader<JsonValue> {
   const optional = body.elements.map((element) => element.voidable);
-  const slotReaders = body.elements.map((element) => ctx.resolve(element.elementType.name));
+  const slotReaders = body.elements.map((element) => ctx.resolve(element.elementType));
   const arity = slotReaders.length;
 
   return {

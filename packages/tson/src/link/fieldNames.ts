@@ -22,9 +22,9 @@
 import { atomParserFor } from '../atom/forType.js';
 import { TsonAtomParseError, TsonAtomValidationError } from '../core/errors.js';
 import type { IdentifierType, Normalization } from '../schema/meta/atoms-text.js';
-import type { RecordBody, RecordTemplateBody } from '../schema/meta/bodies.js';
+import type { RecordBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
+import { recordsInPlace } from '../schema/meta/typeInline.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 import {
   isIdentifierFamily,
@@ -58,20 +58,7 @@ export interface FieldNameTypes {
 }
 
 function recordOf(value: Top | undefined): RecordBody | undefined {
-  return value !== undefined && !isTemplateBody(value) && value.kind === 'record'
-    ? value
-    : undefined;
-}
-
-/**
- * The body of a record template (§5.10), the family base whose members compose it and so share its
- * name type: a reader that dispatches a family on the base's discriminator names matches them in
- * that form.
- */
-function recordTemplateOf(value: Top | undefined): RecordTemplateBody | undefined {
-  return value !== undefined && !isTemplateBody(value) && value.kind === 'record_template'
-    ? value
-    : undefined;
+  return value?.kind === 'record' ? value : undefined;
 }
 
 /**
@@ -88,23 +75,27 @@ export function checkFieldNameTypes(
   const nameTypes = new Map<string, FieldNameType>();
   const local: EntryLookup = (name) => merged.get(name);
   for (const name of localNames) {
-    const body = recordOf(merged.get(name));
-    if (body === undefined) {
-      // A record template's name type is recorded for a reader and never judged here: each
-      // application closes to a record, which is.
-      const template = recordTemplateOf(merged.get(name));
-      if (template?.nameType === undefined) continue;
-      const outcome = check(name, template, local, structure);
-      if (typeof outcome === 'object') {
-        nameTypes.set(name, { typeName: template.nameType, definition: outcome });
+    const entry = merged.get(name);
+    if (entry === undefined) continue;
+    const body = recordOf(entry);
+    if (body !== undefined) {
+      const outcome = check(name, body, local, structure);
+      if (typeof outcome === 'string') {
+        violations.push({ entry: name, message: outcome });
+        continue;
       }
-      continue;
+      if (outcome !== undefined && body.nameType !== undefined) {
+        nameTypes.set(name, { typeName: body.nameType, definition: outcome });
+      }
     }
-    const outcome = check(name, body, local, structure);
-    if (typeof outcome === 'string') {
-      violations.push({ entry: name, message: outcome });
-    } else if (outcome !== undefined && body.nameType !== undefined) {
-      nameTypes.set(name, { typeName: body.nameType, definition: outcome });
+    // A record written in place answers to its name type as a declared one does, reported at the entry holding it
+    // (§4.2, §5.2).
+    for (const inPlace of recordsInPlace(entry)) {
+      const outcome = check(name, inPlace, local, structure);
+      if (typeof outcome === 'string') {
+        violations.push({ entry: name, message: outcome });
+        break;
+      }
     }
   }
   return { violations, nameTypes };

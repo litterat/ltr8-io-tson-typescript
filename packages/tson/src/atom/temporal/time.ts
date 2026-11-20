@@ -9,11 +9,11 @@
  * (`time-second` of 60, refused by §5.4) and the
  * ±18:00 offset bound this inherits from `java.time.ZoneOffset`.
  *
- * **`precision` bounds the *value*, never the spelling (§5.5).** `precision: N` admits a value
+ * **`fraction_digits` bounds the *value*, never the spelling (§5.5).** `fraction_digits: N` admits a value
  * that is a whole number of 10⁻ᴺ seconds -- tested on the parsed `nanosecond` field, not on how
  * many fractional digits the token happened to write: `12:00:00.500` and a hypothetical
  * `12:00:00.5000` denote the same nanosecond count and are both admitted or both refused
- * together under `precision: 1`. `precision: 0` admits only a whole second. `formatFullTime`'s
+ * together under `fraction_digits: 1`. `fraction_digits: 0` admits only a whole second. `formatFullTime`'s
  * own trailing-zero trimming already writes at most `N` digits for any value that passes this
  * check, so there is nothing further for the writer to do.
  *
@@ -28,7 +28,7 @@ import type { PlainTime } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
 import { type ComparableTime, compareTime, formatFullTime, readFullTime } from './rfc3339.js';
 
-/** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `precision: N` value grid (§5.5), shared by `datetime.ts`'s identical check. */
+/** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `fraction_digits: N` value grid (§5.5), shared by `datetime.ts`'s identical check. */
 function onPrecisionGrid(nanosecond: number, precision: bigint): boolean {
   const divisor = 10 ** (9 - Number(precision));
   return nanosecond % divisor === 0;
@@ -68,13 +68,13 @@ export function createTimeParser(typeRef: string, constraints: TimeType): AtomTy
       offset: { totalMinutes: fields.offsetMinutes },
     };
     if (
-      constraints.precision !== undefined &&
-      !onPrecisionGrid(value.nanosecond, constraints.precision)
+      constraints.fractionDigits !== undefined &&
+      !onPrecisionGrid(value.nanosecond, constraints.fractionDigits)
     ) {
       throw new TsonAtomValidationError(
         typeRef,
-        `'${text}' is not a whole number of 10^-${constraints.precision.toString()} seconds (§5.5)`,
-        `on the precision-${constraints.precision.toString()} grid`,
+        `'${text}' is not a whole number of 10^-${constraints.fractionDigits.toString()} seconds (§5.5)`,
+        `on the fraction-digits-${constraints.fractionDigits.toString()} grid`,
       );
     }
     if (constraints.min !== undefined) {

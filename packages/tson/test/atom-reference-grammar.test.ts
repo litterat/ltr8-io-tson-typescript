@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  isQualifiedName,
-  isSiblingField,
-  parseReference,
-  referenceNames,
-  referenceText,
-} from '../src/atom/referenceGrammar.js';
-import type { ApplicationReference } from '../src/ast/reference.js';
+import { isQualifiedName, isSiblingField, parseReference } from '../src/atom/referenceGrammar.js';
 import { TsonAtomParseError } from '../src/core/errors.js';
 
 /**
@@ -42,11 +35,11 @@ describe('a dependent type names one field (§7.4, [TSON-SCHEMA] §12.1)', () =>
 
 describe('a reference is a qualified name (§2.4, §4.1)', () => {
   it('a name is a name', () => {
-    expect(parseReference('geo.address')).toEqual({ kind: 'name', name: 'geo.address' });
+    expect(parseReference('geo.address')).toEqual('geo.address');
   });
 
   it('is read in NFC, so a decomposed spelling is the name its composed one is (§7.7)', () => {
-    expect(parseReference('café')).toEqual({ kind: 'name', name: 'café' });
+    expect(parseReference('café')).toEqual('café');
   });
 
   it('refuses an argument list, saying an application is named by a declaration (§4.1)', () => {
@@ -69,34 +62,6 @@ describe('a reference is a qualified name (§2.4, §4.1)', () => {
   });
 
   it('leaves a segment past the first to the family of what it enters ([TSON-SCHEMA] §5.12)', () => {
-    expect(parseReference('orders.42x')).toEqual({ kind: 'name', name: 'orders.42x' });
-  });
-});
-
-describe('canonical text and names (§7.4)', () => {
-  const application: ApplicationReference = {
-    kind: 'application',
-    name: 'map',
-    arguments: [
-      { kind: 'reference', reference: { kind: 'name', name: 'text' } },
-      {
-        kind: 'reference',
-        reference: {
-          kind: 'application',
-          name: 'list',
-          arguments: [{ kind: 'reference', reference: { kind: 'name', name: 'geo.id' } }],
-        },
-      },
-      { kind: 'value', text: 'a b', form: 'single-line' },
-      { kind: 'value', text: '7', form: 'unquoted' },
-    ],
-  };
-
-  it('writes one space between arguments, a value keeping its form', () => {
-    expect(referenceText(application)).toBe('map<text list<geo.id> "a b" 7>');
-  });
-
-  it('referenceNames lists the head and every reference argument at any depth, never a value', () => {
-    expect(referenceNames(application)).toEqual(['map', 'text', 'list', 'geo.id']);
+    expect(parseReference('orders.42x')).toEqual('orders.42x');
   });
 });

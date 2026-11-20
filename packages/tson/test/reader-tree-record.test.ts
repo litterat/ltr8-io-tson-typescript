@@ -46,7 +46,7 @@ function field(
 ): NamedField {
   return {
     name,
-    type: { name: type, arguments: [], annotations: [] },
+    type: { name: type, annotations: [] },
     optional: marks.optional ?? false,
     voidable: marks.voidable ?? false,
     role: marks.role ?? 'FREE',

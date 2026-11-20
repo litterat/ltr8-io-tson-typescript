@@ -32,7 +32,7 @@ import { formatKnownAtom } from './atomFraming.js';
 import { writeFloat } from '../atom/numeric/float.js';
 import { writeDataValueTo } from './astWriter.js';
 import { referenceToWire } from '../schema/referenceAtoms.js';
-import type { Reference } from '../schema/meta/typedef.js';
+import type { TypeRef } from '../schema/meta/typedef.js';
 import type { Emitter, TextSink } from './emitter.js';
 import { createEmitter, stringSink } from './emitter.js';
 
@@ -49,7 +49,7 @@ export const defaultAtomEncoder: AtomEncoder = (binding: AtomBinding<unknown>, v
   // A reference position (`meta.type_ref`, `meta.field_type_ref`): a bare name is one token, an
   // application or a sibling reference the structured value the data grammar reads (§7.4).
   if (binding.wireType === 'type_ref' || binding.wireType === 'reference') {
-    return referenceToWire(value as Reference);
+    return referenceToWire(value as TypeRef);
   }
   const written = asWrittenToken(value);
   if (written !== undefined) return written;

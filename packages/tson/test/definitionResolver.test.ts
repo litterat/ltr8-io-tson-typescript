@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { fromString, runSync } from '../src/io/bytes.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
+import { desugar } from '../src/compiler/desugar.js';
 import {
   TsonBindMismatchError,
   TsonInternalError,
@@ -19,11 +20,10 @@ import {
 } from '../src/compiler/definitionResolver.js';
 import type { DataValue, CoreValue, RecordValue } from '../src/ast/value.js';
 import type { Declaration, SchemaDocument } from '../src/ast/schema/document.js';
-import type { NamedField, RecordBody, RecordTemplateBody } from '../src/schema/meta/bodies.js';
+import type { NamedField, RecordBody } from '../src/schema/meta/bodies.js';
 import { namedFields } from '../src/schema/meta/bodies.js';
 import type { EntryFacts, Top } from '../src/schema/meta/typedef.js';
 import {
-  entryKind,
   isConstructor,
   parentsOf,
   supertypesOf,
@@ -31,7 +31,7 @@ import {
   withoutChain,
   constructorOf,
 } from '../src/schema/meta/typedef.js';
-import { entry, fieldMapOf } from './model-fixtures.js';
+import { entry, entryClass, fieldMapOf } from './model-fixtures.js';
 import type { IntegerType } from '../src/schema/meta/atoms-numeric.js';
 
 function parse(declarations: string): SchemaDocument {
@@ -66,9 +66,6 @@ function harness(overrides: Partial<DefinitionResolverDeps> = {}): {
     ...(overrides.annotationValueReader === undefined
       ? {}
       : { annotationValueReader: overrides.annotationValueReader }),
-    ...(overrides.applicationCloser === undefined
-      ? {}
-      : { applicationCloser: overrides.applicationCloser }),
     ...(overrides.encodeSourceBody === undefined
       ? {}
       : { encodeSourceBody: overrides.encodeSourceBody }),
@@ -119,7 +116,7 @@ describe('a fresh record definition (§5.2)', () => {
 
     const resolved = resolveOne(resolver, doc, 'integer_size');
 
-    expect(entryKind(resolved)).toBe('PRODUCT');
+    expect(entryClass(resolved)).toBe('PRODUCT');
     expect(isConstructor(resolved)).toBe(false);
     expect(supertypesOf(resolved)).toEqual([]);
     expect(typeParameters(resolved)).toEqual([]);
@@ -130,7 +127,7 @@ describe('a fresh record definition (§5.2)', () => {
     expect(namedFields(resolved)).toEqual([
       {
         name: 'bits',
-        type: { name: 'integer', arguments: [], annotations: [] },
+        type: { name: 'integer', annotations: [] },
         optional: false,
         voidable: false,
         role: 'FREE',
@@ -138,7 +135,7 @@ describe('a fresh record definition (§5.2)', () => {
       },
       {
         name: 'signed',
-        type: { name: 'boolean', arguments: [], annotations: [] },
+        type: { name: 'boolean', annotations: [] },
         optional: false,
         voidable: false,
         role: 'FREE',
@@ -186,7 +183,7 @@ describe('field default/fixed modifiers (§5.2)', () => {
     if (!isRecordBody(body)) throw new Error('unreachable');
     expect(fieldNamed(body, 'a')).toEqual({
       name: 'a',
-      type: { name: 'token', arguments: [], annotations: [] },
+      type: { name: 'token', annotations: [] },
       optional: false,
       voidable: false,
       role: 'FREE',
@@ -290,21 +287,13 @@ describe('field default/fixed modifiers (§5.2)', () => {
     expect(kind.value).toBeUndefined();
   });
 
-  it('a parametric `=` inside a template stays on an unmarked name, held, with the parameter riding `value` (§5.7 open modifiers)', () => {
-    const doc = parse('tmpl => <T> { element_type: type_ref = T }');
+  it('a parametric record carries its parameters, each reference to one marked as that parameter (§5.10)', () => {
+    const doc = parse('box => <T> { v: T }');
     const { resolver } = harness();
-    const body = resolveOne(resolver, doc, 'tmpl');
-    // A record template labels the parameter standing for the whole value (§5.10): the field keeps its
-    // unmarked name and is FIXED where it is written, the parameter riding `value_param`.
-    if ((body as { readonly kind?: unknown }).kind !== 'record_template')
-      throw new Error('unreachable');
-    const template = body as RecordTemplateBody;
-    const field = template.fields.entries.get('element_type');
-    if (field === undefined) throw new Error('unreachable');
-    expect(field.optional).toBe(false);
-    expect(field.role).toBe('FIXED');
-    expect(field.valueParam).toBe('T');
-    expect(field.value).toBeUndefined();
+    const body = resolveOne(resolver, doc, 'box');
+    if (!isRecordBody(body)) throw new Error('unreachable');
+    expect(body.parameters).toEqual([{ name: 'T' }]);
+    expect(fieldNamed(body, 'v').type).toEqual({ name: 'T', annotations: [], param: true });
   });
 });
 
@@ -315,7 +304,7 @@ describe('composition (§5.8)', () => {
     const doc = parse('top => {}');
     const { resolver } = harness();
     const top = resolveOne(resolver, doc, 'top');
-    expect(entryKind(top)).toBe('PRODUCT');
+    expect(entryClass(top)).toBe('PRODUCT');
     expect(supertypesOf(top)).toEqual([]);
     if (!isRecordBody(top)) throw new Error('unreachable');
     expect(namedFields(top)).toEqual([]);
@@ -333,13 +322,13 @@ describe('composition (§5.8)', () => {
 
     const atomEntry = entries.get('atom');
     if (atomEntry === undefined) throw new Error('unreachable');
-    expect(entryKind(atomEntry)).toBe('PRODUCT');
+    expect(entryClass(atomEntry)).toBe('PRODUCT');
     expect(supertypesOf(atomEntry)).toEqual(['top']);
     const productEntry = entries.get('product');
     const sumEntry = entries.get('sum');
     if (productEntry === undefined || sumEntry === undefined) throw new Error('unreachable');
-    expect(entryKind(productEntry)).toBe('PRODUCT');
-    expect(entryKind(sumEntry)).toBe('PRODUCT');
+    expect(entryClass(productEntry)).toBe('PRODUCT');
+    expect(entryClass(sumEntry)).toBe('PRODUCT');
   });
 
   it('a type composing with `atom` is itself kind ATOM', () => {
@@ -354,7 +343,7 @@ describe('composition (§5.8)', () => {
     resolveAll(resolver, entries, doc);
     const constructor = entries.get('meta.thing_type');
     if (constructor === undefined) throw new Error('unreachable');
-    expect(entryKind(constructor)).toBe('ATOM');
+    expect(entryClass(constructor)).toBe('ATOM');
     expect(supertypesOf(constructor)).toEqual(['meta.atom', 'meta.top']);
   });
 
@@ -431,7 +420,7 @@ describe('composition (§5.8)', () => {
     const production = resolveOne(resolver, doc, 'production');
     if (!isRecordBody(production)) throw new Error('unreachable');
     const host = fieldNamed(production, 'host');
-    expect(host.type).toEqual({ name: 'token', arguments: [], annotations: [] });
+    expect(host.type).toEqual({ name: 'token', annotations: [] });
     expect(host.role).toBe('FIXED');
   });
 
@@ -474,7 +463,7 @@ describe('composition (§5.8)', () => {
     if (!isRecordBody(production)) throw new Error('unreachable');
 
     const host = fieldNamed(production, 'host');
-    expect(host.type).toEqual({ name: 'token', arguments: [], annotations: [] });
+    expect(host.type).toEqual({ name: 'token', annotations: [] });
     expect(host.annotations).toEqual([{ name: 'a2' }, { name: 'a1' }]);
   });
 
@@ -595,22 +584,6 @@ describe('§11.5\'s "supertype chain" limit', () => {
     expect(error).toBeInstanceOf(TsonLimitRefusedError);
     expect((error as TsonLimitRefusedError).limit).toBe('supertype-chain');
     expect((error as TsonLimitRefusedError).configuredThreshold).toBe(64);
-  });
-
-  it("the same limit applies through refinement's own transitive supertype chain (§5.7)", () => {
-    const lines = ['base0 => {}'];
-    for (let i = 1; i <= 65; i++) {
-      lines.push(`base${String(i)} => base${String(i - 1)} ^ {}`);
-    }
-    const doc = parse(lines.join('\n'));
-    const { resolver, entries } = harness();
-    for (let i = 0; i <= 64; i++) {
-      const name = `base${String(i)}`;
-      entries.set(name, resolver.resolve(declarationOf(doc, name)));
-    }
-    const error = thrownBy(() => resolveOne(resolver, doc, 'base65'));
-    expect(error).toBeInstanceOf(TsonLimitRefusedError);
-    expect((error as TsonLimitRefusedError).limit).toBe('supertype-chain');
   });
 });
 
@@ -768,7 +741,7 @@ describe('field groups (§5.11)', () => {
     const ok = resolveOne(resolver, doc, 'ok');
     if (!isRecordBody(ok)) throw new Error('unreachable');
     const a = fieldNamed(ok, 'a');
-    expect(a.type).toEqual({ name: 'void', arguments: [], annotations: [] });
+    expect(a.type).toEqual({ name: 'void', annotations: [] });
     expect(a.optional).toBe(true);
     expect(a.voidable).toBe(true);
     expect(a.role).toBe('FREE');
@@ -845,7 +818,7 @@ describe('tightening entries never acquire a fresh selector (§5.2, §5.7)', () 
   it("rejects '=?' on an ordinary (non-member) tightening entry -- a discriminator is declared once, at the base, and a restatement narrows an inherited field rather than minting a new one", () => {
     const doc = parse(`
       base => { k: text }
-      bad  => base ^ { k: =? }
+      bad  => base & { k: =? }
     `);
     const { resolver, entries } = harness();
     entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
@@ -855,13 +828,13 @@ describe('tightening entries never acquire a fresh selector (§5.2, §5.7)', () 
   });
 });
 
-// ── Refinement (§5.7): source ^ { ... } ──────────────────────────────────────────────────────
+// ── Restatement (§5.8): a record's fields are restated with `&`, never refined with `^` ──────────────────────────────────────────────────────
 
-describe('refinement (§5.7)', () => {
-  it('copies the whole inherited field set and admits no new fields', () => {
+describe('restatement through composition (§5.8)', () => {
+  it('a composition restating an inherited field narrows it in place and keeps every other field (§5.8)', () => {
     const doc = parse(`
       base   => { x: token  y: token }
-      narrow => base ^ { x: token = "fixed" }
+      narrow => base & { x: token = "fixed" }
     `);
     const { resolver, entries } = harness();
     entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
@@ -875,39 +848,6 @@ describe('refinement (§5.7)', () => {
     expect(fieldNamed(narrow, 'y').role).toBe('FREE');
   });
 
-  it('rejects a body field naming nothing inherited (refinement adds no fields)', () => {
-    const doc = parse(`
-      base => { x: token }
-      bad  => base ^ { z: token = "x" }
-    `);
-    const { resolver, entries } = harness();
-    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
-    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('names no inherited field');
-  });
-
-  it('rejects a refinement source with no vocabulary to tighten (a finished binding-record body)', () => {
-    const doc = parse('bad => bound ^ {}');
-    const { resolver, entries } = harness();
-    entries.set('bound', entry({ kind: 'void_type' }));
-    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('finished');
-  });
-
-  it('a refinement group entry naming nothing inherited is a resolver error (refinement admits no new groups)', () => {
-    const doc = parse(`
-      base => { x: token }
-      bad  => base ^ { (p: token | q: token) }
-    `);
-    const { resolver, entries } = harness();
-    entries.set('base', resolver.resolve(declarationOf(doc, 'base')));
-    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('names no inherited group');
-  });
-
   it('`~` before a refinement head is likewise a parse error (§4.2, §12.1)', () => {
     expect(() =>
       parse(`
@@ -917,10 +857,10 @@ describe('refinement (§5.7)', () => {
     ).toThrow(TsonParseError);
   });
 
-  it('the definition mark is never inherited through refinement -- "the member is never inherited... and must be, or no concrete subtype of an abstract base could exist" holds for `^` exactly as it does for `&` (§5.2)', () => {
+  it('the definition mark is never inherited through composition -- "the member is never inherited... and must be, or no concrete subtype of an abstract base could exist" (§5.2)', () => {
     const doc = parse(`
       p => abstract { x: token }
-      q => p ^ {}
+      q => p & {}
     `);
     const { resolver, entries } = harness();
     entries.set('p', resolver.resolve(declarationOf(doc, 'p')));
@@ -933,7 +873,7 @@ describe('refinement (§5.7)', () => {
   it("a restatement pinning a discriminator field FIXED does not inherit the base's own discriminators -- the subtype is a member, not itself a further base", () => {
     const doc = parse(`
       pet => abstract { pet_type: text =?  name: text }
-      dog => pet ^ { pet_type: = "dog" }
+      dog => pet & { pet_type: = "dog" }
     `);
     const { resolver, entries } = harness();
     entries.set('pet', resolver.resolve(declarationOf(doc, 'pet')));
@@ -944,10 +884,10 @@ describe('refinement (§5.7)', () => {
     expect(fieldNamed(dog, 'pet_type')).toMatchObject({ role: 'FIXED', optional: false });
   });
 
-  it('restating a pinned field with a different spelling of the same value is not a change of pin -- `= 255` and `= 0xFF` collide as values (§5.5, §5.7)', () => {
+  it('restating a pinned field with a different spelling of the same value is not a change of pin -- `= 255` and `= 0xFF` collide as values (§5.5, §5.8)', () => {
     const doc = parse(`
       x => { n?: int32 = 255 }
-      y => x ^ { n?: = 0xFF }
+      y => x & { n?: = 0xFF }
     `);
     const { resolver, entries } = harness();
     entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
@@ -956,10 +896,10 @@ describe('refinement (§5.7)', () => {
     }).not.toThrow();
   });
 
-  it('restating a pinned field with a genuinely different value is still refused (§5.7)', () => {
+  it('restating a pinned field with a genuinely different value is still refused (§5.8)', () => {
     const doc = parse(`
       x => { n?: int32 = 255 }
-      y => x ^ { n?: = 254 }
+      y => x & { n?: = 254 }
     `);
     const { resolver, entries } = harness();
     entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
@@ -968,11 +908,11 @@ describe('refinement (§5.7)', () => {
     expect((error as TsonSchemaValidationError).message).toContain('different value');
   });
 
-  it('restating a pinned text field with a different Unicode normalisation form of the same content is not a change of pin (§5.7: "text pins compare NFC-normalised")', () => {
+  it('restating a pinned text field with a different Unicode normalisation form of the same content is not a change of pin (§5.8: "text pins compare NFC-normalised")', () => {
     // "é" (é, NFC) vs "é" (e + combining acute, NFD) -- the same grapheme, two encodings.
     const doc = parse(`
       x => { n?: text = "café" }
-      y => x ^ { n?: = "café" }
+      y => x & { n?: = "café" }
     `);
     const { resolver, entries } = harness();
     entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
@@ -993,18 +933,6 @@ describe('FINAL admits no subtype (§5.2)', () => {
     const { resolver, entries } = harness();
     entries.set('reading', resolver.resolve(declarationOf(doc, 'reading')));
     const error = thrownBy(() => resolveOne(resolver, doc, 'calibrated'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('FINAL');
-  });
-
-  it('refuses refinement of a FINAL record', () => {
-    const doc = parse(`
-      reading => final { sensor: token }
-      named   => reading ^ { sensor?: token = "thermometer" }
-    `);
-    const { resolver, entries } = harness();
-    entries.set('reading', resolver.resolve(declarationOf(doc, 'reading')));
-    const error = thrownBy(() => resolveOne(resolver, doc, 'named'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as TsonSchemaValidationError).message).toContain('FINAL');
   });
@@ -1117,7 +1045,7 @@ function integerTypeStructure(): Top {
   const fields: NamedField[] = [
     {
       name: 'size',
-      type: { name: 'integer_size', arguments: [], annotations: [] },
+      type: { name: 'integer_size', annotations: [] },
       optional: true,
       voidable: false,
       role: 'FREE',
@@ -1125,7 +1053,7 @@ function integerTypeStructure(): Top {
     },
     {
       name: 'min',
-      type: { name: 'integer', arguments: [], annotations: [] },
+      type: { name: 'integer', annotations: [] },
       optional: true,
       voidable: false,
       role: 'FREE',
@@ -1133,7 +1061,7 @@ function integerTypeStructure(): Top {
     },
     {
       name: 'exclusive_min',
-      type: { name: 'integer', arguments: [], annotations: [] },
+      type: { name: 'integer', annotations: [] },
       optional: true,
       voidable: false,
       role: 'FREE',
@@ -1141,7 +1069,7 @@ function integerTypeStructure(): Top {
     },
     {
       name: 'max',
-      type: { name: 'integer', arguments: [], annotations: [] },
+      type: { name: 'integer', annotations: [] },
       optional: true,
       voidable: false,
       role: 'FREE',
@@ -1149,7 +1077,7 @@ function integerTypeStructure(): Top {
     },
     {
       name: 'exclusive_max',
-      type: { name: 'integer', arguments: [], annotations: [] },
+      type: { name: 'integer', annotations: [] },
       optional: true,
       voidable: false,
       role: 'FREE',
@@ -1157,7 +1085,7 @@ function integerTypeStructure(): Top {
     },
     {
       name: 'multiple_of',
-      type: { name: 'integer', arguments: [], annotations: [] },
+      type: { name: 'integer', annotations: [] },
       optional: true,
       voidable: false,
       role: 'FREE',
@@ -1247,7 +1175,7 @@ describe('constructor application (§5.5, §5.6)', () => {
 
     const int8 = resolveOne(resolver, doc, 'int8');
 
-    expect(entryKind(int8)).toBe('ATOM');
+    expect(entryClass(int8)).toBe('ATOM');
     expect(isConstructor(int8)).toBe(false);
     expect(supertypesOf(int8)).toEqual([]);
     expect(resolver.factsOf('int8').head).toBe('integer');
@@ -1307,9 +1235,9 @@ describe('constructor application (§5.5, §5.6)', () => {
     structure.set('integer_type', integerTypeStructure());
     structure.set(
       'alias_integer',
-      /* source: { name: 'integer', arguments: [], annotations: [] } */ entry({
+      /* source: { name: 'integer', annotations: [] } */ entry({
         kind: 'alias',
-        target: { name: 'integer', arguments: [], annotations: [] },
+        target: { name: 'integer', annotations: [] },
       }),
     );
 
@@ -1329,9 +1257,9 @@ describe('constructor application (§5.5, §5.6)', () => {
     const { resolver, structure } = harness();
     structure.set(
       'dangling',
-      /* source: { name: 'nowhere', arguments: [], annotations: [] } */ entry({
+      /* source: { name: 'nowhere', annotations: [] } */ entry({
         kind: 'alias',
-        target: { name: 'nowhere', arguments: [], annotations: [] },
+        target: { name: 'nowhere', annotations: [] },
       }),
     );
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
@@ -1474,7 +1402,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     );
   });
 
-  it('rejects refining a non-atom instance', () => {
+  it('rejects `^` over a record: its fields are restated in a composition (§5.7, §5.8)', () => {
     const doc = parse('bad => !notatom ^ { x: 1 }');
     const { resolver, entries } = harness();
     entries.set(
@@ -1492,7 +1420,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     );
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('not an atom-family instance');
+    expect((error as TsonSchemaValidationError).message).toContain("takes no '^'");
   });
 
   // §5.5's own warning: the eligibility test is on the body, and on nothing else. Two readings
@@ -1520,7 +1448,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
       );
       const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
       expect(error).toBeInstanceOf(TsonSchemaValidationError);
-      expect((error as TsonSchemaValidationError).message).toContain('not an atom-family instance');
+      expect((error as TsonSchemaValidationError).message).toContain('is a constraint vocabulary');
     },
   );
 
@@ -1559,112 +1487,22 @@ describe('atom refinement (§5.5, §5.7)', () => {
   });
 });
 
-// ── Instance/reference templates (§5.10) ────────────────────────────────────────────────────
+// ── Parametric declarations (§5.10) ─────────────────────────────────────────────────────────
 
-function widgetStructure(): Top {
-  // IS-A `top` through `product` (hand-built, for this test's own simplified structure
-  // namespace) is what makes `isConstructor` true here.
-  return entry(
-    {
-      kind: 'record',
-      fields: fieldMapOf([
-        {
-          name: 'size',
-          type: { name: 'integer', arguments: [], annotations: [] },
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-        {
-          name: 'label',
-          type: { name: 'token', arguments: [], annotations: [] },
-          optional: false,
-          voidable: false,
-          role: 'FREE',
-          annotations: [],
-        },
-      ]),
-      groups: [],
-      extension: 'OPEN',
-    },
-    ['meta.product', 'meta.top'],
-  );
-}
-
-describe('open constructor application / instance templates (§5.10)', () => {
-  it("holds the body rather than binding it, carrying the declaration's own type parameters", () => {
-    const doc = parse('sized => <T> !widget { size: T  label: "x" }');
-    const { resolver, structure } = harness();
-    structure.set('widget', widgetStructure());
-    const resolved = resolveOne(resolver, doc, 'sized');
-    expect(typeParameters(resolved)).toEqual(['T']);
-    expect(isConstructor(resolved)).toBe(false);
-    expect('application' in resolved).toBe(true);
-  });
-
-  it('rejects binding an unknown field the constructor does not declare', () => {
-    const doc = parse('bad => <T> !widget { nowhere: T }');
-    const { resolver, structure } = harness();
-    structure.set('widget', widgetStructure());
-    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('no field');
-  });
-
-  it('rejects leaving a REQUIRED-with-no-default field unbound (no application could ever satisfy it)', () => {
-    // `label` is bound but `size` is not -- a genuinely non-empty binding record, so this is not
-    // the ambiguous bare `{}` (which parses as the structural `empty-brace` case, not a
-    // zero-field `RecordValue`, and so never reaches `checkTemplateBindings` at all).
-    const doc = parse('bad => <T> !widget { label: T }');
-    const { resolver, structure } = harness();
-    structure.set('widget', widgetStructure());
-    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('requires a');
-  });
-});
-
-describe('top-level template application (§5.10)', () => {
-  it('a declaration-level generic application carries its arguments through, unresolved, as an ALIAS entry', () => {
-    const doc = parse('boxed_pair => box<text, uuid>');
-    const { resolver } = harness();
-    const resolved = resolveOne(resolver, doc, 'boxed_pair');
-    expect(entryKind(resolved)).toBe('ALIAS');
-    expect(typeParameters(resolved)).toEqual([]);
-    expect(resolved).toEqual({
-      kind: 'alias',
-      target: {
-        name: 'box',
-        arguments: [
-          { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
-          { kind: 'ref', ref: { name: 'uuid', arguments: [], annotations: [] } },
-        ],
-        annotations: [],
-      },
-    });
-  });
-
-  it("a partial application re-declares some arguments as the declaration's own open parameters (§5.10)", () => {
-    const doc = parse('uuid_pair => <B> pair<uuid, B>');
-    const { resolver } = harness();
-    const resolved = resolveOne(resolver, doc, 'uuid_pair');
-    // Open, so TEMPLATE by derivation regardless of what its held body applies (§8.1's own
-    // "Open entries" text: "the entry's kind is TEMPLATE by derivation and it has none until it
-    // closes") -- unlike a closed alias (the test above), which is REFERENCE-kind directly.
-    expect(entryKind(resolved)).toBe('TEMPLATE');
-    expect(typeParameters(resolved)).toEqual(['B']);
-    expect('application' in resolved).toBe(true);
+describe('parametric declarations (§5.10)', () => {
+  it('a parametric record body that is a bare application -- a partial application -- is refused: there are no parametric aliases', () => {
+    const doc = parse('pair => <A B> { first: A  second: B }\nuuid_pair => <B> pair<uuid B>');
+    expect(thrownBy(() => desugar(doc))).toBeInstanceOf(TsonSchemaValidationError);
   });
 
   it('a bare reference (no arguments) resolves to an ALIAS entry regardless of what the target itself is (§8.3)', () => {
     const doc = parse('type_name => token');
     const { resolver } = harness();
     const resolved = resolveOne(resolver, doc, 'type_name');
-    expect(entryKind(resolved)).toBe('ALIAS');
+    expect(entryClass(resolved)).toBe('ALIAS');
     expect(resolved).toEqual({
       kind: 'alias',
-      target: { name: 'token', arguments: [], annotations: [] },
+      target: { name: 'token', annotations: [] },
     });
   });
 });
@@ -1678,7 +1516,7 @@ describe('coverage gaps reported as TsonNotImplementedError, never silently mis-
       name: 'raw',
       typeDefAnnotations: [],
       typeDef: {
-        kind: 'referenceTypeDef',
+        kind: 'typeExprDef',
         typeParams: [],
         ref: {
           kind: 'arrayExpr',
@@ -1692,15 +1530,11 @@ describe('coverage gaps reported as TsonNotImplementedError, never silently mis-
     expect(thrownBy(() => resolver.resolve(declaration))).toBeInstanceOf(TsonInternalError);
   });
 
-  it('closing an application needs a whole-schema materialiser this resolver was not built with', () => {
-    const doc = parse('closed => box_t<text> ^ {}');
-    const { resolver } = harness();
-    // `box_t<text>` is a fully-bound (closed) application at a refinement source position --
-    // closing it to the entry it denotes needs a whole-schema materialiser (`ApplicationCloser`),
-    // checked before this resolver would even look `box_t` up in the type-name namespace. (A
-    // *composition* operand no longer takes this path at all: §5.8's last sentence subsumes a
-    // closed application there structurally, via `openOperand`, and mints no entry -- see the
-    // '§5.8 composition' describe block's own coverage.)
+  it('closing a declared application of a parametric record is a gap, never a verdict (§5.10)', () => {
+    const doc = parse('box => <T> { v: T }\nclosed => box<text>');
+    const { resolver, entries } = harness();
+    entries.set('text', entry({ kind: 'text_type', normalization: 'NONE' }));
+    entries.set('box', resolveOne(resolver, doc, 'box'));
     const error = thrownBy(() => resolveOne(resolver, doc, 'closed'));
     expect(error).toBeInstanceOf(TsonNotImplementedError);
   });

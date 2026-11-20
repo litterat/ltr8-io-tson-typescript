@@ -66,8 +66,8 @@ import {
   type NamedField,
   type RecordBody,
 } from '../../schema/meta/bodies.js';
-import { isTemplateBody, type Atom, type Reference, type Top } from '../../schema/meta/typedef.js';
-import type { ReferenceBody } from '../../schema/meta/bodies.js';
+import { dependentOn, type Atom, type Top, type TypeRef } from '../../schema/meta/typedef.js';
+import type { RefBody } from '../../schema/meta/bodies.js';
 import { toNfc } from '../../unicode/nfc.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -90,6 +90,7 @@ import {
 import type { CompileContext } from './compile.js';
 import { buildDependentReader, isDependentReader } from './dependent.js';
 import {
+  siblingType,
   referenceIn,
   writtenBeforeItsSibling,
   writtenWithoutItsSibling,
@@ -167,8 +168,8 @@ export function resolveFieldBody(ctx: CompileContext, fieldTypeName: string): At
     );
   }
   const body = definition;
-  if (isTemplateBody(body)) {
-    throw new Error(`'${fieldTypeName}' is an open template, and carries no atom parser`);
+  if (body.kind === 'incomplete') {
+    throw new Error(`'${fieldTypeName}' is an incomplete entry, and carries no atom parser`);
   }
   if (body.kind === 'alias') {
     throw new Error(`'${fieldTypeName}'s alias chain did not collapse -- this is a library bug`);
@@ -262,14 +263,9 @@ interface RecordPlan {
 }
 
 /** The reference body typing a dependent field's `sibling`, past its alias hops, or `undefined` where it is none. */
-function siblingTypeOf(
-  sibling: NamedField | undefined,
-  ctx: CompileContext,
-): ReferenceBody | undefined {
-  if (sibling === undefined || sibling.type.kind === 'sibling') return undefined;
-  const definition = terminalDefinition(sibling.type.name, (n) => ctx.linkedSchema.entries.get(n));
-  if (definition === undefined || isTemplateBody(definition)) return undefined;
-  return definition.kind === 'reference_type' ? definition : undefined;
+function siblingTypeOf(sibling: NamedField | undefined, ctx: CompileContext): RefBody | undefined {
+  if (sibling === undefined) return undefined;
+  return siblingType(sibling, (n) => ctx.linkedSchema.entries.get(n));
 }
 
 /** An NFC member name in the name type's form: the key a declared field and a document's name share. */
@@ -307,8 +303,8 @@ function buildRecordPlan(
     // A dependent field's type is chosen per instance by its sibling's value (§5.6), which the
     // record hands its reader.
     siblingOf.push(-1);
-    if (field.type.kind === 'sibling') {
-      const siblingField = field.type.field;
+    const siblingField = dependentOn(field.type);
+    if (siblingField !== undefined) {
       const at = fields.findIndex((candidate) => candidate.name === siblingField);
       if (at < 0) {
         throw new Error(
@@ -322,17 +318,18 @@ function buildRecordPlan(
         buildDependentReader(name, field.name, siblingField, ctx, siblingTypeOf(fields[at], ctx)),
       );
     } else {
-      schemaReaders.push(ctx.resolve(typeName));
+      schemaReaders.push(ctx.resolve(field.type));
     }
+    // A value stands on a field typed by a name; one on a type written in place is a reference's (§5.2), read as
+    // the name it is.
+    const valued = field.type.kind !== 'inline';
     fixedReaders.push(
-      field.role === 'FIXED'
+      field.role === 'FIXED' && valued
         ? fixedFieldReader(ctx, typeName, ctx.locationOf(typeName))
         : undefined,
     );
     stated.push(
-      field.value === undefined || field.type.kind === 'sibling'
-        ? undefined
-        : fieldValueOf(ctx, typeName, field.value),
+      field.value === undefined || !valued ? undefined : fieldValueOf(ctx, typeName, field.value),
     );
   });
 
@@ -491,8 +488,8 @@ export function buildRecordReader(
       let position = 0;
       let tagged = false;
       // A dependent field's state, kept only where the record has one: each sibling's reference as written.
-      const named: (Reference | undefined)[] | undefined = plan.hasDependents
-        ? new Array<Reference | undefined>(plan.names.length).fill(undefined)
+      const named: (TypeRef | undefined)[] | undefined = plan.hasDependents
+        ? new Array<TypeRef | undefined>(plan.names.length).fill(undefined)
         : undefined;
       // Each dependent member reached before its sibling was written, by the name written and where it stands.
       const waiting: Waiting = {
@@ -667,7 +664,7 @@ function* readTracked(
   at: number,
   memberName: string,
   slots: readonly Slot[],
-  named: (Reference | undefined)[],
+  named: (TypeRef | undefined)[],
   waiting: Waiting,
 ): Task<Slot> {
   if (plan.typesADependent[at] === true) {
@@ -698,7 +695,7 @@ function* readDependent(
   at: number,
   memberName: string,
   slots: readonly Slot[],
-  named: readonly (Reference | undefined)[],
+  named: readonly (TypeRef | undefined)[],
   waiting: Waiting,
 ): Task<Slot> {
   const sibling = plan.siblingOf[at];
@@ -714,7 +711,7 @@ function* readDependent(
     const hostValue = plan.stated[sibling]?.hostValue;
     return typeof hostValue === 'string' ? hostValue : undefined;
   };
-  let reference: Reference | undefined;
+  let reference: TypeRef | undefined;
   const fieldCtx = fieldContext(ctx, plan, at, memberName);
   if (siblingField.role === 'FIXED' && plan.stated[sibling] !== undefined) {
     reference = referenceIn(statedText());

@@ -70,12 +70,12 @@ export interface DateType extends TypeBase {
  * the offset mandatory — a facet requiring it would be vacuous and one relaxing it would
  * widen the atom against its own pin, so the constructor declares none (§5.5).
  *
- * **`precision` bounds the fractional-second digits, judged on the written token** — `N`
+ * **`fraction_digits` bounds the fractional-second digits, judged on the written token** — `N`
  * admits at most `N` digits (`12:00:00.100` has three, whatever instant it denotes), as a
  * validation constraint, never a truncation instruction: the atom is exact and a value is
- * preserved as written. `precision: 0` admits no fractional part. Stated as an upper bound,
+ * preserved as written. `fraction_digits: 0` admits no fractional part. Stated as an upper bound,
  * the facet is an ordered bound under §5.7 and refines like every other one (§5.5).
- * `precision` is `bigint` because the kernel's own field is typed `non_negative_integer`.
+ * `fractionDigits` is `bigint` because the kernel's own field is typed `non_negative_integer`.
  *
  * Also an {@link Atom} variant: `time => !time_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
@@ -84,12 +84,12 @@ export interface TimeType extends TypeBase {
   readonly kind: 'time_type';
   readonly min?: OffsetTime;
   readonly max?: OffsetTime;
-  readonly precision?: bigint;
+  readonly fractionDigits?: bigint;
 }
 
 /**
  * `temporal.datetime_type` constructor (§5.4's `datetime` atom, RFC 3339
- * `date-time`). Carries the same `precision` facet as {@link TimeType}, for the same reason,
+ * `date-time`). Carries the same `fraction_digits` facet as {@link TimeType}, for the same reason,
  * and the same absence of a timezone facet.
  *
  * Also an {@link Atom} variant: `datetime => !datetime_type {}` is a
@@ -100,7 +100,7 @@ export interface DateTimeType extends TypeBase {
   readonly kind: 'datetime_type';
   readonly min?: OffsetDateTime;
   readonly max?: OffsetDateTime;
-  readonly precision?: bigint;
+  readonly fractionDigits?: bigint;
 }
 
 /**
@@ -118,7 +118,7 @@ export interface DateTimeType extends TypeBase {
  * `max`/`exclusiveMax` are mutually exclusive pairs, the same unenforced invariant
  * {@link IntegerType} (`./atoms-numeric.js`) carries.
  *
- * `precision` bounds the fractional-second digits exactly as {@link TimeType}'s does — a
+ * `fraction_digits` bounds the fractional-second digits exactly as {@link TimeType}'s does — a
  * whole number of 10⁻ᴺ seconds, `bigint` because the kernel types it `non_negative_integer`,
  * and it may not exceed nine, there being no tenth digit the value space carries.
  *
@@ -137,7 +137,7 @@ export interface DurationType extends TypeBase {
   readonly exclusiveMin?: bigint;
   readonly max?: bigint;
   readonly exclusiveMax?: bigint;
-  readonly precision?: bigint;
+  readonly fractionDigits?: bigint;
   readonly multipleOf?: bigint;
 }
 
@@ -151,7 +151,7 @@ export interface DurationType extends TypeBase {
  *
  * **Every numeric field holds the *value*, not the token** — the same `value`-escape-hatch
  * convention {@link DurationType}'s own doc states in full, `period`'s value space (signed
- * months) in place of `duration`'s (signed nanoseconds). No `precision` facet: a month count
+ * months) in place of `duration`'s (signed nanoseconds). No `fraction_digits` facet: a month count
  * has no fractional part to bound.
  *
  * No `spec` field, on {@link DurationType}'s own terms.

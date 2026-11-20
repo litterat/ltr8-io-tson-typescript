@@ -5,6 +5,7 @@
  * field/element's schema-composed default once at construction (`RecordAbstractReader.readSchemaDefault`),
  * and a short renderer for a {@link Value} used only in diagnostic `expected`/`actual` text.
  */
+import type { TypeExpr } from '../../schema/meta/typedef.js';
 import { TsonReadError } from '../../core/errors.js';
 import { throwing } from '../../core/diagnostic.js';
 import { runSync } from '../../io/bytes.js';
@@ -18,11 +19,12 @@ import type { TypeReader } from '../contracts.js';
 import type { AtomValue, Value } from '../../tree/nodes.js';
 
 /**
- * `typeName -> the compiled tree reader for it`, resolved once per record/map/array/tuple body at
+ * `type -> the compiled tree reader for it` -- a type's name, or a type written in place (§4.2) -- resolved once
+ * per record/map/array/tuple body at
  * construction -- the tree-mode instance of Java's `TsonTypeReaderResolver`. Supplied by whoever wires
  * a whole schema's worth of readers together (Wave 5's compiler); this directory only consumes one.
  */
-export type TreeTypeResolver = (typeName: string) => TypeReader<Value>;
+export type TreeTypeResolver = (type: string | TypeExpr) => TypeReader<Value>;
 
 /** A fixed, in-memory {@link EventSource} over `events` -- the port of Java's `ListEventSource`, used only to replay a schema-composed literal through its own field's parser. */
 function listEventSource(events: readonly TsonEvent[]): EventSource {

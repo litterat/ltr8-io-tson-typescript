@@ -976,7 +976,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\nthing => int32\n}\n');
+    expect(io.stdout()).toBe('!!import:"40/core"\n!schema {\nthing => int32\n}\n');
     expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
   });
 
@@ -986,7 +986,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', '--keep-docs', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\n@doc:"A thing." thing => int32\n}\n');
+    expect(io.stdout()).toBe('!!import:"40/core"\n!schema {\n@doc:"A thing." thing => int32\n}\n');
   });
 
   it('an unknown option, a missing file argument and a second file are usage errors, exit 2', async () => {

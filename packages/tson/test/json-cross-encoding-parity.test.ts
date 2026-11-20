@@ -93,15 +93,6 @@ const SCHEMA_SOURCE = `
   pet_of    => pet
   gallery   => { f: figure }
   garage    => { r: robot }
-  outcome    => abstract <T> { code: T }
-  won        => <T> outcome<T> & { prize: text }
-  outcome_of => outcome<text>
-  won_of     => won<text>
-  ledger     => { o: outcome<text> }
-  box        => <T> { v: T }
-  int_box    => box<int32>
-  text_box   => box<text>
-  crate      => { b: box }
   local_box  => { v: meta.declared }
   port_label  => !text ^ { members: ["80" "443"] }
   port_slot   => ( port_label | int32 )
@@ -134,7 +125,7 @@ const SCHEMA_SOURCE = `
   ided        => { id: meta.ref<net.uuid_type> }
   typed       => { t: meta.type_ref }
   cell        => { kind: meta.type_ref  v?: kind! }
-  int_cell    => cell ^ { kind?: = int32 }
+  int_cell    => cell & { kind?: = int32 }
   defaulted   => { kind?: meta.type_ref ~ int32  v?: kind! }
   grouped     => { ( kind: meta.type_ref | name: text )  v?: kind! }
   tmpl        => <T> { item: T }
@@ -162,12 +153,41 @@ const LINKED = resolveUserSchema(SCHEMA_SOURCE);
 const JSON_SCHEMA: JsonCompiledSchema = compileJsonSchema(LINKED);
 const TEXT_SCHEMA: CompiledSchema = compile(LINKED);
 
+/**
+ * A family entered through a parametric record's written parent ([TSON-SCHEMA] §5.8, §5.10): `won_of` composes
+ * `won<text>`, whose parent `outcome<text>` is declared as `outcome_of`, so `won_of` IS-A `outcome_of`. Compiled on
+ * first use, so a schema that fails to load fails each test that reads it.
+ */
+const FAMILY_SOURCE = `
+!!id:"https://example.test/json-parity-family.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
+!schema {
+  outcome    => abstract <T> { code: T }
+  won        => <T> outcome<T> & { prize: text }
+  outcome_of => outcome<text>
+  won_of     => won<text>
+  ledger     => { o: outcome_of }
+}
+`;
+
+let family: { readonly text: CompiledSchema; readonly json: JsonCompiledSchema } | undefined;
+
+function familySchemas(): { readonly text: CompiledSchema; readonly json: JsonCompiledSchema } {
+  if (family === undefined) {
+    const linked = resolveUserSchema(FAMILY_SOURCE);
+    family = { text: compile(linked), json: compileJsonSchema(linked) };
+  }
+  return family;
+}
+
 function tson(rootType: string, body: string): readonly Diagnostic[] {
-  return validateText(bytesOf(body), { schema: TEXT_SCHEMA, root: rootType }).diagnostics;
+  const schema = rootType === 'ledger' ? familySchemas().text : TEXT_SCHEMA;
+  return validateText(bytesOf(body), { schema, root: rootType }).diagnostics;
 }
 
 function json(rootType: string, body: string): readonly Diagnostic[] {
-  return validateJson(body, { schema: JSON_SCHEMA, root: rootType }).diagnostics;
+  const schema = rootType === 'ledger' ? familySchemas().json : JSON_SCHEMA;
+  return validateJson(body, { schema, root: rootType }).diagnostics;
 }
 
 /** A diagnostic reduced to what a consumer routes on: which rule fired, and where in the data. */
@@ -405,7 +425,7 @@ describe('subtype families', () => {
     );
   });
 
-  it('an alias of a template family member selects it in both', () => {
+  it('a member of a family entered through a parametric record’s parent selects it in both', () => {
     bothAccept(
       'ledger',
       '{ o: !won_of { code: "c"  prize: "p" } }',
@@ -413,7 +433,7 @@ describe('subtype families', () => {
     );
   });
 
-  it('an alias of a template family base selects nothing in both', () => {
+  it('the declared application that is the family’s abstract base selects nothing in both', () => {
     sameRule(
       'ledger',
       '{ o: !outcome_of { code: "c" } }',
@@ -421,36 +441,10 @@ describe('subtype families', () => {
     );
   });
 
-  it('the untagged case over a template family in both, comparing expected too', () => {
+  it('the untagged case over that family in both, comparing expected too', () => {
     sameRule('ledger', '{ o: { code: "c"  prize: "p" } }', '{"o": {"code": "c", "prize": "p"}}');
   });
 });
-
-// ── A bare template at a type position ──────────────────────────────────────────────────────
-//    `crate => { b: box }` names the template itself, which is the family base its
-//    instantiations close from (§5.10). The base is ABSTRACT by derivation, so the tag is the
-//    selector in both encodings, and every member is minted, so an alias is the only name either
-//    document has for one.
-
-describe('a bare template at a type position', () => {
-  it('a member of a bare template base reads in both, by alias', () => {
-    bothAccept('crate', '{ b: !int_box { v: 1 } }', '{"b": {"$type": "int_box", "v": 1}}');
-  });
-
-  it('the other member reads in both, which makes the dispatch a dispatch', () => {
-    bothAccept('crate', '{ b: !text_box { v: "x" } }', '{"b": {"$type": "text_box", "v": "x"}}');
-  });
-
-  it('untagged selects nothing: both encodings require the tag', () => {
-    sameRule('crate', '{ b: { v: 1 } }', '{"b": {"v": 1}}');
-  });
-
-  it('a tag naming the base itself selects nothing either', () => {
-    sameRule('crate', '{ b: !box { v: 1 } }', '{"b": {"$type": "box", "v": 1}}');
-  });
-});
-
-// ── Base cases ───────────────────────────────────────────────────────────────────────────────
 
 describe('base cases', () => {
   it('a conforming document is accepted by both', () => {
@@ -965,20 +959,15 @@ describe('§5.6 a reference position over a constructor', () => {
   });
 });
 
-describe('§5.6 a reference position reads an application, a value by name and a sibling reference', () => {
+describe('§5.6 a reference position reads a name: never an application, a value by name, never a sibling reference', () => {
   /**
-   * An application may stand at a kind, judged through the entry the closure closed it to
-   * ([TSON-SCHEMA] §4.2, §7.4): `unique => set<text>` is a type. TSON writes the reference
-   * unquoted, as data grammar; JSON, having no unquoted form, writes the same text as a string.
+   * A reference is a name ([TSON-SCHEMA] §4.2): an argument list is schema grammar, so no data value spells one
+   * ([TSON-DATA] §7.2.5). A quoted token at a reference is the reference its text spells, so TSON's quoted form
+   * and JSON's string meet at the same refusal, on the same code at the same pointer.
    */
-  it('an application at a kind is judged through its entry by both', () => {
-    bothAccept('typed', '{ t: set< text > }', '{"t": "set<text>"}');
-    sameVerdict('ided', '{ id: set<text> }', '{"id": "set<text>"}');
-  });
-
-  /** An argument is compared past its alias chain ([TSON-SCHEMA] §8.2): `set<label>` is `set<text>`. */
-  it('an aliased argument at a kind is judged through its entry by both', () => {
-    bothAccept('typed', '{ t: set<label> }', '{"t": "set<label>"}');
+  it('an argument list at a kind is refused by both, as no name', () => {
+    sameVerdict('typed', '{ t: "set<text>" }', '{"t": "set<text>"}');
+    expect(tson('typed', '{ t: "set<text>" }').map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 
   /**
@@ -999,21 +988,13 @@ describe('§5.6 a reference position reads an application, a value by name and a
     sameVerdict('order_pick', '{ which: o1  also: c1 }', '{"which": "o1", "also": "c1"}');
   });
 
-  it('an application nothing in the closure closed names no type the schema closes, and is refused by both', () => {
-    sameVerdict('typed', '{ t: set<int32> }', '{"t": "set<int32>"}');
-    expect(tson('typed', '{ t: set<int32> }').map((d) => d.code)).toEqual([
-      'ATOM_CONSTRAINT_VIOLATION',
-    ]);
-  });
-
   /**
-   * A sibling reference is a reference value, read by the same production in both encodings. It
-   * stands only at a record field's type, so a field typed by a type reference refuses it, on the
-   * same code at the same pointer in both.
+   * A dependent type's mark is schema grammar standing at a record field's type alone ([TSON-SCHEMA] §5.2), so
+   * no data value spells it, and both encodings refuse it as no name.
    */
-  it('a sibling reference at a kind is refused by both', () => {
-    sameVerdict('typed', '{ t: kind! }', '{"t": "kind!"}');
-    expect(tson('typed', '{ t: kind! }').map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  it('a dependent type’s mark at a kind is refused by both', () => {
+    sameVerdict('typed', '{ t: "kind!" }', '{"t": "kind!"}');
+    expect(tson('typed', '{ t: "kind!" }').map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 });
 
@@ -1033,8 +1014,9 @@ describe('§5.6 a dependent field is read against its sibling', () => {
     expect(verdictsOf(tson('cell', '{ v: 5  kind: int32 }'))).toEqual([
       { code: 'VALIDATION_ERROR', path: '/v' },
     ]);
+    // A parametric record is no member of `meta.type_ref`: no reference names one bare (§4.2, §5.10).
     expect(verdictsOf(tson('cell', '{ kind: tmpl  v: { item: 5 } }'))).toEqual([
-      { code: 'VALIDATION_ERROR', path: '/kind' },
+      { code: 'ATOM_CONSTRAINT_VIOLATION', path: '/kind' },
     ]);
   });
 

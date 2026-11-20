@@ -98,7 +98,7 @@ export function toDataValue<T>(
       throw new TsonWriteError('value matches no member of this variant binding');
     }
     const withFraming = toDataValue(member.binding, value, encodeAtom);
-    return { ...withFraming, typeRef: member.wireName };
+    return resolved.untagged === true ? withFraming : { ...withFraming, typeRef: member.wireName };
   }
   if (resolved.kind === 'bridge') {
     // Recurse through toDataValue, not toCoreValue. A bridge is transparent: it converts the host

@@ -45,11 +45,9 @@ import {
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
-import { areOneSynthetic, unifiedFacts } from './importedSynthetics.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { computeKindMembers } from './kindMembers.js';
 import { checkFieldNameTypes, type FieldNameType } from './fieldNames.js';
@@ -117,7 +115,7 @@ export interface LinkedSchema {
    * Each record among `entries` that states a `name_type`, with the identifier family its field
    * names are values of ([TSON-SCHEMA] §5.2) -- resolved where the record was declared, so an
    * importer reads an imported record's names as its own schema did. A record absent here has the
-   * kernel's `field_name`. Local and imported records alike.
+   * kernel's `meta.identifier`. Local and imported records alike.
    */
   readonly nameTypes: ReadonlyMap<string, FieldNameType>;
 }
@@ -268,7 +266,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const headOf = (name: string): string | undefined => facts.get(name)?.head;
   for (const name of localNames) {
     const definition = merged.get(name);
-    if (definition === undefined || isTemplateBody(definition) || definition.kind !== 'enum') {
+    if (definition?.kind !== 'enum') {
       continue;
     }
     const head = facts.get(name)?.head;
@@ -452,29 +450,6 @@ function mergeImports(
       }
       if (incumbent !== undefined) {
         const existing = merged.get(name);
-        const incumbentFacts = facts.get(name);
-        const arrivingFacts = imported.facts?.get(name);
-        if (
-          incumbent !== origin &&
-          existing !== undefined &&
-          areOneSynthetic(
-            name,
-            incumbentFacts,
-            existing,
-            incumbent,
-            arrivingFacts,
-            definition,
-            origin,
-          )
-        ) {
-          // One synthetic minted by two documents is one entry (§8.2): the first arrival is kept, and each
-          // route's view of its subtypes is credited.
-          merged.set(name, unifySubtypes(existing, definition));
-          if (incumbentFacts !== undefined && arrivingFacts !== undefined) {
-            facts.set(name, unifiedFacts(incumbentFacts, arrivingFacts));
-          }
-          continue;
-        }
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ` +

@@ -342,7 +342,7 @@ export function atomReader(
 ): AtomReader {
   const form = atomFormOf(body);
   const parser: ScalarParser | undefined =
-    body.kind === 'reference_type'
+    body.kind === 'ref'
       ? createReferenceParser(displayName, body, options.judgesKindMembers ?? false)
       : atomParserFor(displayName, body);
   const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;
@@ -354,7 +354,7 @@ export function atomReader(
       if (parser === undefined) {
         throw new Error(`'${displayName}' is an atom body with no parser -- this is a library bug`);
       }
-      return parser.read(tokenOf(content, body.kind === 'reference_type'));
+      return parser.read(tokenOf(content, body.kind === 'ref'));
     },
     profile === undefined
       ? undefined

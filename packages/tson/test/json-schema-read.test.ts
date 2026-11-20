@@ -29,7 +29,7 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import type { MetaValue } from '../src/schema/meta/typedef.js';
 import { namespaceOf } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
-import { entry, namespaceEntry } from './model-fixtures.js';
+import { entry, namespaceEntry, parametricRecord, record } from './model-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
@@ -864,16 +864,13 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(isVerdict(diagnostic.code)).toBe(false);
   });
 
-  it('an unmaterialised generic application is a gap and not a verdict', () => {
+  it('an application no resolution closed is a gap and not a verdict (§5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
         box: entry({
-          kind: 'alias',
-          target: {
-            name: 'pair',
-            arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
-            annotations: [],
-          },
+          kind: 'apply',
+          head: { name: 'pair', annotations: [] },
+          arguments: [{ name: 'text', annotations: [] }],
         }),
       }),
     );
@@ -887,13 +884,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(isVerdict(diagnostic.code)).toBe(false);
   });
 
-  it('an open template family base with no type of its own is a gap and not a verdict', () => {
+  it('a parametric record, no type until applied, is a gap and not a verdict (§5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        box: entry({
-          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-          template: '[T]',
-        }),
+        box: entry(parametricRecord(['T'], record([]))),
       }),
     );
     const result = validateJson('[]', {
@@ -910,10 +904,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
         colour: entry({ kind: 'enum', members: ['RED', 'GREEN'], nameType: 'identifier' }, ['top']),
-        unreadable: entry({
-          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-          template: '[T]',
-        }),
+        unreadable: entry(parametricRecord(['T'], record([]))),
       }),
     );
     // The gap does not stop the schema's other entry from compiling, or from reading cleanly.

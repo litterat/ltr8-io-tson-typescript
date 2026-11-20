@@ -522,8 +522,8 @@ function resolveAgainstRegistry(
     resolveImport,
     maxWaitDepth: limits.maxWaitDepth,
   });
-  // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
-  // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
+  // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map -- a type written in place is
+  // no entry and counts toward none -- and `resolved.entries` is local-only (`Schema.entries`'s own
   // doc), which is exactly what §11.5 names ("declarations in *one* schema map").
   if (resolved.entries.size > limits.maxSchemaEntries) {
     throw schemaEntriesLimitRefusal(limits.maxSchemaEntries, id);

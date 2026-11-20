@@ -16,7 +16,14 @@
  * subtype here, with no separate transitive-closure step needed.
  */
 import type { Top } from '../schema/meta/typedef.js';
-import { chainOf, isType, subtypesOf, supertypesOf, withChain } from '../schema/meta/typedef.js';
+import {
+  chainOf,
+  isParametric,
+  isType,
+  subtypesOf,
+  supertypesOf,
+  withChain,
+} from '../schema/meta/typedef.js';
 
 /**
  * `def` plus `newSubtypes`, unioned with whatever subtypes it already had — a new
@@ -62,7 +69,9 @@ export function computeSubtypes(
   const newSubtypesByName = new Map<string, Set<string>>();
   for (const localName of localNames) {
     const def = merged.get(localName);
-    if (def === undefined) continue;
+    // A parametric record is no type (§5.10): its chain records what its written parents reach, which each
+    // application inherits, but it is in no index, so no position typed by its parent reaches it.
+    if (def === undefined || isParametric(def)) continue;
     for (const supertype of supertypesOf(def)) {
       if (!merged.has(supertype)) continue;
       let set = newSubtypesByName.get(supertype);
