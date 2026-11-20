@@ -453,6 +453,44 @@ Change log §4.5 "Externs", §4.8; §3.1 item 21; §3.2 items 114–116, 124; Pa
   extern. Tree read and validation; binding to host classes is "not implemented", not a verdict, as
   the reference does. The JSON half is Stage 3's.
 
+### Stage 2 outcome
+
+WP2C (with the WP2A review's six repairs) landed in the main checkout; WP2D and Stage 3 ran beside
+it in worktrees and were merged onto it. **Conformance 1438/1438**: Class 1 319/319, Class 2
+1119/1119 (schema 516, link 222, validate 381). Unit 4285/4285. The one conflict of substance was
+the text choice reader: WP2C's tag table (`link/choiceSelection.ts`) takes WP2D's extern variant
+names through its `externNames` seam. `Tson.loadSchema` puts a schema in flight under its own
+identity before fetching its imports and its externs' schemas; the class2 harness loads through it.
+
+Readings to note: the import-closure limit counts externs (§11.5; the reference counts nothing);
+an annotation value of an imported type falls back to a checkpoint read in the document's namespace
+when the import's own compile refuses it (the reference always checkpoints); pins compare by token
+text (`0xFF` ≠ `255`) in `refuseMovedPins` and `placedByPins`; annotation names in front of a foreign
+value are checked against the enclosing scope, their values not read; `size-bound` naming a parameter
+is a parse error (§12.1's `decimal-natural`) where §5.3 calls it a resolver error.
+
+### WP2E: integration — the JSON extern, the WP2B review's repairs, and the seams
+
+After the merge, in the main checkout:
+
+- **The JSON extern** (Part 3 §1.6, §3.3, §6.4, §8.2, §8.6, §9.2; §3.4 item 13): a foreign value's
+  leading `$type` is the enclosing scope's and every other name the foreign schema's; port
+  `json/reader/ExternReader`, the foreign scope and the `$import`-in-foreign-value error. Stage 3
+  left `ExactReader.takesWrapper` as the seam; compile gives an extern `notImplementedReader` today.
+- **The WP2B review's seven repairs** (above).
+- **One choice tally**: Stage 3 wrote `json/schema/choiceSelection.ts` beside WP2C's
+  `link/choiceSelection.ts`; the JSON reader uses the link one, extern names included, and the local
+  copy goes. Remove `json-choice-subtype-tag.test.ts`'s `TEXT_SELECTS_SUBTYPES` guard (now always
+  true), `json/schema/dispatchChoice.ts`'s stale note, and `voidable_tuple1` in
+  `json-atom-rules-read.test.ts`.
+- **Name hygiene of a record in place** judges its field names under the default profile, not its own
+  `name_type`'s (`link/nameHygiene.ts`): `<T> !meta.record { name_type: json_name … }` applied in place
+  with an `@id` field is refused at link.
+- **Extern seams WP2D left**: `externChecks.ts`'s nested-choice rule and WP2C's
+  `checkChoiceVariantsAreDisjoint` may report one choice twice — make one rule; the linker's IS-A
+  through hops for restated field types and reference narrowing (`TsonSchemaLinker:2027`, `:2137`)
+  and parameter bounds through externs are not ported (no vector) — port them.
+
 ## Stage 3: Part 3, the JSON encoding (change log §3.4, §4.7)
 
 Runs beside WP2D in its own worktree for everything but the extern, which follows WP2D's merge.
