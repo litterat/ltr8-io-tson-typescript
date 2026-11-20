@@ -91,9 +91,9 @@ function identity(value: unknown): string {
 }
 
 /**
- * `record` with every reference among its field types and in its types written in place, at any depth, that one
- * of its `parameters` declares marked as that parameter (§5.10's shadowing rule: inside a parametric record a name
- * is read against its parameters before the namespace).
+ * `record` with every reference among its field types and in its types written in place, at any depth, and among
+ * its parents' arguments, that one of its `parameters` declares marked as that parameter (§5.10's shadowing rule:
+ * inside a parametric record a name is read against its parameters before the namespace).
  */
 export function withParametersMarked(record: RecordBody): RecordBody {
   const names = new Set((record.parameters ?? []).map((parameter) => parameter.name));
@@ -101,7 +101,13 @@ export function withParametersMarked(record: RecordBody): RecordBody {
     namedFields(record).map((field) => ({ ...field, type: markedExpr(field.type, names) })),
     record.fields.keyAnnotations,
   );
-  return { ...record, fields };
+  const chain = record.chain;
+  if (chain === undefined || chain.parents.length === 0) return { ...record, fields };
+  return {
+    ...record,
+    fields,
+    chain: { ...chain, parents: chain.parents.map((parent) => markedExpr(parent, names)) },
+  };
 }
 
 function markedRef(ref: TypeRef, names: ReadonlySet<string>): TypeRef {

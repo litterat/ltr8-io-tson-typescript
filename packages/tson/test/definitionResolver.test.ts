@@ -1530,7 +1530,7 @@ describe('coverage gaps reported as TsonNotImplementedError, never silently mis-
     expect(thrownBy(() => resolver.resolve(declaration))).toBeInstanceOf(TsonInternalError);
   });
 
-  it('closing a declared application of a parametric record is a gap, never a verdict (§5.10)', () => {
+  it('closing a declared application with no application closer is a gap, never a verdict (§5.10)', () => {
     const doc = parse('box => <T> { v: T }\nclosed => box<text>');
     const { resolver, entries } = harness();
     entries.set('text', entry({ kind: 'text_type', normalization: 'NONE' }));

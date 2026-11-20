@@ -141,6 +141,9 @@ function canonicalJson(value: unknown): string {
       if (key === 'position') continue; // no §8 output counterpart -- see this module's own doc
       // A reference's `index` is derived by the linker and written by no document (§4.2, §8.1).
       if (key === 'index' && (record as { kind?: unknown }).kind === 'ref') continue;
+      // The application a record in place closes is held beside it for a message, and is no field of the kernel's
+      // `meta.type_inline`, whose one field is `of` (§4.2, §8.2).
+      if (key === 'application' && (record as { kind?: unknown }).kind === 'inline') continue;
       const fieldValue = record[key];
       if (fieldValue === undefined) continue; // "absent" in this model's own convention
       parts.push(`${JSON.stringify(key)}:${canonicalJson(fieldValue)}`);

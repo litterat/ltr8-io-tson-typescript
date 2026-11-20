@@ -33,11 +33,18 @@
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import {
   TsonAtomParseError,
+  TsonAtomValidationError,
   TsonInternalError,
   TsonNotImplementedError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import { createQualifiedNameParser } from '../atom/reference.js';
+import { createIdentifierParser } from '../atom/text/identifier.js';
+import { TYPE_NAME_GRAMMAR } from '../atom/reference.js';
+import { parseReference } from '../atom/referenceGrammar.js';
+import type { AtomType } from '../atom/contract.js';
+import type { Normalization } from '../schema/meta/atoms-text.js';
+import { applyNormalization } from '../unicode/normalization.js';
+import { DEFAULT_NAME_TYPE } from '../schema/meta/kernel.js';
 import type { EntryFacts, MetaValue, NameSlot, Top, TypeRef } from '../schema/meta/typedef.js';
 import {
   typeExprText,
@@ -203,19 +210,28 @@ export class ValuesByName {
   }
 
   /**
-   * The segments of the qualified name `name`: split at each `.`, each a [TSON-DATA] §7.7 identifier. Refused
-   * where a segment is empty or is no identifier.
+   * The segments of the qualified name `name`: its text, in NFC, split at each `.` before any family is consulted
+   * (§5.12). Refused where it splits into none -- empty, an empty segment, or a first segment that is no
+   * [TSON-DATA] §7.7 identifier; each further segment is judged as a name of the family it enters, by the walk.
    */
   private segments(where: string, name: string): readonly string[] {
     try {
-      createQualifiedNameParser(where).read({ text: name, form: 'unquoted' });
+      return parseReference(name).split('.');
     } catch (error) {
       if (!(error instanceof TsonAtomParseError)) throw error;
       throw new TsonSchemaValidationError(
         `${where} holds '${name}', which is no qualified name: ${error.message}`,
       );
     }
-    return name.split('.');
+  }
+
+  /** The family `typeName` states, or `fallback` where it reaches no identifier family (§5.12). */
+  private family(typeName: string | undefined, fallback: Family): Family {
+    if (typeName === undefined) return fallback;
+    const end = terminal(typeName, this.local);
+    const identifiers = this.local(end);
+    if (identifiers?.kind !== 'identifier_type') return fallback;
+    return family(typeName, createIdentifierParser(end, identifiers), identifiers.normalization);
   }
 
   /**
@@ -240,7 +256,11 @@ export class ValuesByName {
     // walk goes on from the member a segment names, and a further segment selects in that member's value.
     let entered = 1;
     while (entered < written.length && isNestedMap(this.merged.get(head))) {
-      const member = `${head}.${written[entered] ?? ''}`;
+      const member = `${head}.${TYPE_NAME_FAMILY.read(
+        `${where} names '${name}'`,
+        `which names the members of the schema map '${head}'`,
+        written[entered] ?? '',
+      )}`;
       if (!this.merged.has(member)) {
         throw new TsonSchemaValidationError(
           `${where} names '${name}', and the schema map '${head}' declares no '${written[entered] ?? ''}'`,
@@ -346,9 +366,18 @@ export class ValuesByName {
       const namespaceType = body !== undefined && isNamespaceType(body) ? body : undefined;
       if (namespaceType !== undefined) {
         const map = namespaceMapOf(namespaceType);
+        const keys = this.family(
+          namespaceType.keyType.name,
+          family(namespaceType.keyType.name, IDENTIFIER_READER, 'NFC'),
+        );
+        const key = keys.read(
+          `${where} names '${name}'`,
+          `which names the keys of '${reached}'`,
+          segment,
+        );
         if (value !== undefined) {
           const entries = entriesOf(value);
-          const found = entries?.get(segment);
+          const found = entries === undefined ? undefined : keyed(entries, keys, key);
           if (found === undefined) {
             const keys = entries === undefined ? [] : [...entries.keys()];
             throw new TsonSchemaValidationError(
@@ -360,8 +389,14 @@ export class ValuesByName {
         at = nameOf(map.valueType) ?? typeExprText(map.valueType);
         if (map.valueType.kind === 'inline') inPlace = map.valueType.of;
       } else if (body?.kind === 'record') {
-        const field = body.fields.entries.get(segment);
-        if (field === undefined) {
+        const names = this.family(body.nameType, DEFAULT_NAME_FAMILY);
+        const declared = declaredField(
+          body,
+          names,
+          names.read(`${where} names '${name}'`, `which names the fields of '${reached}'`, segment),
+        );
+        const field = declared === undefined ? undefined : body.fields.entries.get(declared);
+        if (field === undefined || declared === undefined) {
           throw new TsonSchemaValidationError(
             `${where} names '${name}', and '${reached}' is ${a(at)}, which has no field '${segment}' -- it declares ${[...body.fields.entries.keys()].join(', ') || 'none'}`,
           );
@@ -369,9 +404,9 @@ export class ValuesByName {
         const holder = value;
         if (value !== undefined) {
           const held: MetaValue | undefined =
-            value.form === 'record' ? value.fields.get(segment) : undefined;
+            value.form === 'record' ? value.fields.get(declared) : undefined;
           if (held === undefined && absent === undefined) {
-            absent = `'${reached}' is ${a(at)} whose field '${segment}' is not present in the value`;
+            absent = `'${reached}' is ${a(at)} whose field '${declared}' is not present in the value`;
           }
           value = held;
         }
@@ -535,6 +570,71 @@ export function typeNamedIn(
     }
   }
   return typed;
+}
+
+/**
+ * The family a segment is a name of where it enters a container (§5.12): its name, as a message says it, the reader
+ * a document's own key or field name there is read by, and the form two names are one in.
+ */
+interface Family {
+  /** `segment` as a name of this family, in its form; refused, opening with `naming`, where it is none. */
+  read(naming: string, role: string, segment: string): string;
+  /** Whether `key`, as declared or as a value holds it, is the name `read`. */
+  names(read: string, key: string): boolean;
+}
+
+function family(name: string, reader: AtomType<unknown>, form: Normalization): Family {
+  return {
+    read(naming, role, segment): string {
+      try {
+        const value = reader.read({ text: segment, form: 'unquoted' });
+        return typeof value === 'string' ? value : segment;
+      } catch (error) {
+        if (!(error instanceof TsonAtomParseError || error instanceof TsonAtomValidationError)) {
+          throw error;
+        }
+        throw new TsonSchemaValidationError(
+          `${naming}, and '${segment}' is no name of '${name}', ${role} -- ${error.message}`,
+        );
+      }
+    },
+    names: (read, key) => read === applyNormalization(form, key),
+  };
+}
+
+/** The reader of the series' identifier (§7.7), what the kernel's `type_name` and `meta.identifier` read. */
+const IDENTIFIER_READER: AtomType<string> = createIdentifierParser(
+  'meta.identifier',
+  TYPE_NAME_GRAMMAR,
+);
+
+/** A schema map's members and the root are named by `meta.type_name` (§5.12). */
+const TYPE_NAME_FAMILY: Family = family('meta.type_name', IDENTIFIER_READER, 'NFC');
+
+/** A record stating no name type names its fields with `meta.identifier` (§5.2). */
+const DEFAULT_NAME_FAMILY: Family = family(DEFAULT_NAME_TYPE, IDENTIFIER_READER, 'NFC');
+
+/** The field of `record` whose declared name is `read` under `names`, or `undefined` for none. */
+function declaredField(record: RecordBody, names: Family, read: string): string | undefined {
+  if (record.fields.entries.has(read)) return read;
+  for (const declared of record.fields.entries.keys()) {
+    if (names.names(read, declared)) return declared;
+  }
+  return undefined;
+}
+
+/** The value under the key that is `key` under `keys`. */
+function keyed(
+  entries: ReadonlyMap<string, MetaValue>,
+  keys: Family,
+  key: string,
+): MetaValue | undefined {
+  const exact = entries.get(key);
+  if (exact !== undefined) return exact;
+  for (const [held, entry] of entries) {
+    if (keys.names(key, held)) return entry;
+  }
+  return undefined;
 }
 
 /** The text a name value spells, `undefined` for any other form. */

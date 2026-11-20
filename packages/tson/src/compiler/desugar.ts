@@ -43,6 +43,7 @@
  * **An invalid sugar form is reported per declaration, not thrown**, when a {@link DesugarFailureReporter} is
  * supplied, so an author sees every independent problem in one pass.
  */
+import { at, atValue } from './parameterTypes.js';
 import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument, SchemaMap } from '../ast/schema/document.js';
@@ -753,24 +754,6 @@ function refuseParameterBound(binding: Binding, pass: DesugarPass): void {
       throw at(value.text, `a size bound (${binding.head}.${f.name})`);
     }
   }
-}
-
-/** A parameter standing at `slot`, which is no type slot (§5.10). */
-export function at(parameter: string, slotName: string): TsonSchemaValidationError {
-  return new TsonSchemaValidationError(
-    `parameter '${parameter}' stands at ${slotName} -- a parameter is a type, and stands only at a field's ` +
-      'type or as an argument of an application there or in a parent (§5.10)',
-  );
-}
-
-/** A parameter standing at a field's default or fixed value, which is never one (§5.10). */
-export function atValue(parameter: string, fieldName: string): TsonSchemaValidationError {
-  return new TsonSchemaValidationError(
-    `parameter '${parameter}' stands at the value of field '${fieldName}' (meta.record_field.value) -- a ` +
-      "parameter is a type, and stands only at a field's type or as an argument of an application there or " +
-      "in a parent, so a field's value is never one (§5.10). State the value where the application is " +
-      `declared: 'name => head<argument> & { ${fieldName}?: = value }'`,
-  );
 }
 
 /** The type an element or map-value position holds, rewritten ({@link typeRef}). */

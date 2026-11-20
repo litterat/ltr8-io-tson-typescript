@@ -231,9 +231,12 @@ function typed<T extends TypeBase>(inner: RecordBinding<T>): RecordBinding<T> {
     construct: (slots) => {
       const [chain, ...rest] = slots as [TypeChain | undefined, ...unknown[]];
       const body = inner.construct(rest);
-      return chain === undefined
-        ? body
-        : (withChain(body as unknown as Top, chain) as unknown as T);
+      if (chain === undefined) return body;
+      const chained = withChain(body as unknown as Top, chain);
+      // A parametric record's parents' arguments are its parameters where it declares them (§5.10).
+      return (chained.kind === 'record' && chained.parameters !== undefined
+        ? withParametersMarked(chained)
+        : chained) as unknown as T;
     },
   });
 }

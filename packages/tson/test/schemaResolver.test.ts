@@ -494,11 +494,10 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
       // §5.9: subtraction breaks IS-A -- `ok` itself (still open) carries no edge to `result`.
       expect(supertypesOf(entryOf(schema, 'ok'))).toEqual([]);
       expect(parentsOf(entryOf(schema, 'ok'))).toEqual([]);
-      // `ok<text>`'s own instantiation carries no edge to `result` or to any instantiation of it
-      // -- only its self-edge to its family base, `ok`: rule 10's dropped open application never
-      // survived substitution to close into a live edge one pass later.
+      // `ok<text>`'s own instantiation carries no edge to `result` or to any instantiation of it,
+      // and none to `ok` either: no application is IS-A its head (§5.10).
       const used = entryOf(schema, 'used');
-      expect(supertypesOf(used)).toEqual(['ok']);
+      expect(supertypesOf(used)).toEqual([]);
       expect(fieldNamesOf(recordBodyOf(schema, 'used'))).toEqual(['payload']);
       expect([...schema.entries.keys()].some((k) => k.startsWith('result_'))).toBe(false);
     },

@@ -29,6 +29,7 @@ import { isIdentifierText } from '../unicode/identifier-profile.js';
 import {
   isIdentifierFamily,
   isKernelIdentifier,
+  nameTypeDotRefusal,
   nameTypeFormRefusal,
   recordNameType,
 } from './nameType.js';
@@ -132,6 +133,13 @@ function check(
   const form = nameTypeFormRefusal(resolved.definition);
   if (form !== undefined) {
     return `'${name}': its name_type '${stated ?? ''}' cannot judge names -- ${form} (§5.2)`;
+  }
+  const dot = nameTypeDotRefusal(resolved.definition);
+  if (dot !== undefined) {
+    return (
+      `'${name}': its name_type '${stated ?? ''}' cannot name a record's fields -- ${dot}; a vocabulary ` +
+      'with dotted names is translated with the names changed, or held as a map keyed by text ([TSON-SCHEMA] §5.2)'
+    );
   }
   const parser = atomParserFor(resolved.name, resolved.definition);
   if (parser === undefined) return resolved.definition;

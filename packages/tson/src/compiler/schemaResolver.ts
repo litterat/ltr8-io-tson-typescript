@@ -39,15 +39,26 @@ import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { FieldNameType } from '../link/fieldNames.js';
 import { NO_FIELDS } from '../schema/meta/bodies.js';
-import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
+import type {
+  Annotations,
+  ApplyBody,
+  EntryFacts,
+  Restatement,
+  Top,
+  TypeExpr,
+  TypeRef,
+} from '../schema/meta/typedef.js';
 import {
   APPLICATION_ANNOTATION,
   COMPLETION_ANNOTATION,
+  applicationOf,
   chainOf,
   isParametric,
+  parentsOf,
   typeParameters,
   isType,
   typeChain,
+  withApplication,
   withChain,
   withCompletion,
 } from '../schema/meta/typedef.js';
@@ -66,7 +77,14 @@ import type {
   EntryFactsTable,
   SourceBodyEncoder,
 } from './resolverTypes.js';
-import { checkParameterBounds } from './parameterBounds.js';
+import * as ParameterTypes from './parameterTypes.js';
+import * as ParametricRegularity from './parametricRegularity.js';
+import * as Ancestry from './ancestry.js';
+import * as CanonicalApplication from './canonicalApplication.js';
+import * as Substitution from './substitution.js';
+import { createHeldRecursion } from './heldRecursion.js';
+import { createParametricMaterialiser } from './parametricMaterialiser.js';
+import { createRestatements } from './restatements.js';
 import { applicationsOf } from '../schema/meta/typeInline.js';
 import { desugar, typeParamsOf, type DesugarFailureReporter } from './desugar.js';
 import { looseAnnotationValue } from './looseAnnotation.js';
@@ -107,6 +125,11 @@ export interface Schema {
   /** `entries.get(name)`'s facts beyond its value (§8.1) -- present only for a name with any recorded. */
   readonly facts: ReadonlyMap<string, EntryFacts>;
   readonly bootstrap: boolean;
+  /**
+   * The fields each local entry restates over a source its closed chain does not reach (§5.8, §5.9), for the linker
+   * to judge -- present only for an entry with any. Absent means none.
+   */
+  readonly restatements?: ReadonlyMap<string, readonly Restatement[]>;
 }
 
 /** One `!!import`'s own resolved namespace, and where each of its entries was originally declared. */
@@ -132,6 +155,8 @@ export interface ImportedSchema {
   readonly enumForms?: ReadonlyMap<string, Normalization>;
   /** Each record among `entries` that states a `name_type`, with its identifier family -- `LinkedSchema.nameTypes`. Absent means none. */
   readonly nameTypes?: ReadonlyMap<string, FieldNameType>;
+  /** Each contributed entry's restatements off its chain, settled when its schema resolved. Absent means none. */
+  readonly restatements?: ReadonlyMap<string, readonly Restatement[]>;
 }
 
 /** Resolves one `!!import` directive's URI to the namespace it contributes. */
@@ -228,7 +253,19 @@ export function resolveSchema(
   // Which schema declared each imported entry, and the readers its annotation values come through.
   const origins = new Map<string, string>();
   const annotationReaders = new Map<string, AnnotationValueReader>();
-  const namespace = mergeImports(document, deps, facts, origins, annotationReaders);
+  // Which application each entry is the instantiation of (§8.2): an import's as its key states it, a local one's as
+  // materialisation closes it. What the applied-parent fold keys on.
+  const applications = new Map<string, ApplyBody>();
+  const importedRestatements = new Map<string, readonly Restatement[]>();
+  const namespace = mergeImports(
+    document,
+    deps,
+    facts,
+    origins,
+    annotationReaders,
+    applications,
+    importedRestatements,
+  );
 
   const reporter: DesugarFailureReporter | undefined =
     receiver === undefined
@@ -296,6 +333,8 @@ export function resolveSchema(
   // deepest entry it waits on otherwise. An import is ready before the resolution starts, so a wait ends at one.
   const waits = new Map<string, Set<string>>();
   const depths = new Map<string, number>();
+  // The declarations whose resolution failed and was reported: each has its verdict, and a later check is not a second.
+  const failed = new Set<string>();
 
   /** Records that the entry being made ready waits on `name`, one of this document's declarations. */
   const waited = (name: string): void => {
@@ -367,6 +406,7 @@ export function resolveSchema(
         throw e;
       }
       const position = positionOf(declaration, positions);
+      failed.add(name);
       receiver.report(schemaProblem(id, name, e, position));
       const placeholder = unresolvedPlaceholder(typeParamsOf(declaration.typeDef));
       if (position !== undefined) facts.set(name, { position });
@@ -421,6 +461,22 @@ export function resolveSchema(
       : looseAnnotationValue(value);
   };
 
+  // One materialiser for the whole schema, created before the driving loop because resolution itself asks it for
+  // applications on demand: a declaration naming an application closes into its own name as it resolves, and an
+  // absorbed operand's arguments are checked against their bounds. Sharing the instance is what lets the batch pass
+  // below see what those closings recorded.
+  const heldRecursion = createHeldRecursion(namespaceGetter, (name) => declarations.has(name));
+  const restatements = createRestatements(importedRestatements);
+  const materialiser = createParametricMaterialiser({
+    namespace: namespaceGetter,
+    facts,
+    applications,
+    heldRecursion,
+    resolving: () => [...resolving].at(-1),
+    restatements,
+    placeholder: unresolvedPlaceholder,
+  });
+
   resolverBox.current = createDefinitionResolver({
     definitionMetaReader: readers.meta,
     ...(readers.value === undefined ? {} : { definitionValueReader: readers.value }),
@@ -429,6 +485,8 @@ export function resolveSchema(
     facts,
     annotationValueReader,
     opens,
+    applicationCloser: materialiser,
+    restatements,
     ...(deps.encodeSourceBody === undefined ? {} : { encodeSourceBody: deps.encodeSourceBody }),
   } satisfies DefinitionResolverDeps);
   const resolver: DefinitionResolver = resolverBox.current;
@@ -437,20 +495,59 @@ export function resolveSchema(
     namespaceGetter(name);
   }
 
-  // §5.10's written bounds, each declaration once, now that every callee's bound is ready: that a bound names a
-  // type, and that a parameter passed to a bounded parameter is written with a bound IS-A it.
-  checkParameterBounds(namespace, new Set(declarations.keys()), heads, (name, error) => {
+  /** Reports `error` against the declaration `name`, or throws it where nothing collects. */
+  const report = (name: string, error: ReportableSchemaError): void => {
     if (receiver === undefined) throw error;
     const declaration = requiredGet(declarations, name, 'resolveSchema');
     receiver.report(schemaProblem(id, name, error, positionOf(declaration, positions)));
-  });
+  };
 
-  // Every chain closed transitively, now that every entry is ready, and a closed type's written parents dropped
-  // (§4.1, §5.8).
+  // §5.10 materialisation, after every declaration has resolved and before anything reads the result: closing an
+  // application needs the parametric record's own resolved form, which only exists once the driving loop has run.
+  // It adds no entry: an application closes in place, or into the declaration naming it.
   const resolvedLocals = new Map<string, Top>();
   for (const name of declarations.keys()) {
     resolvedLocals.set(name, requiredGet(namespace, name, 'resolveSchema'));
   }
+
+  // §5.10.1's regularity boundary, before anything closes: a recursive application passes each parameter through
+  // unchanged, judged at the declaration, so a parametric record refused for it is refused even if nobody applies it.
+  const irregular = ParametricRegularity.check(
+    resolvedLocals,
+    receiver === undefined ? undefined : report,
+  );
+  condemn(irregular, resolvedLocals, namespace);
+  // §5.10's written bounds, each declaration once, now that every callee's bound is ready: that a bound names a
+  // type, and that a parameter passed to a bounded parameter is written with a bound IS-A it.
+  const refusedParameters = ParameterTypes.check(
+    namespace,
+    new Set(declarations.keys()),
+    heads,
+    (name, error) => {
+      report(name, new TsonSchemaValidationError(`'${name}': ${error.message}`, { cause: error }));
+    },
+  );
+  condemn(refusedParameters, resolvedLocals, namespace);
+  // §5.10.1's held recursion, over the parametric records as the two checks above left them, each declaration once.
+  heldRecursion.forget();
+  const heldRecursive = new Set<string>();
+  for (const name of declarations.keys()) {
+    const error = heldRecursion.refusal(name);
+    if (error === undefined) continue;
+    report(name, error);
+    heldRecursive.add(name);
+  }
+  condemn(heldRecursive, resolvedLocals, namespace);
+  // The bound checks of the applications closed while declarations were being made ready, which an argument could
+  // not order (§3.4.1), run now that every argument is ready -- before anything else closes.
+  materialiser.checkDeferred((name, error) => {
+    if (receiver === undefined) throw error;
+    if (!failed.has(name)) report(name, error);
+  });
+
+  materialiser.materialise(resolvedLocals, receiver === undefined ? undefined : report);
+  republish(namespace, resolvedLocals);
+  appliedParentEdges(namespace, resolvedLocals, applications);
   closeChains(namespace, resolvedLocals);
 
   // §6: a declaration's own name-annotations bind to the *name*, never hoisted onto the definition -- so they,
@@ -477,10 +574,20 @@ export function resolveSchema(
     entries.set(name, value);
     const recorded = facts.get(name);
     if (recorded !== undefined && Object.keys(recorded).length > 0) localFacts.set(name, recorded);
+    // §8.2's derived key annotation: every entry that closes an application of a parametric record carries
+    // `@meta.application` on its key, stated as written, its arguments past their alias hops.
+    const application = materialiser.writtenApplication(name);
+    const applied =
+      application === undefined ? nameAnnotations : withApplication(nameAnnotations, application);
+    // §8.1's other derived key annotation: a declared completion states the incomplete entries it closed.
     const completion = resolver.completionOf(name);
-    const annotated =
-      completion === undefined ? nameAnnotations : withCompletion(nameAnnotations, completion);
+    const annotated = completion === undefined ? applied : withCompletion(applied, completion);
     if (annotated.length > 0) keyAnnotations.set(name, annotated);
+  }
+  // A declaration that failed has its verdict, and its restatements were made of what it could not finish.
+  const restated = new Map<string, readonly Restatement[]>();
+  for (const [name, found] of restatements.settled((type) => materialiser.closedInPlace(type))) {
+    if (declarations.has(name) && !failed.has(name) && found.length > 0) restated.set(name, found);
   }
 
   // A nested map's own entry is derived from the members' paths, so the two never disagree (§2.2.3).
@@ -492,6 +599,7 @@ export function resolveSchema(
     keyAnnotations: synced.keyAnnotations,
     facts: localFacts,
     bootstrap: false,
+    ...(restated.size === 0 ? {} : { restatements: restated }),
   };
 }
 
@@ -532,37 +640,141 @@ function refuseDerivedAnnotation(name: string, declaration: Declaration): void {
   }
 }
 
-// ── Applied parents (§5.8) ───────────────────────────────────────────────────────────────────
+// ── Condemned parametric records, applied parents (§5.8) ─────────────────────────────────────
 
 /**
- * Every local chain closed transitively -- an entry IS-A every entry its supertypes are IS-A -- and a closed type's
- * written parents dropped: a closed type's parents are not part of it (§4.1). A parametric record keeps its written
- * parents, which may name its own parameters.
+ * Replaces each named entry with the placeholder a declaration that failed to resolve leaves, keeping its type
+ * parameters -- a parametric record whose verdict is already in. Both maps, because the two halves are read by
+ * different phases: materialisation walks the locals, while an application's head is looked up through the namespace.
  */
-function closeChains(namespace: Map<string, Top>, locals: Map<string, Top>): void {
-  const bound = locals.size + 1;
-  for (let round = 0; round <= bound; round++) {
-    let changed = false;
-    for (const [name, definition] of locals) {
-      if (!isType(definition)) continue;
-      const chain = chainOf(definition);
-      const names = new Set(chain.supertypes);
-      for (const member of chain.supertypes) {
-        const ancestor = namespace.get(member);
-        for (const further of ancestor === undefined ? [] : chainOf(ancestor).supertypes) {
-          names.add(further);
-        }
-      }
-      const parents = isParametric(definition) ? chain.parents : [];
-      if (names.size === chain.supertypes.length && parents.length === chain.parents.length)
-        continue;
-      const closed = withChain(definition, typeChain([...names], parents, chain.subtypes));
-      locals.set(name, closed);
-      namespace.set(name, closed);
-      changed = true;
-    }
+function condemn(
+  names: ReadonlySet<string>,
+  resolvedLocals: Map<string, Top>,
+  namespace: Map<string, Top>,
+): void {
+  for (const name of names) {
+    const placeholder = unresolvedPlaceholder(typeParameters(resolvedLocals.get(name)));
+    resolvedLocals.set(name, placeholder);
+    namespace.set(name, placeholder);
+  }
+}
+
+/** Puts the local entries back into the namespace, which every later phase reads through. */
+function republish(namespace: Map<string, Top>, resolvedLocals: ReadonlyMap<string, Top>): void {
+  for (const [name, value] of resolvedLocals) namespace.set(name, value);
+}
+
+/**
+ * §5.8's IS-A edge for a parent written as an application, derived once every declaration has resolved, and the
+ * chains made complete through it. The entry an application denotes is whichever declaration names the same
+ * application, and asking that during materialisation would make the answer depend on declaration order, so the edge
+ * waits until every parent is a type. **Nothing is created here**: the pass derives an index over entries that
+ * already exist, keyed on §8.2's canonical application, and an application no declaration names contributes no edge.
+ * **Complete means transitively closed**: an entry IS-A every entry its supertypes are IS-A, to a fixed point.
+ */
+function appliedParentEdges(
+  namespace: Map<string, Top>,
+  resolvedLocals: Map<string, Top>,
+  applications: ReadonlyMap<string, ApplyBody>,
+): void {
+  const byApplication = new Map<string, string>();
+  for (const name of namespace.keys()) {
+    const application = applications.get(name);
+    if (application === undefined) continue;
+    const key = CanonicalApplication.key(
+      CanonicalApplication.of(application.head.name, application.arguments),
+    );
+    if (!byApplication.has(key)) byApplication.set(key, name);
+  }
+  for (let round = 0; round <= namespace.size; round++) {
+    const changed = fold(resolvedLocals, byApplication, namespace);
+    republish(namespace, resolvedLocals);
     if (!changed) return;
   }
+}
+
+/** One round of {@link appliedParentEdges} over one map, to a fixed point within it -- `true` when any chain grew. */
+function fold(
+  entries: Map<string, Top>,
+  byApplication: ReadonlyMap<string, string>,
+  namespace: Map<string, Top>,
+): boolean {
+  let changedAny = false;
+  for (let pass = 0; pass <= entries.size; pass++) {
+    let changed = false;
+    for (const [name, value] of entries) {
+      const folded = completed(value, byApplication, namespace);
+      if (folded !== value) {
+        entries.set(name, folded);
+        namespace.set(name, folded);
+        changed = true;
+      }
+    }
+    if (!changed) return changedAny;
+    changedAny = true;
+  }
+  return changedAny;
+}
+
+/**
+ * One chain made complete: a type's every applied parent's owning declaration folded in, and every member's own
+ * supertypes. An applied parent reaches what its head's applied parents reach, substituted (§5.8: an application
+ * takes its head's written parents' edges), to any depth; the application nobody declares adds no edge of its own.
+ * `definition` itself where nothing grew.
+ */
+function completed(
+  definition: Top,
+  byApplication: ReadonlyMap<string, string>,
+  namespace: ReadonlyMap<string, Top>,
+): Top {
+  if (!isType(definition)) return definition;
+  const lookup = (name: string): Top | undefined => namespace.get(name);
+  const chain = new Set(chainOf(definition).supertypes);
+  const parents: TypeExpr[] = [...parentsOf(definition)];
+  const seen = new Set<string>();
+  for (let parent = parents.shift(); parent !== undefined; parent = parents.shift()) {
+    if (parent.kind !== 'inline' || parent.of.kind !== 'apply') continue;
+    const application = parent.of;
+    // A parent written through an alias of a parametric record is that parametric record's application (§8.3).
+    const head = Ancestry.parametricHead(application.head.name, lookup);
+    const key = CanonicalApplication.key(CanonicalApplication.of(head, application.arguments));
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const owner = byApplication.get(key);
+    if (owner !== undefined) chain.add(owner);
+    const record = namespace.get(head);
+    const parameters = typeParameters(record);
+    if (record?.kind === 'record' && parameters.length === application.arguments.length) {
+      const bindings = new Map<string, TypeRef>();
+      parameters.forEach((parameter, index) => {
+        const argument = application.arguments[index];
+        if (argument !== undefined) bindings.set(parameter, argument);
+      });
+      parents.push(...Substitution.parents(record, bindings));
+    }
+  }
+  for (const member of [...chain]) {
+    for (const further of Ancestry.closedNames(namespace.get(member))) chain.add(further);
+  }
+  const current = chainOf(definition);
+  return chain.size === new Set(current.supertypes).size
+    ? definition
+    : withChain(definition, typeChain([...chain], current.parents, current.subtypes));
+}
+
+/**
+ * Every closed chain with the applications the fold left standing dropped: an application no declaration names
+ * denotes an entry nothing can be declared as, and a closed type's parents are not part of it (§4.1). A parametric
+ * record keeps its written parents, which may name its own parameters.
+ */
+function closeChains(namespace: Map<string, Top>, locals: Map<string, Top>): void {
+  for (const [name, definition] of locals) {
+    if (!isType(definition) || isParametric(definition) || parentsOf(definition).length === 0)
+      continue;
+    const chain = chainOf(definition);
+    locals.set(name, withChain(definition, typeChain(chain.supertypes, [], chain.subtypes)));
+  }
+  republish(namespace, locals);
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────────────────────
@@ -601,6 +813,8 @@ function mergeImports(
   facts: EntryFactsTable,
   origins: Map<string, string>,
   annotationReaders: Map<string, AnnotationValueReader>,
+  applications: Map<string, ApplyBody>,
+  restatements: Map<string, readonly Restatement[]>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
   const alreadyImported = new Set<string>();
@@ -640,6 +854,10 @@ function mergeImports(
       }
       const recorded = imported.facts?.get(name);
       if (recorded !== undefined) facts.set(name, recorded);
+      const application = applicationOf(imported.keyAnnotations?.get(name));
+      if (application !== undefined) applications.set(name, application);
+      const restated = imported.restatements?.get(name);
+      if (restated !== undefined) restatements.set(name, restated);
     }
   }
   // Each nested map holds the union of the members its closure declares.
@@ -651,7 +869,7 @@ function mergeImports(
  * resolve instead of collapsing into a cascade of consequences of one original error: an empty record. It keeps
  * the failed declaration's own type parameters, so a downstream `bl<text>` is not told `bl` takes none.
  */
-function unresolvedPlaceholder(parameters: readonly string[]): Top {
+export function unresolvedPlaceholder(parameters: readonly string[]): Top {
   return {
     kind: 'record',
     fields: NO_FIELDS,

@@ -638,6 +638,19 @@ export interface EntryFacts {
   readonly refines?: string;
 }
 
+/**
+ * One field an entry restates over a source its closed chain does not reach (§5.8, §5.9): an application at an
+ * operand, which reaches no edge to its head, or a subtraction's operand, which reaches none. `source` is the operand
+ * as written, `inherited` the field as the source holds it and `restated` as the entry states it; the linker judges
+ * the pair by §5.8's rule, as it judges a restatement of a supertype on the chain.
+ */
+export interface Restatement {
+  readonly source: TypeExpr;
+  readonly field: string;
+  readonly inherited: RecordField;
+  readonly restated: RecordField;
+}
+
 /** An entry with none of its facts recorded. */
 export const NO_FACTS: EntryFacts = {};
 

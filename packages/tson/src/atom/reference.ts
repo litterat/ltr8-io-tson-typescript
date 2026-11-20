@@ -13,6 +13,7 @@ import type { IdentifierType } from '../schema/meta/atoms-text.js';
 import type { RefBody } from '../schema/meta/bodies.js';
 import type { AtomToken, AtomType } from './contract.js';
 import { createIdentifierParser } from './text/identifier.js';
+import { parseReference } from './referenceGrammar.js';
 
 /**
  * The grammar a name of a type is read by: the kernel's `type_name`, an `identifier`
@@ -154,8 +155,9 @@ function createTypeNameParser(
 }
 
 /**
- * A reference that names values, `of` a type that is no constructor (§4.2, §5.12): a qualified name, each
- * segment an identifier, read into the name it is. A value is named and never applied, so it takes no
+ * A reference that names values, `of` a type that is no constructor (§4.2, §5.12): a qualified name, its text in
+ * NFC split at each `.`, the first segment an identifier and each further one a name of the family of what it
+ * enters, which only the walk that resolves it knows. A value is named and never applied, so it takes no
  * argument list. Where the reference was linked over a whole closure the name is judged by what it
  * reaches there, as a value body's names are: a name reaching nothing, a type, or a value whose type is no
  * `of` is refused as a constraint the value breaks.
@@ -165,10 +167,15 @@ function createValueNameParser(
   reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
-  const segment = createIdentifierParser(typeRef, TYPE_NAME_GRAMMAR);
   return {
     read(token: AtomToken): string {
-      const name = readName(segment, token.text, typeRef);
+      let name: string;
+      try {
+        name = parseReference(token.text);
+      } catch (error) {
+        if (!(error instanceof TsonAtomParseError)) throw error;
+        throw new TsonAtomParseError(typeRef, error.message, QUALIFIED_NAME);
+      }
       const values = judges ? reference.index?.values : undefined;
       if (values === undefined) return name;
       try {

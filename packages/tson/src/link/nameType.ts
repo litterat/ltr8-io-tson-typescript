@@ -22,6 +22,7 @@ import type { RecordBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { metaName } from '../schema/meta/kernel.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
+import { identifierProfileOf, profileAdmits } from '../unicode/identifier-profile.js';
 
 /** The kernel's `field_name` (§5.2), the name type a record that states none has. */
 export const FIELD_NAME = metaName('field_name');
@@ -132,3 +133,18 @@ function isAscii(text: string): boolean {
 function asciiBase(base: IdentifierBase): boolean {
   return base === 'ASCII' || base === 'NONE';
 }
+
+/**
+ * Why `type` cannot name the keys a qualified name's segment selects, or `undefined` when it can ([TSON-SCHEMA]
+ * §4.2, §5.2, §5.12): a qualified name splits at `.` before any family is consulted, so a name holding one could not
+ * be reached by a reference. Asked of a namespace's `key_type` and a record's `name_type`.
+ */
+export function nameTypeDotRefusal(type: IdentifierType): string | undefined {
+  return profileAdmits(identifierProfileOf(type), FULL_STOP)
+    ? "its profile admits '.' (U+002E), which joins the segments of a qualified name, so a name holding " +
+        'one could not be reached by a reference ([TSON-SCHEMA] §5.12)'
+    : undefined;
+}
+
+/** U+002E, the separator of a qualified name's segments. */
+const FULL_STOP = 0x2e;

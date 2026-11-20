@@ -25,6 +25,7 @@ import { schemaPositionOf, spellingOf } from './facts.js';
 import { isKindMember, namesTypes, ofRefusal } from './kindMembers.js';
 import { isA } from './restatedFields.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
+import { nameTypeDotRefusal } from './nameType.js';
 
 /** The constructor whose instances an identifier family is (§7.7): what a namespace's `key_type` must be built with. */
 const IDENTIFIER_TYPE = kernelName(UNICODE_MAP, 'identifier_type');
@@ -147,6 +148,13 @@ function checkNamespaceType(
       `'${name}' key_type names '${key}', which is no identifier family -- a namespace's keys are names, so its ` +
         'key type is a member of meta.identifier_ref, a type built with identifier_type; a closed set of names ' +
         'is an identifier family with members (§4.2, §7.4)',
+    );
+  }
+  const family = local(terminal(key, local));
+  const dot = family?.kind === 'identifier_type' ? nameTypeDotRefusal(family) : undefined;
+  if (dot !== undefined) {
+    throw new TsonSchemaValidationError(
+      `'${name}' key_type names '${key}', which cannot name a namespace's keys -- ${dot} ([TSON-SCHEMA] §4.2)`,
     );
   }
 }

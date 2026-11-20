@@ -67,6 +67,7 @@ import type { SourcePosition } from '../schema/meta/position.js';
 import type {
   Annotation,
   Annotations,
+  ApplyBody,
   Completion,
   EntryFacts,
   IncompleteEntry,
@@ -104,6 +105,7 @@ import {
   type NamedField,
   type RecordBody,
   type RecordExtensionType,
+  type RecordField,
 } from '../schema/meta/bodies.js';
 import {
   discriminatorsRefusal,
@@ -126,21 +128,27 @@ import type {
   EntryFactsTable,
   SourceBodyEncoder,
 } from './resolverTypes.js';
-import { DESUGARED, WRITTEN_FIELDS, at as standsAt } from './desugar.js';
+import { DESUGARED, WRITTEN_FIELDS, applicationValue } from './desugar.js';
 import { DEFAULT_NAME_TYPE, SCHEMA, metaName } from '../schema/meta/kernel.js';
 import { APPLY, FIELDS, PARAMETERS } from './wireForm.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomNarrows, checkBodyCoherence, isAtom } from './atomChecks.js';
 import { terminal, terminalDefinition } from '../link/aliasChain.js';
-import { ofParent as ancestryOfParent } from './ancestry.js';
 import { metaFormOfLexer } from './tokenForms.js';
 import {
+  argumentNotAName,
   createConstructionRewrite,
+  suggestedName as suggestedNameOf,
   text as writtenText,
   type ConstructionRewrite,
 } from './constructionRewrite.js';
 import { constructs } from './constructionSugar.js';
 import * as IncompleteEntries from './incompleteEntries.js';
+import * as Ancestry from './ancestry.js';
+import * as Substitution from './substitution.js';
+import * as TypeSlots from '../schema/meta/typeSlots.js';
+import { at as standsAt, checkSlots } from './parameterTypes.js';
+import type { Restatements } from './restatements.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -165,6 +173,32 @@ export interface DefinitionResolverDeps {
   readonly facts?: EntryFactsTable;
   readonly encodeSourceBody?: SourceBodyEncoder;
   readonly opens?: (head: string) => boolean;
+  /**
+   * What a declaration needs of a §5.10 application while it resolves: the entry a declaration naming one is, and
+   * the bound check of an operand absorbed by value. Omitted, a declared application is refused unclosed.
+   */
+  readonly applicationCloser?: ApplicationCloser;
+  /** Where each restatement over a source the closed chain does not reach is recorded, for the linker (§5.8). */
+  readonly restatements?: Restatements;
+}
+
+/**
+ * `parametricMaterialiser.ts`'s on-demand half, seen by the resolver as a dependency the way its namespace getters
+ * are: what a declaration needs of a §5.10 application while it resolves, before the rest of materialisation runs as
+ * a whole-schema pass afterwards.
+ */
+export interface ApplicationCloser {
+  /**
+   * §5.10's call-site check, for an application absorbed by value rather than closed: each argument must name a type
+   * that IS-A its parameter's bound. A composition operand is absorbed and never closes.
+   */
+  checkArguments(head: string, record: Top, args: readonly TypeRef[]): void;
+  /**
+   * The entry a declaration naming a fully-bound application is (§8.2): the parametric record's application closed
+   * into this declaration's own name. `undefined` where this declaration cannot own an entry -- an unresolved head or
+   * one that is no parametric record, or an arity mismatch -- for the ordinary path to report.
+   */
+  closeApplicationInto(declaredName: string, application: ApplyBody): Top | undefined;
 }
 
 /** What every resolution step reads: the dependencies, and the resolver's own working state. */
@@ -251,7 +285,7 @@ export function createDefinitionResolver(given: DefinitionResolverDeps): Definit
 /**
  * A parametric record with each parameter carrying the bound its declaration wrote (`<T: text>`, §5.10), the others
  * unbounded: a parameter is its name and its written bound, known in full where it is declared. Whether a bound
- * names a type is judged once every declaration is ready (`parameterBounds.ts`).
+ * names a type is judged once every declaration is ready (`parameterTypes.ts`).
  */
 function withBounds(declaration: Declaration, resolved: Resolved): Resolved {
   const written = declaration.parameterTypes;
@@ -359,8 +393,8 @@ function applyRecordExtensionMark(
 
 /**
  * A record draft as the value its entry holds: the record with its chain and, for a parametric record (§5.10), its
- * `parameters`, each name among its field types that one of them declares marked as that parameter. A parametric
- * record keeps its parents as written; a closed record keeps none.
+ * `parameters`, each name among its field types and its parents' arguments that one of them declares marked as that
+ * parameter. A parametric record keeps its parents as written; a closed record keeps only its applied ones.
  */
 function recordValue(draft: Draft, record: RecordBody): Resolved {
   const parameters = draft.parameters;
@@ -373,7 +407,13 @@ function recordValue(draft: Draft, record: RecordBody): Resolved {
             parameters: parameters.map((parameter): Param => ({ name: parameter })),
           }),
         );
-  const chain = typeChain(draft.supertypes, parameters.length > 0 ? draft.parents : []);
+  // A parametric record keeps the parents as written, its parameters marked, which closing completes; a closed
+  // declaration keeps only its applied parents, for the resolver's fold to turn into edges and drop (§5.8).
+  const parents =
+    parameters.length > 0
+      ? draft.parents.map((parent) => asParameters(parent, parameters))
+      : draft.parents.filter((parent) => parent.kind === 'inline');
+  const chain = typeChain(draft.supertypes, parents);
   return {
     value: withChain(body, chain),
     ...(draft.head === undefined ? {} : { head: draft.head }),
@@ -638,12 +678,7 @@ function resolveTypeDef(deps: ResolverContext, name: string, typeDef: TypeDef): 
 function parametricInstance(deps: ResolverContext, name: string, instance: Instance): Resolved {
   const target = requireTypeRef(instance.value, `'${name}'`);
   const head = resolveConstructorTarget(deps, name, target);
-  if (head.name === metaName('record')) {
-    throw new TsonNotImplementedError(
-      `'${name}': a parametric record written as '<...> !${target} { ... }' is not implemented; write its body ` +
-        `in braces, '${name} => <...> { ... }' (§5.10)`,
-    );
-  }
+  if (head.name === metaName('record')) return parametricRecord(deps, name, instance);
   const prefix =
     `'${name}': a parametric record's body is a record body -- braces or a composition (§5.10) -- and ` +
     `'!${target} { ... }' `;
@@ -661,6 +696,141 @@ function parametricInstance(deps: ResolverContext, name: string, instance: Insta
     `${prefix}is a value of the type '${target}', no type, and a parametric record over a value is no ` +
       `record. Declare one value per instantiation ('order_api => !${target} { ... }'), or carry what varies ` +
       'as data of the type',
+  );
+}
+
+/**
+ * `<T> !meta.record { … }` -- a parametric record in its explicit spelling, read against `record`'s own vocabulary as
+ * any record is, with the declaration's parameters added (§5.10). What the author wrote is answered first, in the
+ * terms they wrote it in -- a construction of `meta.record` -- so a binding the record does not declare names the
+ * record's vocabulary, and a parameter at a slot that names no type is refused for standing there
+ * ({@link checkSlots}) rather than for not reading as a boolean.
+ */
+function parametricRecord(deps: ResolverContext, name: string, instance: Instance): Resolved {
+  const record = metaName('record');
+  const vocabulary = resolveConstructorTarget(deps, name, record).definition;
+  if (!isRecordBody(vocabulary)) {
+    throw new TsonInternalError(`'${name}': constructor '${record}' is no record`);
+  }
+  const payload = instance.value;
+  refuseWrittenParameters(name, record, payload);
+  refuseWrittenChain(name, payload);
+  const bindings = payload.coreValue;
+  if (bindings.kind !== 'record') {
+    throw new TsonSchemaValidationError(
+      `'${name}': a parametric record's explicit body is a braced record of '${record}' bindings (§5.10)`,
+    );
+  }
+  checkParametricBindings(name, record, vocabulary, bindings);
+  checkSlots(instance.typeParams, payload, deps.metaDefinitions);
+  refuseLiteralOnParameter(payload, instance.typeParams);
+  const rewritten = deps.rewrite.inPlace(payload, false).coreValue;
+  const fields = rewritten.kind === 'record' ? [...rewritten.fields] : [];
+  fields.push({
+    name: PARAMETERS,
+    value: {
+      annotations: [],
+      coreValue: {
+        kind: 'array',
+        elements: instance.typeParams.map((parameter) => ({
+          annotations: [],
+          coreValue: {
+            kind: 'record',
+            fields: [
+              {
+                name: 'name',
+                value: {
+                  annotations: [],
+                  coreValue: { kind: 'token', text: parameter, form: 'unquoted' },
+                },
+              },
+            ],
+          },
+        })),
+      },
+    },
+  });
+  const built = bindAtomInstance(deps, name, {
+    annotations: payload.annotations,
+    typeRef: record,
+    coreValue: { kind: 'record', fields },
+  });
+  if (built.kind !== 'record' || !isParametric(built)) {
+    throw new TsonInternalError(
+      `'${name}': '!${record} { ... }' with parameters bound to something other than a parametric record`,
+    );
+  }
+  return { value: checkedParametric(withParametersMarked(built)), head: record };
+}
+
+/**
+ * §5.10's two declaration-time questions about a parametric record's explicit payload: a binding `record` does not
+ * declare, and a required field nothing binds, so no application could build one.
+ */
+function checkParametricBindings(
+  name: string,
+  target: string,
+  vocabulary: RecordBody,
+  bindings: RecordValue,
+): void {
+  const bound = new Set<string>();
+  for (const binding of bindings.fields) {
+    if (!vocabulary.fields.entries.has(binding.name)) {
+      throw new TsonSchemaValidationError(
+        `'${name}': '${target}' has no field '${binding.name}' to bind (§7.2) -- its fields are ` +
+          `[${[...vocabulary.fields.entries.keys()].join(', ')}]`,
+      );
+    }
+    bound.add(binding.name);
+  }
+  for (const [field, declared] of vocabulary.fields.entries) {
+    if (!declared.optional && declared.value === undefined && !bound.has(field)) {
+      throw new TsonSchemaValidationError(
+        `'${name}': '${target}' requires a '${field}', and nothing binds it (§7.2), so no application of this ` +
+          'parametric record could build one',
+      );
+    }
+  }
+}
+
+/**
+ * The literal-on-a-parameter rule over the payload not yet bound, for a field whose whole type is a parameter: read
+ * against `record_field` its literal `value` would be read against a type nothing declares, so it is refused for
+ * where it stands before the reader is asked (§5.10).
+ */
+function refuseLiteralOnParameter(payload: DataValue, parameters: readonly string[]): void {
+  if (payload.coreValue.kind !== 'record') return;
+  for (const binding of payload.coreValue.fields) {
+    const fields = binding.value.coreValue;
+    if (binding.name !== FIELDS || fields.kind !== 'map') continue;
+    for (const entry of fields.entries) {
+      const field = entry.value.coreValue;
+      const key = entry.key.coreValue;
+      if (field.kind !== 'record' || key.kind !== 'token') continue;
+      const parameter = tokenAt(field, 'type');
+      const literal = tokenAt(field, 'value');
+      if (parameter !== undefined && parameters.includes(parameter) && literal !== undefined) {
+        throw literalOnParameterType(key.text, parameter, literal);
+      }
+    }
+  }
+}
+
+/** The token `record` holds at `slot`, as written; `undefined` where it holds none. */
+function tokenAt(record: RecordValue, slot: string): string | undefined {
+  const value = record.fields.find((field) => field.name === slot)?.value.coreValue;
+  return value?.kind === 'token' ? value.text : undefined;
+}
+
+function literalOnParameterType(
+  field: string,
+  parameter: string,
+  literal: string,
+): TsonSchemaValidationError {
+  return new TsonSchemaValidationError(
+    `field '${field}' is typed by the parameter '${parameter}' and carries the literal value '${literal}' -- a ` +
+      "literal needs a closed type, and this field's type differs in every application. Write no value here, and " +
+      `state it where the application is declared: 'name => head<argument> & { ${field}?: = value }' (§5.10)`,
   );
 }
 
@@ -684,29 +854,100 @@ function resolveApplication(
       true,
     );
   }
-  const head = deps.namespaceDefinitions(generic.name);
-  if (head === undefined) {
-    throw new TsonSchemaValidationError(`'${name}' has an unresolved reference '${generic.name}'`);
-  }
-  const definition = terminalDefinition(generic.name, deps.namespaceDefinitions);
-  const parameters = (definition?.kind === 'record' ? definition.parameters : undefined) ?? [];
-  if (parameters.length === 0) {
-    throw new TsonSchemaValidationError(
-      `'${generic.name}' declares no type parameters, so '${generic.name}<...>' applies arguments to ` +
-        'something that takes none (§5.10); drop the argument list',
+  if (!namesOnly(generic)) {
+    // Which parametric record is applied, and to how many arguments, is judged before what the arguments are.
+    const definition = deps.namespaceDefinitions(
+      Ancestry.parametricHead(generic.name, deps.namespaceDefinitions),
     );
+    if (!isParametric(definition) || parametersOf(definition).length !== generic.args.length) {
+      throw unclosed(deps, name, generic.name, generic.args.length);
+    }
+    throw argumentNotANameIn(generic);
   }
-  if (parameters.length !== generic.args.length) {
-    throw new TsonSchemaValidationError(
-      `'${generic.name}' takes ${String(parameters.length)} type argument${parameters.length === 1 ? '' : 's'} ` +
-        `[${parameters.map((parameter) => parameter.name).join(', ')}], but ${String(generic.args.length)} ` +
-        `${generic.args.length === 1 ? 'was' : 'were'} applied (§5.10)`,
+  // This declaration owns the entry. An undefined answer means it cannot -- an unresolved head or an arity mismatch
+  // -- and the verdict is given here.
+  if (deps.applicationCloser === undefined) {
+    const definition = deps.namespaceDefinitions(
+      Ancestry.parametricHead(generic.name, deps.namespaceDefinitions),
     );
+    if (isParametric(definition) && parametersOf(definition).length === generic.args.length) {
+      throw new TsonNotImplementedError(
+        `'${name}': closing the application '${applicationText(generic)}' needs an application closer, and ` +
+          'this resolver was built without one (§5.10)',
+      );
+    }
+    throw unclosed(deps, name, generic.name, generic.args.length);
   }
-  throw new TsonNotImplementedError(
-    `'${name}': closing the application '${applicationText(generic)}' of a parametric record is not ` +
-      'implemented (§5.10)',
+  const owned = deps.applicationCloser.closeApplicationInto(name, names(generic));
+  if (owned !== undefined) return { value: owned, head: metaName('record') };
+  throw unclosed(deps, name, generic.name, generic.args.length);
+}
+
+/**
+ * Why a declaration naming `head` applied to `supplied` arguments could not be closed into it: its head names
+ * nothing, takes no arguments, or takes another number of them (§5.10).
+ */
+function unclosed(
+  deps: ResolverContext,
+  name: string,
+  head: string,
+  supplied: number,
+): TsonSchemaValidationError {
+  const definition = deps.namespaceDefinitions(
+    Ancestry.parametricHead(head, deps.namespaceDefinitions),
   );
+  if (definition === undefined) {
+    return new TsonSchemaValidationError(`'${name}' has an unresolved reference '${head}'`);
+  }
+  const parameters = parametersOf(definition).map((parameter) => parameter.name);
+  if (parameters.length === 0) {
+    return new TsonSchemaValidationError(
+      `'${head}' declares no type parameters, so '${head}<...>' applies arguments to something that takes ` +
+        'none (§5.10); drop the argument list',
+    );
+  }
+  return new TsonSchemaValidationError(
+    `'${head}' takes ${String(parameters.length)} type argument${parameters.length === 1 ? '' : 's'} ` +
+      `[${parameters.join(', ')}], but ${String(supplied)} ${supplied === 1 ? 'was' : 'were'} applied (§5.10)`,
+  );
+}
+
+/** Whether every argument of `generic` is a name. */
+function namesOnly(generic: ApplicationRef): boolean {
+  return generic.args.every((argument) => argument.kind === 'nameRef');
+}
+
+/** `generic`, every argument a name, as the application it is (§5.10). */
+function names(generic: ApplicationRef): ApplyBody {
+  return {
+    kind: 'apply',
+    head: { name: generic.name, annotations: [] },
+    arguments: generic.args.map((argument) => ({
+      name: argument.kind === 'nameRef' ? argument.name : '',
+      annotations: [],
+    })),
+  };
+}
+
+/** The refusal of `generic`'s first argument that is no name (§5.3). */
+function argumentNotANameIn(generic: ApplicationRef): TsonSchemaValidationError {
+  const written = applicationValue(generic);
+  const listed =
+    written.coreValue.kind === 'record'
+      ? written.coreValue.fields.find((field) => field.name === 'arguments')?.value.coreValue
+      : undefined;
+  const argument =
+    listed?.kind === 'array'
+      ? listed.elements.find(
+          (each) => each.typeRef !== undefined || each.coreValue.kind !== 'token',
+        )
+      : undefined;
+  if (argument === undefined) {
+    throw new TsonInternalError(
+      `'${applicationText(generic)}': no argument that is no name was found`,
+    );
+  }
+  return argumentNotAName(writtenText(argument), suggestedNameOf(argument), writtenText(written));
 }
 
 // ── Constructor application (§5.5, §5.6) ────────────────────────────────────────────────────
@@ -876,12 +1117,7 @@ function refuseLiteralsOnParameterTypes(record: RecordBody): void {
   for (const field of namedFields(record)) {
     const parameter = parameterIn(field.type);
     if (parameter !== undefined && field.value !== undefined) {
-      throw new TsonSchemaValidationError(
-        `field '${field.name}' is typed by the parameter '${parameter}' and carries the literal value ` +
-          `'${field.value.text}' -- a literal needs a closed type, and this field's type differs in every ` +
-          "application. Write no value here, and state it where the application is declared: 'name => " +
-          `head<argument> & { ${field.name}?: = value }' (§5.10)`,
-      );
+      throw literalOnParameterType(field.name, parameter, field.value.text);
     }
   }
   mapInPlace(record, (inline) => {
@@ -1196,7 +1432,7 @@ function bracedPayload(name: string, target: string, payload: DataValue): Map<st
 
 /** What a closed parent contributes to an IS-A chain (§5.8, `ancestry.ts`). */
 function ofParent(deps: ResolverContext, parent: string): string[] {
-  return ancestryOfParent(parent, deps.namespaceDefinitions);
+  return Ancestry.ofParent(parent, deps.namespaceDefinitions);
 }
 
 /**
@@ -1327,9 +1563,8 @@ interface ConstructorHead {
  * a question about the entry at the end of the chain, not about the hop. A constructor is always
  * meta-schema vocabulary, declared in the *governing* meta-schema, one hop via `!!meta`.
  *
- * The author's own spelling survives where it is visible: {@link resolveInstance}/
- * {@link resolveInstanceTemplate} record `target` (not {@link ConstructorHead.name}) in the
- * result's own `source`, so the chain stays walkable from resolved output.
+ * The author's own spelling survives where it is visible: {@link resolveInstance} records `target` (not
+ * {@link ConstructorHead.name}) as the entry's head, so the chain stays walkable from resolved output.
  */
 function resolveConstructorTarget(
   deps: ResolverContext,
@@ -1427,8 +1662,6 @@ function bodyIsNotValidData(
   );
 }
 
-// ── Top-level constructor application / template alias (§5.6, §5.10) ───────────────────────
-
 // ── Composition (§5.8) and subtraction (§5.9) ───────────────────────────────────────────────
 
 /**
@@ -1468,13 +1701,56 @@ function resolveComposition(
     }
   };
 
+  // Each inherited field whose source the closed chain will not reach, with that source: an applied operand's
+  // fields, and under a removal every operand's (§5.8, §5.9 rule 4). A body entry naming one is judged at link
+  // through the restatements, the chain holding no record that has it.
+  const offTheChain = new Map<string, TypeExpr>();
+  const subtracts = construction.removal !== undefined;
+
   for (const supertypeRef of construction.supertypes) {
     if (supertypeRef.kind === 'applicationRef') {
-      // §5.8: an application at an operand is absorbed where it stands, contributing its fields and its head's
-      // written parents' edges; closing it is the parametric materialiser's.
-      throw new TsonNotImplementedError(
-        `'${name}': composing the application '${applicationText(supertypeRef)}' is not implemented (§5.8, §5.10)`,
+      // §5.8: an application at an operand denotes no entry of its own, whether its arguments are this
+      // declaration's parameters or concrete. It contributes its fields and its head's own ancestors, and the type
+      // the composition produces is this declaration. The application itself goes into the chain, arguments and all:
+      // a parametric record keeps it in `parents`, substituted when each application closes, and a closed
+      // declaration's is folded by the resolver into the edge to the entry the application denotes. A removal
+      // revokes IS-A for every parent (§5.9), so nothing is kept.
+      const operand = parametricOperand(deps, name, supertypeRef, parameters, 'supertype');
+      for (const ancestor of operand.ancestors) {
+        addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
+      }
+      const applied: TypeInline = {
+        kind: 'inline',
+        head: APPLY,
+        of: {
+          kind: 'apply',
+          head: { name: supertypeRef.name, annotations: [] },
+          arguments: operand.args,
+        },
+      };
+      if (!subtracts) directSupertypes.push(applied);
+      for (const field of operand.fields) offTheChain.set(field.name, applied);
+      const bindings = new Map<string, TypeRef>();
+      for (const [parameter, argument] of operand.bindings) {
+        bindings.set(parameter, asParameterRef(argument, parameters));
+      }
+      deps.restatements?.absorbs(name, operand.head, bindings);
+      absorb(
+        name,
+        {
+          kind: 'record',
+          fields: fieldMapOf(operand.fields),
+          groups: operand.groups,
+          extension: 'OPEN',
+        },
+        fields,
+        groups,
+        seenFieldNames,
+        inheritedFieldIndex,
       );
+      // An applied operand states its head's name type, which every application keeps (§5.2).
+      takeNameType(supertypeRef.name, operand.nameType);
+      continue;
     }
     const supertypeName = supertypeRef.name;
     refuseParameterOperand(name, supertypeName, parameters, 'supertype', '&');
@@ -1488,7 +1764,7 @@ function resolveComposition(
     // chain (§8.3), be a definition whose body is a `!record`". See `resolveRefinement` for why
     // the composed vocabulary is the terminal's while the recorded name is the author's.
     const supertypeVocabulary = vocabularyOf(deps, supertypeName) ?? supertypeDef;
-    refuseUnappliedTemplate(name, supertypeName, supertypeVocabulary, 'supertype', '&');
+    refuseUnappliedParametricRecord(name, supertypeName, supertypeVocabulary, 'supertype', '&');
     if (!isRecordBody(supertypeVocabulary)) {
       throw new TsonSchemaValidationError(
         `'${name}': supertype '${supertypeName}' has no fields to contribute -- its body is a binding record, ` +
@@ -1511,6 +1787,11 @@ function resolveComposition(
     directSupertypes.push({ name: supertypeName, annotations: [] });
     for (const ancestor of ofParent(deps, supertypeName))
       addIfAbsent(transitiveSupertypes, seenTransitive, ancestor);
+    if (subtracts) {
+      for (const field of supertypeVocabulary.fields.entries.keys()) {
+        offTheChain.set(field, { name: supertypeName, annotations: [] });
+      }
+    }
     absorb(name, supertypeVocabulary, fields, groups, seenFieldNames, inheritedFieldIndex);
     takeNameType(supertypeName, supertypeVocabulary.nameType);
   }
@@ -1528,6 +1809,7 @@ function resolveComposition(
           'resolver computes and no declaration writes (§4.1). Name the field something else',
       );
     }
+    const inherited = new Map(fields.map((field) => [field.name, field]));
     for (const entry of construction.body.entries) {
       resolveEntry(
         deps,
@@ -1541,6 +1823,15 @@ function resolveComposition(
         parameters,
       );
     }
+    recordRestatements(
+      deps,
+      name,
+      bodyNames(construction),
+      offTheChain,
+      inherited,
+      fields,
+      parameters,
+    );
   }
   if (construction.removal !== undefined) {
     applyRemovals(name, construction.removal, bodyNames(construction), fields, groups);
@@ -1562,13 +1853,156 @@ function resolveComposition(
   // §5.9 rule 8: subtraction breaks IS-A, and a subtracted record keeps no lineage -- its chain is
   // empty whatever its parents were, including one that contributed nothing to the removal (§5.9's
   // own "the clause is head-level").
-  const subtracted = construction.removal !== undefined;
   return {
     parameters,
-    supertypes: subtracted ? [] : transitiveSupertypes,
-    parents: subtracted ? [] : directSupertypes,
+    supertypes: subtracts ? [] : transitiveSupertypes,
+    parents: subtracts ? [] : directSupertypes,
     body,
   };
+}
+
+/**
+ * Each field the body names that restates one inherited from `offTheChain`'s sources, as inherited and as
+ * restated, for the link to judge by §5.8's rule. Inside a parametric record the parameters stand as such,
+ * substituted wherever it is applied.
+ */
+function recordRestatements(
+  deps: ResolverContext,
+  name: string,
+  named: ReadonlySet<string>,
+  offTheChain: ReadonlyMap<string, TypeExpr>,
+  inherited: ReadonlyMap<string, NamedField>,
+  fields: readonly NamedField[],
+  parameters: readonly string[],
+): void {
+  if (deps.restatements === undefined) return;
+  for (const field of named) {
+    const source = offTheChain.get(field);
+    const was = inherited.get(field);
+    const now = fields.find((candidate) => candidate.name === field);
+    if (source === undefined || was === undefined || now === undefined) continue;
+    deps.restatements.restates(name, {
+      source: asParameters(source, parameters),
+      field,
+      inherited: { ...unnamedField(was), type: asParameters(was.type, parameters) },
+      restated: { ...unnamedField(now), type: asParameters(now.type, parameters) },
+    });
+  }
+}
+
+/** `field` without its name. */
+function unnamedField(field: NamedField): RecordField {
+  const { name: _name, ...facts } = field;
+  void _name;
+  return facts;
+}
+
+/**
+ * `type` with each name `parameters` declares as the parameter it is, as the parametric record holds it, so
+ * substituting it later finds the parameter.
+ */
+function asParameters(type: TypeExpr, parameters: readonly string[]): TypeExpr {
+  if (parameters.length === 0) return type;
+  return TypeSlots.map(
+    type,
+    TypeSlots.names((reference) => asParameterRef(reference, parameters)),
+  );
+}
+
+function asParameterRef(reference: TypeRef, parameters: readonly string[]): TypeRef {
+  return parameters.includes(reference.name) && reference.param !== true
+    ? { ...reference, param: true }
+    : reference;
+}
+
+/**
+ * What an applied operand contributes to the declaration absorbing it: a field set, its groups and name type, and
+ * the operand's head's own supertypes -- never an edge to the head, no application being IS-A its head (§5.10).
+ * **Absorbing needs no closure**: the operand is a parametric record, so its field set is known while the
+ * application is open; its parameters are substituted with the arguments as written, an argument that is one of the
+ * absorbing declaration's own parameters landing as that declaration's name for it. Inner applications are left
+ * unclosed, for the absorbing declaration's own materialisation.
+ */
+function parametricOperand(
+  deps: ResolverContext,
+  name: string,
+  application: ApplicationRef,
+  typeParams: readonly string[],
+  position: string,
+): ParametricOperand {
+  const head = application.name;
+  // An alias of a parametric record is the parametric record under another name (§8.3), and is applied as it is.
+  const parametricHead = Ancestry.parametricHead(head, deps.namespaceDefinitions);
+  const definition = deps.namespaceDefinitions(parametricHead);
+  if (definition === undefined) {
+    throw new TsonSchemaValidationError(
+      `'${name}': ${position} '${head}' names no type this schema declares or imports`,
+    );
+  }
+  const end = terminal(head, deps.namespaceDefinitions);
+  const atEnd = deps.namespaceDefinitions(end);
+  if (constructs(end, atEnd) || atEnd?.kind === 'incomplete') {
+    // A constructor applied is a construction (§5.3), a binding record with elements or slots, not fields.
+    throw new TsonSchemaValidationError(
+      `'${name}': ${position} '${head}<...>' has no fields to contribute -- it constructs a '!${head}', a ` +
+        'binding record, not a vocabulary, so there is nothing to compose with (§5.8)',
+    );
+  }
+  if (definition.kind !== 'record' || !isParametric(definition)) {
+    throw new TsonSchemaValidationError(
+      `'${name}': ${position} '${head}' declares no type parameters, so it cannot be applied to ` +
+        `'${application.args.map((argument) => (argument.kind === 'nameRef' ? argument.name : '...')).join(', ')}' ` +
+        '(§5.10)',
+    );
+  }
+  const headParameters = parametersOf(definition).map((parameter) => parameter.name);
+  if (headParameters.length !== application.args.length) {
+    throw new TsonSchemaValidationError(
+      `'${name}': ${position} '${head}' declares ${String(headParameters.length)} type parameter(s) and is ` +
+        `applied to ${String(application.args.length)} (§5.10)`,
+    );
+  }
+  const args = typeArguments(application);
+  // §5.10's bound check, which an operand absorbed by value would otherwise never get.
+  deps.applicationCloser?.checkArguments(parametricHead, definition, args);
+  const bindings = new Map<string, TypeRef>();
+  headParameters.forEach((parameter, index) => {
+    const argument = args[index];
+    if (argument !== undefined) bindings.set(parameter, argument);
+  });
+  const substituted = Substitution.fields(definition, bindings);
+  return {
+    ancestors: Ancestry.ofApplication(parametricHead, deps.namespaceDefinitions),
+    fields: namedFields({ fields: substituted }),
+    groups: definition.groups,
+    ...(definition.nameType === undefined ? {} : { nameType: definition.nameType }),
+    args,
+    head: parametricHead,
+    bindings,
+  };
+}
+
+/**
+ * What an operand hands its absorber: the ancestors it can still be indexed under, its fields, groups and name type,
+ * its arguments, and the parametric record it applies with the binding of each of its parameters.
+ */
+interface ParametricOperand {
+  readonly ancestors: readonly string[];
+  readonly fields: readonly NamedField[];
+  readonly groups: readonly FieldGroup[];
+  readonly nameType?: string;
+  readonly args: readonly TypeRef[];
+  readonly head: string;
+  readonly bindings: ReadonlyMap<string, TypeRef>;
+}
+
+/**
+ * The arguments of an application of a parametric record, each a name or a parameter (§5.3): an application or a
+ * sugar form there is refused, to be declared under a name first.
+ */
+function typeArguments(application: ApplicationRef): TypeRef[] {
+  if (!namesOnly(application)) throw argumentNotANameIn(application);
+  return [...names(application).arguments];
 }
 
 /** Every field name this declaration's own body mentions, whether it introduces or tightens it — both are what §5.9 rule 4 forbids a removal from naming. */
@@ -1823,7 +2257,7 @@ function absorb(
  * A parametric record named without arguments is no operand (§5.8, §5.10): an operand is flattened, and a
  * parametric record has fields only once its parameters are bound.
  */
-function refuseUnappliedTemplate(
+function refuseUnappliedParametricRecord(
   name: string,
   operand: string,
   definition: Top,
@@ -1846,7 +2280,7 @@ function refuseUnappliedTemplate(
 
 /**
  * A parameter is never an operand of `&` or `^` (§5.8, §5.10): both read the operand's field set
- * to flatten, and a parameter has none until the template is applied, so `<T> T & { ... }` and
+ * to flatten, and a parameter has none until the parametric record is applied, so `<T> T & { ... }` and
  * `<T> T ^ { ... }` have no body to hold. An operand applied *to* a parameter, `result<T>`, is a
  * different thing and is admitted. Checked before the name is looked up, as §5.10's shadowing rule
  * reads it: a parameter hides a schema entry of the same name.
@@ -1861,7 +2295,7 @@ function refuseParameterOperand(
   if (parameters.includes(operand)) {
     throw new TsonSchemaValidationError(
       `'${name}': ${position} '${operand}' is a parameter of this declaration, and a parameter is ` +
-        `never an operand of '${operator}' -- its fields are unknown until the template is applied, ` +
+        `never an operand of '${operator}' -- its fields are unknown until the parametric record is applied, ` +
         'so there is nothing to flatten (§5.10)',
     );
   }

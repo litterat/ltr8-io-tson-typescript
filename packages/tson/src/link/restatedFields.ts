@@ -11,8 +11,8 @@
  */
 import { TsonSchemaValidationError } from '../core/errors.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
-import { typeNameOf } from '../schema/meta/bodies.js';
-import type { Top } from '../schema/meta/typedef.js';
+import { typeExprText, typeNameOf } from '../schema/meta/bodies.js';
+import type { Restatement, Top } from '../schema/meta/typedef.js';
 import { dependentOn, supertypesOf } from '../schema/meta/typedef.js';
 import { sameTypeExpr } from '../schema/meta/typeInline.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
@@ -62,6 +62,68 @@ function narrows(inherited: RecordField, restated: RecordField, namespace: Entry
  *
  * @throws TsonSchemaValidationError naming the first source whose restated fields do not narrow.
  */
+/**
+ * §5.8's rule over the restatements no record on the entry's closed chain holds: over an application at an operand,
+ * which reaches no edge to its head and none at all where no declaration names it, and over a subtraction's
+ * operands, which reach none. The verdict is the one {@link checkRestatedFieldTypes} gives a supertype, whether or not
+ * a declaration names the application.
+ *
+ * @throws TsonSchemaValidationError naming the first source whose restated fields do not narrow.
+ */
+export function checkRestatementsOffTheChain(
+  entryName: string,
+  restatements: readonly Restatement[],
+  namespace: ReadonlyMap<string, Top>,
+): void {
+  const lookup: EntryLookup = (name) => namespace.get(name);
+  const violations = new Map<string, string[]>();
+  for (const restatement of restatements) {
+    const violation = restatementViolation(
+      restatement.field,
+      restatement.inherited,
+      restatement.restated,
+      lookup,
+    );
+    if (violation === undefined) continue;
+    const source = typeExprText(restatement.source);
+    const found = violations.get(source) ?? [];
+    found.push(violation);
+    violations.set(source, found);
+  }
+  for (const [source, found] of violations) refuseRestatement(entryName, source, found);
+}
+
+/** Why `restated` is no restatement of `inherited`, the field `field`; `undefined` where it is one. */
+function restatementViolation(
+  field: string,
+  inherited: RecordField,
+  restated: RecordField,
+  lookup: EntryLookup,
+  shown: (name: string) => string = (name) => name,
+): string | undefined {
+  const dependent = restatesDependent(field, inherited, restated);
+  if (dependent !== undefined) return dependent;
+  if (narrows(inherited, restated, lookup)) return undefined;
+  const oneIsANameOneInPlace =
+    (restated.type.kind === 'inline') !== (inherited.type.kind === 'inline');
+  return (
+    `field '${field}' is typed '${shown(typeNameOf(restated))}', which is not ` +
+    `'${shown(typeNameOf(inherited))}' or IS-A it` +
+    (oneIsANameOneInPlace
+      ? ` -- a name and a type written in place are never one type (§8.2), so write ` +
+        `'${shown(typeNameOf(inherited))}' as it is inherited`
+      : '')
+  );
+}
+
+function refuseRestatement(entryName: string, source: string, violations: readonly string[]): void {
+  if (violations.length > 0) {
+    throw new TsonSchemaValidationError(
+      `'${entryName}': not a valid restatement of '${source}''s fields (§5.8): ${violations.join('; ')}`,
+    );
+  }
+}
+
 export function checkRestatedFieldTypes(
   entryName: string,
   record: RecordBody,
@@ -83,20 +145,9 @@ export function checkRestatedFieldTypes(
     for (const [fieldName, inherited] of source.fields.entries) {
       const restated = record.fields.entries.get(fieldName);
       if (restated === undefined) continue;
-      const dependent = restatesDependent(fieldName, inherited, restated);
-      if (dependent !== undefined) {
-        violations.push(dependent);
-      } else if (!narrows(inherited, restated, lookup)) {
-        violations.push(
-          `field '${fieldName}' is typed '${shown(typeNameOf(restated))}', which is not ` +
-            `'${shown(typeNameOf(inherited))}' or IS-A it`,
-        );
-      }
+      const violation = restatementViolation(fieldName, inherited, restated, lookup, shown);
+      if (violation !== undefined) violations.push(violation);
     }
-    if (violations.length > 0) {
-      throw new TsonSchemaValidationError(
-        `'${entryName}': not a valid restatement of '${shown(supertype)}''s fields (§5.8): ${violations.join('; ')}`,
-      );
-    }
+    refuseRestatement(entryName, shown(supertype), violations);
   }
 }

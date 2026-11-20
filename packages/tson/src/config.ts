@@ -420,6 +420,7 @@ function importedFrom(
       createAnnotationValueReader(compiledMetaFor(schema, identifierPolicy))(type, value),
     enumForms: schema.enumForms,
     nameTypes: schema.nameTypes,
+    ...(schema.restatements === undefined ? {} : { restatements: schema.restatements }),
   };
 }
 

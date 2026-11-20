@@ -47,6 +47,7 @@ import {
 } from '../core/errors.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { createQualifiedNameParser } from '../atom/reference.js';
+import { parseReference } from '../atom/referenceGrammar.js';
 import { terminal, type EntryLookup } from '../link/aliasChain.js';
 import { referenceIn, writtenWithoutItsSibling } from '../link/dependentFields.js';
 import { lexerFormOfMeta, metaFormOfLexer } from '../compiler/tokenForms.js';
@@ -454,8 +455,15 @@ class ValueBodyReader {
         message: `${at(path)}'${name}' is no atom, so no token is a value of it`,
       });
     }
+    // A reference naming types holds a type's name, every segment an identifier; one naming values holds a
+    // qualified name whose segments past the first are names of the families they enter, judged by the walk
+    // that resolves it when the schema links (§5.12).
     const parser =
-      body.kind === 'ref' ? createQualifiedNameParser(name) : atomParserFor(name, body);
+      body.kind !== 'ref'
+        ? atomParserFor(name, body)
+        : this.namesTypes(body.of.name)
+          ? createQualifiedNameParser(name)
+          : VALUE_NAME;
     if (parser === undefined) return;
     try {
       parser.read({ text: token.text, form: lexerFormOfMeta(token.form) });
@@ -910,3 +918,8 @@ function at(path: readonly string[]): string {
   if (path.length === 0) return '';
   return `at /${path.map((step) => step.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}: `;
 }
+
+/** A value's qualified name, read by its grammar alone: its text in NFC, split at `.`, the first segment a name (§5.12). */
+const VALUE_NAME = {
+  read: (token: { readonly text: string }): string => parseReference(token.text),
+};

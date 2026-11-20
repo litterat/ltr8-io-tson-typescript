@@ -44,7 +44,8 @@ import {
 } from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
-import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
+import type { Annotations, EntryFacts, Restatement, Top } from '../schema/meta/typedef.js';
+import { isParametric } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
@@ -66,6 +67,7 @@ import { checkFieldGroups } from './fieldGroups.js';
 import { checkRecordExtension } from './recordExtension.js';
 import { checkKindsReferencesAndNamespaceTypes } from './namespaceTypes.js';
 import { checkValuesByName, ValuesByName } from './valuesByName.js';
+import { checkRestatementsOffTheChain } from './restatedFields.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -118,6 +120,13 @@ export interface LinkedSchema {
    * kernel's `meta.identifier`. Local and imported records alike.
    */
   readonly nameTypes: ReadonlyMap<string, FieldNameType>;
+  /**
+   * The fields each entry restates over a source its closed chain does not reach (§5.8, §5.9), as its schema's
+   * resolution settled them -- local and imported alike, present only for an entry with any. An importer that
+   * absorbs an application of an imported parametric record takes the record's restatements with it. Absent
+   * means none.
+   */
+  readonly restatements?: ReadonlyMap<string, readonly Restatement[]>;
 }
 
 /** Dependencies {@link linkSchema} needs beyond the {@link Schema} being linked. */
@@ -199,7 +208,16 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const enumForms = new Map<string, Normalization>();
   const facts = new Map<string, EntryFacts>();
   const nameTypes = new Map<string, FieldNameType>();
-  let merged = mergeImports(schema.imports, resolveImport, origins, enumForms, facts, nameTypes);
+  const restatements = new Map<string, readonly Restatement[]>();
+  let merged = mergeImports(
+    schema.imports,
+    resolveImport,
+    origins,
+    enumForms,
+    facts,
+    nameTypes,
+    restatements,
+  );
 
   const localNames = new Set<string>();
   const selfId = canonicalizeIdentity(schema.id);
@@ -231,6 +249,8 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     localNames.add(name);
     const recorded = schema.facts.get(name);
     if (recorded !== undefined) facts.set(name, recorded);
+    const restated = schema.restatements?.get(name);
+    if (restated !== undefined) restatements.set(name, restated);
   }
 
   // Each nested map holds the union of the members its closure declares (§2.2.3).
@@ -345,6 +365,23 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     structureFacts: facts,
     ...(receiver === undefined ? {} : { receiver }),
   });
+  // §5.8's rule over the restatements the closed chain does not reach, each local closed entry's.
+  for (const [name, found] of schema.restatements ?? []) {
+    if (!localNames.has(name) || isParametric(merged.get(name))) continue;
+    try {
+      checkRestatementsOffTheChain(name, found, merged);
+    } catch (error: unknown) {
+      if (!(error instanceof TsonSchemaValidationError)) throw error;
+      if (receiver === undefined) throw error;
+      receiver.report({
+        code: 'SCHEMA_ERROR',
+        message: error.message,
+        schemaId: schema.id,
+        schemaPointer: `/${name}`,
+        ...schemaPositionOf(facts, name),
+      });
+    }
+  }
   checkEveryEntryIsInhabited(merged, localNames, {
     schemaId: schema.id,
     facts,
@@ -385,6 +422,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     origins,
     enumForms,
     nameTypes,
+    restatements,
   };
   if (deps.heldValues !== undefined && !state.refused) {
     deps.heldValues(linked, localNames, (entry, error) => {
@@ -422,6 +460,7 @@ function mergeImports(
   enumForms: Map<string, Normalization>,
   facts: Map<string, EntryFacts>,
   nameTypes: Map<string, FieldNameType>,
+  restatements: Map<string, readonly Restatement[]>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
   const alreadyImported = new Set<string>();
@@ -465,6 +504,8 @@ function mergeImports(
       origins.set(name, origin);
       const recorded = imported.facts?.get(name);
       if (recorded !== undefined) facts.set(name, recorded);
+      const restated = imported.restatements?.get(name);
+      if (restated !== undefined) restatements.set(name, restated);
     }
   }
   return merged;

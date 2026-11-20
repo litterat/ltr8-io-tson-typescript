@@ -238,8 +238,11 @@ export function buildAtomReader(
           createReferenceParser(name, atom, options.judgesKindMembers ?? false),
           name,
           (ctx, value) => {
-            // Name hygiene judges the name, as it judges any name (§8.2).
-            const written = nameWritten(value);
+            // Name hygiene judges the name, as it judges any name (§8.2). A value's qualified name past its
+            // first segment is a path of names of the families it enters (§5.12), each judged where it is
+            // declared, so only the entry it starts from is judged here.
+            const name = nameWritten(value);
+            const written = (atom.index?.namesTypes ?? true) ? name : (name.split('.')[0] ?? name);
             const violations = judgeName(written, profile, policy);
             if (violations.length === 0) return false;
             reportNameViolations(ctx, written, violations);
