@@ -23,6 +23,8 @@ import { TsonSchemaValidationError } from '../core/errors.js';
 import type { Top, TypeRef } from '../schema/meta/typedef.js';
 import { typeParameters } from '../schema/meta/typedef.js';
 import { applicationsOf } from '../schema/meta/typeInline.js';
+import type { AncestryLookup } from './ancestry.js';
+import { parametricHead } from './ancestry.js';
 
 /** Where an irregular recursive application is reported, per declaration. */
 export type IrregularityReporter = (declaration: string, error: TsonSchemaValidationError) => void;
@@ -36,10 +38,13 @@ interface Application {
 /**
  * Checks every parametric record in `entries`, reporting each irregular application against the declaration that
  * wrote it; with no `reporter` the first failure throws. Returns the parametric records found irregular, for the
- * caller to replace before anything closes an application of one.
+ * caller to replace before anything closes an application of one. An application's head is followed through
+ * `lookup` -- the whole namespace -- to the parametric record it applies, an alias of one being applied as it is
+ * (§8.3, §5.10), so `sw<B, A>` over `sw => swap` is judged as `swap<B, A>` is.
  */
 export function check(
   entries: ReadonlyMap<string, Top>,
+  lookup: AncestryLookup,
   reporter: IrregularityReporter | undefined,
 ): Set<string> {
   const irregular = new Set<string>();
@@ -49,7 +54,7 @@ export function check(
       applications.set(
         name,
         applicationsOf(value).map((application) => ({
-          head: application.head.name,
+          head: parametricHead(application.head.name, lookup),
           arguments: application.arguments,
         })),
       );

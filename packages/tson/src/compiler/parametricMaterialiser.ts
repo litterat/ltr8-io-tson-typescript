@@ -51,6 +51,7 @@ import { parameterIn } from '../schema/meta/typeInline.js';
 import * as TypeSlots from '../schema/meta/typeSlots.js';
 import { terminal } from '../link/aliasChain.js';
 import { sealedExtern, terminalExtern } from '../link/externs.js';
+import { isAThroughHops, type ExternHops } from '../link/externHops.js';
 import * as Ancestry from './ancestry.js';
 import * as CanonicalApplication from './canonicalApplication.js';
 import * as Substitution from './substitution.js';
@@ -96,6 +97,18 @@ export interface MaterialiserDeps {
   readonly restatements: Restatements;
   /** The placeholder a refused parametric record leaves: an empty record keeping its parameters. */
   readonly placeholder: (parameters: readonly string[]) => Top;
+  /**
+   * How many applications may close in place one inside another before the declaration is refused: the
+   * configurable nesting-depth limit on types written in place that [TSON-SCHEMA] §5.2 permits, in the manner of
+   * [TSON-DATA] §9.1, so a chain of applications as deep as the schema's entries ends as a verdict at its
+   * declaration rather than exhausting the host's stack.
+   */
+  readonly maxNestingDepth: number;
+  /**
+   * The namespace's hops through its externs, asked once every declaration is ready: an argument or a bound naming
+   * an extern is judged at the entry it lands on, by identity (§5.10, §5.13). Absent, a name is judged as written.
+   */
+  readonly hops?: () => ExternHops;
 }
 
 /** One resolution's materialiser: the on-demand half resolution asks, and the whole-schema pass after it. */
@@ -135,6 +148,23 @@ interface DeferredCheck {
   readonly args: readonly TypeRef[];
 }
 
+/**
+ * A record closed in place, kept for the next application of the same canonical key in the same context
+ * ({@link MemoFrame}): the closed record, the deepest nesting of closings it holds, and every canonical key its
+ * closing looked up.
+ */
+interface Memoised {
+  readonly inline: TypeInline;
+  readonly height: number;
+  readonly reached: ReadonlySet<string>;
+}
+
+/** What one closing in place under way has seen so far: the keys it reached and the deepest closing beneath it. */
+interface MemoFrame {
+  readonly reached: Set<string>;
+  height: number;
+}
+
 /** One deferred applied-parent membership check (§5.2), judged once every declaration has closed. */
 interface DeferredMembership {
   readonly declaration: string;
@@ -156,6 +186,51 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
   const deferredMemberships: DeferredMembership[] = [];
   /** The entry {@link materialise} is closing applications in, or `undefined` outside that pass. */
   let materialising: string | undefined;
+  /**
+   * Each record closed in place, by context and canonical key ({@link memoKey}). Closing in place is a pure function
+   * of the application, the namespace and the declarations closing applications around it, so a second application of
+   * one key in one context is the first one's record; without this a record applying the next twice doubles the work
+   * at every level. Cleared wherever the namespace a closing reads changes under it.
+   */
+  const memo = new Map<string, Memoised>();
+  /** The closings in place under way, innermost last, each collecting what its memo entry records. */
+  const frames: MemoFrame[] = [];
+  const { maxNestingDepth } = deps;
+
+  /**
+   * The context a record closed in place is memoised in: the entry its restatements and deferred checks answer to,
+   * whether those checks are deferred or immediate, and the declarations closing applications around it, which a
+   * recursion inside it ties to.
+   */
+  function memoKey(key: string): string {
+    const declaration = resolving();
+    return JSON.stringify([
+      declaration === undefined ? 'materialising' : 'resolving',
+      declaration ?? materialising ?? '',
+      [...closingInto],
+      key,
+    ]);
+  }
+
+  /** Records, in the closing in place enclosing this one, that it reached `reached` and holds `height` closings. */
+  function reported(reached: Iterable<string>, height: number): void {
+    const parent = frames.at(-1);
+    if (parent === undefined) return;
+    for (const key of reached) parent.reached.add(key);
+    parent.height = Math.max(parent.height, height);
+  }
+
+  /** The verdict on an application that would close in place one level past {@link maxNestingDepth}. */
+  function tooDeep(): TsonSchemaValidationError {
+    const outermost = closingInPlace.values().next().value;
+    const where = outermost === undefined ? 'an application' : `'${applyText(outermost)}'`;
+    return new TsonSchemaValidationError(
+      `closing ${where} in place nests applications of parametric records more than ` +
+        `${String(maxNestingDepth)} deep, past the configured nesting-depth limit on types written in place ` +
+        '(§5.2, [TSON-DATA] §9.1): declare an application along the chain under a name and write that name ' +
+        'where it is used',
+    );
+  }
 
   /** The parametric record an application's head names, past its alias hops. */
   const parametricHead = (head: string): string => Ancestry.parametricHead(head, namespace);
@@ -302,7 +377,10 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
     const key = CanonicalApplication.key(canonical);
     const owner = closingInto.get(key);
     // The declaration closing this application reached it again while substituting: the recursion names it.
-    if (owner !== undefined) return { name: owner, annotations: [] };
+    if (owner !== undefined) {
+      reported([key], 0);
+      return { name: owner, annotations: [] };
+    }
     const bindings = bind(parameters, args);
     refuseMembership(body, bindings, written);
     const repeated = closingInPlace.get(key);
@@ -313,8 +391,25 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
           `=> ${applyText(repeated)}') and write that name where it is used`,
       );
     }
-    closingInPlace.set(key, written);
     restatements.absorbs(resolving() ?? materialising, head, bindings);
+    const context = memoKey(key);
+    const known = memo.get(context);
+    // A record closed in this context before is reused where nothing it reached is being closed around it now, and
+    // its own nesting still fits under the closings standing here: the verdict a second closing would reach.
+    if (
+      known !== undefined &&
+      ![...closingInPlace.keys()].some((open) => known.reached.has(open))
+    ) {
+      if (closingInPlace.size + known.height > maxNestingDepth) throw tooDeep();
+      reported([key, ...known.reached], known.height);
+      return known.inline.application === written
+        ? known.inline
+        : { ...known.inline, application: written };
+    }
+    if (closingInPlace.size >= maxNestingDepth) throw tooDeep();
+    closingInPlace.set(key, written);
+    const frame: MemoFrame = { reached: new Set([key]), height: 0 };
+    frames.push(frame);
     try {
       const closed = closeParametricRecord(body, bindings);
       const inline: TypeInline = {
@@ -323,8 +418,13 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
         of: withChain(closed, EMPTY_CHAIN),
         application: written,
       };
+      const height = frame.height + 1;
+      memo.set(context, { inline, height, reached: frame.reached });
+      frames.pop();
+      reported(frame.reached, height);
       return inline;
     } finally {
+      if (frames.at(-1) === frame) frames.pop();
       closingInPlace.delete(key);
     }
   }
@@ -403,7 +503,12 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
   function checkArguments(head: string, record: Top, args: readonly TypeRef[]): void {
     const declaration = resolving();
     if (declaration !== undefined) {
-      const key = JSON.stringify([declaration, head, ...args.map((argument) => argument.name)]);
+      // A parameter and an entry spelled alike are two arguments, as they are two `meta.type_ref` values.
+      const key = JSON.stringify([
+        declaration,
+        head,
+        ...args.map((argument) => [argument.name, argument.param === true]),
+      ]);
       if (!deferredKeys.has(key)) {
         deferredKeys.add(key);
         deferred.push({ declaration, head, args: [...args] });
@@ -431,7 +536,11 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
     if (target === undefined) return; // an unresolved argument -- the linker's verdict
     const boundEnd = terminal(bound, namespace);
     const chain = supertypesOf(target);
-    const admitted = end === boundEnd || chain.includes(boundEnd) || chain.includes(bound);
+    const admitted =
+      end === boundEnd ||
+      chain.includes(boundEnd) ||
+      chain.includes(bound) ||
+      (deps.hops !== undefined && isAThroughHops(argument, bound, namespace, deps.hops()));
     if (!admitted) {
       throw new TsonSchemaValidationError(
         `'${head}<...>' binds '${parameter.name}' to '${argument}', which is not a type that IS-A ${bound} -- ` +
@@ -444,6 +553,7 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
     closeApplicationInto,
     checkArguments,
     checkDeferred(reporter: DeferredFailureReporter): void {
+      memo.clear();
       const refused = new Set<string>();
       for (const check of deferredMemberships) {
         try {
@@ -475,6 +585,7 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
       entries: Map<string, Top>,
       reporter: MaterialisationFailureReporter | undefined,
     ): void {
+      memo.clear();
       for (const [name, value] of entries) {
         materialising = name;
         try {
@@ -495,6 +606,7 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
         }
       }
       materialising = undefined;
+      memo.clear();
     },
     closedInPlace: (type) => TypeSlots.map(type, slotRewrite()),
     writtenApplication: (name) => writtenApplications.get(name),

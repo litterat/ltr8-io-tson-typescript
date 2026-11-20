@@ -263,7 +263,7 @@ describe('validateReferences: a namespace value is a value, never a type (§4.1)
 });
 
 describe('validateReferences: arity (§5.10)', () => {
-  const template = def(
+  const box = def(
     {
       kind: 'record',
       fields: fieldMapOf([
@@ -295,7 +295,7 @@ describe('validateReferences: arity (§5.10)', () => {
   it('rejects an application supplying too many arguments', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      ['box', template],
+      ['box', box],
       ['user', user(apply('box', 'text', 'text'))],
     ]);
     expect(() => {
@@ -306,7 +306,7 @@ describe('validateReferences: arity (§5.10)', () => {
   it('admits an application supplying one argument per parameter', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      ['box', template],
+      ['box', box],
       ['user', user(apply('box', 'text'))],
     ]);
     expect(() => {
@@ -316,7 +316,7 @@ describe('validateReferences: arity (§5.10)', () => {
 
   it('rejects a parametric record named bare at a type slot: it is no type until applied (§5.10)', () => {
     const merged = new Map<string, Top>([
-      ['box', template],
+      ['box', box],
       ['user', user(ref('box'))],
     ]);
     expect(() => {

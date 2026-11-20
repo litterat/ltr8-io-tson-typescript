@@ -6,10 +6,10 @@ import { standardLibrary } from '../src/stdlib/index.js';
 import { kindOfEntry } from './linked-entries.js';
 
 /**
- * The rules of Revision 39's reference, value-entry and facet work, each at the section that states it: counts
- * (§5.5), a bound read against its family's instance (§5.6), the size pair every container shares (§5.3),
- * namespace types (§4.1), a default or pin at a reference (§5.2, §5.12), qualified names (§5.12), and a template
- * over a value's type (§5.10).
+ * The rules of references, value entries and facets, each at the section that states it: counts (§5.5), a bound
+ * read against its family's instance (§5.6), the size pair every container shares (§5.3), namespace types (§4.1), a
+ * default or pin at a reference (§5.2, §5.12), qualified names (§5.12), and a parametric record over a value's type
+ * (§5.10).
  */
 
 const HEADER = `!!id:"https://example.test/wp2b.tn"

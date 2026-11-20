@@ -2,7 +2,7 @@
  * WP4C — the annotation object and dispatch ([TSON-JSON] §3.2, §3.3, §6.1.5, §8, §8.3.1, §9.4;
  * [TSON-SCHEMA] §5.2, §5.4, §5.10, §7.2). Ported in spirit from the Java reference's
  * `JsonTaggedValueReadTest`, `JsonSealedFamilyReadTest`, `JsonChoiceReadTest`,
- * `JsonAliasTagReadTest`, `SealedFactoryEncodingParityTest`, `TemplateFamilyEncodingParityTest`
+ * `JsonAliasTagReadTest`, `SealedFactoryEncodingParityTest`, `ParametricFamilyEncodingParityTest`
  * and `CrossEncodingParityTest` — one schema per describe block, table-driven where the Java
  * carries an inline text block per case.
  *
@@ -475,8 +475,8 @@ describe('cross-encoding parity: same schema, same verdict', () => {
 // ParametricFamilyEncodingParityTest's own corner) ───────────────────────────────────────────
 
 describe('an abstract parametric record’s application as a family base', () => {
-  const TEMPLATE_SOURCE = `
-!!id:"https://example.test/json-dispatch-template.tn"
+  const PARAMETRIC_SOURCE = `
+!!id:"https://example.test/json-dispatch-parametric.tn"
 !!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   box      => abstract <T> { kind: text =?  value: T }
@@ -485,15 +485,15 @@ describe('an abstract parametric record’s application as a family base', () =>
   text_box => box<text> & { kind: = text_box }
 }
 `;
-  let templateCompiled: JsonCompiledSchema | undefined;
+  let parametricCompiled: JsonCompiledSchema | undefined;
 
   /** The schema compiled once on first use, so a schema that fails to load fails each test that reads it. */
   function compiled(): JsonCompiledSchema {
-    templateCompiled ??= compileJsonSchema(resolveUserSchema(TEMPLATE_SOURCE));
-    return templateCompiled;
+    parametricCompiled ??= compileJsonSchema(resolveUserSchema(PARAMETRIC_SOURCE));
+    return parametricCompiled;
   }
 
-  function acceptedTemplate(typeName: string, json: string): string {
+  function acceptedParametric(typeName: string, json: string): string {
     const result = validateJson(json, { schema: compiled(), root: typeName });
     expect(result.diagnostics, JSON.stringify(result.diagnostics)).toEqual([]);
     if (result.value === undefined) throw new Error('accepted a read with no value');
@@ -505,12 +505,12 @@ describe('an abstract parametric record’s application as a family base', () =>
 
   it('a tag naming a member dispatches to it, validated in full', () => {
     expect(
-      acceptedTemplate('box_text', '{"$type": "int_box", "kind": "int_box", "value": "1"}'),
+      acceptedParametric('box_text', '{"$type": "int_box", "kind": "int_box", "value": "1"}'),
     ).toBe('{"kind":"int_box","value":"1"}');
   });
 
   it('the discriminator alone dispatches, with no tag needed', () => {
-    expect(acceptedTemplate('box_text', '{"kind": "text_box", "value": "hi"}')).toBe(
+    expect(acceptedParametric('box_text', '{"kind": "text_box", "value": "hi"}')).toBe(
       '{"kind":"text_box","value":"hi"}',
     );
   });

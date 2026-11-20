@@ -342,8 +342,8 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
 // A member composes an application of the parametric record, and is IS-A the family base through the parent the
 // parametric record wrote; dispatch at the base is §5.2's own, over those members.
 
-const TEMPLATE_FAMILY_SCHEMA = `
-!!id:"test://subsumption-template-family.tn"
+const PARAMETRIC_FAMILY_SCHEMA = `
+!!id:"test://subsumption-parametric-family.tn"
 !!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet    => abstract { type: text =?  name: text }
@@ -355,38 +355,42 @@ const TEMPLATE_FAMILY_SCHEMA = `
 }
 `;
 
-let templateFamily: CompiledSchema | undefined;
+let parametricFamily: CompiledSchema | undefined;
 
 /** The family schema, compiled once on first use, so a schema that fails to load fails each test that reads it. */
-function templateFamilyCompiled(): CompiledSchema {
-  templateFamily ??= compile(resolveUserSchema(TEMPLATE_FAMILY_SCHEMA));
-  return templateFamily;
+function parametricFamilyCompiled(): CompiledSchema {
+  parametricFamily ??= compile(resolveUserSchema(PARAMETRIC_FAMILY_SCHEMA));
+  return parametricFamily;
 }
 
-function readTemplateFamilyHolder(document: string) {
-  return validate(templateFamilyCompiled(), 'holder', bytes(document));
+function readParametricFamilyHolder(document: string) {
+  return validate(parametricFamilyCompiled(), 'holder', bytes(document));
 }
 
 describe('§5.10 a family entered through a parametric record’s written parent dispatches over its members', () => {
   it('places a member with no tag at all, reading the selector it pins (§5.2)', () => {
-    const result = readTemplateFamilyHolder(`{ p: { type: dog  name: "n"  pet: "x"  note: "n" } }`);
+    const result = readParametricFamilyHolder(
+      `{ p: { type: dog  name: "n"  pet: "x"  note: "n" } }`,
+    );
     expect(result.diagnostics).toEqual([]);
   });
 
   it('a selector may arrive after the fields it selects ([TSON-DATA] §2.5)', () => {
-    const result = readTemplateFamilyHolder(`{ p: { name: "n"  pet: "x"  note: "n"  type: dog } }`);
+    const result = readParametricFamilyHolder(
+      `{ p: { name: "n"  pet: "x"  note: "n"  type: dog } }`,
+    );
     expect(result.diagnostics).toEqual([]);
   });
 
   it('an agreeing tag is admitted and changes nothing', () => {
-    const result = readTemplateFamilyHolder(
+    const result = readParametricFamilyHolder(
       `{ p: !dog { type: dog  name: "n"  pet: "x"  note: "n" } }`,
     );
     expect(result.diagnostics).toEqual([]);
   });
 
   it('refuses a tag contradicting the discriminator -- a tag may agree, never overrule', () => {
-    const result = readTemplateFamilyHolder(
+    const result = readParametricFamilyHolder(
       `{ p: !cat { type: dog  name: "n"  pet: "x"  note: "n" } }`,
     );
     expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
@@ -394,14 +398,14 @@ describe('§5.10 a family entered through a parametric record’s written parent
   });
 
   it('a discriminator value no member pins is a validation error naming the alternatives', () => {
-    const result = readTemplateFamilyHolder(`{ p: { type: bird  name: "n" } }`);
+    const result = readParametricFamilyHolder(`{ p: { type: bird  name: "n" } }`);
     expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
     expect(result.diagnostics[0]?.message).toContain('dog');
     expect(result.diagnostics[0]?.message).toContain('cat');
   });
 
   it('no entry is minted for an application a member composes (§8.2)', () => {
-    const linked = resolveUserSchema(TEMPLATE_FAMILY_SCHEMA);
+    const linked = resolveUserSchema(PARAMETRIC_FAMILY_SCHEMA);
     expect([...linked.entries.keys()].some((k) => k.startsWith('pet_of_'))).toBe(false);
   });
 });

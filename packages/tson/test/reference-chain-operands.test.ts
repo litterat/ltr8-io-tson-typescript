@@ -6,8 +6,8 @@
  * check -- "after following both alias chains to their terminal entries".
  *
  * A reference is a hop, not a different type, so an alias to a record is an admissible operand.
- * What the walk does not do is launder a finished body: "an alias resolving to [a binding record
- * or a template instantiation] is *finished*" and admits neither operator.
+ * What the walk does not do is launder a finished body: a record, a tuple, a choice and a namespace
+ * value take no `^` (§4.3, §5.7), and an alias resolving to one admits no refinement either.
  *
  * The walk decides only what an operand *is*. What the resolved entry records is the name the
  * author wrote, since §8.3 states a chain as written and collapses it nowhere -- which is what the

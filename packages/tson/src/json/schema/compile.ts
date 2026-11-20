@@ -7,7 +7,7 @@
  * **What this compiler builds (§3–§8.4).** Every atom family (`json/schema/atoms.ts`), every
  * record — closed (`json/schema/record.ts`) and every record-family position §6.1.5 governs:
  * OPEN-with-subtypes and ABSTRACT-with-no-`discriminators` (`json/schema/dispatchTag.ts`),
- * ABSTRACT/family-base-template naming `discriminators` (`json/schema/dispatchMember.ts`) —
+ * ABSTRACT naming `discriminators`, a family base (`json/schema/dispatchMember.ts`) —
  * arrays/sets and tuples (`json/schema/array.ts`, `json/schema/tuple.ts`), maps in both wire
  * forms (`json/schema/map.ts`), and every choice (§8, `json/schema/dispatchChoice.ts`). §3.3's
  * annotation object is read at every position that admits it: records and every record-family
@@ -35,7 +35,11 @@
  * in place is built without the guard: a map's members are keys, and a choice's `$type` names a
  * variant of it.
  *
- * **What it does not.** An incomplete entry (§5.5), an extern (§5.13) and an entry holding a
+ * **An extern (§5.13) compiles to its boundary** (`json/schema/extern.ts`): the leading `$type` is
+ * the enclosing scope's and the value is read by the foreign schema's own compile, each foreign schema
+ * compiled once for the whole compile and whatever it reaches ([TSON-SCHEMA] §7.9, [TSON-JSON] §8.6).
+ *
+ * **What it does not.** An incomplete entry (§5.5) and an entry holding a
  * namespace *value* (`defaults => !headers { ... }`, a value of a meta layer's vocabulary and never a
  * type, §4.1) compile to {@link notImplementedReader}:
  * the plan stays **total** (every entry gets a reader, so a schema holding one still compiles and
@@ -84,6 +88,7 @@ import { buildMapReader } from './map.js';
 import { buildRecordReader } from './record.js';
 import { buildDeclaredReader } from './declared.js';
 import { buildTupleReader } from './tuple.js';
+import { externBoundary, type ForeignJsonReaders } from './extern.js';
 import type { JsonTypeReader } from './types.js';
 
 export { notImplementedReader } from './notImplemented.js';
@@ -145,10 +150,55 @@ function locationOf(
   };
 }
 
+/** What a JSON compile may be given beyond the linked schema. */
+export interface JsonCompileDeps {
+  /**
+   * The linked schema of a canonical identity, where a value read through an extern reaches an entry that neither
+   * the extern's foreign schema nor the one its target lands in holds, and is read in the schema declaring it
+   * ([TSON-SCHEMA] §7.9). Omitted, such a value reports `NOT_IMPLEMENTED`. The foreign schemas an extern names need
+   * nothing: the link holds them.
+   */
+  readonly foreignSchema?: (identity: string) => LinkedSchema | undefined;
+}
+
 /**
  * Compiles `linkedSchema` in tree mode: one {@link JsonTypeReader} per entry, eagerly.
  */
-export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchema {
+export function compileJsonSchema(
+  linkedSchema: LinkedSchema,
+  deps: JsonCompileDeps = {},
+): JsonCompiledSchema {
+  return compileWith(linkedSchema, deps, new Map());
+}
+
+/**
+ * {@link compileJsonSchema}, each foreign schema a value is read in compiled once for the whole compile and whatever
+ * it reaches ([TSON-SCHEMA] §7.9): `foreignCompiles` is shared by every schema this compile reaches through an extern.
+ */
+function compileWith(
+  linkedSchema: LinkedSchema,
+  deps: JsonCompileDeps,
+  foreignCompiles: Map<LinkedSchema, JsonCompiledSchema>,
+): JsonCompiledSchema {
+  const readerOf = (linked: LinkedSchema, name: string): JsonTypeReader => {
+    let within = linked === linkedSchema ? undefined : foreignCompiles.get(linked);
+    if (within === undefined && linked !== linkedSchema) {
+      within = compileWith(linked, deps, foreignCompiles);
+      foreignCompiles.set(linked, within);
+    }
+    const there = within;
+    // Deferred to the read: a reader of this schema's own is finished only once this compile is.
+    return { read: (ctx) => (there ?? self()).get(name).read(ctx) };
+  };
+  const foreign: ForeignJsonReaders = {
+    reader: readerOf,
+    readerIn(identity, name) {
+      const linked = deps.foreignSchema?.(identity);
+      return linked === undefined ? undefined : readerOf(linked, name);
+    },
+  };
+  // Read only once a value crosses, by which time this compile has returned `compiled`.
+  const self = (): JsonCompiledSchema => compiled;
   const finished = new Map<string, JsonTypeReader>();
   const atomReaders = new Map<string, AtomReader>();
   const building = new Set<string>();
@@ -221,6 +271,11 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
     if (body.kind === 'record' && (body.parameters?.length ?? 0) > 0) {
       // No type a position names (§5.10): a parametric record is applied, never read directly.
       return parametricRecordReader(name, typeParameters(body), location);
+    }
+    if (body.kind === 'extern') {
+      // The boundary between this scope and the foreign schema's (§7.9).
+      const boundary = externBoundary(linkedSchema, name, location, foreign);
+      if (boundary !== undefined) return boundary;
     }
     if (
       body.kind === 'incomplete' ||
@@ -329,7 +384,7 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
     resolve(name);
   }
 
-  return {
+  const compiled: JsonCompiledSchema = {
     linkedSchema,
     find: (name: string) => finished.get(name),
     get: (name: string) => {
@@ -344,4 +399,5 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
     rootDeclaration: (name: string) =>
       linkedSchema.entries.has(name) ? locationOf(linkedSchema, name) : undefined,
   };
+  return compiled;
 }

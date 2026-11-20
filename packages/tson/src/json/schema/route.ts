@@ -20,6 +20,8 @@
  */
 import type { Task } from '../../io/bytes.js';
 import { terminalDefinition } from '../../link/aliasChain.js';
+import { landingDefinition, landingIn } from '../../link/externTarget.js';
+import type { LinkedSchema } from '../../link/link.js';
 import type { Top } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import { type Lead, readWrapped } from './tagMembers.js';
@@ -78,12 +80,16 @@ export interface Route {
 
 /**
  * Whether a value of the entry `name` is a map -- a map, or a namespace type, whose value is the map it
- * describes -- past its alias chain: the members of a wrapper's `$value` there are keys, never annotation
- * members ([TSON-JSON] §3.2, §3.3).
+ * describes -- past its alias chain and any extern, at the entry it lands on ([TSON-SCHEMA] §5.13): the members of
+ * a wrapper's `$value` there are keys, never annotation members ([TSON-JSON] §3.2, §3.3, §8.6).
  */
-export function isKeyedType(name: string, entries: ReadonlyMap<string, Top>): boolean {
-  const kind = terminalDefinition(name, (n) => entries.get(n))?.kind;
-  return kind === 'map' || kind === 'namespace';
+export function isKeyedType(name: string, linked: LinkedSchema): boolean {
+  const landing = landingIn(linked, name);
+  const definition: Top | undefined =
+    landing === undefined
+      ? terminalDefinition(name, (n) => linked.entries.get(n))
+      : landingDefinition(landing);
+  return definition?.kind === 'map' || definition?.kind === 'namespace';
 }
 
 /** Builds the route to `resolve(name)`, `keyed` saying whether `name` is map-typed ({@link isKeyedType}): the wrapper form reads its `$value` at the entry reader; the inline form reads exactly `name`'s own type, through {@link ExactReader.readExact} where the resolved reader offers one and through the wrapper reading otherwise (a type that never reads a bare object as its own value can only be a wrapper). */

@@ -65,7 +65,7 @@ import {
   withCompletion,
 } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
-import { DEFAULT_MAX_WAIT_DEPTH } from '../core/limits.js';
+import { DEFAULT_MAX_NESTING_DEPTH, DEFAULT_MAX_WAIT_DEPTH } from '../core/limits.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -90,6 +90,10 @@ import { createHeldRecursion } from './heldRecursion.js';
 import { createParametricMaterialiser } from './parametricMaterialiser.js';
 import { createRestatements } from './restatements.js';
 import { applicationsOf } from '../schema/meta/typeInline.js';
+import { terminal } from '../link/aliasChain.js';
+import { externHops, type ExternHops } from '../link/externHops.js';
+import { canonicalizeIdentity } from '../link/identity.js';
+import type { LinkedSchema } from '../link/link.js';
 import { desugar, typeParamsOf, type DesugarFailureReporter } from './desugar.js';
 import { looseAnnotationValue } from './looseAnnotation.js';
 
@@ -210,6 +214,18 @@ export interface SchemaResolverDeps {
    * reached in. Defaults to {@link DEFAULT_MAX_WAIT_DEPTH}.
    */
   readonly maxWaitDepth?: number;
+  /**
+   * `max_depth` ([TSON-DATA] §9.1), applied as [TSON-SCHEMA] §5.2's nesting-depth limit on types written in place:
+   * how many applications of parametric records may close in place one inside another. Past it the declaration is
+   * refused where it is written. Defaults to {@link DEFAULT_MAX_NESTING_DEPTH}.
+   */
+  readonly maxNestingDepth?: number;
+  /**
+   * The linked schema of a canonical identity, where a local extern's foreign schema is obtained -- loaded with the
+   * imports (§3.4.1, §5.13) -- so a bound or an argument naming an extern is judged at the entry it lands on. Omitted,
+   * such a name is judged as written, and the link attaches the extern.
+   */
+  readonly externSchema?: (identity: string) => LinkedSchema | undefined;
 }
 
 /** Options for {@link resolveSchema}. */
@@ -279,6 +295,7 @@ export function resolveSchema(
   // materialisation closes it. What the applied-parent fold keys on.
   const applications = new Map<string, ApplyBody>();
   const importedRestatements = new Map<string, readonly Restatement[]>();
+  const importedExterns = new Map<string, ExternTarget>();
   const namespace = mergeImports(
     document,
     deps,
@@ -287,6 +304,7 @@ export function resolveSchema(
     annotationReaders,
     applications,
     importedRestatements,
+    importedExterns,
   );
 
   const reporter: DesugarFailureReporter | undefined =
@@ -441,6 +459,31 @@ export function resolveSchema(
   // absorbed operand's arguments are checked against their bounds. Sharing the instance is what lets the batch pass
   // below see what those closings recorded.
   const heldRecursion = createHeldRecursion(namespaceGetter, (name) => declarations.has(name));
+  // The namespace's hops through its externs, built once every declaration is ready: an imported extern as its
+  // schema attached it, a local one attached to its foreign schema where that is loaded (§5.13).
+  let hops: ExternHops | undefined;
+  const externHopsNow = (): ExternHops => {
+    if (hops !== undefined) return hops;
+    const targets = new Map(importedExterns);
+    for (const name of declarations.keys()) {
+      const value = namespace.get(name);
+      if (value?.kind !== 'extern' || deps.externSchema === undefined) continue;
+      let foreign: LinkedSchema | undefined;
+      try {
+        foreign = deps.externSchema(canonicalizeIdentity(value.schema));
+      } catch {
+        continue; // no identity: the link refuses the extern
+      }
+      if (foreign !== undefined) targets.set(name, { foreign, type: value.type });
+    }
+    const selfId = canonicalizeIdentity(id);
+    hops = externHops(
+      (name) => namespace.get(name),
+      (name) => origins.get(name) ?? selfId,
+      targets,
+    );
+    return hops;
+  };
   const restatements = createRestatements(importedRestatements);
   const materialiser = createParametricMaterialiser({
     namespace: namespaceGetter,
@@ -450,6 +493,8 @@ export function resolveSchema(
     resolving: () => order.current(),
     restatements,
     placeholder: unresolvedPlaceholder,
+    maxNestingDepth: deps.maxNestingDepth ?? DEFAULT_MAX_NESTING_DEPTH,
+    hops: externHopsNow,
   });
 
   resolverBox.current = createDefinitionResolver({
@@ -495,6 +540,7 @@ export function resolveSchema(
   // unchanged, judged at the declaration, so a parametric record refused for it is refused even if nobody applies it.
   const irregular = ParametricRegularity.check(
     resolvedLocals,
+    (name) => namespace.get(name),
     receiver === undefined ? undefined : report,
   );
   condemn(irregular, resolvedLocals, namespace);
@@ -507,6 +553,7 @@ export function resolveSchema(
     (name, error) => {
       report(name, new TsonSchemaValidationError(`'${name}': ${error.message}`, { cause: error }));
     },
+    externHopsNow(),
   );
   condemn(refusedParameters, resolvedLocals, namespace);
   // §5.10.1's held recursion, over the parametric records as the two checks above left them, each declaration once.
@@ -662,8 +709,9 @@ function appliedParentEdges(
   for (const name of namespace.keys()) {
     const application = applications.get(name);
     if (application === undefined) continue;
+    // An import's application is stated as written, its head possibly an alias of the parametric record (§8.2).
     const key = CanonicalApplication.key(
-      CanonicalApplication.of(application.head.name, application.arguments),
+      canonicalApplication(application, (entry) => namespace.get(entry)),
     );
     if (!byApplication.has(key)) byApplication.set(key, name);
   }
@@ -715,10 +763,11 @@ function completed(
   const seen = new Set<string>();
   for (let parent = parents.shift(); parent !== undefined; parent = parents.shift()) {
     if (parent.kind !== 'inline' || parent.of.kind !== 'apply') continue;
-    const application = parent.of;
-    // A parent written through an alias of a parametric record is that parametric record's application (§8.3).
-    const head = Ancestry.parametricHead(application.head.name, lookup);
-    const key = CanonicalApplication.key(CanonicalApplication.of(head, application.arguments));
+    // A parent written through an alias of a parametric record is that parametric record's application, and each
+    // argument is the entry at the end of its alias chain (§8.2, §8.3).
+    const application = canonicalApplication(parent.of, lookup);
+    const head = application.head.name;
+    const key = CanonicalApplication.key(application);
     if (seen.has(key)) continue;
     seen.add(key);
     const owner = byApplication.get(key);
@@ -741,6 +790,22 @@ function completed(
   return chain.size === new Set(current.supertypes).size
     ? definition
     : withChain(definition, typeChain([...chain], current.parents, current.subtypes));
+}
+
+/**
+ * `application` in §8.2's canonical form: its head past the alias hops that end at a parametric record, and each
+ * argument past its alias chain, so two spellings of one application key one edge.
+ */
+function canonicalApplication(
+  application: Pick<ApplyBody, 'head' | 'arguments'>,
+  lookup: (name: string) => Top | undefined,
+): ApplyBody {
+  return CanonicalApplication.of(
+    Ancestry.parametricHead(application.head.name, lookup),
+    application.arguments.map((argument) =>
+      argument.param === true ? argument : { ...argument, name: terminal(argument.name, lookup) },
+    ),
+  );
 }
 
 /**
@@ -796,6 +861,7 @@ function mergeImports(
   annotationReaders: Map<string, AnnotationValueReader>,
   applications: Map<string, ApplyBody>,
   restatements: Map<string, readonly Restatement[]>,
+  externs: Map<string, ExternTarget>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
   const alreadyImported = new Set<string>();
@@ -839,6 +905,8 @@ function mergeImports(
       if (application !== undefined) applications.set(name, application);
       const restated = imported.restatements?.get(name);
       if (restated !== undefined) restatements.set(name, restated);
+      const attached = imported.externs?.get(name);
+      if (attached !== undefined) externs.set(name, attached);
     }
   }
   // Each nested map holds the union of the members its closure declares.

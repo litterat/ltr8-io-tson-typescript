@@ -139,7 +139,7 @@ function tupleLabel(discriminators: readonly string[]): string {
     : `discriminator '${discriminators[0] ?? ''}'`;
 }
 
-/** Builds the member-dispatch reader for one sealed record-family position -- reachable only through `json/schema/compile.ts`'s own `build` (an ABSTRACT record or family-base template naming `discriminators`). */
+/** Builds the member-dispatch reader for one sealed record-family position -- reachable only through `json/schema/compile.ts`'s own `build` (an ABSTRACT record naming `discriminators`, a family base). */
 export function buildMemberDispatcher(
   options: DispatchMemberOptions,
 ): JsonTypeReader & ExactReader {
@@ -148,8 +148,7 @@ export function buildMemberDispatcher(
   const members = directMembers(name, entries);
   const selectors = selectorsOf(ctx, discriminators, baseFields, members);
   // The selectors' names in the base's name form ([TSON-SCHEMA] §5.5), what the leading-member
-  // peek matches: the family's members compose the base, so they share its name type, and a
-  // template base states none of its own.
+  // peek matches: the family's members compose the base, so they share its name type.
   const rule =
     [...own]
       .map((written) => fieldNameRule(ctx.linkedSchema.nameTypes.get(written)))

@@ -26,15 +26,8 @@
  *   value (the RFC 3339 example [TSON-DATA] §5.4 itself gives), so identity reduces the
  *   offset-adjusted instant modulo one day ({@link timeOfDayWrapped}) before comparing.
  *
- *   **This is deliberately not what {@link compareTime} does**, and that is a known, open
- *   divergence rather than an oversight: [TSON-DATA] §5.4 states "equality, ordering and bounds
- *   compare the instant" for `!time` in one breath, but {@link compareTime} (unchanged here, and
- *   used unmodified by `atom/temporal/time.ts`'s `min`/`max` bound checks) compares the
- *   offset-adjusted instant *without* wrapping, so a bound or an ordering comparison spanning a
- *   day boundary and this module's own equality can disagree on the same pair of values. Bringing
- *   ordering and bounds in line with equality is out of this change's scope -- it would alter
- *   validation behaviour for every existing `time_type` `min`/`max` facet, not just add a missing
- *   check -- so it is left exactly as it was and reported rather than silently changed either way.
+ *   {@link compareTime} wraps the same way, so ordering, bounds and identity agree on every pair
+ *   of times-of-day ([TSON-DATA] §5.4: "equality, ordering and bounds compare the instant").
  * - **Annotations are not part of a value's identity** ([TSON-DATA] §2.6: "A key's annotations
  *   and type annotation do not participate in identity at any layer"). Skipped structurally, by
  *   key, wherever both sides of a comparison carry an `annotations` field.
@@ -112,9 +105,9 @@ const SECONDS_PER_DAY = 86400;
 
 /**
  * `value`'s offset-adjusted time-of-day, reduced into `[0, 86400)` seconds since UTC midnight --
- * the identity a bare `!time` compares by (this module's own top note): unlike
- * {@link compareTime}'s ordering, a day-boundary crossing wraps rather than landing outside the
- * range, so `23:30:00-02:00` (raw instant one day ahead) and `01:30:00Z` land on the same slot.
+ * the identity a bare `!time` compares by (this module's own top note), on the same clock
+ * {@link compareTime} orders by: a day-boundary crossing wraps, so `23:30:00-02:00` and
+ * `01:30:00Z` land on the same slot.
  */
 export function timeOfDayWrapped(value: PlainTime): number {
   const raw = value.hour * 3600 + value.minute * 60 + value.second - value.offset.totalMinutes * 60;

@@ -29,6 +29,8 @@ import { metaName } from '../schema/meta/kernel.js';
 import { applicationsOf } from '../schema/meta/typeInline.js';
 import { terminal } from '../link/aliasChain.js';
 import { noType } from './incompleteEntries.js';
+import * as Ancestry from './ancestry.js';
+import { isAThroughHops, NO_HOPS, type ExternHops } from '../link/externHops.js';
 import type { DefinitionGetter } from './resolverTypes.js';
 import { OF, TYPE, VALUE } from './wireForm.js';
 
@@ -76,13 +78,15 @@ export type BoundFailureReporter = (entryName: string, error: TsonSchemaValidati
 /**
  * Checks each of `local`'s parametric records in `entries` -- the whole namespace, imports included, since a local
  * parametric record may pass a parameter to an imported one -- and returns the names refused. `meta` is where a
- * bound's name is read when the schema does not hold it.
+ * bound's name is read when the schema does not hold it; `hops` follows a bound naming an extern to the entry it
+ * lands on (§5.13).
  */
 export function check(
   entries: ReadonlyMap<string, Top>,
   local: ReadonlySet<string>,
   meta: DefinitionGetter,
   report: BoundFailureReporter,
+  hops: ExternHops = NO_HOPS,
 ): Set<string> {
   const refused = new Set<string>();
   const lookup: DefinitionGetter = (name) => entries.get(name);
@@ -106,14 +110,24 @@ export function check(
     const mine = new Map(parametersOf(definition).map((parameter) => [parameter.name, parameter]));
     try {
       for (const application of applicationsOf(definition)) {
-        const head = application.head.name;
+        // An alias of a parametric record is applied as the record is, its bounds included (§8.3, §5.10).
+        const head = Ancestry.parametricHead(application.head.name, lookup);
         const callee = entries.get(head);
         const theirs = isParametric(callee) && !refused.has(head) ? parametersOf(callee) : [];
         application.arguments.forEach((argument, index) => {
           const passed = mine.get(argument.name);
           const bounded = theirs[index];
           if (passed === undefined || bounded?.bound === undefined) return;
-          requireBound(passed, head, bounded.name, bounded.bound, local.has(head), lookup, meta);
+          requireBound(
+            passed,
+            head,
+            bounded.name,
+            bounded.bound,
+            local.has(head),
+            lookup,
+            meta,
+            hops,
+          );
         });
       }
     } catch (error: unknown) {
@@ -161,6 +175,7 @@ function requireBound(
   calleeLocal: boolean,
   lookup: DefinitionGetter,
   meta: DefinitionGetter,
+  hops: ExternHops,
 ): void {
   const required = `'${callee}', which declares '${theirs}: ${bound.name}'`;
   if (mine.bound === undefined) {
@@ -170,7 +185,7 @@ function requireBound(
     );
   }
   const own = mine.bound;
-  if (!isA(own, true, bound, calleeLocal, lookup, meta)) {
+  if (!isA(own, true, bound, calleeLocal, lookup, meta, hops)) {
     throw new TsonSchemaValidationError(
       `parameter '${mine.name}' is declared '${mine.name}: ${own.name}' and passed to ${required}, and ` +
         `${own.name} is not a type that IS-A ${bound.name} (§5.10)`,
@@ -190,6 +205,7 @@ function isA(
   bLocal: boolean,
   lookup: DefinitionGetter,
   meta: DefinitionGetter,
+  hops: ExternHops,
 ): boolean {
   if (a.name === b.name) return true;
   const find =
@@ -202,7 +218,11 @@ function isA(
   const definition = find(aLocal)(aTerminal);
   if (definition === undefined) return false;
   const supertypes = supertypesOf(definition);
-  return supertypes.includes(bTerminal) || supertypes.includes(b.name);
+  return (
+    supertypes.includes(bTerminal) ||
+    supertypes.includes(b.name) ||
+    isAThroughHops(a.name, b.name, find(aLocal), hops)
+  );
 }
 
 // ── The walk ─────────────────────────────────────────────────────────────────────────────────

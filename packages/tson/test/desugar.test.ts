@@ -429,7 +429,7 @@ describe('a dependent type (§4.2, §5.2)', () => {
   });
 });
 
-// ── §5.2's field-state table, exercised through a template body ─────────
+// ── §5.2's field-state table, exercised through a parametric record's body ─────────
 
 describe('field-marks validation (§5.2)', () => {
   it("the void sentinel '_' is no modifier value: '~ _' and '= _' are parse errors, not resolver errors", () => {

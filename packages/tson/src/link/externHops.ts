@@ -138,3 +138,33 @@ export function externHopsOf(linked: LinkedSchema): ExternHops {
     targets,
   );
 }
+
+/**
+ * §7.2's IS-A between two names of one namespace, through its hops ([TSON-SCHEMA] §5.13, §8.3): past their alias
+ * hops they are one entry, or the first's chain lists the second; and, through an extern, the two reach one entry by
+ * identity, or the entry the first reaches lists, in the namespace holding it, an entry of the second's identity.
+ * With no hops this is the plain walk.
+ */
+export function isAThroughHops(
+  sub: string,
+  sup: string,
+  entries: EntryLookup,
+  hops: ExternHops,
+): boolean {
+  const wanted = terminal(sup, entries);
+  const end = terminal(sub, entries);
+  if (end === wanted) return true;
+  if (supertypesOf(entries(end)).some((supertype) => terminal(supertype, entries) === wanted)) {
+    return true;
+  }
+  if (!hops.any()) return false;
+  const identity = hops.identity(sup);
+  if (hops.identity(sub) === identity) return true;
+  const landing = hops.landing(sub);
+  // A supertype is a name of the namespace holding the entry, so its identity is read there.
+  return landing === undefined
+    ? supertypesOf(entries(end)).some((supertype) => hops.identity(supertype) === identity)
+    : supertypesOf(landingDefinition(landing)).some(
+        (supertype) => `${declaringIdentity(landing.in, supertype)}#${supertype}` === identity,
+      );
+}

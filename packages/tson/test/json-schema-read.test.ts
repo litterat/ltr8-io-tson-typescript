@@ -795,14 +795,11 @@ describe('§8.2 name hygiene', () => {
   });
 });
 
-// ── Dispatch positions (WP4C, `json-dispatch.test.ts`) ──────────────────────────────────────
+// ── Dispatch positions (`json-dispatch.test.ts`) ────────────────────────────────────────────
 //
-// Record-family and choice positions no longer gap -- WP4C (`json/schema/dispatchTag.ts`,
-// `json/schema/dispatchMember.ts`, `json/schema/dispatchChoice.ts`) replaced the NOT_IMPLEMENTED
-// this describe block used to assert. The dispatch surface itself -- the annotation object, tag
-// and member dispatch, choice discrimination, cross-encoding parity -- is `json-dispatch.test.ts`'s
-// own concern; §8.5's scoped positions are the one dispatch-adjacent gap still open
-// (`json/schema/compile.ts`'s own top note).
+// Record-family and choice positions are `json/schema/dispatchTag.ts`'s, `dispatchMember.ts`'s and
+// `dispatchChoice.ts`'s, and the dispatch surface itself -- the annotation object, tag and member
+// dispatch, choice discrimination, cross-encoding parity -- is `json-dispatch.test.ts`'s concern.
 
 // ── Gaps: NOT_IMPLEMENTED is a compile-time-total, read-time-non-verdict placeholder ──────────
 //
@@ -810,21 +807,12 @@ describe('§8.2 name hygiene', () => {
 // AndNotAVerdict`/`#aSchemaWithUnreadableEntriesStillCompiles`. The Java pair reaches its gap
 // through `lookup => { text => int32 }`: its own `atoms()`-mode compile leaves a map's own
 // constructor unbuilt. That example does not port -- `json/schema/map.ts` reads maps in full in
-// this package's tree-mode compile, strictly more coverage than the Java module has (this file's
-// own top note, and `json/schema/atoms.ts`'s own top note on the one place the divergence runs
-// the other way). `json/schema/compile.ts`'s own top note names what compiles to
-// {@link notImplementedReader} here instead: a scoped position, a meta 'data' construct, an
-// unmaterialised generic application, and a genuinely unapplied non-record template.
-//
-// A scoped position and a meta 'data' construct are each reachable through this package's own
-// resolve/link pipeline (`dynamic` -- one of core.tn's three scoped instances -- and meta-kernel's
-// own `data` entry, respectively); an unmaterialised generic application and an unapplied
-// non-record template are not producible that way without hand-writing a schema this port's own
-// resolver would refuse before it ever reached compile (Part 2 §5.10: "bare references to a
-// parameterized type without `<>` are resolver errors"), so those two are exercised by hand-
-// building the `LinkedSchema` directly -- the same technique `templates.test.ts` already uses
-// for `compiler/compile.ts`'s own equivalent branches -- to reach `compileJsonSchema` at all.
-describe('gaps (§8.5, one corner of §5.10)', () => {
+// this package's tree-mode compile. `json/schema/compile.ts`'s own top note names what compiles to
+// {@link notImplementedReader} here instead: an entry holding a namespace value, and an application
+// no resolution closed. Neither reaches compile through this package's own resolve/link pipeline,
+// whose resolver closes every application and reads a namespace value as a value, so both are
+// exercised by hand-building the `LinkedSchema` directly to reach `compileJsonSchema` at all.
+describe('gaps (§4.1, one corner of §5.10)', () => {
   function handLinked(entries: Record<string, Top>): LinkedSchema {
     const map = new Map(Object.entries(entries));
     return {

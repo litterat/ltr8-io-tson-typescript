@@ -15,7 +15,7 @@ import { supertypesOf, subtypesOf } from '../src/schema/meta/typedef.js';
  * Each walk case the kernel's `reference` doc names is pinned on its own: a construction is a member, a
  * refinement of a member is one, a type built with another constructor is not, an ABSTRACT record base is a
  * member of `meta.ref<record>` with no values of its own, an instantiation is a member of its constructor's
- * kind where the template it closes is not, and a constructor, whose declaration is a record, is a member of
+ * reference where the parametric record it closes is not, and a constructor, whose declaration is a record, is a member of
  * `meta.ref<record>` and `meta.type_ref`. Then `of`: any type or constructor of the schema's one namespace, a
  * type that is no constructor making the reference one that names values. Last, the kernel's `name_type`
  * slots, typed `meta.identifier_ref`, judged by membership.

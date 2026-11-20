@@ -73,40 +73,30 @@ function tson(root: string, body: string): readonly Diagnostic[] {
   return validateText(new TextEncoder().encode(body), { schema: TEXT_SCHEMA, root }).diagnostics;
 }
 
-/**
- * Whether the text encoding's choice reader already admits a subtype's tag ([TSON-SCHEMA] §5.4's
- * selection). Where it does the two encodings are compared; where it does not, the JSON side alone is
- * asserted and the comparison is not made, so these cases state the JSON rule without waiting on the
- * text reader.
- */
-const TEXT_SELECTS_SUBTYPES = tson('h', '{ i: !circle { name: "a"  r: 1 } }').length === 0;
-
-/** The document is taken -- by both encodings where the text reader selects subtypes -- and the JSON read's value is returned. */
+/** The document is taken by both encodings, and the JSON read's value is returned. */
 function accepted(tsonBody: string, jsonBody: string, root = 'h'): string {
-  if (TEXT_SELECTS_SUBTYPES) expect(tson(root, tsonBody), 'the text encoding').toEqual([]);
+  expect(tson(root, tsonBody), 'the text encoding').toEqual([]);
   const read = json(root, jsonBody);
   expect(read.diagnostics, 'the JSON encoding').toEqual([]);
   return read.text;
 }
 
-/** The JSON refusal is one problem, returned; with the text encoding's verdict beside it where that reader selects subtypes. */
+/** The JSON refusal is one problem, returned, with the text encoding's verdict beside it. */
 function refused(tsonBody: string, jsonBody: string, root = 'h'): Diagnostic {
   const fromJson = json(root, jsonBody).diagnostics;
   expect(fromJson.length, `json: ${JSON.stringify(fromJson)}`).toBe(1);
   const refusal = fromJson[0];
   if (refusal === undefined) throw new Error('unreachable');
-  if (TEXT_SELECTS_SUBTYPES) {
-    const fromText = tson(root, tsonBody);
-    expect(fromText.length, `text: ${JSON.stringify(fromText)}`).toBe(1);
-    const text = fromText[0];
-    if (text === undefined) throw new Error('unreachable');
-    expect(refusal.code, 'the two encodings disagree').toBe(text.code);
-    const path = text.path ?? '';
-    expect(
-      [path, `${path}/$type`, `${path}/$value`],
-      `${refusal.path ?? ''} against ${path}`,
-    ).toContain(refusal.path);
-  }
+  const fromText = tson(root, tsonBody);
+  expect(fromText.length, `text: ${JSON.stringify(fromText)}`).toBe(1);
+  const text = fromText[0];
+  if (text === undefined) throw new Error('unreachable');
+  expect(refusal.code, 'the two encodings disagree').toBe(text.code);
+  const path = text.path ?? '';
+  expect(
+    [path, `${path}/$type`, `${path}/$value`],
+    `${refusal.path ?? ''} against ${path}`,
+  ).toContain(refusal.path);
   return refusal;
 }
 

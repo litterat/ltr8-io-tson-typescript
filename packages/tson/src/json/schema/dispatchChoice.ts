@@ -13,9 +13,10 @@
  * does not hold, the tag is REQUIRED.
  *
  * **A tag is always accepted**, disjoint or not (§8.1): a value's own `$type` places it by name,
- * and §5.4 says which variant a name selects (`choiceSelection.ts`): a name meaning a variant
- * selects it, before any variant it only IS-A; a name IS-A exactly one variant and meaning none
- * selects that one; a name IS-A more than one and meaning none selects none. "Meaning" is
+ * and §5.4 says which variant a name selects (`link/choiceSelection.ts`, the one tally the text
+ * reader reads too): a name meaning a variant selects it, before any variant it only IS-A; a name
+ * IS-A exactly one variant and meaning none selects that one; a name IS-A more than one and meaning
+ * none selects none. "Meaning" is
  * §8.3's identity: a reference is a hop, not a rewrite, so an alias of a variant is the variant
  * (`link/aliasChain.ts`'s `admitting`, which `dispatchTag.ts` applies to a family's subtypes too).
  * A type IS-A one variant by the namespace's `subtypes` index, and is read **as itself**: the
@@ -24,6 +25,12 @@
  * name). A subtype of a variant that is no record is read at the subtype's own reader, whose facets
  * the variant's would not check; one below a sealed family's variant is placed by that family's own
  * selectors, which a choice cannot bypass.
+ *
+ * **An extern variant's names are the ones its position admits** ([TSON-SCHEMA] §5.13, [TSON-JSON]
+ * §8.6), judged of the entries by identity, and every name selecting it routes to its boundary
+ * (`json/schema/extern.ts`), which takes the whole tagged object and judges the tag in the
+ * enclosing scope itself; a wrapper's `$value` there is the foreign value. Its discrimination class
+ * is the entry it lands on, classified in the namespace holding it.
  *
  * **§8.3.1's map escape.** An object whose first member is an annotation member is read as the
  * tagged form before anything else, even at an untagged, disjoint choice whose brace-class variant
@@ -43,9 +50,13 @@ import type { TypeExpr } from '../../schema/meta/typedef.js';
 import { typeExprText } from '../../schema/meta/bodies.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { choiceDisjoint, subtypesOf, type Top } from '../../schema/meta/typedef.js';
+import { choiceDisjoint, type Top } from '../../schema/meta/typedef.js';
 import { discriminationClassOf, type DiscriminationClass } from '../../link/disjointness.js';
-import { admitting, terminal } from '../../link/aliasChain.js';
+import { terminal } from '../../link/aliasChain.js';
+import { choiceSelection } from '../../link/choiceSelection.js';
+import { externVariantNames } from '../../link/externAdmission.js';
+import { externHopsOf } from '../../link/externHops.js';
+import { landingIn } from '../../link/externTarget.js';
 import type { ChoiceBody } from '../../schema/meta/bodies.js';
 import type { JsonReadContext } from '../readContext.js';
 import type { JsonEvent } from '../stream.js';
@@ -55,7 +66,6 @@ import { skipNextValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
 import { lead as leadOf, leadPresent, TYPE, type Lead } from './tagMembers.js';
 import { CHOICE, refusesScope } from './tags.js';
-import { selectChoice } from './choiceSelection.js';
 import { hasChoiceSelfTag, isKeyedType, routeTo, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 
@@ -92,16 +102,16 @@ export function buildChoiceReader(
   schemaLocation: SchemaLocation,
   ctx: CompileContext,
 ): JsonTypeReader {
-  // A type written in place is named by no tag (§4.2): only a named variant is reached by `$type`.
-  const variantNames = body.variants.flatMap((v) => (v.kind === 'inline' ? [] : [v.name]));
   const namesList = body.variants.map(typeExprText).join(' | ');
   // The body's own fact: a choice written in place is no entry, so its fact is on the body the link set it on.
   const disjoint = choiceDisjoint(body) === true;
 
   const byClass = new Map<DiscriminationClass, TypeExpr>();
+  // An extern variant is classified at the entry it lands on, in the namespace holding it (§5.4, §5.13).
+  const hops = externHopsOf(ctx.linkedSchema);
   if (disjoint) {
     for (const variant of body.variants) {
-      const variantClass = discriminationClassOf(variant, ctx.linkedSchema.entries);
+      const variantClass = discriminationClassOf(variant, ctx.linkedSchema.entries, hops);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass.clear();
         break;
@@ -114,32 +124,35 @@ export function buildChoiceReader(
     .sort()
     .join(', ');
 
-  // §5.4's selection ({@link selectChoice}): a name meaning a variant -- the variant itself, or an alias
-  // of what it resolves to ("resolves to a distinct type", §5.4's own "Resolution" paragraph) -- selects
-  // it before any variant the name only IS-A, and a name IS-A exactly one variant selects that one. A
-  // written variant name is flattened to *its own* terminal first (`terminal`), then `admitting`
-  // collects every name whose chain ends there too: a variant that is itself an alias (`either2 =>
-  // (n_of | count)`, `n_of => note`) admits its target (`note`) and every sibling alias (`n2 => note`)
-  // as well. `resolvers` keeps each name's own lazy resolver alongside its `Route`, so `tagged` (below)
-  // can reach the raw reader directly for the sealed/abstract self-tag continuation (`route.ts`'s own
-  // `ChoiceSelfTagReadable`), which needs the reader itself rather than the `Route` wrapper.
-  const entries = ctx.linkedSchema.entries;
+  // §5.4's selection, the one tally both encodings' choice readers read (`link/choiceSelection.ts`): a name meaning
+  // a variant -- the variant itself, or any name whose alias chain ends where the variant's does ("resolves to a
+  // distinct type", §5.4's own "Resolution" paragraph) -- selects it before any variant the name only IS-A, and a
+  // name IS-A exactly one variant selects that one. An extern variant's names are the ones its position admits,
+  // judged of the entries by identity (§5.13). `resolvers` keeps each name's own lazy resolver alongside its
+  // `Route`, so `tagged` (below) can reach the raw reader directly for the sealed/abstract self-tag continuation
+  // (`route.ts`'s own `ChoiceSelfTagReadable`), which needs the reader itself rather than the `Route` wrapper.
+  const linked = ctx.linkedSchema;
+  const entries = linked.entries;
   const lookup = (n: string): Top | undefined => entries.get(n);
-  const terminalOf = new Map<string, string>(
-    variantNames.map((written) => [written, terminal(written, lookup)]),
-  );
-  const selection = selectChoice(
-    variantNames,
-    (variant) => admitting([terminalOf.get(variant) ?? variant], entries),
-    (variant) => {
-      const definition = lookup(terminalOf.get(variant) ?? variant);
-      return definition === undefined ? [] : admitting(subtypesOf(definition), entries);
+  const selection = choiceSelection(body.variants, entries, {
+    externNames: (variant) => {
+      const names = externVariantNames(linked, variant.name);
+      return names === undefined ? undefined : { target: names.named, subtype: names.subtypes };
     },
-  );
+  });
   const routes = new Map<string, Route>();
   const resolvers = new Map<string, () => JsonTypeReader>();
-  for (const [written, variant] of selection.selects) {
-    const keyed = isKeyedType(written, entries);
+  for (const [written, selected] of selection.selects) {
+    const variant = selected.name;
+    // An extern variant's boundary takes the whole tagged object and judges the tag itself, a subtype's name
+    // included (§7.9, [TSON-JSON] §8.6).
+    if (landingIn(linked, variant) !== undefined) {
+      const resolveBoundary = () => ctx.resolve(variant);
+      resolvers.set(written, resolveBoundary);
+      routes.set(written, routeTo(resolveBoundary, isKeyedType(variant, linked)));
+      continue;
+    }
+    const keyed = isKeyedType(written, linked);
     if (selection.named.has(written)) {
       const resolveThis = () => ctx.resolve(written);
       resolvers.set(written, resolveThis);
@@ -150,7 +163,7 @@ export function buildChoiceReader(
     // places by its own selectors -- a sealed family, whose discriminators this position cannot bypass --
     // receives the value and places it itself, and anything else reads the subtype at its own reader,
     // whose facets the variant's reader would not check.
-    const variantDefinition = lookup(terminalOf.get(variant) ?? variant);
+    const variantDefinition = lookup(terminal(variant, lookup));
     const sealed =
       variantDefinition?.kind === 'record' &&
       variantDefinition.extension === 'ABSTRACT' &&

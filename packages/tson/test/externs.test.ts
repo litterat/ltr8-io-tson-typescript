@@ -291,8 +291,10 @@ ${CORE}
   });
 
   it("§5.13: a closure reached through an extern holding another revision's kernel is refused, unfetched", async () => {
+    // Deliberately not this revision's kernel: the Revision 39 identity stands for any other revision's.
+    const anotherRevisionsKernel = 'https://tson.io/2026/39/m/meta.tn';
     const error = await loadError(
-      declaring('k => !meta.extern { schema: "https://tson.io/2026/39/m/meta.tn"  type: text }'),
+      declaring(`k => !meta.extern { schema: "${anotherRevisionsKernel}"  type: text }`),
     );
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as Error).message).toContain("holds the kernel 'tson.io/2026/39/m/meta.tn'");

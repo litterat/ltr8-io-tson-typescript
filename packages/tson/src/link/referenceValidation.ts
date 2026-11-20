@@ -57,11 +57,18 @@ import { inlineRefusal, sameTypeExpr } from '../schema/meta/typeInline.js';
 import { isChoiceDisjoint } from './disjointness.js';
 import { noType } from '../compiler/incompleteEntries.js';
 import { sealedExtern } from './externs.js';
+import { isAThroughHops, NO_HOPS, type ExternHops } from './externHops.js';
+import { landingDefinition } from './externTarget.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
 /** Dependencies {@link validateReferences} needs beyond the merged namespace itself. */
 export interface ValidateReferencesOptions {
+  /**
+   * The namespace's hops through its externs ([TSON-SCHEMA] §5.13): every IS-A this module asks -- a restated
+   * field's type, a bound, a variant that is a choice -- is asked of the entry a name lands on, by identity.
+   */
+  readonly hops?: ExternHops;
   /** This schema's own canonical identity, stamped on every diagnostic. */
   readonly schemaId: string;
   /**
@@ -100,6 +107,7 @@ export function validateReferences(
   options: ValidateReferencesOptions,
 ): void {
   const { schemaId, structureNamespace, receiver, facts } = options;
+  const hops = options.hops ?? NO_HOPS;
   const enumForms = options.enumForms ?? NO_ENUM_FORMS;
   // A field's default or pin at a reference over a type that is no constructor is a value's qualified name,
   // judged by the walk a value body's names take (§5.12).
@@ -116,6 +124,7 @@ export function validateReferences(
         def,
         facts?.get(name)?.head,
         merged,
+        hops,
         structureNamespace,
         enumForms,
         byName,
@@ -170,6 +179,7 @@ function validateEntry(
   def: Top,
   head: string | undefined,
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
   structureNamespace: ReadonlyMap<string, Top> | undefined,
   enumForms: ReadonlyMap<string, Normalization>,
   byName: ValuesByName,
@@ -212,16 +222,17 @@ function validateEntry(
       structureNamespace === undefined
         ? namespace
         : mergeWithFallback(namespace, structureNamespace);
-    validateTypeExpr(parent, lookup, typeParameters(def), name, ' parent');
+    validateTypeExpr(parent, lookup, hops, typeParameters(def), name, ' parent');
   }
 
-  validateBody(name, def, namespace, typeParameters(def), enumForms, byName);
+  validateBody(name, def, namespace, hops, typeParameters(def), enumForms, byName);
 }
 
 function validateBody(
   entryName: string,
   def: Top,
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
   ownParameters: readonly string[],
   enumForms: ReadonlyMap<string, Normalization>,
   byName: ValuesByName,
@@ -248,6 +259,7 @@ function validateBody(
         validateTypeExpr(
           field.type,
           namespace,
+          hops,
           ownParameters,
           entryName,
           ` field '${field.name}'`,
@@ -265,11 +277,11 @@ function validateBody(
           }
         }
       }
-      checkRestatedFieldTypes(entryName, def, namespace);
+      checkRestatedFieldTypes(entryName, def, namespace, hops);
       return;
     }
     default:
-      validateType(def, namespace, ownParameters, entryName, '');
+      validateType(def, namespace, hops, ownParameters, entryName, '');
   }
 }
 
@@ -277,6 +289,7 @@ function validateBody(
 function validateType(
   body: Type,
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
   ownParameters: readonly string[],
   subject: string,
   trail: string,
@@ -284,19 +297,34 @@ function validateType(
   switch (body.kind) {
     case 'namespace':
       validateName(body.keyType, namespace, ownParameters, subject, `${trail} key_type`);
-      validateTypeExpr(body.valueType, namespace, ownParameters, subject, `${trail} value_type`);
+      validateTypeExpr(
+        body.valueType,
+        namespace,
+        hops,
+        ownParameters,
+        subject,
+        `${trail} value_type`,
+      );
       return;
     case 'ref':
       validateName(body.of, namespace, ownParameters, subject, `${trail} of`);
       return;
     case 'map':
       validateName(body.keyType, namespace, ownParameters, subject, `${trail} key_type`);
-      validateTypeExpr(body.valueType, namespace, ownParameters, subject, `${trail} value_type`);
+      validateTypeExpr(
+        body.valueType,
+        namespace,
+        hops,
+        ownParameters,
+        subject,
+        `${trail} value_type`,
+      );
       return;
     case 'array':
       validateTypeExpr(
         body.elementType,
         namespace,
+        hops,
         ownParameters,
         subject,
         `${trail} element_type`,
@@ -307,6 +335,7 @@ function validateType(
         validateTypeExpr(
           element.elementType,
           namespace,
+          hops,
           ownParameters,
           subject,
           `${trail} element[${String(index)}]`,
@@ -318,6 +347,7 @@ function validateType(
         validateTypeExpr(
           variant,
           namespace,
+          hops,
           ownParameters,
           subject,
           `${trail} variant[${String(index)}]`,
@@ -326,7 +356,7 @@ function validateType(
       checkVariantsAreDistinct(subject, body, namespace);
       checkVariantsAreNotVoid(subject, body, namespace);
       checkVariantsAreNamed(subject, trail, body, namespace);
-      checkChoiceVariantsAreDisjoint(subject, trail, body, namespace);
+      checkChoiceVariantsAreDisjoint(subject, trail, body, namespace, hops);
       return;
     }
     case 'record':
@@ -334,6 +364,7 @@ function validateType(
         validateTypeExpr(
           field.type,
           namespace,
+          hops,
           ownParameters,
           subject,
           `${trail} field '${field.name}'`,
@@ -342,7 +373,15 @@ function validateType(
       }
       return;
     case 'apply':
-      validateApplication(body.head, body.arguments, namespace, ownParameters, subject, trail);
+      validateApplication(
+        body.head,
+        body.arguments,
+        namespace,
+        hops,
+        ownParameters,
+        subject,
+        trail,
+      );
       return;
     default:
       return; // no type reference of their own to validate
@@ -526,6 +565,7 @@ function asWritten(token: Token): string {
 function validateTypeExpr(
   expr: TypeExpr,
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
   ownParameters: readonly string[],
   subject: string,
   trail: string,
@@ -541,7 +581,7 @@ function validateTypeExpr(
           'inside a type, nor at any other slot (§5.2)',
       );
     }
-    validateType(expr.of, namespace, ownParameters, subject, trail);
+    validateType(expr.of, namespace, hops, ownParameters, subject, trail);
     return;
   }
   validateName(expr, namespace, ownParameters, subject, trail);
@@ -621,6 +661,7 @@ function validateApplication(
   head: TypeRef,
   argumentsWritten: readonly TypeRef[],
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
   ownParameters: readonly string[],
   subject: string,
   trail: string,
@@ -657,7 +698,7 @@ function validateApplication(
     const bound = declared[index]?.bound;
     if (bound === undefined || argument.param === true || ownParameters.includes(argument.name))
       return;
-    if (!isA(argument.name, bound.name, namespace)) {
+    if (!isA(argument.name, bound.name, namespace, hops)) {
       throw new TsonSchemaValidationError(
         `${context}: '${head.name}<...>' binds '${declared[index]?.name ?? ''}' to '${argument.name}', which is ` +
           `not a type that IS-A ${bound.name} -- an argument names a type that IS-A its parameter's written ` +
@@ -667,14 +708,26 @@ function validateApplication(
   });
 }
 
-/** Whether the type `name` IS-A `bound`: one type past their alias hops (§8.3), or `bound` among its supertypes. */
-function isA(name: string, bound: string, namespace: ReadonlyMap<string, Top>): boolean {
+/**
+ * Whether the type `name` IS-A `bound`: one type past their hops, alias and extern alike, by identity (§8.3, §5.13),
+ * or `bound` among its supertypes, in the namespace holding the entry it lands on.
+ */
+function isA(
+  name: string,
+  bound: string,
+  namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
+): boolean {
   const lookup = lookupIn(namespace);
   const own = terminal(name, lookup);
   const theirs = terminal(bound, lookup);
   if (own === theirs) return true;
   const supertypes = supertypesOf(namespace.get(own));
-  return supertypes.includes(theirs) || supertypes.includes(bound);
+  return (
+    supertypes.includes(theirs) ||
+    supertypes.includes(bound) ||
+    isAThroughHops(name, bound, lookup, hops)
+  );
 }
 
 // ── Choice variants ──────────────────────────────────────────────────────────────────────────
@@ -740,35 +793,61 @@ function checkVariantsAreNamed(
 }
 
 /**
- * A variant that is a choice is disjoint, judged at the end of its alias chain (§5.4, §8.3): a value of it carries
- * the tag naming it, and a value carries one tag ([TSON-DATA] §3.2), so it is read at the nested choice untagged,
- * where a choice that is not disjoint could select nothing. A choice nests one deep.
+ * A variant that is a choice is disjoint, judged at the entry it reaches past its alias chain and any extern (§5.4,
+ * §8.3, §5.13): a value of it carries the tag naming it, and a value carries one tag ([TSON-DATA] §3.2), so it is read
+ * at the nested choice untagged, where a choice that is not disjoint could select nothing. A choice nests one deep.
+ * One rule for both: a choice reached through an extern is a choice of another schema, whose variants are no names of
+ * this one, so the advice for it is an extern per variant.
  */
 function checkChoiceVariantsAreDisjoint(
   subject: string,
   trail: string,
   choice: ChoiceBody,
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops,
 ): void {
   const lookup = lookupIn(namespace);
   const nested = new Map<string, readonly string[]>();
+  const foreign = new Set<string>();
   for (const variant of choice.variants) {
     if (variant.kind === 'inline' || variant.param === true) continue;
+    const landing = hops.landing(variant.name);
+    if (landing !== undefined) {
+      const reached = landingDefinition(landing);
+      if (reached?.kind !== 'choice' || reached.disjoint !== false) continue;
+      nested.set(variant.name, reached.variants.map(typeExprText));
+      foreign.add(variant.name);
+      continue;
+    }
     const inner = terminalDefinition(variant.name, lookup);
-    if (inner?.kind !== 'choice' || isChoiceDisjoint(inner.variants, namespace)) continue;
+    if (inner?.kind !== 'choice' || isChoiceDisjoint(inner.variants, namespace, hops)) continue;
     nested.set(variant.name, inner.variants.map(typeExprText));
   }
   if (nested.size === 0) return;
   const written = choice.variants.map(typeExprText);
-  const listed = [...new Set(written.flatMap((variant) => nested.get(variant) ?? [variant]))];
+  const listed = [
+    ...new Set(
+      written.flatMap((variant) =>
+        foreign.has(variant) ? [variant] : (nested.get(variant) ?? [variant]),
+      ),
+    ),
+  ];
   const names = [...nested.keys()].join(', ');
+  const inPlace = `'( ${listed.join(' | ')} )'`;
+  const advice =
+    foreign.size === 0
+      ? `list its variants in its place, ${inPlace}`
+      : foreign.size === nested.size
+        ? 'name each of its variants by an extern of its own and list those in its place'
+        : `list its variants in its place, ${inPlace}, naming each variant of [${[...foreign].join(', ')}] by an ` +
+          'extern of its own';
   throw new TsonSchemaValidationError(
     `'${subject}'${trail}: the choice '( ${written.join(' | ')} )' has ` +
       (nested.size === 1
         ? `a variant '${names}' that is a choice`
         : `variants [${names}] that are choices`) +
       ' not disjoint -- a value of one carries the tag naming it and no other, so it is read there untagged ' +
-      `and none of its variants could be selected (§5.4): list its variants in its place, '( ${listed.join(' | ')} )'`,
+      `and none of its variants could be selected (§5.4${foreign.size === 0 ? '' : ', §5.13'}): ${advice}`,
   );
 }
 

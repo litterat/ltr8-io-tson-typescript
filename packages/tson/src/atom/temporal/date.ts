@@ -8,7 +8,7 @@
  * in one hand-written pass -- shape and calendar validity together, since JS has nothing to
  * split the work with. A non-leap 29th of February therefore fails inside `readFullDate` itself
  * and reads back the same way the Java's `DateTimeParseException` does: a {@link
- * TsonAtomParseError}, not a a validation error -- the token never denotes a real
+ * TsonAtomParseError}, not a validation error -- the token never denotes a real
  * calendar date at all, so this isn't a value falling outside a declared bound.
  *
  * See `CONFORMANCE.md` and `rfc3339.ts`'s own TSDoc for why `!date` rejects ISO 8601's

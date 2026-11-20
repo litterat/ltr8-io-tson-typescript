@@ -44,7 +44,7 @@ export function buildDeclaredReader(
   for (const entry of ctx.linkedSchema.entries.keys()) {
     closure.set(
       entry,
-      routeTo(() => ctx.resolve(entry), isKeyedType(entry, ctx.linkedSchema.entries)),
+      routeTo(() => ctx.resolve(entry), isKeyedType(entry, ctx.linkedSchema)),
     );
   }
 

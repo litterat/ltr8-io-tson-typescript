@@ -631,6 +631,9 @@ function resolveAgainstRegistry(
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
     maxWaitDepth: limits.maxWaitDepth,
+    maxNestingDepth: limits.maxNestingDepth,
+    // An extern's schema was loaded with the imports (§3.4.1, §5.13): the registry holds it by identity.
+    externSchema: (identity) => schemas.get(identity),
   });
   // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map -- a type written in place is
   // no entry and counts toward none -- and `resolved.entries` is local-only (`Schema.entries`'s own

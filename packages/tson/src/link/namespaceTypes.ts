@@ -57,7 +57,7 @@ export function checkKindsReferencesAndNamespaceTypes(
     try {
       switch (value.kind) {
         case 'ref':
-          checkReferenceOf(spelled(name), value, local);
+          checkReferenceOf(spelled(name), value, local, options.hops);
           break;
         case 'namespace':
           checkNamespaceType(spelled(name), value, local, heads);
@@ -87,7 +87,12 @@ export function checkKindsReferencesAndNamespaceTypes(
  * entry, a value entry or nothing (§4.2) -- and a refinement of a reference narrows `of` (§5.7): the refined `of` is its source's or
  * IS-A it, so every name the refinement admits the source admits too.
  */
-function checkReferenceOf(name: string, reference: RefBody, local: EntryLookup): void {
+function checkReferenceOf(
+  name: string,
+  reference: RefBody,
+  local: EntryLookup,
+  hops: ExternHops | undefined,
+): void {
   const end = terminal(reference.of.name, local);
   const of = local(end);
   if (of === undefined) {
@@ -99,20 +104,25 @@ function checkReferenceOf(name: string, reference: RefBody, local: EntryLookup):
   if (refusal !== undefined) {
     throw new TsonSchemaValidationError(`'${name}' is a reference, but ${refusal}`);
   }
-  checkReferenceNarrows(name, reference, local);
+  checkReferenceNarrows(name, reference, local, hops);
 }
 
 /**
  * §5.7's rule for a refinement of a reference, `!meta.type_ref ^ { of: ... }`: its `of` is its source's or
  * IS-A it. The resolver binds the refinement before the names `of` holds need be resolved, so the IS-A is
- * asked here, over the one namespace both resolve in; the source is the reference the refinement's chain
- * names, past its alias hops.
+ * asked here, over the one namespace both resolve in, through its hops; the source is the reference the
+ * refinement's chain names, past its alias hops.
  */
-function checkReferenceNarrows(name: string, reference: RefBody, local: EntryLookup): void {
+function checkReferenceNarrows(
+  name: string,
+  reference: RefBody,
+  local: EntryLookup,
+  hops: ExternHops | undefined,
+): void {
   for (const supertype of supertypesOf(reference)) {
     const source = local(terminal(supertype, local));
     if (source?.kind !== 'ref') continue;
-    if (!isA(reference.of.name, source.of.name, local)) {
+    if (!isA(reference.of.name, source.of.name, local, hops)) {
       throw new TsonSchemaValidationError(
         `'${name}': not a valid refinement of '!${supertype}' (§5.7): of '${reference.of.name}' is not ` +
           `'${source.of.name}' or IS-A it, so the refinement admits names the source refuses -- ` +

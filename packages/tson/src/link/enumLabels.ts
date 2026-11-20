@@ -1,6 +1,6 @@
 /**
  * What an enum's `name_type` obliges ([TSON-SCHEMA] §7.4): that it names an identifier family -- a
- * member of `identifier_kind`, whose form implies NFC (`nameType.ts`'s `nameTypeFormRefusal`) --
+ * member of `meta.identifier_ref`, whose form implies NFC (`nameType.ts`'s `nameTypeFormRefusal`) --
  * that each member is a value of it, and that no two members are one value under its equality --
  * and, because the answer lives in a namespace the body cannot see, where `name_type` resolves at
  * all. `fieldNames.ts` holds a record's field names to the same three.

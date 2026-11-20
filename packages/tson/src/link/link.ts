@@ -376,6 +376,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     refusedEnums,
     enumProfiles,
     nameTypes,
+    inPlaceNameTypes: fieldNameTypes.inPlaceNameTypes,
     ...(receiver === undefined ? {} : { receiver }),
   });
 
@@ -386,6 +387,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   });
 
   validateReferences(merged, {
+    hops,
     schemaId: schema.id,
     facts,
     enumForms,
@@ -411,7 +413,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   for (const [name, found] of schema.restatements ?? []) {
     if (!localNames.has(name) || isParametric(merged.get(name))) continue;
     try {
-      checkRestatementsOffTheChain(name, found, merged);
+      checkRestatementsOffTheChain(name, found, merged, hops);
     } catch (error: unknown) {
       if (!(error instanceof TsonSchemaValidationError)) throw error;
       if (receiver === undefined) throw error;

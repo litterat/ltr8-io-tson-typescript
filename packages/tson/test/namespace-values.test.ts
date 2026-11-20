@@ -422,14 +422,14 @@ describe('a namespace value’s names meet §8.2 at the read ([TSON-DATA] §8.2,
 });
 
 describe('a diagnostic about a reference names the spelling the author wrote (§4.2, §8.2)', () => {
-  it('a reference slot of a layer’s record is named as written, never its minted entry', () => {
+  it('a reference written in place at a layer’s record slot is named as the author wrote it', () => {
     let message = '';
     try {
       withLayer().resolveSchema(governed('orders => !interface { place => { request: text } }'));
     } catch (error) {
       message = (error as Error).message;
     }
+    // The slot's type is a reference written in place: no entry stands for it, so its spelling is the name.
     expect(message).toContain('meta.ref<meta.record>');
-    expect(message).not.toMatch(/reference_type_record_false_[0-9a-f]{8}/);
   });
 });

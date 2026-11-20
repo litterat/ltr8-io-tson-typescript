@@ -227,7 +227,7 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
     });
   });
 
-  it('instance with typeParams is a template with the same payload shape -- a collection payload is ordinary', () => {
+  it('instance with typeParams parses to the same payload shape -- a collection payload is ordinary', () => {
     // The payload is read with the *data* grammar (§2.3-§2.9): 'variants: [T error]' is a
     // record field holding an array of two bare tokens, exactly as ordinary as a scalar payload.
     const def = typeDefOf('<T> !choice { variants: [T error] }');

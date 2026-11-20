@@ -33,6 +33,7 @@ import {
 import type { EventSource, TsonEvent } from '../stream/event.js';
 import type { ReadContext } from './contracts.js';
 import { skipAnnotations } from './tree/grammar.js';
+import { foreignScopeSuffix, type ForeignScope } from '../link/foreignScope.js';
 
 // ---------------------------------------------------------------------------------------------
 // RFC 6901 escaping -- `~` before `/`, matching `tree/accessors.ts`'s own (unexported) helper.
@@ -106,17 +107,6 @@ interface Cursor {
 }
 
 /**
- * The scope a foreign value is read in ([TSON-SCHEMA] §7.9): the foreign schema whose namespace its names resolve
- * in, the extern it was read through, and the schema declaring that extern, which is the enclosing scope's. A
- * diagnostic raised inside the value names both.
- */
-export interface ForeignScope {
-  readonly extern: string;
-  readonly declaredIn: string;
-  readonly schema: string;
-}
-
-/**
  * One foreign value's scope, entered at `start`: the schema pointer renders the steps after it, into the foreign
  * schema, and a diagnostic raised inside names every boundary crossed.
  */
@@ -128,11 +118,10 @@ interface Scope {
 
 /** What a diagnostic raised inside `scope` adds to its message: every boundary crossed, innermost first. */
 function scopeSuffix(scope: Scope): string {
-  let out = ` (read in the scope of ${scope.boundary.schema}, through the extern '${scope.boundary.extern}' of ${scope.boundary.declaredIn}`;
-  for (let outer = scope.parent; outer !== undefined; outer = outer.parent) {
-    out += `, within '${outer.boundary.extern}' of ${outer.boundary.declaredIn}`;
-  }
-  return `${out}; [TSON-SCHEMA] §7.9)`;
+  const enclosing: ForeignScope[] = [];
+  for (let outer = scope.parent; outer !== undefined; outer = outer.parent)
+    enclosing.push(outer.boundary);
+  return foreignScopeSuffix(scope.boundary, enclosing);
 }
 
 /**

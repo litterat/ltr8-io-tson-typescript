@@ -17,27 +17,31 @@ import { dependentOn, supertypesOf } from '../schema/meta/typedef.js';
 import { sameTypeExpr } from '../schema/meta/typeInline.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
 import { restatesDependent } from './dependentFields.js';
+import { isAThroughHops, NO_HOPS, type ExternHops } from './externHops.js';
 
 /**
- * §7.2's IS-A between two names of `namespace`: past their alias hops they are one entry, or the first's
- * chain lists the second.
+ * §7.2's IS-A between two names of `namespace`: past their hops, alias and extern alike, they are one entry by
+ * identity, or the first's chain lists the second (`externHops.ts`'s {@link isAThroughHops}).
  */
-export function isA(sub: string, sup: string, namespace: EntryLookup): boolean {
-  const wanted = terminal(sup, namespace);
-  const end = terminal(sub, namespace);
-  if (end === wanted) return true;
-  const definition = namespace(end);
-  return (
-    definition !== undefined &&
-    supertypesOf(definition).some((supertype) => terminal(supertype, namespace) === wanted)
-  );
+export function isA(
+  sub: string,
+  sup: string,
+  namespace: EntryLookup,
+  hops: ExternHops = NO_HOPS,
+): boolean {
+  return isAThroughHops(sub, sup, namespace, hops);
 }
 
 /**
  * Whether `restated`'s type narrows `inherited`'s: two names when the same entry or one IS-A it, or `void` at a
  * voidable position; two types written in place only when equal; and a name and a type in place never (§8.2).
  */
-function narrows(inherited: RecordField, restated: RecordField, namespace: EntryLookup): boolean {
+function narrows(
+  inherited: RecordField,
+  restated: RecordField,
+  namespace: EntryLookup,
+  hops: ExternHops,
+): boolean {
   // A dependent field is restated only as itself, which `restatesDependent` judges before this is asked.
   if (dependentOn(inherited.type) !== undefined || dependentOn(restated.type) !== undefined) {
     return true;
@@ -49,19 +53,11 @@ function narrows(inherited: RecordField, restated: RecordField, namespace: Entry
     // A field typed by a name no entry holds is the reference checks' to report.
     return true;
   }
-  if (isA(to.name, from.name, namespace)) return true;
+  if (isA(to.name, from.name, namespace, hops)) return true;
   const end = namespace(terminal(to.name, namespace));
   return restated.voidable && end?.kind === 'void_type';
 }
 
-/**
- * Judges the fields `record` restates against the nearest closed record on its chain. A supertype another
- * supertype lists was judged when that one linked, so only the minimal ones are asked, and the diagnostic
- * names the source the author wrote. A supertype that is still open (the family base an applied operand
- * reaches) has parameter-typed fields and is skipped.
- *
- * @throws TsonSchemaValidationError naming the first source whose restated fields do not narrow.
- */
 /**
  * §5.8's rule over the restatements no record on the entry's closed chain holds: over an application at an operand,
  * which reaches no edge to its head and none at all where no declaration names it, and over a subtraction's
@@ -74,6 +70,7 @@ export function checkRestatementsOffTheChain(
   entryName: string,
   restatements: readonly Restatement[],
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops = NO_HOPS,
 ): void {
   const lookup: EntryLookup = (name) => namespace.get(name);
   const violations = new Map<string, string[]>();
@@ -83,6 +80,7 @@ export function checkRestatementsOffTheChain(
       restatement.inherited,
       restatement.restated,
       lookup,
+      hops,
     );
     if (violation === undefined) continue;
     const source = typeExprText(restatement.source);
@@ -99,11 +97,12 @@ function restatementViolation(
   inherited: RecordField,
   restated: RecordField,
   lookup: EntryLookup,
+  hops: ExternHops,
   shown: (name: string) => string = (name) => name,
 ): string | undefined {
   const dependent = restatesDependent(field, inherited, restated);
   if (dependent !== undefined) return dependent;
-  if (narrows(inherited, restated, lookup)) return undefined;
+  if (narrows(inherited, restated, lookup, hops)) return undefined;
   const oneIsANameOneInPlace =
     (restated.type.kind === 'inline') !== (inherited.type.kind === 'inline');
   return (
@@ -124,10 +123,19 @@ function refuseRestatement(entryName: string, source: string, violations: readon
   }
 }
 
+/**
+ * Judges the fields `record` restates against the nearest closed record on its chain. A supertype another
+ * supertype lists was judged when that one linked, so only the minimal ones are asked, and the diagnostic
+ * names the source the author wrote. A supertype that is still open (the family base an applied operand
+ * reaches) has parameter-typed fields and is skipped.
+ *
+ * @throws TsonSchemaValidationError naming the first source whose restated fields do not narrow.
+ */
 export function checkRestatedFieldTypes(
   entryName: string,
   record: RecordBody,
   namespace: ReadonlyMap<string, Top>,
+  hops: ExternHops = NO_HOPS,
   shown: (name: string) => string = (name) => name,
 ): void {
   const lookup: EntryLookup = (name) => namespace.get(name);
@@ -145,7 +153,7 @@ export function checkRestatedFieldTypes(
     for (const [fieldName, inherited] of source.fields.entries) {
       const restated = record.fields.entries.get(fieldName);
       if (restated === undefined) continue;
-      const violation = restatementViolation(fieldName, inherited, restated, lookup, shown);
+      const violation = restatementViolation(fieldName, inherited, restated, lookup, hops, shown);
       if (violation !== undefined) violations.push(violation);
     }
     refuseRestatement(entryName, shown(supertype), violations);

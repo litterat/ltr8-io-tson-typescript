@@ -56,6 +56,8 @@ export interface FieldNameTypes {
   readonly violations: readonly FieldNameViolation[];
   /** Each record whose name type is stated and judged sound, by name. */
   readonly nameTypes: ReadonlyMap<string, FieldNameType>;
+  /** Each record written in place whose name type is stated and judged sound, by its body (§4.2, §5.2). */
+  readonly inPlaceNameTypes: ReadonlyMap<RecordBody, FieldNameType>;
 }
 
 function recordOf(value: Top | undefined): RecordBody | undefined {
@@ -74,6 +76,7 @@ export function checkFieldNameTypes(
 ): FieldNameTypes {
   const violations: FieldNameViolation[] = [];
   const nameTypes = new Map<string, FieldNameType>();
+  const inPlaceNameTypes = new Map<RecordBody, FieldNameType>();
   const local: EntryLookup = (name) => merged.get(name);
   for (const name of localNames) {
     const entry = merged.get(name);
@@ -97,9 +100,12 @@ export function checkFieldNameTypes(
         violations.push({ entry: name, message: outcome });
         break;
       }
+      if (outcome !== undefined && inPlace.nameType !== undefined) {
+        inPlaceNameTypes.set(inPlace, { typeName: inPlace.nameType, definition: outcome });
+      }
     }
   }
-  return { violations, nameTypes };
+  return { violations, nameTypes, inPlaceNameTypes };
 }
 
 /** The violation, or the name type `body` was judged under (`undefined` where none resolves to judge by). */

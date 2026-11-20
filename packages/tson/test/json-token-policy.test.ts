@@ -1,6 +1,6 @@
 /**
- * A port of the Java reference's `JsonScriptPolicyTest`
- * (`tson-json/src/test/java/io/ltr8/tson/json/JsonScriptPolicyTest.java`) -- [TSON-DATA] §8.2's
+ * A port of the Java reference's `JsonTokenPolicyTest`
+ * (`tson-json/src/test/java/io/ltr8/tson/json/JsonTokenPolicyTest.java`) -- [TSON-DATA] §8.2's
  * token surface ("Values") on the JSON side, reached into this encoding by [TSON-JSON] §9.4: "the
  * token policy, when a deployment sets one, reaches map keys and string values". Exercises
  * `ReadJsonOptions.tokenPolicy` (`json/facade.ts`) and `json/schema/tokenHygiene.ts`, the two
@@ -52,7 +52,7 @@ function under(policy: TokenPolicy | undefined, typeName: string, json: string) 
   });
 }
 
-describe('JsonScriptPolicyTest', () => {
+describe('JsonTokenPolicyTest', () => {
   it('a_string_value_whose_scripts_the_policy_refuses_is_refused', () => {
     const result = under(tokenPolicyAt('ASCII_ONLY'), 'note', `{"text": "p${CYRILLIC_A}ssword"}`);
     expect(result.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);

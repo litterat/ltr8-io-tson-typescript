@@ -1,8 +1,9 @@
 /**
  * The names a value entry holds -- a {@link Namespace} of a meta layer's own vocabulary -- resolved
  * and judged by the slots they were read at (Part 2 §4.2, §5.12): a type's name at a slot typed by
- * a kind, judged a member of the kind; a value's qualified name at a slot typed `ref<T>`, judged a
- * value IS-A `T`; and a `type_ref` slot's application, judged by resolution and arity.
+ * a reference over a constructor (`meta.ref<meta.record>`), judged a member of it; a value's
+ * qualified name at a slot typed by a reference over a type (`meta.ref<T>`), judged a value IS-A
+ * `T`; and a `type_ref` slot's application, judged by resolution and arity.
  *
  * **Fed by the read, not by a walk through the meta's declarations.** Each name was kept with its
  * slot (`schema/meta`'s `NameSlot`) by the read that produced it (`schema/namespaceReader.ts`), so
@@ -80,7 +81,7 @@ export interface ValuesByNameOptions {
   /** The entry facts of that namespace, where a slot type's applied constructor is recorded (§8.1). */
   readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   readonly receiver?: DiagnosticsReceiver;
-  /** The namespace's externs, each a member of a kind where the entry it lands on is (§5.13). Absent means none. */
+  /** The namespace's externs, each a member of a reference over a constructor where the entry it lands on is (§5.13). Absent means none. */
   readonly hops?: ExternHops;
 }
 
@@ -135,7 +136,7 @@ export function checkValuesByName(
 }
 
 /**
- * Every name `entry` holds at a kind-, reference- or `type_ref`-typed slot, with its path: a value entry's, and an
+ * Every name `entry` holds at a reference- or `type_ref`-typed slot, with its path: a value entry's, and an
  * incomplete entry's fields as their declared types read them -- judged as a construction's are where it writes
  * them, completed or not (§4.2, §5.5).
  */
@@ -147,7 +148,7 @@ function namesIn(entry: Top): readonly HeldName[] {
   return namesInValue(entry.value, []);
 }
 
-/** Every name `value`, at `at`, holds at a kind-, reference- or `type_ref`-typed slot, with its path. */
+/** Every name `value`, at `at`, holds at a reference- or `type_ref`-typed slot, with its path. */
 function namesInValue(value: MetaValue, at: readonly string[]): HeldName[] {
   const found: HeldName[] = [];
   const walk = (meta: MetaValue, path: readonly string[]): void => {
@@ -202,7 +203,7 @@ export class ValuesByName {
     this.structure = this.local;
   }
 
-  /** A slot's declared type as the meta's author wrote it (`kind<record>`, `link/facts.ts`). */
+  /** A slot's declared type as the meta's author wrote it (`meta.ref<meta.record>`, `link/facts.ts`). */
   private slotSpelling(type: string): string {
     return spellingOf(type, this.structure(type), this.options.structureFacts);
   }
@@ -323,8 +324,8 @@ export class ValuesByName {
 
   /**
    * A slot over a constructor holds a type's name, its path from the root -- one segment once a schema map
-   * nested as an entry has been entered by its members' names -- a member of the kind (§4.2): an entry whose
-   * value is of the kind's `of`. A value entry is refused as a value, however many segments name it, and a type
+   * nested as an entry has been entered by its members' names -- a member of the reference (§4.2): an entry
+   * whose value is of the reference's `of`. A value entry is refused as a value, however many segments name it, and a type
    * admits no further segment.
    */
   private judgeMember(

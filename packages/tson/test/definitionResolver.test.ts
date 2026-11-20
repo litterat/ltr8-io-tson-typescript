@@ -1038,7 +1038,7 @@ describe('annotations (§6)', () => {
   });
 });
 
-// ── Template applications (§5.10) and constructor application/refinement (§5.5, §5.6) ──────
+// ── Applications of parametric records (§5.10) and constructor application/refinement (§5.5, §5.6)
 
 /** `!integer`'s constraint vocabulary in the structure namespace, and a minimal hand-rolled reader for it -- this work package's own test scaffolding stands in for a full compiled reader (a later work package's own concern), the same way the reference implementation's own isolated tests do. */
 function integerTypeStructure(): Top {

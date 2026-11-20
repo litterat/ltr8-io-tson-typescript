@@ -6,13 +6,13 @@
  * `LinkedSchema.nameTypes`.
  *
  * **Where it resolves.** A `name_type` an author wrote resolves in the schema's own namespace
- * first, then the governing meta's, as an enum's does (§7.4): `field_name => !identifier_type {
- * start_add: "@" }` declared locally is what `name_type: field_name` names. The absent default is
+ * first, then the governing meta's, as an enum's does (§7.4): `field_name =>
+ * !unicode.identifier_type { start_add: "@" }` declared locally is what `name_type: field_name` names. The absent default is
  * `meta.identifier` (§5.2), resolved in the governing meta first, so a schema's own entry of that
  * spelling does not retype every record that states nothing. Two name types are one by the entry they
  * resolve to (§8.3), never by spelling.
  *
- * **What may stand there** is a member of `identifier_kind` (§4.2): an entry built with
+ * **What may stand there** is a member of `meta.identifier_ref` (§4.2): an entry built with
  * `identifier_type` -- an instance, a refinement of one, or an alias of either -- which is to say one whose value, at the end of its
  * alias chain, is an `identifier_type` body. And its `normalization` must imply NFC
  * ({@link nameTypeFormRefusal}).
@@ -61,7 +61,7 @@ export function recordNameType(
   return undefined;
 }
 
-/** Whether `type` is an identifier family: a member of `identifier_kind` (§4.2), built with `identifier_type`. */
+/** Whether `type` is an identifier family: a member of `meta.identifier_ref` (§4.2), built with `identifier_type`. */
 export function isIdentifierFamily(
   type: ResolvedNameType,
 ): type is ResolvedNameType & { readonly definition: IdentifierType } {

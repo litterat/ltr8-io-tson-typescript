@@ -690,7 +690,7 @@ describe('§6.4 maps', () => {
 // `aTokenRefusalLeavesNothingInEveryModeAndBothEncodings` still has no *cross-encoding* analogue,
 // though the gap it used to be blocked on is now half-closed: `ReadJsonOptions.tokenPolicy`
 // exists and is wired through (`json/schema/tokenHygiene.ts`, exercised in full by
-// `json-token-policy.test.ts`'s own port of `JsonScriptPolicyTest`), but the Java case compares
+// `json-token-policy.test.ts`'s own port of `JsonTokenPolicyTest`), but the Java case compares
 // **four** modes -- TSON tree, TSON bind, JSON tree, JSON bind -- and none of the four map onto
 // what this port can build a genuine four-way comparison from: TSON bind and JSON bind have no
 // analogue at all (above), the *schemaless* TSON tree reader honours `tokenPolicy`
@@ -897,17 +897,17 @@ describe('§5.5 a text family’s normalization', () => {
   });
 });
 
-// \u2500\u2500 A record template under a sealed base ([TSON-SCHEMA] \u00a75.10, \u00a78.1) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u2500\u2500 A parametric record under a sealed base ([TSON-SCHEMA] \u00a75.10, \u00a78.1) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-describe('\u00a76.1.5 a record template under a sealed base', () => {
+describe('\u00a76.1.5 a parametric record under a sealed base', () => {
   /**
-   * A record template IS-A a sealed base is no member of it, though it pins the selector: it has
-   * no values, and its applications are the members. So `pending`'s `"wait"` selects nothing, and
-   * the refusal offers only what a document could select -- never a route to the template, whose
-   * own reader would refuse for want of a subtype, naming a type the position never offered. This
-   * port's `expected` names the members that pin, where the reference's names their pins.
+   * A parametric record composing a sealed base is no member of it, though it pins the selector: it
+   * is no type, and the declarations naming its applications are the members (§5.10). So
+   * `pending`'s `"wait"` selects nothing, and the refusal offers only what a document could select
+   * -- never a route to the parametric record, which no position names. This port's `expected`
+   * names the members that pin, where the reference's names their pins.
    */
-  it('a record template under a sealed base is no member of it, in both', () => {
+  it('a parametric record under a sealed base is no member of it, in both', () => {
     sameRule(
       'ruling',
       '{ v: { v_kind: "wait"  detail: 1 } }',

@@ -9,7 +9,7 @@
  * - **OPEN with subtypes** — untagged, the value is the record itself and goes to its own concrete
  *   reader ({@link untagged}); a tag restating the record goes there too, and one naming a subtype
  *   goes to that subtype.
- * - **ABSTRACT** (closed, or a family-base template) — no direct instances, so the tag is REQUIRED
+ * - **ABSTRACT** — no direct instances, so the tag is REQUIRED
  *   and the base itself is not admissible: the failure lands before the object's shape is
  *   consulted, the same refusal TSON text gives a missing `!type-ref` at the same position
  *   (`compiler/subsumption.ts`'s own `guardSubsumption`, whose diagnostics this module matches —

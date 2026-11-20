@@ -86,7 +86,7 @@ function deps(overrides: Partial<SchemaResolverDeps> = {}): SchemaResolverDeps {
   };
 }
 
-/** The real readers over the real kernel -- what every sugar/template test in this file needs. */
+/** The real readers over the real kernel -- what every sugar and parametric-record test in this file needs. */
 function depsWithReader(): SchemaResolverDeps {
   return deps();
 }
@@ -442,7 +442,7 @@ describe('parametric records and their applications (§5.10), end to end', () =>
     );
     // §8.2: `outcome_of` is the instantiation entry itself (no minted twin) -- and the `abstract`
     // the author wrote on `outcome` is each application's, so this *closed* record's own
-    // `extension` states it too, distinct from the template's own derived fact just above.
+    // `extension` states it too, distinct from the parametric record's own derived fact just above.
     const outcomeOf = entryOf(schema, 'outcome_of');
     expect(isRecordBody(outcomeOf) && outcomeOf.extension).toBe('ABSTRACT');
   });
@@ -483,7 +483,7 @@ describe('§5.8 composition operand that is a fully-bound application, end to en
   });
 
   it(
-    'a removal drops an open application from the lineage a template keeps for names ' +
+    'a removal drops an open application from the lineage a parametric record keeps for names ' +
       '(§5.9 rule 10): `ok => <T> result<T> - { extra }` composes no IS-A edge to `result`',
     () => {
       const doc = document(

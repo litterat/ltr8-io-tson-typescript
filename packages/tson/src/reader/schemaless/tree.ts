@@ -140,8 +140,9 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    * **Never checked against a field name, type-ref, or annotation name.** Those are `identifier`
    * positions governed by {@link identifierPolicy} alone (`checkIdentifierHygiene`,
    * {@link reportNameHygiene}); this field governs the positions that are not names at all. The
-   * pinned Java reference checks both surfaces together at its own event-source layer, where the
-   * four text-bearing event kinds are not yet told apart (`ScriptPolicyEventSource`'s own doc); this
+   * pinned Java reference checks both surfaces together where its data stream emits each event,
+   * where the four text-bearing event kinds are not yet told apart (`TsonDataStream.checkTokenPolicy`'s
+   * own doc); this
    * reader already dispatches on event kind before either check runs, so the two surfaces are kept
    * separate here rather than merged incidentally.
    */
