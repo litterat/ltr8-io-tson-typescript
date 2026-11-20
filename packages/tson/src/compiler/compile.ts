@@ -71,6 +71,7 @@ import { externHopsOf } from '../link/externHops.js';
 import { externBoundary, type ForeignReaders } from './externReader.js';
 import { externVariantNames } from '../link/externAdmission.js';
 import { fieldNameRule } from '../reader/tree/fieldNames.js';
+import { bodyNameType } from '../link/bodyNameType.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
 // ── CompiledSchema ───────────────────────────────────────────────────────────────────────────
@@ -223,7 +224,10 @@ function buildReader(
     return guard(built);
   }
   if (isRecordBody(body)) {
-    const fieldNames = fieldNameRule(schema.nameTypes.get(name));
+    // A record written in place is no entry, so the name type it states is read off its own body.
+    const fieldNames = fieldNameRule(
+      inPlace ? bodyNameType(body, schema.entries) : schema.nameTypes.get(name),
+    );
     const built = recordTreeReader(
       name,
       name,

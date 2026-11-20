@@ -19,9 +19,8 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 /**
  * `scalar_or_list` is disjoint with class-stable variants: one per JSON kind, so the untagged
  * route holds. `shape`'s two record variants share the brace class, so it is not disjoint and the
- * tag is required. `unit_circle` is a proper subtype of `circle`, a variant of `shape` -- and,
- * deliberately, *not itself* reachable by tag there (§5.4 gives a choice its own membership
- * relation, not §7.2's general subsumption; see this file's own cases below). `loose` carries
+ * tag is required. `unit_circle` is a proper subtype of `circle`, a variant of `shape`, and so
+ * reachable by tag there (§8.1; see this file's own cases below). `loose` carries
  * §8.3's first leak -- a `float64` still admitting `.nan` and the infinities has string-class
  * values -- and `tight` is the same choice over a variant that narrowed both facets away.
  */
@@ -148,33 +147,24 @@ describe('§8.1: the tagged form, admitted at every choice position', () => {
   });
 
   /**
-   * A choice position's `$type` is flattened for alias, not for subtype (`dispatchChoice.ts`'s own
-   * top note has the full citation): [TSON-SCHEMA] §7.2 carves choice positions out of the
-   * subtype-inclusive subsumption rule it states for "every other typed position", giving them
-   * §5.4's own variant membership instead, and §8.4 gives the structural reason -- a choice has no
-   * expected supertype for a tag to be admitted *into*, only a closed variant list a name either
-   * names or does not. `unit_circle` composes `circle` (a proper subtype, not an alias) and so
-   * resolves to a real, declared entry -- `TYPE_MISMATCH`, not `UNKNOWN_TYPE_REF` -- but it is not
-   * itself a variant of `shape`, so a tag naming it is refused exactly like any other non-variant
-   * name. This port's text-encoding choice reader (`compiler/choiceReader.ts`) reads the same way.
-   * The reference's own `DispatchChoiceReader` reads this differently (its own Javadoc: "a
-   * variant, an alias of one or a subtype of one by its tag") -- this port follows it for the
-   * alias half (`json-alias-tag-read.test.ts`'s own choice-position case) and diverges for the
-   * subtype half exercised here, deliberately, reported as a Part 3/reference divergence.
+   * A choice position's `$type` names a variant, or a type that IS-A exactly one variant ([TSON-JSON]
+   * §3.3, §8.1; [TSON-SCHEMA] §5.4): `unit_circle` composes `circle`, a variant of `shape`, so its
+   * name selects `circle` and the value is read as `unit_circle` -- inline for a record, in a
+   * wrapper's `$value` for any other form, which carries no `$type` of its own (§3.3).
    */
-  it('§5.4: a choice discriminates by variant identity (name or alias), so a proper subtype of a variant is not the variant', () => {
-    const problem = refusal('shape', '{"$type": "unit_circle", "radius": 1.0, "fixed": true}');
-    expect(problem.code).toBe('TYPE_MISMATCH');
-    expect(problem.path).toBe('/$type');
+  it('§5.4: a type IS-A exactly one variant is selected by its own name, and read as itself', () => {
+    expect(accepted('shape', '{"$type": "unit_circle", "radius": 1.0, "fixed": true}')).toBe(
+      '{"radius":1.0,"fixed":true}',
+    );
+    // Read as `unit_circle`, so its own field is required.
+    const problem = refusal('shape', '{"$type": "unit_circle", "radius": 1.0}');
+    expect(problem.code).toBe('FIELD_REQUIRED');
   });
 
-  it('the wrapper form discriminates the same way: a subtype named at $type is still refused', () => {
-    const problem = refusal(
-      'shape',
-      '{"$type": "unit_circle", "$value": {"radius": 1.0, "fixed": true}}',
-    );
-    expect(problem.code).toBe('TYPE_MISMATCH');
-    expect(problem.path).toBe('/$type');
+  it('the wrapper form selects the same way: the subtype is named once, by the wrapper’s $type', () => {
+    expect(
+      accepted('shape', '{"$type": "unit_circle", "$value": {"radius": 1.0, "fixed": true}}'),
+    ).toBe('{"radius":1.0,"fixed":true}');
   });
 
   it('a tag naming something that is no variant is refused', () => {
@@ -217,9 +207,7 @@ describe('§8.3 class stability', () => {
 /**
  * `pet` is a choice variant of `c1` and is itself a SEALED family (§6.1.5's third reading, member-
  * dispatched by `pet_type`). Every variant of `c1` shares the brace class, so `c1` is not disjoint
- * and the tag is always required (§8.2) -- and since no subtype admission holds at a choice's own
- * tag (this file's own case above), `dog`/`cat` are not themselves admissible there. `pet`'s own
- * name is the *only* admissible spelling, though `pet` has no direct instances of its own
+ * and the tag is always required (§8.2) -- and `pet`'s own name is an admissible tag, though `pet` has no direct instances of its own
  * (§6.1.5) -- exactly the combination `dispatchChoice.ts`'s own top note and
  * `json/schema/route.ts`'s own \`ChoiceSelfTagReadable\` exist for: without it, this shape would be
  * unwritable inline (though the wrapper form, \`{"$type":"pet","$value":{...}}\`, already reaches
@@ -285,12 +273,14 @@ describe("§6.1.5/§8.4: a sealed family's own name as a choice variant", () => 
     expect(problems[0]?.code).toBe('VALIDATION_ERROR');
   });
 
-  it('a subtype’s own name is still not admissible at the choice’s tag -- this fix only reaches the variant’s own name', () => {
+  it('a member of the family, named by its own tag, is placed by the family’s selectors and its pin agrees (§6.1.5)', () => {
+    expect(
+      sealedProblems('{"$type": "dog", "pet_type": "dog", "name": "Rex", "breed": "corgi"}'),
+    ).toEqual([]);
     const problem = sealedProblems(
-      '{"$type": "dog", "pet_type": "dog", "name": "Rex", "breed": "corgi"}',
+      '{"$type": "dog", "pet_type": "cat", "name": "Rex", "breed": "corgi"}',
     );
-    expect(problem.length).toBe(1);
-    expect(problem[0]?.code).toBe('TYPE_MISMATCH');
+    expect(problem.length).toBeGreaterThan(0);
   });
 
   it('the same sealed base at an ordinary (non-choice) position still refuses its own name -- this fix is choice-routed only', () => {

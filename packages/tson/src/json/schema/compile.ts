@@ -25,9 +25,19 @@
  * `headers => !meta.namespace { key_type: header_name  value_type: text }`, takes a JSON object
  * read as `{header_name => text}` and never as a record of the facets.
  *
- * **What it does not.** A parametric record (no type until it is applied, §5.10), an incomplete entry (§5.5),
- * an extern (§5.13) and an entry holding a namespace *value* (`defaults => !headers { ... }`, a value
- * of a meta layer's vocabulary and never a type, §4.1) compile to {@link notImplementedReader}:
+ * **A parametric record is no type a value is read against** (§5.10): it compiles to
+ * `json/schema/parametric.ts`'s reader, which refuses what it is handed as a validation error -- a
+ * `$type` naming one, a root type supplied out of band naming one, or a declared position's tag
+ * reaching one ([TSON-JSON] §3.3, §3.4).
+ *
+ * **A type written in place has no name** (§4.2): its reader is guarded by `json/schema/inPlace.ts`,
+ * which refuses every annotation object at its position ([TSON-JSON] §3.3). A map or a choice written
+ * in place is built without the guard: a map's members are keys, and a choice's `$type` names a
+ * variant of it.
+ *
+ * **What it does not.** An incomplete entry (§5.5), an extern (§5.13) and an entry holding a
+ * namespace *value* (`defaults => !headers { ... }`, a value of a meta layer's vocabulary and never a
+ * type, §4.1) compile to {@link notImplementedReader}:
  * the plan stays **total** (every entry gets a reader, so a schema holding one still compiles and
  * its types read), and reading against such an entry reports `NOT_IMPLEMENTED`, [TSON-DATA]
  * §8.1's own non-verdict, as the reference's `ErrorReader` does for both.
@@ -45,7 +55,13 @@ import type { Task } from '../../io/bytes.js';
 import type { NonHeldTop } from '../../link/bodyKind.js';
 import type { LinkedSchema } from '../../link/link.js';
 import { namespaceAsMap } from '../../schema/meta/namespaces.js';
-import { subtypesOf, type Top, type TypeExpr, type TypeInline } from '../../schema/meta/typedef.js';
+import {
+  subtypesOf,
+  typeParameters,
+  type Top,
+  type TypeExpr,
+  type TypeInline,
+} from '../../schema/meta/typedef.js';
 import { typeExprText } from '../../schema/meta/bodies.js';
 import type { JsonReadContext } from '../readContext.js';
 import {
@@ -61,7 +77,9 @@ import { buildArrayReader } from './array.js';
 import { buildChoiceReader } from './dispatchChoice.js';
 import { buildMemberDispatcher } from './dispatchMember.js';
 import { buildTagDispatcher } from './dispatchTag.js';
+import { guardInPlace, takesInPlaceGuard } from './inPlace.js';
 import { notImplementedReader } from './notImplemented.js';
+import { parametricRecordReader } from './parametric.js';
 import { buildMapReader } from './map.js';
 import { buildRecordReader } from './record.js';
 import { buildDeclaredReader } from './declared.js';
@@ -141,7 +159,12 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
       if (type.kind !== 'inline') return resolve(type.name);
       const held = inPlace.get(type);
       if (held !== undefined) return held;
-      const built = build(typeExprText(type), type.of);
+      const text = typeExprText(type);
+      const body = build(text, type.of);
+      // A type written in place has no name, so no `$type` names it (§3.3, §4.2).
+      const built = takesInPlaceGuard(type.of)
+        ? guardInPlace(text, type.of, linkedSchema.entries, body)
+        : body;
       inPlace.set(type, built);
       return built;
     }
@@ -197,7 +220,7 @@ export function compileJsonSchema(linkedSchema: LinkedSchema): JsonCompiledSchem
 
     if (body.kind === 'record' && (body.parameters?.length ?? 0) > 0) {
       // No type a position names (§5.10): a parametric record is applied, never read directly.
-      return notImplementedReader(name, 'a parametric record');
+      return parametricRecordReader(name, typeParameters(body), location);
     }
     if (
       body.kind === 'incomplete' ||
