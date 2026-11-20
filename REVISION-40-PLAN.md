@@ -600,6 +600,23 @@ swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is r
     so two spellings of one body (a head, or a restated field at its default) arrive as one value
     there and cannot differ. A text comparison is the stricter check of the fixtures' own text.
 
+18. **Part 2 §5.2, §11.5, §3.4.1 rule 7, a bound on closing in place.** §3.4.1 says closing "needs no
+    bound of its own"; §5.2 lets a processor bound inline nesting and calls exceeding it an error;
+    §11.5 calls exceeding a limit a refusal, not a resolver error. The port bounds closing in place by
+    `max_nesting_depth` and reports a positioned resolver error, the reference overflows its stack.
+    The three sentences need one reading.
+19. **Part 2 §11.5, the size of a closed type.** Rule 7 bounds termination, not size: a 40-line
+    doubling chain closes to a type of 2⁴⁰ nodes. Memoising the closing (the port does) keeps
+    construction linear, but every walk of the written-out type is exponential. §11.5 may want a size
+    limit on a closed type, or a rule that closed types are shared.
+20. **Part 2 §5.10, §5.13, an argument judged against a bound through an extern.** _Reference:_ judges
+    by name, so `box<order_x>` against `<T: order>`, `order_x` an extern of `order`, is refused.
+    _Port:_ follows the extern by identity and admits it.
+21. **Part 2 §5.8, §4.2, IS-A through an extern in the linker.** _Reference:_ `TsonSchemaLinker`'s
+    `isA` (the restated-field and reference-narrowing checks) compares identity and the local chain,
+    missing a subtype reached through an extern (`rush_x` against `order`). _Port:_ also reads the
+    chain of the entry the extern lands on.
+
 ### Divergences that are not spec questions
 
 - **CLI.** The reference's `validate` takes a flat file list and classifies each file as a schema or
