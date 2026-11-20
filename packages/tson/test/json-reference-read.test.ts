@@ -30,7 +30,7 @@ function only(found: readonly Diagnostic[]): Diagnostic {
 const TYPE_NAMES = compileJsonSchema(
   resolveUserSchema(`
 !!id:"https://example.test/json-kinds.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   stock_id    => !net.uuid_type {}
   customer_id => !net.uuid_type {}
@@ -77,7 +77,7 @@ describe('§5.6 a position typed by meta.ref<constructor> holds type names', () 
 const VALUE_NAMES = compileJsonSchema(
   resolveUserSchema(`
 !!id:"https://example.test/json-picks.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   order     => { id: text }
   customer  => { name: text }

@@ -28,7 +28,7 @@ describe('the name policy reaches schema linking (§11.4)', () => {
   // one schema's declared names a scope, so the pair is refused where a lone name never would be.
   const CONFUSABLE_SCHEMA = [
     '!!id:"https://example.com/confusable.tn"',
-    '!!import:"https://tson.io/2026/39/m/core.tn"',
+    '!!import:"https://tson.io/2026/40/m/core.tn"',
     '!schema { aec => text  \u0430\u0435\u0441 => text }',
   ].join('\n');
 

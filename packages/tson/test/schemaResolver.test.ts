@@ -58,7 +58,7 @@ function document(declarations: string, id = 'https://example.com/s.tn'): Schema
 // application's argument is read as, are the kernel's to say (§4.1, §5.10), so a stand-in reader
 // would only test itself.
 
-const KERNEL_URI = 'https://tson.io/2026/39/m/meta.tn';
+const KERNEL_URI = 'https://tson.io/2026/40/m/meta.tn';
 
 const kernel = linkSchema(bootstrapKernel(encodeUtf8(META_TN)));
 

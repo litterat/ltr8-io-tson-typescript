@@ -43,7 +43,7 @@ import { entry } from './model-fixtures.js';
 
 const USER_SCHEMA = `
 !!id:"test://catalog.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   reading => {
     id: uuid
@@ -219,7 +219,7 @@ describe('the import chain is three schemas deep', () => {
 
     expect(linked.imports).toEqual([core.id.split('?')[0]]);
     expect(core.imports.map((id) => id.split('?')[0])).toEqual(
-      ['numeric', 'temporal', 'net'].map((library) => `https://tson.io/2026/39/m/${library}.tn`),
+      ['numeric', 'temporal', 'net'].map((library) => `https://tson.io/2026/40/m/${library}.tn`),
     );
     expect(numeric.imports.map((id) => id.split('?')[0])).toEqual([kernel.id.split('?')[0]]);
     expect(kernel.imports).toEqual([]); // the kernel imports nothing (§3.4)

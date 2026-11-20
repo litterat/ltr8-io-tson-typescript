@@ -20,7 +20,7 @@ import {
 
 function link(declarations: string): LinkedSchema {
   return standardLibrary().resolveSchema(`!!id:"https://example.test/closed-body-refs.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
 !schema {
   box => <T> { v: T }
   ${declarations}

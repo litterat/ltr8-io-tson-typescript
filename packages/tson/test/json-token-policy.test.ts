@@ -35,7 +35,7 @@ const CYRILLIC_A = 'а';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/token-policy-1.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   note   => { text: text }
   scores => { text => int32 }

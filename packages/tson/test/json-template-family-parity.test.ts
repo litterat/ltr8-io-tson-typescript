@@ -24,7 +24,7 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 /** The template itself is the base, SEALED by the surviving discriminator -- dispatch by the pin. A selector is a pin on an unmarked name (§5.10); `type?: text = T` is an injected pin and selects nothing. */
 const SEALED_SCHEMA = `
 !!id:"https://example.test/tsealed.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   dog_type => { breed: text }
   cat_type => { indoor: boolean }
@@ -38,7 +38,7 @@ const SEALED_SCHEMA = `
 /** The template itself is the base, ABSTRACT for want of a discriminator -- dispatch by tag. */
 const ABSTRACT_SCHEMA = `
 !!id:"https://example.test/tabstract.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   dog_type => { breed: text }
   cat_type => { indoor: boolean }

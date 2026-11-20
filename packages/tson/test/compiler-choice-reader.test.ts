@@ -208,7 +208,7 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
 
 const DISJOINT_SCHEMA = `
 !!id:"test://choice-disjoint.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }
@@ -338,7 +338,7 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"test://choice-sealed.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet => abstract {
     pet_type: text =?
@@ -414,7 +414,7 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
  */
 const ALIAS_VARIANT_SCHEMA = `
 !!id:"test://choice-alias-variant.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   note    => { body: text }
   n_of    => note

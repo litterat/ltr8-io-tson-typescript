@@ -198,7 +198,7 @@ describe('init-example + schema-governed validate, end to end', () => {
 });
 
 describe('validate: a data document is read under its own !!import ([TSON-DATA] §2.2)', () => {
-  const CORE = '!!import:"https://tson.io/2026/39/m/core.tn"';
+  const CORE = '!!import:"https://tson.io/2026/40/m/core.tn"';
   const ABSENT = '!!import:"https://example.test/not-provided.tn"\n!claim { id: 1 }\n';
 
   it('a header naming the bundled library validates, the root type taken from its root tag', async () => {
@@ -274,7 +274,7 @@ describe('--max-depth and --max-wait-depth', () => {
       schema,
       [
         '!!id:"https://example.test/chain.tn"',
-        '!!import:"https://tson.io/2026/39/m/core.tn"',
+        '!!import:"https://tson.io/2026/40/m/core.tn"',
         '!schema {',
         '  w0 => w1 & { a: text }',
         '  w1 => w2 & { b: text }',
@@ -962,7 +962,7 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
 describe('strip', () => {
   const SCHEMA = [
     '!!id:"https://example.test/thing-1.tn"',
-    '!!import:"https://tson.io/2026/39/m/core.tn"',
+    '!!import:"https://tson.io/2026/40/m/core.tn"',
     '!schema {',
     '  @doc:"A thing."',
     '  thing => int32',
@@ -1004,7 +1004,7 @@ describe('strip', () => {
     const file = join(dir, 'broken.tn');
     await writeFile(
       file,
-      '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n',
+      '!!import:"https://tson.io/2026/40/m/core.tn"\n!schema { thing => }\n',
       'utf8',
     );
     const io = captureOutput();

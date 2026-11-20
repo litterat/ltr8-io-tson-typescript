@@ -16,7 +16,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 const COMPILED = compileJsonSchema(
   resolveUserSchema(`
 !!id:"https://example.test/json-declared-host.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   note     => { body: text }
   memo     => { body: text  urgent: boolean }

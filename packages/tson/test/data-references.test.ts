@@ -13,8 +13,8 @@ import { standardLibrary } from '../src/stdlib/index.js';
  * namespace, and an application is judged through the entry the schema closed it to.
  */
 
-const META = '!!import:"https://tson.io/2026/39/m/meta.tn"';
-const CORE = '!!import:"https://tson.io/2026/39/m/core.tn"';
+const META = '!!import:"https://tson.io/2026/40/m/meta.tn"';
+const CORE = '!!import:"https://tson.io/2026/40/m/core.tn"';
 
 const ORDERS = `!!id:"https://example.test/orders.tn"
 ${META}

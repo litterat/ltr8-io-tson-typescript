@@ -226,7 +226,7 @@ describe('a recursive schema-governed read is bounded (the compiled reader stack
   // schema type reading a deep document overflowed the host stack and escaped `readTree`.
   const compiled = compile(
     resolveUserSchema(`!!id:"test://recursive.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   node => { children: [node] }
 }

@@ -13,7 +13,7 @@ let counter = 0;
 
 /** A schema document around `body`, with a fresh `!!id`. */
 export function schemaSource(body: string, header = ''): Uint8Array {
-  const source = `!!id:"https://example.test/schema${String(counter++)}.tn"\n!!import:"https://tson.io/2026/39/m/core.tn"\n${header}\n!schema {\n${body}\n}\n`;
+  const source = `!!id:"https://example.test/schema${String(counter++)}.tn"\n!!import:"https://tson.io/2026/40/m/core.tn"\n${header}\n!schema {\n${body}\n}\n`;
   return new TextEncoder().encode(source);
 }
 

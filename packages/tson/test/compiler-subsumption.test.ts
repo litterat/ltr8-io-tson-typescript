@@ -16,7 +16,7 @@ import { requireValue } from './reader-tree-helpers.js';
 
 const USER_SCHEMA = `
 !!id:"test://subsumption.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   person    => { name: text }
   employee  => person & { badge: text }
@@ -89,7 +89,7 @@ describe('subsumption -- §7.2 at every position it governs', () => {
   it('refuses an unrelated type at a tuple position', () => {
     const tupleSchema = `
 !!id:"test://subsumption-tuple.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pair => [text, text]
   unrelated => [integer, integer]
@@ -174,7 +174,7 @@ describe('subsumption -- §7.2 at every position it governs', () => {
 
 const FAMILY_SCHEMA = `
 !!id:"test://subsumption-family.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet => abstract {
     pet_type: text =?
@@ -345,7 +345,7 @@ describe('§5.2 ABSTRACT with `discriminators`: the value is placed by reading t
 
 const TEMPLATE_FAMILY_SCHEMA = `
 !!id:"test://subsumption-template-family.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet    => <N, T> { type: text = N  pet: T }
   dog    => pet<"dog", text> & { note: text }

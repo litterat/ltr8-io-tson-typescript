@@ -9,7 +9,7 @@ import type { Diagnostic } from '../src/core/diagnostic.js';
 const HEAD = [
   '!!id:"https://example.test/names.tn"',
 
-  '!!import:"https://tson.io/2026/39/m/core.tn"',
+  '!!import:"https://tson.io/2026/40/m/core.tn"',
 ].join('\n');
 
 const SCHEMA = `

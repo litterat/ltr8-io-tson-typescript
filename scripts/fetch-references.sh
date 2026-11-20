@@ -18,13 +18,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REF_DIR="$REPO_ROOT/.references"
 
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
-JAVA_PIN="c48b744707128531e82cfe87b0fd584a2e26bc8f"
+JAVA_PIN="7fe582759319d60a28df613a669d36362281f9f2"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
 # 944 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
 # 2026 Revision 39 baseline: one directive (`!!import`) and a root tagged `!schema`, one namespace
 # per schema, the merged kernel with nested schema maps, references as data grammar, dependent
 # fields, and record templates as their own constructor.
-SUITE_PIN="fb8757fb2e4ed947e0446a8de247145f990de905"
+SUITE_PIN="3d769b5999bbe118f400d6e6f4f6e2e6bb3ace63"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"

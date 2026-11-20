@@ -970,7 +970,7 @@ describe("the spec's own worked example (§1.6)", () => {
     // N`, a parametric default taking the name mark its literal spelling takes (§5.7).
     const doc = parse(`
 !!id:"https://example.com/task.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 @doc:"Task-tracking example schema."
 !schema {
   priority => integer

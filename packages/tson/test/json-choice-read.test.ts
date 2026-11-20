@@ -27,7 +27,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
  */
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/choice-1.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   scalar_or_list => ( text | int32 | boolean | [text] )
   any_json       => ( text | number | boolean | [any_json?] | {text => any_json?} )
@@ -228,7 +228,7 @@ describe('§8.3 class stability', () => {
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"https://example.test/choice-sealed.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet => abstract {
     pet_type: text =?

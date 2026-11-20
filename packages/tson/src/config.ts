@@ -36,10 +36,10 @@
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
  * tson.register(linkSchema(bootstrapKernel(kernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/39/m/numeric.tn',
- *   'https://tson.io/2026/39/m/temporal.tn',
- *   'https://tson.io/2026/39/m/net.tn',
- *   'https://tson.io/2026/39/m/core.tn',
+ *   'https://tson.io/2026/40/m/numeric.tn',
+ *   'https://tson.io/2026/40/m/temporal.tn',
+ *   'https://tson.io/2026/40/m/net.tn',
+ *   'https://tson.io/2026/40/m/core.tn',
  * ]);
  * ```
  *

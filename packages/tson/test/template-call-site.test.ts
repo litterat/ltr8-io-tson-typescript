@@ -8,7 +8,7 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import { applicationOf, isTemplateBody } from '../src/schema/meta/typedef.js';
 import { fieldTypeName, subtypesIn, supertypesIn } from './model-fixtures.js';
 
-const CORE = 'https://tson.io/2026/39/m/core.tn';
+const CORE = 'https://tson.io/2026/40/m/core.tn';
 
 let counter = 0;
 

@@ -16,9 +16,9 @@ Two packages, released in lockstep: `@ltr8/tson` (the library; subpath entry poi
 from is [ltr8-io-tson-java](https://github.com/litterat/ltr8-io-tson-java), and both are tested
 against [ltr8-io-tson-test-suite](https://github.com/litterat/ltr8-io-tson-test-suite).
 
-**Versioning is `0.<spec revision>.<patch>`.** `0.39.x` implements the **2026 Revision 39** spec
+**Versioning is `0.<spec revision>.<patch>`.** `0.40.x` implements the **2026 Revision 40** spec
 series. A new revision moves the minor, and the spec is a working draft with no compatibility
-guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/39/m/core.tn` is
+guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/40/m/core.tn` is
 revision-specific and must match the library's own revision. The CLI depends on the library at an
 exact pin, never a range.
 
@@ -118,7 +118,7 @@ import { validate } from '@ltr8/tson';
 import { standardLibrary } from '@ltr8/tson/stdlib';
 
 const SCHEMA = `!!id:"https://example.com/order.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   order => {
     order_id: int32
@@ -148,7 +148,7 @@ the entry name the _root value_ reads against, and it is not inferred from the d
 
 `core.tn` imports `numeric.tn`, `temporal.tn` and `net.tn`, so a schema importing it sees `ipv4`,
 `ipv6`, `cidr4`, `cidr6`, `mac`, `hostname`, `host` and `media_type` too. A schema that wants only
-one library imports that one (`https://tson.io/2026/39/m/net.tn` for the network atoms).
+one library imports that one (`https://tson.io/2026/40/m/net.tn` for the network atoms).
 
 `standardLibrary()` is not a singleton — a registry is mutable state, and two callers sharing one
 would see each other's registrations. Build a fresh one per unit of work; re-resolving the same
@@ -189,7 +189,7 @@ import { createTson } from '@ltr8/tson';
 import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
-await tson.preload(['https://tson.io/2026/39/m/core.tn']); // with the kernel registered first
+await tson.preload(['https://tson.io/2026/40/m/core.tn']); // with the kernel registered first
 ```
 
 `preload` verifies a `?sha256=` pin whenever one is declared, and checks that the fetched
@@ -383,9 +383,9 @@ is the only checklist; `references/` here documents the API as it stands.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/39/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/39/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/39/tson-part3-json.md (`@ltr8/tson/json`)
+- Part 1 — Text Data Format: https://tson.io/raw/2026/40/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/40/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/40/tson-part3-json.md (`@ltr8/tson/json`)
 
 All are working revisions and change without compatibility guarantees until the spec freezes at
 version 1. Re-fetch and check the revision number at the top rather than trusting a cached copy.

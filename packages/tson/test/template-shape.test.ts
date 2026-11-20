@@ -12,7 +12,7 @@ function load(declarations: string): unknown {
   counter += 1;
   const source =
     `!!id:"https://example.test/template-shape-${String(counter)}.tn"\n` +
-    `!!import:"https://tson.io/2026/39/m/core.tn"\n!schema {\n${declarations}\n}\n`;
+    `!!import:"https://tson.io/2026/40/m/core.tn"\n!schema {\n${declarations}\n}\n`;
   return standardLibrary().resolveSchema(encodeUtf8(source));
 }
 

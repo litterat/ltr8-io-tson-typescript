@@ -13,7 +13,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `
 !!id:"https://example.test/enum-labels.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 `;
 
 const HEADER_NAME = `

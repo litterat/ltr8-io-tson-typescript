@@ -26,7 +26,7 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.39.x` implements the **2026 Revision 39** series. A new spec revision moves the
+built against, so `0.40.x` implements the **2026 Revision 40** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
@@ -177,7 +177,7 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapKernel(kernelBytes)));
-await tson.preload(['https://tson.io/2026/39/m/core.tn']);
+await tson.preload(['https://tson.io/2026/40/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
@@ -337,9 +337,9 @@ binding (`$import` at the root), the §3.5 HTTP header fields, or a schema-direc
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/39/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/39/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/39/tson-part3-json.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/40/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/40/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/40/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.

@@ -23,7 +23,7 @@ proportional to nesting depth either way — nothing materialises a whole docume
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor tracks the TSON spec revision this implements, so
-`0.39.x` is built against the 2026 Revision 39 series. `@ltr8/tson` and `@ltr8/tson-cli` are
+`0.40.x` is built against the 2026 Revision 40 series. `@ltr8/tson` and `@ltr8/tson-cli` are
 released in lockstep at the same version.
 
 ## Entry points

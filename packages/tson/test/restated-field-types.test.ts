@@ -14,8 +14,8 @@ import { fieldTypeName, recordEntry } from './linked-entries.js';
 function link(body: string): LinkedSchema {
   return standardLibrary().resolveSchema(
     '!!id:"https://example.test/restated.tn"\n' +
-      '!!import:"https://tson.io/2026/39/m/meta.tn"\n' +
-      '!!import:"https://tson.io/2026/39/m/core.tn"\n' +
+      '!!import:"https://tson.io/2026/40/m/meta.tn"\n' +
+      '!!import:"https://tson.io/2026/40/m/core.tn"\n' +
       `!schema ${body}`,
   );
 }

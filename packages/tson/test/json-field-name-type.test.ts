@@ -14,7 +14,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-field-names.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   json_name => !unicode.identifier_type { start_add: "@$" }
   node => !meta.record { name_type: json_name  fields: {

@@ -15,8 +15,8 @@ import { standardLibrary } from '../src/stdlib/index.js';
 import type { Tson } from '../src/config.js';
 import type { LinkedSchema } from '../src/link/link.js';
 
-const META = 'https://tson.io/2026/39/m/meta.tn';
-const CORE = 'https://tson.io/2026/39/m/core.tn';
+const META = 'https://tson.io/2026/40/m/meta.tn';
+const CORE = 'https://tson.io/2026/40/m/core.tn';
 const LAYER = 'https://example.com/m/service.tn';
 
 /**

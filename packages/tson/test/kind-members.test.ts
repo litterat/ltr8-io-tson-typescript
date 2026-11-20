@@ -22,8 +22,8 @@ import { supertypesOf, subtypesOf } from '../src/schema/meta/typedef.js';
  */
 
 const HEADER = `!!id:"https://example.test/kinds.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema `;
 
 function link(body: string): LinkedSchema {
@@ -148,14 +148,14 @@ describe('the members of a reference over a constructor (§4.2, §5.12)', () => 
   it('a member declared in an import is a member, and an import’s own kind is recomputed over the importer’s closure (§2.2.3)', () => {
     const tson = standardLibrary();
     tson.resolveSchema(`!!id:"https://example.test/kind-ids.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   stock_id => !net.uuid_type {}
   some_id  => meta.ref<net.uuid_type>
 }`);
     const linked = tson.resolveSchema(`!!id:"https://example.test/kinds.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
 !!import:"https://example.test/kind-ids.tn"
 !schema {
   customer_id => !net.uuid_type {}
@@ -176,7 +176,7 @@ describe('the members of a reference over a constructor (§4.2, §5.12)', () => 
   });
 
   it('meta.type_ref holds the namespace types and the constructors, and no template (§4.1)', () => {
-    const kernel = standardLibrary().schemas.get('tson.io/2026/39/m/meta.tn');
+    const kernel = standardLibrary().schemas.get('tson.io/2026/40/m/meta.tn');
     if (kernel === undefined) throw new Error('the kernel is not registered');
     const held = members(kernel, 'meta.type_ref');
     expect(held).toEqual(
@@ -197,7 +197,7 @@ describe('the members of a reference over a constructor (§4.2, §5.12)', () => 
 
   it('meta.ref<namespace> holds every namespace type, the kernel root’s `schema` beside `meta.schema`', () => {
     const linked = standardLibrary().resolveSchema(`!!id:"https://example.test/kinds.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
 !schema {
   api        => !meta.namespace { key_type: meta.identifier  value_type: text }
   namespaces => !meta.reference_type { of: meta.namespace }
@@ -207,7 +207,7 @@ describe('the members of a reference over a constructor (§4.2, §5.12)', () => 
 
   it('a namespace type is a map and no record: IS-A map and product (§4.1)', () => {
     const linked = standardLibrary().resolveSchema(`!!id:"https://example.test/kinds.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
 !schema {
   api        => !meta.namespace { key_type: meta.identifier  value_type: text }
   labels     => !meta.map { key_type: meta.identifier  value_type: text }
@@ -326,7 +326,7 @@ describe('what `of` names decides what a reference admits (§4.2)', () => {
           pick_type => meta.atom & {}
           ids => !meta.reference_type { of: pick_type }
         }`,
-        `!!id:"https://example.test/kinds.tn"\n!!import:"https://tson.io/2026/39/m/meta.tn"\n!schema `,
+        `!!id:"https://example.test/kinds.tn"\n!!import:"https://tson.io/2026/40/m/meta.tn"\n!schema `,
       ),
     ).toContain('can never be satisfied');
   });
@@ -350,7 +350,7 @@ describe('what `of` names decides what a reference admits (§4.2)', () => {
 
 describe('the kernel’s name_type slots, typed meta.identifier_ref (§4.2, §5.2)', () => {
   it('holds the kernel’s identifier families and the aliases beside them', () => {
-    const meta = standardLibrary().schemas.get('tson.io/2026/39/m/meta.tn');
+    const meta = standardLibrary().schemas.get('tson.io/2026/40/m/meta.tn');
     if (meta === undefined) throw new Error('the kernel is not registered');
     expect(members(meta, 'meta.identifier_ref')).toEqual([
       'meta.field_name',
@@ -374,7 +374,7 @@ describe('the kernel’s name_type slots, typed meta.identifier_ref (§4.2, §5.
   });
 
   it('a constructor pinning name_type pins a value of the slot’s kind, judged where the pin is written', () => {
-    const header = `!!id:"https://example.test/kinds.tn"\n!!import:"https://tson.io/2026/39/m/meta.tn"\n!schema `;
+    const header = `!!id:"https://example.test/kinds.tn"\n!!import:"https://tson.io/2026/40/m/meta.tn"\n!schema `;
     expect(() =>
       standardLibrary().resolveSchema(
         header +

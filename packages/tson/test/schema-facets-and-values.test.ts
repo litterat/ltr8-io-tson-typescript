@@ -14,8 +14,8 @@ import { kindOfEntry } from './linked-entries.js';
  */
 
 const HEADER = `!!id:"https://example.test/wp2b.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema `;
 
 function link(body: string): LinkedSchema {

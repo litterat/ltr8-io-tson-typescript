@@ -21,7 +21,7 @@ const PIN = `?sha256=${'0123456789abcdef'.repeat(4)}`;
 describe('stripSchema', () => {
   it('drops the !!id, pins and @doc (§2.2.1, §3.1), keeps every other annotation, and shortens the spec library', () => {
     const schema = `!!id:"https://example.test/thing-1.tn${PIN}"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !!import:"https://example.test/shapes-1.tn${PIN}"
 @doc:"""
   Things.
@@ -86,20 +86,20 @@ thing => int32
   });
 
   it('shortens only the five libraries a schema builds on under tson.io/<year>/<revision>/m/ (§2.2.1)', () => {
-    const schema = `!!import:"https://tson.io/2026/39/m/meta.tn"
-!!import:"https://tson.io/2026/39/m/meta-kernel.tn"
-!!import:"https://tson.io/2026/39/x/core.tn"
-!!import:"https://example.test/2026/39/m/core.tn"
-!!import:"https://tson.io/2026/39/m/net.tn"
-!!import:"https://tson.io/2026/39/m/policy.tn"
+    const schema = `!!import:"https://tson.io/2026/40/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/meta-kernel.tn"
+!!import:"https://tson.io/2026/40/x/core.tn"
+!!import:"https://example.test/2026/40/m/core.tn"
+!!import:"https://tson.io/2026/40/m/net.tn"
+!!import:"https://tson.io/2026/40/m/policy.tn"
 !schema { thing => int32 }
 `;
     expect(stripSchema(schema)).toBe(`!!import:"39/meta"
-!!import:"https://tson.io/2026/39/m/meta-kernel.tn"
-!!import:"https://tson.io/2026/39/x/core.tn"
-!!import:"https://example.test/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/meta-kernel.tn"
+!!import:"https://tson.io/2026/40/x/core.tn"
+!!import:"https://example.test/2026/40/m/core.tn"
 !!import:"39/net"
-!!import:"https://tson.io/2026/39/m/policy.tn"
+!!import:"https://tson.io/2026/40/m/policy.tn"
 !schema {
 thing => int32
 }
@@ -149,7 +149,7 @@ last => { @examples:{ a => 1 } m?: int32 }
 
   it('refuses a malformed schema, naming where it breaks', () => {
     const attempt = (): string =>
-      stripSchema('!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n');
+      stripSchema('!!import:"https://tson.io/2026/40/m/core.tn"\n!schema { thing => }\n');
     expect(attempt).toThrow(TsonParseError);
     try {
       attempt();
@@ -161,7 +161,7 @@ last => { @examples:{ a => 1 } m?: int32 }
   it('refuses a token that does not lex (§7.2.2)', () => {
     expect(() =>
       stripSchema(
-        '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => "unterminated\n}\n',
+        '!!import:"https://tson.io/2026/40/m/core.tn"\n!schema { thing => "unterminated\n}\n',
       ),
     ).toThrow(TsonLexError);
   });

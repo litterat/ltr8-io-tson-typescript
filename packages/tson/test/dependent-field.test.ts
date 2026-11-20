@@ -18,8 +18,8 @@ let counter = 0;
 
 function schema(declarations: string, id = ID): string {
   return (
-    `!!id:"${id}"\n!!import:"https://tson.io/2026/39/m/meta.tn"\n` +
-    `!!import:"https://tson.io/2026/39/m/core.tn"\n!schema {\n${declarations}\n}\n`
+    `!!id:"${id}"\n!!import:"https://tson.io/2026/40/m/meta.tn"\n` +
+    `!!import:"https://tson.io/2026/40/m/core.tn"\n!schema {\n${declarations}\n}\n`
   );
 }
 
@@ -233,7 +233,7 @@ describe('§5.2 reading, tree mode', () => {
 });
 
 describe('§5.2 the kernel’s own dependent fields', () => {
-  const META = '!!import:"https://tson.io/2026/39/m/meta.tn"\n';
+  const META = '!!import:"https://tson.io/2026/40/m/meta.tn"\n';
 
   it('record_field.value is read against its type', () => {
     const tson = standardLibrary();

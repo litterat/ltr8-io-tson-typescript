@@ -12,7 +12,7 @@ import { standardLibrary } from '../src/stdlib/index.js';
  * (§4.1), and the derived `@meta.synthetic` and `@meta.application` at the keys that carry them (§8.2).
  */
 
-const CORE = 'https://tson.io/2026/39/m/core.tn';
+const CORE = 'https://tson.io/2026/40/m/core.tn';
 
 function written(source: string): string {
   const schema: LinkedSchema = standardLibrary().resolveSchema(

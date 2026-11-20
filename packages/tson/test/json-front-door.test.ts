@@ -34,7 +34,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-front-door.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   person => { name: text  tries?: int32 ~ 0 }
 }
