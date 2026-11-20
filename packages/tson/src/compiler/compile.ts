@@ -67,6 +67,9 @@ import { isAtom } from './atomChecks.js';
 import { guardSubsumption } from './subsumption.js';
 import { terminalDefinition } from '../link/aliasChain.js';
 import { isChoiceDisjoint } from '../link/disjointness.js';
+import { externHopsOf } from '../link/externHops.js';
+import { externBoundary, type ForeignReaders } from './externReader.js';
+import { externVariantNames } from '../link/externAdmission.js';
 import { fieldNameRule } from '../reader/tree/fieldNames.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 
@@ -152,6 +155,13 @@ export interface CompileDeps {
    * judges the spelling alone, and the schema holding the name judges the member when it links.
    */
   readonly judgesReferenceMembers?: boolean;
+  /**
+   * The linked schema of a canonical identity, where a value read through an extern reaches an entry that neither
+   * the extern's foreign schema nor the one its target lands in holds, and is read in the schema declaring it
+   * (§7.9). Omitted, such a value reports `NOT_IMPLEMENTED`. The foreign schemas an extern names need nothing: the
+   * link holds them.
+   */
+  readonly foreignSchema?: (identity: string) => LinkedSchema | undefined;
 }
 
 /**
@@ -167,6 +177,7 @@ function buildReader(
   resolve: (type: string | TypeExpr) => TypeReader<Value>,
   policy: IdentifierPolicy,
   judgesMembers: boolean,
+  foreign: ForeignReaders,
   inPlace = false,
 ): TypeReader<Value> {
   const body = definition;
@@ -266,9 +277,14 @@ function buildReader(
   if (isChoiceBody(body)) {
     // A choice in place carries no derived `disjoint` of its own: it is derived here, as the linker derives a
     // declared one's (§5.4).
-    const disjoint = choiceDisjoint(definition) ?? isChoiceDisjoint(body.variants, schema.entries);
+    const hops = externHopsOf(schema);
+    const disjoint =
+      choiceDisjoint(definition) ?? isChoiceDisjoint(body.variants, schema.entries, hops);
     // A tag at a choice names a variant (§5.4, §7.2), so a choice in place takes tags as a declared one does.
-    return choiceTreeReader(name, name, body, resolve, location(), disjoint, schema.entries);
+    return choiceTreeReader(name, name, body, resolve, location(), disjoint, schema.entries, {
+      hops,
+      externVariants: (variant) => externVariantNames(schema, variant),
+    });
   }
   if (isAlias(body)) {
     // A closed alias reads exactly as its target does (§8.3) -- no framing of its own to add, so
@@ -306,6 +322,11 @@ function buildReader(
         return abandonedValue();
       },
     };
+  }
+  if (body.kind === 'extern') {
+    // The boundary between this scope and the foreign schema's (§7.9).
+    const boundary = externBoundary(schema, name, location(), foreign);
+    if (boundary !== undefined) return boundary;
   }
   if (body.kind === 'apply') {
     throw new TsonNotImplementedError(
@@ -451,6 +472,35 @@ function buildDeclaredReader(
  * compiling means and how cycles resolve.
  */
 export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledSchema {
+  return compileWith(schema, deps, new Map());
+}
+
+/**
+ * {@link compile}, each foreign schema a value is read in compiled once for the whole compile and whatever it
+ * reaches, in its mode (§7.9): `foreignCompiles` is shared by every schema this compile reaches through an extern.
+ */
+function compileWith(
+  schema: LinkedSchema,
+  deps: CompileDeps,
+  foreignCompiles: Map<LinkedSchema, CompiledSchema>,
+): CompiledSchema {
+  const readerOf = (linked: LinkedSchema, name: string): TypeReader<Value> => {
+    let compiled = linked === schema ? self : foreignCompiles.get(linked);
+    if (compiled === undefined) {
+      compiled = compileWith(linked, deps, foreignCompiles);
+      foreignCompiles.set(linked, compiled);
+    }
+    // Deferred to the read: a foreign schema's reader may reach back through its own externs.
+    const within = compiled;
+    return { read: (ctx) => within.reader(name).read(ctx) };
+  };
+  const foreign: ForeignReaders = {
+    reader: readerOf,
+    readerIn(identity, name) {
+      const linked = deps.foreignSchema?.(identity);
+      return linked === undefined ? undefined : readerOf(linked, name);
+    },
+  };
   const cache = new Map<string, TypeReader<Value>>();
   const inPlace = new WeakMap<TypeInline, TypeReader<Value>>();
   const policy = deps.identifierPolicy ?? DEFAULT_IDENTIFIER_POLICY;
@@ -470,6 +520,7 @@ export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledS
         resolve,
         policy,
         judgesMembers,
+        foreign,
         true,
       );
       inPlace.set(type, built);
@@ -510,16 +561,17 @@ export function compile(schema: LinkedSchema, deps: CompileDeps = {}): CompiledS
       },
     };
     cache.set(name, placeholder);
-    const inner = buildReader(schema, name, definition, resolve, policy, judgesMembers);
+    const inner = buildReader(schema, name, definition, resolve, policy, judgesMembers, foreign);
     box.inner = inner;
     cache.set(name, inner); // supersede the placeholder for every caller from here on
     return inner;
   }
 
-  return {
+  const self: CompiledSchema = {
     linked: schema,
     reader: resolve,
   };
+  return self;
 }
 
 // ── Whole-document reading ──────────────────────────────────────────────────────────────────

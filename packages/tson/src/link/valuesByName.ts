@@ -66,6 +66,8 @@ import { isNestedMap } from '../schema/meta/schemaPaths.js';
 import { isValueEntry } from '../schema/meta/typedef.js';
 import { schemaPositionOf, spellingOf } from './facts.js';
 import { isKindMember, namesTypes } from './kindMembers.js';
+import { describeExtern } from './externs.js';
+import type { ExternHops } from './externHops.js';
 import { terminal, terminalDefinition, type EntryLookup } from './aliasChain.js';
 import { referenceIn, siblingType, typeNamed, type TypeNamed } from './dependentFields.js';
 
@@ -78,6 +80,8 @@ export interface ValuesByNameOptions {
   /** The entry facts of that namespace, where a slot type's applied constructor is recorded (§8.1). */
   readonly structureFacts?: ReadonlyMap<string, EntryFacts>;
   readonly receiver?: DiagnosticsReceiver;
+  /** The namespace's externs, each a member of a kind where the entry it lands on is (§5.13). Absent means none. */
+  readonly hops?: ExternHops;
 }
 
 /** One name a value holds, where it sits, and the slot it fills. */
@@ -290,6 +294,19 @@ export class ValuesByName {
       );
     }
     const entry = end === head ? `'${head}'` : `'${head}' (an alias of '${end}')`;
+    if (referent.kind === 'extern' && segments.length > 1) {
+      throw new TsonSchemaValidationError(
+        `${where} names '${name}', and ${entry} is ${describeExtern(referent)}: no name walks through an ` +
+          `extern into another schema's namespace, so '${segments[1] ?? ''}' selects nothing ([TSON-SCHEMA] ` +
+          '§5.12, §5.13)',
+      );
+    }
+    if (referent.kind === 'extern' && !types) {
+      throw new TsonSchemaValidationError(
+        `${where} wants a value of '${slot.of}', and ${entry} is ${describeExtern(referent)}, a type and no ` +
+          `value -- a slot over '${slot.of}' holds the name of a value ([TSON-SCHEMA] §5.12)`,
+      );
+    }
     if (isParametric(referent) || referent.kind === 'incomplete') {
       throw new TsonSchemaValidationError(
         referent.kind === 'incomplete'
@@ -331,7 +348,7 @@ export class ValuesByName {
         `${wants}'${name}' goes on past ${entry}, a type, which admits no further segment`,
       );
     }
-    if (isKindMember(name, slot.of, this.local, (n) => this.headOf(n))) return;
+    if (isKindMember(name, slot.of, this.local, (n) => this.headOf(n), this.options.hops)) return;
     if (isNamespaceValue(referent)) {
       throw new TsonSchemaValidationError(`${wants}${entry} is ${aValueNoType(referent)}`);
     }

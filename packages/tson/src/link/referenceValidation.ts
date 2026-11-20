@@ -56,6 +56,7 @@ import {
 import { inlineRefusal, sameTypeExpr } from '../schema/meta/typeInline.js';
 import { isChoiceDisjoint } from './disjointness.js';
 import { noType } from '../compiler/incompleteEntries.js';
+import { sealedExtern } from './externs.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -399,6 +400,16 @@ function checkFieldValue(
   if (fieldType.param === true || ownParameters.includes(fieldType.name)) return;
   const terminalName = terminal(fieldType.name, lookupIn(namespace));
   const target = namespace.get(terminalName);
+  if (target?.kind === 'extern') {
+    // An extern is sealed: a field typed by it takes no default or pin (§5.13).
+    throw sealedExtern(
+      `'${entryName}': field '${field.name}'`,
+      `its ${field.role === 'DEFAULT' ? 'default' : 'fixed value'} ${asWritten(field.value)} is a value of`,
+      fieldType.name,
+      terminalName,
+      target,
+    );
+  }
   // An unresolved reference is already reported by validateTypeExpr, above (a name the walk itself
   // does not reach, undeclared or a cycle, resolves no `target` here either). A parametric record or an
   // incomplete entry is no type and is refused at the field's type; a namespace value is not a type at all,

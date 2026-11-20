@@ -56,6 +56,8 @@ import { discriminationClassOf, type DiscriminationClass } from '../link/disjoin
 import { terminal } from '../link/aliasChain.js';
 import { choiceSelection } from '../link/choiceSelection.js';
 import { hasChoiceSelfTag } from './subsumption.js';
+import type { ExternHops } from '../link/externHops.js';
+import type { ExternVariantNames } from '../link/externAdmission.js';
 import type { TsonEvent } from '../stream/event.js';
 
 /** [TSON-DATA] §4's fixed base-type order, mapped onto §5.4's own classes -- the token half of {@link classifyEvent}. */
@@ -100,6 +102,15 @@ function classifyEvent(event: TsonEvent): DiscriminationClass | undefined {
   }
 }
 
+/**
+ * What a choice reader asks of the externs among its variants (§5.4, §5.13): the hops a variant is classified
+ * through, and the names an extern variant answers to (`link/externAdmission.ts`'s `externVariantNames`).
+ */
+export interface ChoiceExterns {
+  readonly hops: ExternHops;
+  readonly externVariants: (variant: string) => ExternVariantNames | undefined;
+}
+
 /** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
 export function choiceTreeReader(
   name: string,
@@ -109,6 +120,7 @@ export function choiceTreeReader(
   schemaLocation: SchemaLocation,
   disjoint: boolean,
   namespace: ReadonlyMap<string, Top>,
+  externs?: ChoiceExterns,
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
     name: typeExprText(variant),
@@ -118,7 +130,20 @@ export function choiceTreeReader(
   const names = variants.map((variant) => variant.name).join(' | ');
 
   // The tag table (this module's own top note), each name to the variant it selects.
-  const selection = choiceSelection(body.variants, namespace);
+  const selection = choiceSelection(
+    body.variants,
+    namespace,
+    externs === undefined
+      ? {}
+      : {
+          externNames: (variant) => {
+            const names = externs.externVariants(variant.name);
+            return names === undefined
+              ? undefined
+              : { target: names.named, subtype: names.subtypes };
+          },
+        },
+  );
   const byWrittenName = new Map<string, (typeof variants)[number]>();
   for (const [written, selected] of selection.selects) {
     const variant = variants.find((candidate) => candidate.expr === selected);
@@ -142,7 +167,7 @@ export function choiceTreeReader(
   if (disjoint) {
     byClass = new Map();
     for (const variant of variants) {
-      const variantClass = discriminationClassOf(variant.expr, namespace);
+      const variantClass = discriminationClassOf(variant.expr, namespace, externs?.hops);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass = undefined;
         break;

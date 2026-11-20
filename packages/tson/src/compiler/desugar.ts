@@ -96,6 +96,7 @@ import {
   scoped,
   tokenValue,
 } from './wireForm.js';
+import { sealedExtern, writtenExterns } from '../link/externs.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -415,6 +416,14 @@ function checkApplication(head: string, pass: DesugarPass): void {
   const declaration = pass.local.get(head);
   if (declaration === undefined) return;
   const typeDef = declaration.typeDef;
+  const extern = writtenExterns(new Map([[head, declaration]])).get(head);
+  if (extern !== undefined) {
+    throw sealedExtern(`'${pass.currentName}'`, `'${head}<...>' applies`, head, head, {
+      kind: 'extern',
+      schema: extern.schema ?? '',
+      type: extern.type ?? '',
+    });
+  }
   const mayConstruct =
     (typeDef.kind === 'structuralTypeDef' && typeDef.body.kind !== 'recordDef') ||
     typeDef.kind === 'typeExprDef' ||

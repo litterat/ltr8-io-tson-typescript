@@ -39,6 +39,7 @@ import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument } from '../ast/schema/document.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
 import type { FieldNameType } from '../link/fieldNames.js';
+import type { ExternTarget } from '../link/externTarget.js';
 import { NO_FIELDS } from '../schema/meta/bodies.js';
 import type {
   Annotations,
@@ -158,6 +159,8 @@ export interface ImportedSchema {
   readonly enumForms?: ReadonlyMap<string, Normalization>;
   /** Each record among `entries` that states a `name_type`, with its identifier family -- `LinkedSchema.nameTypes`. Absent means none. */
   readonly nameTypes?: ReadonlyMap<string, FieldNameType>;
+  /** Each contributed extern attached to the foreign entry it lands on (§5.13) -- `LinkedSchema.externs`. Absent means none. */
+  readonly externs?: ReadonlyMap<string, ExternTarget>;
   /** Each contributed entry's restatements off its chain, settled when its schema resolved. Absent means none. */
   readonly restatements?: ReadonlyMap<string, readonly Restatement[]>;
 }

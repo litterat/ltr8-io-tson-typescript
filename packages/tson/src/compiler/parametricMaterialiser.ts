@@ -50,6 +50,7 @@ import { metaName } from '../schema/meta/kernel.js';
 import { parameterIn } from '../schema/meta/typeInline.js';
 import * as TypeSlots from '../schema/meta/typeSlots.js';
 import { terminal } from '../link/aliasChain.js';
+import { sealedExtern, terminalExtern } from '../link/externs.js';
 import * as Ancestry from './ancestry.js';
 import * as CanonicalApplication from './canonicalApplication.js';
 import * as Substitution from './substitution.js';
@@ -271,6 +272,16 @@ export function createParametricMaterialiser(deps: MaterialiserDeps): Parametric
     const record = closable(head, namespace(head));
     if (record === undefined) return undefined;
     const parameters = typeParameters(record);
+    const extern = terminalExtern(head, namespace);
+    if (parameters.length === 0 && extern !== undefined) {
+      throw sealedExtern(
+        `'${head}<...>'`,
+        `'${head}<...>' applies`,
+        head,
+        terminal(head, namespace),
+        extern,
+      );
+    }
     if (parameters.length === 0) {
       throw new TsonSchemaValidationError(
         `'${head}' declares no type parameters, so '${head}<...>' applies arguments to something that takes ` +

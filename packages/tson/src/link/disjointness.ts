@@ -42,6 +42,7 @@ import type { Annotations, EntryFacts, Top, TypeExpr } from '../schema/meta/type
 import { typeExprText } from '../schema/meta/bodies.js';
 import { mapInPlace } from '../schema/meta/typeInline.js';
 import { schemaPositionOf } from './facts.js';
+import type { ExternHops } from './externHops.js';
 import { choiceDisjoint } from '../schema/meta/typedef.js';
 import { DISJOINT_ANNOTATION } from '../schema/meta/kernel.js';
 
@@ -168,8 +169,12 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
 export function discriminationClassOf(
   type: string | TypeExpr,
   namespace: ReadonlyMap<string, Top>,
+  hops?: ExternHops,
 ): DiscriminationClass | undefined {
   if (typeof type !== 'string' && type.kind === 'inline') return classify(type.of, namespace);
+  // An extern is classified at the entry it lands on, in the namespace holding it (§5.4, §5.13).
+  const landed = hops?.discrimination(typeof type === 'string' ? type : type.name);
+  if (landed !== undefined) return landed.class;
   const lookup = (n: string): Top | undefined => namespace.get(n);
   const def = terminalDefinition(typeof type === 'string' ? type : type.name, lookup);
   return def === undefined ? undefined : classify(def, namespace);
@@ -179,10 +184,11 @@ export function discriminationClassOf(
 export function isChoiceDisjoint(
   variants: readonly TypeExpr[],
   namespace: ReadonlyMap<string, Top>,
+  hops?: ExternHops,
 ): boolean {
   const seen = new Set<DiscriminationClass>();
   for (const variant of variants) {
-    const variantClass = discriminationClassOf(variant, namespace);
+    const variantClass = discriminationClassOf(variant, namespace, hops);
     if (variantClass === undefined || seen.has(variantClass)) {
       return false;
     }
@@ -196,7 +202,10 @@ export function isChoiceDisjoint(
  * namespace. Pure: entries with no `choice` body keep their identity, and `merged` itself is
  * returned unchanged when it holds no choice at all.
  */
-export function computeDisjointness(merged: ReadonlyMap<string, Top>): Map<string, Top> {
+export function computeDisjointness(
+  merged: ReadonlyMap<string, Top>,
+  hops?: ExternHops,
+): Map<string, Top> {
   const result = new Map(merged);
   for (const [name, def] of merged) {
     // A choice written in place derives its `disjoint` as a declared one does (§4.2, §5.4).
@@ -204,12 +213,12 @@ export function computeDisjointness(merged: ReadonlyMap<string, Top>): Map<strin
       inline.of.kind === 'choice'
         ? {
             ...inline,
-            of: { ...inline.of, disjoint: isChoiceDisjoint(inline.of.variants, merged) },
+            of: { ...inline.of, disjoint: isChoiceDisjoint(inline.of.variants, merged, hops) },
           }
         : inline,
     );
     if (body.kind === 'choice') {
-      body = { ...body, disjoint: isChoiceDisjoint(body.variants, merged) };
+      body = { ...body, disjoint: isChoiceDisjoint(body.variants, merged, hops) };
     }
     if (body !== def) result.set(name, body);
   }

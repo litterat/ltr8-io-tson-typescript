@@ -27,6 +27,7 @@ import {
 } from '../schema/meta/typedef.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
 import { mapInPlace } from '../schema/meta/typeInline.js';
+import type { ExternHops } from './externHops.js';
 
 /** An entry reached by a walk, under the name it is declared by. */
 interface Found {
@@ -53,14 +54,18 @@ export function namesTypes(of: string, local: EntryLookup): boolean {
 
 /**
  * Whether the entry `name` names in `local` is a member of the names `of` admits. `heads` gives the
- * constructor an entry's value applies, from its recorded facts.
+ * constructor an entry's value applies, from its recorded facts. An extern is a member where the entry it lands on
+ * is, judged in the namespace holding that entry (`hops`, §5.13).
  */
 export function isKindMember(
   name: string,
   of: string,
   local: EntryLookup,
   heads: (name: string) => string | undefined,
+  hops?: ExternHops,
 ): boolean {
+  const landed = hops?.membership(name, of);
+  if (landed !== undefined) return landed;
   const end = terminal(name, local);
   const type = local(end);
   if (type === undefined || !isTypeValue(type)) return false;
@@ -89,11 +94,12 @@ export function kindMembers(
   reference: RefBody,
   merged: ReadonlyMap<string, Top>,
   heads: (name: string) => string | undefined,
+  hops?: ExternHops,
 ): readonly string[] {
   const local: EntryLookup = (n) => merged.get(n);
   const members: string[] = [];
   for (const name of merged.keys()) {
-    if (isKindMember(name, reference.of.name, local, heads)) members.push(name);
+    if (isKindMember(name, reference.of.name, local, heads, hops)) members.push(name);
   }
   return members.sort();
 }
@@ -106,6 +112,8 @@ export interface KindIndexInputs {
   readonly entries: EntryAccess;
   /** What a name read under a reference over `of`, a type that is no constructor, reaches: the link's own walk over its final namespace. */
   readonly values: (of: string) => ReferenceValues;
+  /** The namespace's externs, each a member where the entry it lands on is (§5.13). Absent means none. */
+  readonly hops?: ExternHops;
 }
 
 /**
@@ -132,7 +140,7 @@ export function computeKindMembers(
   }
   const indexed = (value: RefBody): RefBody => {
     const types = namesTypes(value.of.name, local);
-    const members = types ? kindMembers(value, merged, heads) : [];
+    const members = types ? kindMembers(value, merged, heads, inputs.hops) : [];
     const { index: _previous, ...rest } = value;
     void _previous;
     return withChain(
