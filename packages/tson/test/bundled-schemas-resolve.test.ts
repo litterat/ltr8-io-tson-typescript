@@ -15,7 +15,6 @@ import { headed, topBinding } from '../src/schema/bindings.js';
 import { defaultAtomEncoder } from '../src/write/bindingWriter.js';
 import { isNestedMap } from '../src/schema/meta/schemaPaths.js';
 import { subtypesOf, type Annotation } from '../src/schema/meta/typedef.js';
-import { referenceText } from '../src/ast/reference.js';
 import {
   CORE_TN,
   META_TN,
@@ -254,8 +253,6 @@ function canonicalCore(value: CoreValue, head?: string): Canonical {
   switch (value.kind) {
     case 'token':
       return value.form === 'unquoted' ? canonicalName(value.text) : JSON.stringify(value.text);
-    case 'reference':
-      return referenceText(value.reference);
     case 'empty-brace':
       return {};
     case 'void':

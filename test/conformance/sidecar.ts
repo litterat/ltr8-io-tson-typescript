@@ -107,23 +107,9 @@ export type ExpectedCoreValue =
   | { readonly kind: 'token'; readonly form: TokenForm; readonly text: string }
   | { readonly kind: 'absent' }
   | { readonly kind: 'empty-brace' }
-  | {
-      readonly kind: 'reference';
-      readonly name: string;
-      readonly arguments: readonly ExpectedReferenceArgument[];
-    }
   | { readonly kind: 'record'; readonly fields: readonly ExpectedRecordField[] }
   | { readonly kind: 'map'; readonly entries: readonly ExpectedMapEntry[] }
   | { readonly kind: 'array'; readonly elements: readonly ExpectedDataValue[] };
-
-/** One argument of an expected reference (parser layer): a nested reference with arguments, or a token. */
-export type ExpectedReferenceArgument =
-  | {
-      readonly kind: 'reference';
-      readonly name: string;
-      readonly arguments: readonly ExpectedReferenceArgument[];
-    }
-  | { readonly kind: 'token'; readonly form: TokenForm; readonly text: string };
 
 /** An expected record field (parser layer). */
 export interface ExpectedRecordField {
@@ -285,11 +271,6 @@ export type ExpectedReaderAtom =
  */
 export type ExpectedReaderValue =
   | { readonly kind: 'record'; readonly fields: readonly ExpectedReaderField[] }
-  | {
-      readonly kind: 'reference';
-      readonly segments: readonly string[];
-      readonly arguments: readonly ExpectedReaderValue[];
-    }
   | { readonly kind: 'map'; readonly entries: readonly ExpectedReaderEntry[] }
   | { readonly kind: 'array'; readonly elements: readonly ExpectedReaderValue[] }
   | { readonly kind: 'atom'; readonly atom: ExpectedReaderAtom }
@@ -463,15 +444,7 @@ function toCommonFields(fields: Map<string, DataValue>): CommonSidecarFields {
 
 // ── Parser-layer: ExpectedDocument ───────────────────────────────────────────────────────────
 
-const CORE_VALUE_KINDS = [
-  'token',
-  'reference',
-  'record',
-  'map',
-  'array',
-  'absent',
-  'empty-brace',
-] as const;
+const CORE_VALUE_KINDS = ['token', 'record', 'map', 'array', 'absent', 'empty-brace'] as const;
 
 function toExpectedToken(dv: DataValue): ExpectedToken {
   const fields = recordFields(dv, 'lexer token');
@@ -537,39 +510,6 @@ function toExpectedMapEntry(dv: DataValue): ExpectedMapEntry {
   };
 }
 
-/** `dv` is a `reference_core` record (`parser-sidecar.tn`): a qualified name and its arguments. */
-function toExpectedReference(
-  dv: DataValue,
-  context: string,
-): Extract<ExpectedCoreValue, { readonly kind: 'reference' }> {
-  const fields = recordFields(dv, context);
-  return {
-    kind: 'reference',
-    name: requiredText(fields, 'name', context),
-    arguments: arrayElements(
-      requireField(fields, 'arguments', context),
-      `${context}.arguments`,
-    ).map(toExpectedReferenceArgument),
-  };
-}
-
-/** `dv` is a `reference_argument` field group: a nested `reference` or a `token`. */
-function toExpectedReferenceArgument(dv: DataValue): ExpectedReferenceArgument {
-  const fields = recordFields(dv, 'reference argument');
-  const { name: kind, value: payload } = soleMember(
-    fields,
-    ['reference', 'token'],
-    'reference argument',
-  );
-  if (kind === 'reference') return toExpectedReference(payload, 'reference argument.reference');
-  const payloadFields = recordFields(payload, 'reference argument.token');
-  return {
-    kind: 'token',
-    form: requiredText(payloadFields, 'form', 'reference argument.token') as TokenForm,
-    text: requiredText(payloadFields, 'text', 'reference argument.token'),
-  };
-}
-
 /**
  * `dv` is a `core_value` field group: a record carrying exactly one member named `token`,
  * `record`, `map`, `array`, `absent` or `empty-brace` (`parser-sidecar.tn`'s own `core_value`).
@@ -586,8 +526,6 @@ function toExpectedCoreValue(dv: DataValue): ExpectedCoreValue {
         text: requiredText(payloadFields, 'text', 'core-value.token'),
       };
     }
-    case 'reference':
-      return toExpectedReference(payload, 'core-value.reference');
     case 'absent':
       return { kind: 'absent' };
     case 'empty-brace':
@@ -739,7 +677,7 @@ function toExpectedVocabularyValue(dv: DataValue): ExpectedVocabularyValue {
 
 // ── Reader-layer: ExpectedReaderValue ────────────────────────────────────────────────────────
 
-const READER_VALUE_KINDS = ['record', 'reference', 'map', 'array', 'atom', 'absent'] as const;
+const READER_VALUE_KINDS = ['record', 'map', 'array', 'atom', 'absent'] as const;
 const READER_ATOM_KINDS = ['boolean', 'string', 'number'] as const;
 
 function toExpectedReaderField(dv: DataValue): ExpectedReaderField {
@@ -786,20 +724,6 @@ function toExpectedReaderValue(dv: DataValue): ExpectedReaderValue {
           requireField(payloadFields, 'fields', 'reader value.record'),
           'fields',
         ).map((el) => toExpectedReaderField(el)),
-      };
-    }
-    case 'reference': {
-      const payloadFields = recordFields(payload, 'reader value.reference');
-      return {
-        kind: 'reference',
-        segments: arrayElements(
-          requireField(payloadFields, 'segments', 'reader value.reference'),
-          'segments',
-        ).map((el) => tokenText(el, 'reader value.reference segment')),
-        arguments: arrayElements(
-          requireField(payloadFields, 'arguments', 'reader value.reference'),
-          'arguments',
-        ).map(toExpectedReaderValue),
       };
     }
     case 'map': {

@@ -310,59 +310,32 @@ describe('document header (§2.2, §3.3)', () => {
   });
 });
 
-describe('a reference is one core value, kept structured (§4, §7.4)', () => {
-  it('an application reduces to a reference value: its name and each argument as classified', () => {
-    const value = doc('{ t: pair<uuid "a b" 201> }').root.coreValue as {
-      fields: readonly { value: { coreValue: unknown } }[];
-    };
-    expect(defined(value.fields[0]).value.coreValue).toEqual({
-      kind: 'reference',
-      reference: {
-        kind: 'application',
-        name: 'pair',
-        arguments: [
-          { kind: 'reference', reference: { kind: 'name', name: 'uuid' } },
-          { kind: 'value', text: 'a b', form: 'single-line' },
-          { kind: 'value', text: '201', form: 'unquoted' },
-        ],
-      },
+describe('a reference in data is a token, a qualified name (§4.1, §7.4)', () => {
+  it('a qualified name is the token it is, with no structure of its own', () => {
+    expect(doc('geo.address').root.coreValue).toEqual({
+      kind: 'token',
+      text: 'geo.address',
+      form: 'unquoted',
     });
   });
 
-  it('a nested application is a reference argument of its own', () => {
-    expect(doc('a<b<c>>').root.coreValue).toEqual({
-      kind: 'reference',
-      reference: {
-        kind: 'application',
-        name: 'a',
-        arguments: [
-          {
-            kind: 'reference',
-            reference: {
-              kind: 'application',
-              name: 'b',
-              arguments: [{ kind: 'reference', reference: { kind: 'name', name: 'c' } }],
-            },
-          },
-        ],
-      },
-    });
+  it('an application is a parse error wherever a value stands: a field, a root, a nested argument', () => {
+    for (const text of ['{ t: pair<uuid "a b" 201> }', 'a<b<c>>', '[ box<text> ]']) {
+      expect(() => doc(text), text).toThrow(TsonParseError);
+    }
   });
 
-  it('a sibling reference reduces to its field name', () => {
-    expect(doc('kind! ').root.coreValue).toEqual({
-      kind: 'reference',
-      reference: { kind: 'sibling', field: 'kind' },
-    });
+  it('a sibling mark is a parse error: no form of a data value ends in "!"', () => {
+    expect(() => doc('kind! ')).toThrow(TsonParseError);
+    expect(() => doc('{ v: kind! }')).toThrow(TsonParseError);
   });
 
-  it('records the reference like any core value, at its own start position', () => {
-    const { document, positions } = parse('{ t: box<text> }');
-    const record = document.root.coreValue as {
-      fields: readonly { value: { coreValue: CoreValue } }[];
-    };
-    const reference = defined(record.fields[0]).value.coreValue;
-    expect(positions.get(reference)).toMatchObject({ line: 1, column: 6 });
+  it('a quoted token holds the text it spells, a "<" among it being text', () => {
+    expect(doc('"set<text>"').root.coreValue).toEqual({
+      kind: 'token',
+      text: 'set<text>',
+      form: 'single-line',
+    });
   });
 });
 

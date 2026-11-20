@@ -15,7 +15,7 @@ import { createTson, mapSchemaSource, type SchemaSource } from '../src/config.js
 import {
   DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
-  scriptPolicy,
+  tokenPolicyAt,
   withRestrictionLevel,
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
@@ -420,7 +420,7 @@ describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
 
   it('carries the policies the instance was configured with, not the defaults', () => {
     const identifierPolicy = withRestrictionLevel(DEFAULT_IDENTIFIER_POLICY, 'ASCII_ONLY');
-    const token = scriptPolicy('SINGLE_SCRIPT');
+    const token = tokenPolicyAt('SINGLE_SCRIPT');
     const tson = createTson({ identifierPolicy, tokenPolicy: token });
     expect(tson.processorPolicy.identifierPolicy).toEqual(identifierPolicy);
     expect(tson.processorPolicy.tokenPolicy).toEqual(token);

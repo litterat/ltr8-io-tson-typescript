@@ -248,7 +248,6 @@ export function buildAtomReader(
             }
             return refused;
           },
-          true,
         ),
         name,
       );

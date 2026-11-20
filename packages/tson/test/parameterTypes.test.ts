@@ -307,7 +307,7 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
     });
   });
 
-  it('an imported template is taken as recorded, not walked again -- a local template passing a parameter to it inherits the recorded bound', () => {
+  it('an imported template is taken as recorded, not walked again -- a data value spells no application, so a parameter passed to it inherits nothing (§4.1)', () => {
     const imported = template(['T'], 'meta.array', record({ element_type: token('T') }));
     const recorded: Top = {
       ...(imported as TemplateBody),
@@ -335,7 +335,6 @@ describe('inferAll -- each parameter gets the type an argument for it is read as
     expect(parameters.get('wrap')?.get('U')).toEqual({
       name: 'U',
       type: refT('meta.type_ref'),
-      bound: refT('text'),
     });
   });
 });
@@ -422,7 +421,7 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
     expect(reported[0]).toContain('is a constructor, not a type');
   });
 
-  it('a parameter inherits the bound of the template it is passed to, and a written bound may not be wider', () => {
+  it('a parameter passed to a template through an application inherits no bound: a data value spells none (§4.1)', () => {
     const box = template(['T'], 'meta.array', record({ element_type: token('T') }));
     const wrap = template(
       ['U'],
@@ -435,34 +434,17 @@ describe('inferAll -- a written type narrows what the positions give (§5.10)', 
         }),
       }),
     );
-    const entries = new Map([
-      ['box', box],
-      ['wrap', wrap],
-    ]);
-    const bounded = infer(entries, {
-      written: new Map([['box', new Map([['T', refT('uint8')]])]]),
-      extra,
-    });
+    const bounded = infer(
+      new Map([
+        ['box', box],
+        ['wrap', wrap],
+      ]),
+      { written: new Map([['box', new Map([['T', refT('uint8')]])]]), extra },
+    );
     expect(bounded.get('wrap')?.get('U')).toEqual({
       name: 'U',
       type: refT('meta.type_ref'),
-      bound: refT('uint8'),
     });
-
-    const reported: string[] = [];
-    infer(entries, {
-      written: new Map([
-        ['box', new Map([['T', refT('uint8')]])],
-        ['wrap', new Map([['U', refT('text')]])],
-      ]),
-      extra,
-      reporter: {
-        report(name, error): void {
-          reported.push(`${name}: ${error.message}`);
-        },
-      },
-    });
-    expect(reported.some((m) => m.startsWith('wrap:') && m.includes('never widens'))).toBe(true);
   });
 });
 

@@ -112,6 +112,32 @@ Class 2 failure introduced by the harness changes; unit tests: no test that pass
 except tests asserting Revision 39's data forms, which are rewritten to Revision 40's (a test of an
 argument list in data becomes a test that it is refused). typecheck, lint, format:check clean.
 
+### Stage 1 outcome
+
+WP1 landed; the gate holds. Class 1 **319/319**, Class 2 0/1119 (every one the kernel's
+`meta.set_type` failure), 1438 discovered; unit tests 353 failing of 3476, the same set as Stage 0
+by name (the net −20 are argument-list and sibling tests rewritten as refusals). What Stage 2
+inherits:
+
+- **The schema parser still reads payloads with the data grammar** (`parseCoreValue`), which now
+  refuses `set<text>` and `kind!`. WP2A writes the schema grammar's own payload reading. The local
+  `marksSibling`/`siblingField` in `compiler/schemaParser.ts` stand for `dependent-type`.
+- **Placeholders to replace:** `schema/referenceAtoms.ts`'s `referenceToWire`, `compiler/desugar.ts`'s
+  `refValueOf` and `compiler/wireForm.ts` write an application or a dependent type as token text
+  (`pair<uuid B>`, `kind!`); `wireForm.applicationIn` returns `undefined`; `compiler/templates.ts`'s
+  materialisation backstop is a bare constant 64 (the policy limit is gone). All die with WP2A/WP2B.
+- **`ast/reference.ts`** keeps `Reference`/`ApplicationReference` for the schema model only; the data
+  value model has no reference (six core-value kinds).
+- **Segments after the first** are still judged as identifiers by the atom parsers; the
+  family-by-family walk (items 117–118) is WP2B's.
+- **The harness**: names compared as written (rule 6 gone, `synthetic.ts` deleted); `resolvedForm.ts`
+  has an `isIncomplete(linked, name)` hook returning false until the model has incomplete entries,
+  and compares `@meta.completion`. It never compared `@meta.application`; WP2A adds that when output
+  carries it. A `fixtures/cycle-*.tn` subject's own `!!id` is not served (a `not-found`, a
+  non-verdict): the cycle verdict must come from the library treating a reference to the subject's
+  own identity as a cycle before fetching — WP2D's.
+- `@ltr8/tson-cli`'s exported `ScriptPolicy` alias is now `TokenPolicy`.
+
 ## Stage 2: the kernel and the type system
 
 Four packages, run **in sequence**: they share the schema model, the resolver, the linker and the

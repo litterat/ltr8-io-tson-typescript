@@ -7,7 +7,7 @@ import {
   nameHygieneRefusal,
   perSegment,
   permitting,
-  scriptPolicy,
+  tokenPolicyAt,
   tokenSatisfiesPolicy,
   withRestrictionLevel,
   withSkeletonDistinctness,
@@ -111,9 +111,9 @@ describe('permitting (§8.2 mechanism 3, admitted script combinations)', () => {
     expect(nameHygieneRefusal([name], admitted)).toBeUndefined();
   });
 
-  it('composes with ScriptPolicy the same way, via tokenSatisfiesPolicy', () => {
+  it('composes with TokenPolicy the same way, via tokenSatisfiesPolicy', () => {
     const name = 'id_' + cp(0x043f); // Latin + Cyrillic
-    const bare = scriptPolicy('SINGLE_SCRIPT');
+    const bare = tokenPolicyAt('SINGLE_SCRIPT');
     expect(tokenSatisfiesPolicy(name, bare)).toBe(false);
 
     const admitted = permitting(bare, LATIN, CYRILLIC);
@@ -251,7 +251,7 @@ describe('nameHygieneRefusal -- mechanism 1 runs first, over the whole scope', (
   });
 });
 
-describe('ScriptPolicy (§8.2 "Values")', () => {
+describe('TokenPolicy (§8.2 "Values")', () => {
   it('defaults to Unrestricted, so no scan runs', () => {
     expect(DEFAULT_TOKEN_POLICY.restrictionLevel).toBe('UNRESTRICTED');
     expect(tokenSatisfiesPolicy(CYR_A + 'dmin')).toBe(true);
@@ -259,13 +259,13 @@ describe('ScriptPolicy (§8.2 "Values")', () => {
   });
 
   it('builds a whole-text policy at any level', () => {
-    const policy = scriptPolicy('ASCII_ONLY');
+    const policy = tokenPolicyAt('ASCII_ONLY');
     expect(tokenSatisfiesPolicy('plain', policy)).toBe(true);
     expect(tokenSatisfiesPolicy(CYR_A, policy)).toBe(false);
   });
 
   it('states no unit -- a per-segment token policy is unwritable, the unit belongs to names only', () => {
-    expect(Object.keys(scriptPolicy('HIGHLY_RESTRICTIVE')).sort()).toEqual([
+    expect(Object.keys(tokenPolicyAt('HIGHLY_RESTRICTIVE')).sort()).toEqual([
       'permittedScripts',
       'restrictionLevel',
     ]);

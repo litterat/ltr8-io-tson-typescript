@@ -51,7 +51,7 @@ import type {
 import type { TypeRef } from '../schema/meta/typedef.js';
 import { parentsOf } from '../schema/meta/typedef.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
-import { referenceToWire, typeRefFromAst } from '../schema/referenceAtoms.js';
+import { referenceToWire } from '../schema/referenceAtoms.js';
 import { metaName } from '../schema/meta/kernel.js';
 import { lexerFormOfMeta } from './tokenForms.js';
 
@@ -229,7 +229,7 @@ export function heldRecord(
         : f.type === undefined
           ? undefined
           : f.type.kind === 'sibling'
-            ? { kind: 'reference', reference: { kind: 'sibling', field: f.type.field } }
+            ? tokenValue(`${f.type.field}!`)
             : refValue(f.type);
     const members: RecordField[] = type === undefined ? [] : [{ name: TYPE, value: scoped(type) }];
     if (f.optional) {
@@ -359,7 +359,7 @@ export function field(record: RecordValue, name: string): CoreValue | undefined 
  * what makes one of them wrong. A quoted token is never an application, so a held body's text literal
  * (`pattern: "box<T>"`) is text whatever it spells.
  */
-export function applicationIn(value: CoreValue): TypeRef | undefined {
-  if (value.kind !== 'reference' || value.reference.kind !== 'application') return undefined;
-  return typeRefFromAst(value.reference);
+export function applicationIn(_value: CoreValue): TypeRef | undefined {
+  // A data value holds no application (§4.1): the argument list is no data syntax.
+  return undefined;
 }

@@ -48,7 +48,7 @@ import {
   DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
   type IdentifierPolicy,
-  type ScriptPolicy,
+  type TokenPolicy,
 } from '../unicode/policy.js';
 import type { JsonEvent, JsonEventSource } from './stream.js';
 
@@ -82,7 +82,7 @@ interface Cursor {
   readonly events: JsonEventSource;
   readonly receiver: DiagnosticsReceiver;
   readonly identifierPolicy: IdentifierPolicy;
-  readonly tokenPolicy: ScriptPolicy;
+  readonly tokenPolicy: TokenPolicy;
   position: Position | undefined;
   reported: number;
   /**
@@ -153,7 +153,7 @@ export interface JsonReadContext {
    * reaches map keys and string values"). Defaults to {@link DEFAULT_TOKEN_POLICY}, which checks
    * nothing.
    */
-  tokenPolicy(): ScriptPolicy;
+  tokenPolicy(): TokenPolicy;
   /** Hands one problem to this read's receiver, located at this context's pointer and position. */
   report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void;
   /** How many problems this read has reported so far, counting every context derived from it. */
@@ -280,7 +280,7 @@ function makeContext(
     identifierPolicy(): IdentifierPolicy {
       return cursor.identifierPolicy;
     },
-    tokenPolicy(): ScriptPolicy {
+    tokenPolicy(): TokenPolicy {
       return cursor.tokenPolicy;
     },
     report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void {
@@ -318,7 +318,7 @@ export function createJsonReadContext(
   events: JsonEventSource,
   receiver: DiagnosticsReceiver,
   identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
-  tokenPolicy: ScriptPolicy = DEFAULT_TOKEN_POLICY,
+  tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): JsonReadContext {
   return makeContext(
     {

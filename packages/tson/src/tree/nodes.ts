@@ -50,18 +50,7 @@ import type {
  * none.
  */
 export type Value =
-  | RecordNode
-  | MapNode
-  | ArrayNode
-  | TupleNode
-  | AtomNode
-  | ApplicationReferenceNode
-  | SiblingReferenceNode
-  | VoidNode
-  | MissingNode;
-
-/** The two nodes a schemaless read keeps for a reference (§4, §7.4). Mirrors `TsonReference`. */
-export type ReferenceNode = ApplicationReferenceNode | SiblingReferenceNode;
+  RecordNode | MapNode | ArrayNode | TupleNode | AtomNode | VoidNode | MissingNode;
 
 /**
  * A record node — named fields in a stable order (§2.5). Mirrors `TsonRecord`. Duplicate field names are
@@ -157,51 +146,6 @@ export type AtomValue =
 export interface AtomNode {
   readonly kind: 'atom';
   readonly value: AtomValue;
-  readonly typeRef?: string;
-  readonly annotations: Annotations;
-}
-
-/**
- * An application read with no schema (§4, §7.4): `map<text list<int32>>` kept as the structured value
- * it is, its qualified name's {@link segments} and its {@link arguments}, resolving nothing. Each
- * argument is read by the ordinary schemaless rule, so `201` is a number and `text` a string, and a
- * nested application is another {@link ApplicationReferenceNode}. A qualified name without arguments
- * is a token, read as any token is. Mirrors `TsonApplicationReference`.
- *
- * **A tree reference is one the grammar alone shows to be a reference**: an application by its
- * `<...>`, a sibling reference by its trailing `!`. There is no referent here -- with no schema there
- * is no closure to resolve a name in; a read under a schema delivers a reference at a
- * reference-typed position as the schema model's reference object.
- *
- * `text` is the canonical text the application reads as -- the name, an adjacent `<`, each argument
- * separated by one space, and `>`, a value argument keeping its token form. It is carried rather
- * than derived because spelling an argument back needs the identifier grammar to tell a name from a
- * string, which this layer does not hold.
- */
-export interface ApplicationReferenceNode {
-  readonly kind: 'application-reference';
-  /** The qualified name's segments: `geo.address` is `['geo', 'address']`. */
-  readonly segments: readonly string[];
-  /** The arguments, at least one, each read by the schemaless rule. */
-  readonly arguments: readonly Value[];
-  /** The canonical text, what the reference reads as. */
-  readonly text: string;
-  readonly typeRef?: string;
-  readonly annotations: Annotations;
-}
-
-/**
- * A sibling reference read with no schema (§4, §7.4): `kind!` kept as the structured value it is, the
- * {@link field} it names and the mark, resolving nothing. Its meaning -- the type the field of the
- * same record names -- is a schema's to give, and only at a record field's type. Mirrors
- * `TsonSiblingReference`.
- */
-export interface SiblingReferenceNode {
-  readonly kind: 'sibling-reference';
-  /** The field's name, one identifier. */
-  readonly field: string;
-  /** The field's name and the sibling mark: `kind!`. */
-  readonly text: string;
   readonly typeRef?: string;
   readonly annotations: Annotations;
 }
@@ -367,39 +311,6 @@ export function voidNode(
 /** Constructs a {@link MissingNode} carrying the RFC 6901 pointer at which navigation failed. */
 export function missingNode(path: string): MissingNode {
   return { kind: 'missing', path };
-}
-
-/** Constructs an {@link ApplicationReferenceNode}. Mirrors `TsonApplicationReference`'s canonical constructor. */
-export function applicationReferenceNode(
-  segments: readonly string[],
-  args: readonly Value[],
-  text: string,
-  typeRef?: string,
-  nodeAnnotations: Annotations = EMPTY_ANNOTATIONS,
-): ApplicationReferenceNode {
-  return {
-    kind: 'application-reference',
-    segments,
-    arguments: args,
-    text,
-    annotations: nodeAnnotations,
-    ...(typeRef !== undefined ? { typeRef } : {}),
-  };
-}
-
-/** Constructs a {@link SiblingReferenceNode}. Mirrors `TsonSiblingReference`'s canonical constructor. */
-export function siblingReferenceNode(
-  field: string,
-  typeRef?: string,
-  nodeAnnotations: Annotations = EMPTY_ANNOTATIONS,
-): SiblingReferenceNode {
-  return {
-    kind: 'sibling-reference',
-    field,
-    text: `${field}!`,
-    annotations: nodeAnnotations,
-    ...(typeRef !== undefined ? { typeRef } : {}),
-  };
 }
 
 /** Constructs a {@link TsonDocument}. Mirrors `TsonDocument.of`/its canonical constructor. */

@@ -54,8 +54,7 @@ describe('value-preserving round trip through the real schemaless reader', () =>
     ['a boolean', 'true'],
     ['a string', '"hello"'],
     ['void', '_'],
-    ['an application reference, kept structured (§7.4)', '{ t: pair<box<text> 201 "a b"> }'],
-    ['a sibling reference (§7.4)', '{ value: kind! }'],
+    ['a qualified name, a token like any other (§4.1)', '{ t: geo.address }'],
   ])('%s', (_label, text) => {
     const document = readSchemaless(text);
     const written = writeTree(document);

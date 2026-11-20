@@ -65,31 +65,28 @@
  * once `T` is bound) finds the entry under construction and references it by name rather than
  * recursing forever.
  *
- * **The depth backstop is [TSON-SCHEMA] §11.5's materialisation-depth limit.** §5.10.1's own
+ * **The depth backstop is a bare constant.** §5.10.1's own
  * static check — that a recursive application must pass every parameter through unchanged, so a
  * well-formed schema's recursion always ties the knot on its first repeat — is a separate, later
  * pass over the *resolved* entries before any of them are closed (the Java's `TemplateRegularity`,
  * a later work package's own file here). What this module carries instead is the guard the Java
  * documents as a **backstop, not the rule**: `MAX_CLOSING_DEPTH` bounds how many nested
- * instantiations one `close` chain may open before materialisation gives up -- exactly §11.5's own
- * "nested open synthetics closed for one application", at its own default of 64. Ported for its
+ * instantiations one `close` chain may open before materialisation gives up, at 64. Ported for its
  * semantics, not its mechanism — a fixed depth counter over a `Set` of in-progress entry names,
  * checked after each new link is added — so that a hole in the earlier static check (or, in this
- * port, simply not having reached that later work package yet) fails as a limit refusal
- * (`core/limits.ts`'s own `materialisationDepthLimitRefusal`) naming the outermost application and
+ * port, simply not having reached that later work package yet) fails as a resolver error
+ * naming the outermost application and
  * the chain that grew rather than repeated, a caller can report, never as a host stack overflow.
  */
 import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonInternalError,
-  TsonLimitRefusedError,
   TsonNotImplementedError,
   TsonReadError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
-import { DEFAULT_MAX_MATERIALISATION_DEPTH, MATERIALISATION_DEPTH_LIMIT } from '../core/limits.js';
-import type { CoreValue, DataValue, RecordField, TokenValue } from '../ast/value.js';
+import type { CoreValue, DataValue, RecordField } from '../ast/value.js';
 import type { Token, TypeArgument, TypeRef, Top } from '../schema/meta/typedef.js';
 import { namespaceOf } from '../schema/meta/typedef.js';
 import {
@@ -110,7 +107,7 @@ import { checkBodyCoherence } from './atomChecks.js';
 import { canonicalApplication, canonicalBinding, ofApplication, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
 import { metaName } from '../schema/meta/kernel.js';
-import { CHAIN, RECORD, applicationIn, field, heldRecord, rescope } from './wireForm.js';
+import { CHAIN, RECORD, field, heldRecord, rescope } from './wireForm.js';
 import { chainOfParents } from './ancestry.js';
 import { heldOf, withParametersOf, type HeldBody } from './heldBody.js';
 import { substitute } from './templateSubstitution.js';
@@ -357,11 +354,10 @@ export interface TemplateMaterialiser {
 }
 
 /**
- * How deep the closing chain may go before materialisation is abandoned — a backstop, not the
- * rule, and [TSON-SCHEMA] §11.5's own "materialisation depth" limit at its own default. See this
- * module's own doc for why this stays even once §5.10.1's static check lands elsewhere.
+ * How deep the closing chain may go before materialisation is abandoned — a backstop against the
+ * host stack, not the rule and no policy limit. See this module's own doc.
  */
-const MAX_CLOSING_DEPTH = DEFAULT_MAX_MATERIALISATION_DEPTH;
+const MAX_CLOSING_DEPTH = 64;
 
 /** The constructor a held record template carries — its closure is the instantiation itself. */
 const RECORD_HEAD = RECORD;
@@ -864,19 +860,13 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
     if (closing.size > MAX_CLOSING_DEPTH) {
       closing.delete(name);
       // Named for the *outermost* head, which is the one the author wrote; the head in hand here
-      // is whichever link happened to tip the depth over. A limit refusal ([TSON-SCHEMA] §11.5),
-      // not a resolver error: the application may tie its own knot eventually (arguments growing
-      // rather than repeating looks identical to this deployment's own bound from the inside), and
-      // §8.1's fifth outcome is what names that distinction rather than reporting the schema itself
-      // as malformed.
-      throw new TsonLimitRefusedError(
+      // is whichever link happened to tip the depth over. No policy limit bounds this: it is a
+      // backstop against the host stack, reported as the resolver error it is.
+      throw new TsonSchemaValidationError(
         `'${heads[0] ?? head}<...>' does not close: materialising it needs more than ` +
-          `${String(MAX_CLOSING_DEPTH)} nested instantiations, exceeding the configured ` +
-          `'${MATERIALISATION_DEPTH_LIMIT}' limit of ${String(MAX_CLOSING_DEPTH)} -- either the arguments are ` +
-          'growing rather than repeating and there is no finite set of types to build (§5.10), or this ' +
-          `deployment simply declined to spend the resources. The chain begins ${chain()}. A recursive ` +
-          'template must reach an argument it has already been applied to',
-        { limit: MATERIALISATION_DEPTH_LIMIT, configuredThreshold: MAX_CLOSING_DEPTH },
+          `${String(MAX_CLOSING_DEPTH)} nested instantiations -- the arguments are growing rather than ` +
+          `repeating and there is no finite set of types to build (§5.10). The chain begins ${chain()}. ` +
+          'A recursive template must reach an argument it has already been applied to',
       );
     }
     heads.push(head);
@@ -1200,16 +1190,6 @@ export function createTemplateMaterialiser(deps: TemplateMaterialiserDeps): Temp
    */
   function closeApplications(value: CoreValue): CoreValue {
     switch (value.kind) {
-      case 'reference': {
-        const application = applicationIn(value);
-        if (application === undefined) return value;
-        const token: TokenValue = {
-          kind: 'token',
-          text: close(application).name,
-          form: 'unquoted',
-        };
-        return token;
-      }
       case 'record':
         return {
           kind: 'record',

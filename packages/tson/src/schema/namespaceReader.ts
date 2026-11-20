@@ -38,7 +38,7 @@ import type {
 } from '../ast/value.js';
 import type { DiagnosticCode } from '../core/diagnostic.js';
 import type { DefinitionValueReader } from '../compiler/resolverTypes.js';
-import { referenceFromAst, referenceToWire } from './referenceAtoms.js';
+import { referenceToWire } from './referenceAtoms.js';
 import {
   TsonAtomParseError,
   TsonAtomValidationError,
@@ -518,12 +518,6 @@ class ValueBodyReader {
         message: `${at(path)}expected ${wanted}, found the quoted token "${core.text}", which is text rather than a name`,
       });
     }
-    // An application or a sibling reference at a name slot: the data grammar's own reference value
-    // (§7.4), kept as written. Whether it is admitted is the slot's reference type's `allow_sibling`,
-    // and what it names is the linker's to judge.
-    if (core.kind === 'reference') {
-      return { form: 'reference', reference: referenceFromAst(core.reference), slot };
-    }
     if (core.kind === 'record' || core.kind === 'map' || core.kind === 'empty-brace') {
       throw new TsonReadError({
         code: 'TYPE_MISMATCH',
@@ -839,8 +833,6 @@ function heldView(value: DataValue): MetaValue {
   switch (core.kind) {
     case 'token':
       return tokenOf(core);
-    case 'reference':
-      return { form: 'reference', reference: referenceFromAst(core.reference) };
     case 'void':
       return { form: 'void' };
     case 'array':
@@ -929,8 +921,6 @@ function describe(core: CoreValue): string {
       return "the void sentinel '_'";
     case 'token':
       return `the token '${core.text}'`;
-    case 'reference':
-      return core.reference.kind === 'sibling' ? 'a sibling reference' : 'a reference';
   }
 }
 

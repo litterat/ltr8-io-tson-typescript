@@ -300,6 +300,52 @@ describe('the name atoms ([TSON-SCHEMA] §4.2, §5.12)', () => {
     ).toThrow(TsonAtomParseError);
   });
 
+  it('§2.4, §7.1: a quoted token at a reference position is the reference its text spells', () => {
+    const reference = {
+      kind: 'reference_type',
+      of: { name: 'net.uuid_type', arguments: [], annotations: [] },
+      allowSibling: false,
+      index: {
+        namesTypes: true,
+        members: ['customer_id', 'net.uuid_type'],
+        applications: new Map<string, string>(),
+        aliases: new Map<string, string>(),
+        entries: new Map<string, unknown>(),
+        shown: [],
+      },
+    } as const;
+    const parser = createReferenceParser('k', reference, true);
+    expect(parser.read({ text: 'customer_id', form: 'single-line' })).toBe(
+      parser.read({ text: 'customer_id', form: 'unquoted' }),
+    );
+    expect(parser.read({ text: 'net.uuid_type', form: 'single-line' })).toBe('net.uuid_type');
+  });
+
+  it('§4.1, [TSON-JSON] §5.6: text spelling an application or a dependent type is no reference, quoted or not', () => {
+    const reference = {
+      kind: 'reference_type',
+      of: { name: 'net.uuid_type', arguments: [], annotations: [] },
+      allowSibling: false,
+      index: {
+        namesTypes: true,
+        members: ['customer_id'],
+        applications: new Map<string, string>(),
+        aliases: new Map<string, string>(),
+        entries: new Map<string, unknown>(),
+        shown: [],
+      },
+    } as const;
+    for (const judges of [true, false]) {
+      for (const form of ['unquoted', 'single-line'] as const) {
+        for (const text of ['set<text>', 'kind!']) {
+          expect(() => createReferenceParser('k', reference, judges).read({ text, form })).toThrow(
+            TsonAtomParseError,
+          );
+        }
+      }
+    }
+  });
+
   it('§4.2: a data document’s reference-typed field names a member of the reference', () => {
     const tson = standardLibrary();
     const linked = tson.resolveSchema(

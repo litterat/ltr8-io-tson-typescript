@@ -14,13 +14,16 @@
  * (§8.1) -- and the two are compared directly. Nothing here ever renders this implementation's
  * own resolved output to text.
  *
- * **RUNNER.md rule 6's hash normalisation is applied wherever a resolver-minted name appears** --
- * an entry's own key, or a name written inside a body (a field's `type`, a `binds`/`subtypes`
- * entry) -- via `synthetic.ts`'s {@link normalizeSyntheticNamesAnywhere}. A single entry
- * is rendered to a canonical, key-sorted JSON text (never a TSON document) purely so that
- * normalisation can run once over the whole structure rather than being threaded through every
- * shape in `schema/meta` individually; two entries compare equal exactly when their
- * canonical renderings do.
+ * **No name is normalised.** No entry is minted (RUNNER.md, Revision 40), so every key and every
+ * name inside a body is compared as written. A single entry is rendered to a canonical, key-sorted
+ * JSON text (never a TSON document) purely so that one comparison covers the whole structure rather
+ * than being threaded through every shape in `schema/meta` individually; two entries compare equal
+ * exactly when their canonical renderings do.
+ *
+ * **A resolved form lists complete entries only** (RUNNER.md): an incomplete entry, and an alias
+ * whose chain ends at one, appears in the subject and never in its resolved form
+ * ({@link isIncomplete}). What a declared completion closed is stated on its key, `@meta.completion`,
+ * and is compared as a claim of its own ({@link markedCompletions}, {@link ourCompletions}).
  */
 import { encodeUtf8 } from '../../packages/tson/src/io/utf8.js';
 import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
@@ -34,7 +37,6 @@ import type { Annotation, Top } from '../../packages/tson/src/schema/meta/typede
 import { isConstructor, isTemplateBody } from '../../packages/tson/src/schema/meta/typedef.js';
 import { createDefinitionValueReader } from '../../packages/tson/src/schema/namespaceReader.js';
 import { isNestedMap } from '../../packages/tson/src/schema/meta/schemaPaths.js';
-import { normalizeSyntheticName, normalizeSyntheticNamesAnywhere } from './synthetic.js';
 
 /** `dv`'s decoded token text -- the resolved schema-map's own keys, always a bare identifier. */
 function tokenTextOf(dv: DataValue): string {
@@ -176,37 +178,44 @@ function annotationValueText(value: unknown): unknown {
 
 /**
  * `entry`, reduced to what a comparison is about: its value-position annotations other than `doc`
- * (whose text a fixture abbreviates) and `synthetic` (derived, recomputed on ingest -- §8.2), a
- * held template as the structure its text parses to, and a canonical rendering with every
- * resolver-minted name's content hash normalised (RUNNER.md rule 6, generalised) wherever it
- * appears.
+ * (whose text a fixture abbreviates), a held template as the structure its text parses to, and a
+ * canonical rendering.
  */
 export function renderDefinition(entry: ResolvedEntry): string {
   const { value } = entry;
   const compared = {
     annotations: entry.annotations
-      .filter((annotation) => annotation.name !== 'doc' && annotation.name !== 'meta.synthetic')
+      .filter((annotation) => annotation.name !== 'doc')
       .map((annotation) => ({
         name: annotation.name,
         value: annotationValueText(annotation.value),
       })),
     value: isTemplateBody(value) ? { ...value, template: parsedTemplate(value.template) } : value,
   };
-  return normalizeSyntheticNamesAnywhere(canonicalJson(compared));
+  return canonicalJson(compared);
+}
+
+/**
+ * Whether the entry `name` names is an incomplete entry ([TSON-SCHEMA] §5.5), or an alias whose chain
+ * ends at one: what a resolved form leaves out. The schema model carries no incomplete entry, so
+ * none is.
+ */
+function isIncomplete(_linked: LinkedSchema, _name: string): boolean {
+  return false;
 }
 
 /**
  * `linked`'s own entries -- the ones this schema declares itself, excluding whatever `!!import`
- * merged in -- keyed by their hash-normalised name. Mirrors the Java reference implementation's
- * `ResolvedForm.ownEntries`: a `class2/schema/valid` vector states only what its own subject
- * declares, never restating an imported schema's entries too.
+ * merged in -- as its resolved form holds them: complete entries only. Mirrors the Java reference
+ * implementation's `ResolvedForm.ownEntries`: a `class2/schema/valid` vector states only what its
+ * own subject declares, never restating an imported schema's entries too.
  */
 export function ownEntries(linked: LinkedSchema): Map<string, ResolvedEntry> {
   const selfId = canonicalizeIdentity(linked.id);
   const own = new Map<string, ResolvedEntry>();
   for (const [name, value] of linked.entries) {
-    if (linked.origins.get(name) === selfId && !isNestedMap(value)) {
-      own.set(normalizeSyntheticName(name), {
+    if (linked.origins.get(name) === selfId && !isNestedMap(value) && !isIncomplete(linked, name)) {
+      own.set(name, {
         value,
         annotations: linked.facts.get(name)?.annotations ?? [],
       });
@@ -215,38 +224,60 @@ export function ownEntries(linked: LinkedSchema): Map<string, ResolvedEntry> {
   return own;
 }
 
+/** The names `annotation`'s `{ of: [capped bounded] }` value lists, in order; `undefined` where it is no such record. */
+function completionNames(value: unknown): readonly string[] | undefined {
+  if (typeof value !== 'object' || value === null || !('coreValue' in value)) return undefined;
+  const core = (value as DataValue).coreValue;
+  if (core.kind !== 'record') return undefined;
+  const of = core.fields.find((field) => field.name === 'of')?.value.coreValue;
+  if (of?.kind !== 'array') return undefined;
+  return of.elements.map((element) =>
+    element.coreValue.kind === 'token' ? element.coreValue.text : '',
+  );
+}
+
 /**
- * The names `linked` marks `@synthetic` at their schema-map key, among its own (non-imported)
- * entries -- hash-normalised. §8.2 puts this marker on every entry the resolver materialised from
- * a sugar form or closed from a template application, and on no other.
+ * The names each schema-map key's `@meta.completion` lists in a §8 resolved-schema document, keyed by
+ * entry name. Read from the text parsed as data rather than from a bound value, for the reason the
+ * Java reference's `ResolvedForm.markedCompletions` gives: a key-position annotation is dropped when a
+ * resolved-form document is read back, so a bound comparison would render none on either side and
+ * agree for the wrong reason.
  */
-export function ourSynthetics(linked: LinkedSchema): Set<string> {
-  const selfId = canonicalizeIdentity(linked.id);
-  const marked = new Set<string>();
-  for (const name of linked.entries.keys()) {
-    if (linked.origins.get(name) !== selfId) continue;
-    const annotations = linked.keyAnnotations.get(name);
-    if (annotations?.some((annotation) => annotation.name === 'meta.synthetic') === true) {
-      marked.add(normalizeSyntheticName(name));
+export function markedCompletions(resolvedText: string): Map<string, readonly string[]> {
+  const { document } = runSync(
+    parseDocument(fromBytes(encodeUtf8(resolvedText)), { resolvedForm: true }),
+  );
+  const marked = new Map<string, readonly string[]>();
+  const root = document.root.coreValue;
+  if (root.kind !== 'map') return marked;
+  const walk = (prefix: string, entries: readonly { key: DataValue; value: DataValue }[]): void => {
+    for (const entry of entries) {
+      const path = `${prefix}${tokenTextOf(entry.key)}`;
+      for (const annotation of entry.key.annotations) {
+        if (annotation.name !== 'meta.completion') continue;
+        const names = completionNames(annotation.value);
+        if (names !== undefined) marked.set(path, names);
+      }
+      if (entry.value.typeRef === 'meta.schema' && entry.value.coreValue.kind === 'map') {
+        walk(`${path}.`, entry.value.coreValue.entries);
+      }
     }
-  }
+  };
+  walk('', root.entries);
   return marked;
 }
 
-const SYNTHETIC_KEY_MARKER = /@meta\.synthetic\s+([A-Za-z0-9_]+)\s*=>/g;
-
-/**
- * The names a §8 resolved-schema document's own *text* marks `@synthetic` at a schema-map key --
- * hash-normalised. Read from raw text rather than from a bound value for the reason the Java
- * reference implementation's own `ResolvedForm.markedSynthetics` gives: a key-position annotation
- * is dropped when a resolved-form document is read back, so a bound comparison would render no
- * annotations on either side and agree for the wrong reason.
- */
-export function markedSynthetics(resolvedText: string): Set<string> {
-  const marked = new Set<string>();
-  for (const match of resolvedText.matchAll(SYNTHETIC_KEY_MARKER)) {
-    const name = match[1];
-    if (name !== undefined) marked.add(normalizeSyntheticName(name));
+/** The same, from this resolver: the `@meta.completion` on the keys of the schema's own entries. */
+export function ourCompletions(linked: LinkedSchema): Map<string, readonly string[]> {
+  const selfId = canonicalizeIdentity(linked.id);
+  const marked = new Map<string, readonly string[]>();
+  for (const name of linked.entries.keys()) {
+    if (linked.origins.get(name) !== selfId) continue;
+    for (const annotation of linked.keyAnnotations.get(name) ?? []) {
+      if (annotation.name !== 'meta.completion') continue;
+      const names = completionNames(annotation.value);
+      if (names !== undefined) marked.set(name, names);
+    }
   }
   return marked;
 }

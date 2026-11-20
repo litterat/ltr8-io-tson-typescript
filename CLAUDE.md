@@ -306,7 +306,6 @@ The rules the runner must keep:
   read (`utf-16`, `utf-32`; `invalid-utf8` is not one, it must reach the lexer), a `class2/` vector
   under a Class 1 processor (not this port), anything under `proposed/`, and a `refused` vector
   naming a UTS #39 data version this build does not carry. Anything else is a failure.
-- **Normalise a resolver-minted name's trailing `_[0-9a-f]{8}` before comparing** (Class 2),
-  wherever it appears — as an entry's own key, inside a body, or in a list of names a sidecar
-  states. §8.2 keys identity on structure, so the spelling is not normative and comparing it tests
-  our own hash.
+- **Compare every name as written.** No entry is minted (Part 2 §8.2; a type at a slot stays where
+  it is written), so nothing carries an implementation-chosen suffix. An expected resolved form
+  lists complete entries only, and each key's `@meta.completion` is compared.

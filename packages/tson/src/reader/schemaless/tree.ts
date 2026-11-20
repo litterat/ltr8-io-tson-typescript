@@ -79,16 +79,7 @@ import type {
   RecordField,
 } from '../../ast/value.js';
 import type { AtomValue, MapEntry as TreeMapEntry, Value } from '../../tree/nodes.js';
-import {
-  voidNode,
-  arrayNode,
-  atomNode,
-  mapNode,
-  recordNode,
-  applicationReferenceNode,
-  siblingReferenceNode,
-} from '../../tree/nodes.js';
-import { referenceText, type ApplicationReference } from '../../ast/reference.js';
+import { voidNode, arrayNode, atomNode, mapNode, recordNode } from '../../tree/nodes.js';
 import { diagnosticCodeForMechanism } from '../../core/diagnostic.js';
 import { toNfc } from '../../unicode/nfc.js';
 import { isIdentifierText } from '../../unicode/identifier-profile.js';
@@ -98,7 +89,7 @@ import {
   nameHygieneRefusal,
   tokenHygieneRefusal,
   type IdentifierPolicy,
-  type ScriptPolicy,
+  type TokenPolicy,
 } from '../../unicode/policy.js';
 import { firstConfusableCollision } from '../../unicode/skeleton.js';
 import { UTS39_VERSION } from '../../unicode/uts39.js';
@@ -144,7 +135,7 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    * recursively) an annotation's own value. Defaults to {@link DEFAULT_TOKEN_POLICY}, Unrestricted,
    * so an ordinary read scans nothing. Distinct from {@link identifierPolicy}: a value has no
    * identifier profile and no scope to be distinct within, so only the restricted-script rule
-   * (mechanism 3) ever applies here -- see `unicode/policy.ts`'s own {@link ScriptPolicy} doc.
+   * (mechanism 3) ever applies here -- see `unicode/policy.ts`'s own {@link TokenPolicy} doc.
    *
    * **Never checked against a field name, type-ref, or annotation name.** Those are `identifier`
    * positions governed by {@link identifierPolicy} alone (`checkIdentifierHygiene`,
@@ -154,7 +145,7 @@ export interface SchemalessTreeReaderOptions extends NestingLimitOptions {
    * reader already dispatches on event kind before either check runs, so the two surfaces are kept
    * separate here rather than merged incidentally.
    */
-  readonly tokenPolicy?: ScriptPolicy;
+  readonly tokenPolicy?: TokenPolicy;
   /**
    * Whether a record's field names are held to the series' identifier, the name type of a
    * schemaless record (§2.5, Part 2 §7.7). True, the default, for a document that names no
@@ -196,7 +187,7 @@ function* readStructuralAnnotations(
   ctx: ReadContext,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   depth = 0,
 ): Task<Annotations> {
   const first = yield* ctx.peek();
@@ -227,7 +218,7 @@ function* readStructuralDataValue(
   ctx: ReadContext,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   depth = 0,
 ): Task<DataValue> {
   if (depth >= limit) {
@@ -259,7 +250,7 @@ function* readStructuralCoreValue(
   ctx: ReadContext,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   depth: number,
 ): Task<CoreValue> {
   const e = yield* ctx.next();
@@ -322,8 +313,6 @@ function* readStructuralCoreValue(
     case 'token':
       checkTokenHygiene(ctx, e.text, tokenPolicy);
       return { kind: 'token', text: e.text, form: e.form };
-    case 'reference':
-      return { kind: 'reference', reference: e.reference };
     case 'void':
       return { kind: 'void' };
     case 'empty-brace':
@@ -414,14 +403,14 @@ function checkIdentifierHygiene(
  * function's caller ever rewinds past a `token` event either.
  *
  * **Restricted-script only.** {@link tokenHygieneRefusal} can return only that one rule -- see its
- * own doc and `unicode/policy.ts`'s {@link ScriptPolicy} doc for why mechanisms 1 and 2 have
+ * own doc and `unicode/policy.ts`'s {@link TokenPolicy} doc for why mechanisms 1 and 2 have
  * nothing to check on a value.
  *
  * Reported/thrown exactly the way {@link checkIdentifierHygiene} is -- see that function's own
  * note, and {@link reportNameHygiene}'s, on why a fail-fast refusal here surfaces as
  * {@link TsonNameHygieneRefusedError} rather than {@link TsonReadError}.
  */
-function checkTokenHygiene(ctx: ReadContext, text: string, tokenPolicy: ScriptPolicy): void {
+function checkTokenHygiene(ctx: ReadContext, text: string, tokenPolicy: TokenPolicy): void {
   const detail = tokenHygieneRefusal(text, tokenPolicy);
   if (detail === undefined) return;
   const message = `the token '${text}' is refused under [TSON-DATA] §8.2's "Values" token policy: ${detail}`;
@@ -490,7 +479,7 @@ function* readNode(
   preserve: boolean,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   judgeNames: boolean,
   depth: number,
 ): Task<Value> {
@@ -549,11 +538,6 @@ function* readNode(
     case 'void':
       yield* ctx.next();
       return voidNode(typeRefName, annotations);
-    case 'reference':
-      yield* ctx.next();
-      return peeked.reference.kind === 'sibling'
-        ? siblingReferenceNode(peeked.reference.field, typeRefName, annotations)
-        : readReference(ctx, peeked.reference, tokenPolicy, typeRefName, annotations);
     case 'token':
       yield* ctx.next();
       checkTokenHygiene(ctx, peeked.text, tokenPolicy);
@@ -582,7 +566,7 @@ function* readRecord(
   preserve: boolean,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   judgeNames: boolean,
   depth: number,
 ): Task<Value> {
@@ -737,7 +721,7 @@ function* readArray(
   preserve: boolean,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   judgeNames: boolean,
   depth: number,
 ): Task<Value> {
@@ -775,7 +759,7 @@ function* readMap(
   preserve: boolean,
   limit: number,
   identifierPolicy: IdentifierPolicy,
-  tokenPolicy: ScriptPolicy,
+  tokenPolicy: TokenPolicy,
   judgeNames: boolean,
   depth: number,
 ): Task<Value> {
@@ -845,41 +829,6 @@ function* readMap(
   }
   yield* ctx.next(); // map-end
   return mapNode(entries, typeRefName, annotations);
-}
-
-/**
- * A reference with arguments, kept as the structured value it is (§4): its segments, and each
- * argument read by the schemaless rule a token is read by, a nested application a reference of its
- * own. Nothing resolves. A value argument is a token like any other, so §8.2's token policy judges
- * it as it judges one.
- */
-function readReference(
-  ctx: ReadContext,
-  reference: ApplicationReference,
-  tokenPolicy: ScriptPolicy,
-  typeRefName: string | undefined,
-  annotations: Annotations,
-): Value {
-  const args: Value[] = [];
-  for (const argument of reference.arguments) {
-    if (argument.kind === 'reference' && argument.reference.kind === 'application') {
-      args.push(readReference(ctx, argument.reference, tokenPolicy, undefined, EMPTY_ANNOTATIONS));
-      continue;
-    }
-    const token =
-      argument.kind === 'reference'
-        ? { text: argument.reference.name, form: 'unquoted' as const }
-        : { text: argument.text, form: argument.form };
-    checkTokenHygiene(ctx, token.text, tokenPolicy);
-    args.push(atomNode(narrowBaseValue(resolveBaseType(token)), undefined, EMPTY_ANNOTATIONS));
-  }
-  return applicationReferenceNode(
-    reference.name.split('.'),
-    args,
-    referenceText(reference),
-    typeRefName,
-    annotations,
-  );
 }
 
 /**
@@ -1036,10 +985,6 @@ function keyIdentity(node: Value): unknown {
     }
     case 'map':
       return node.entries.map((entry) => [keyIdentity(entry.key), keyIdentity(entry.value)]);
-    case 'application-reference':
-      return ['reference', node.segments.slice(), node.arguments.map(keyIdentity)];
-    case 'sibling-reference':
-      return ['sibling', node.field];
     case 'void':
       return VOID_KEY_IDENTITY;
     case 'tuple':

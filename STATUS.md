@@ -253,7 +253,7 @@ day it does not match is the day it matters.
       refuses a reordering, a map's entry order matters only when `ordered: true`
 - [x] `void` and facets by family — `void_type` in the kernel; every facet holding a value of the constrained
       family is typed by that family's own instance and every count by `numeric.count` (#16, #17)
-- [x] Processor policy (Part 1 §8.2, `m/policy.tn`) — `ScriptPolicy` (a UTS #39 level and its
+- [x] Processor policy (Part 1 §8.2, `m/policy.tn`) — `TokenPolicy` (a UTS #39 level and its
       permitted scripts), `IdentifierPolicy` (a script policy plus `perSegment` and
       `skeletonDistinctness`), a token policy, §9.1's limits and the UTS #39 data version, held in
       one `ProcessorPolicy`. `policy.tn` is the sixth bundled schema, served by identity; nothing

@@ -20,28 +20,7 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
     });
   });
 
-  it('an application is the structured reference value of the data grammar (§7.4), round-tripping through applicationIn', () => {
-    const ref = {
-      name: 'box',
-      arguments: [
-        { kind: 'ref' as const, ref: { name: 'text', arguments: [], annotations: [] } },
-        { kind: 'value' as const, value: { text: '3', form: 'UNQUOTED' as const } },
-      ],
-      annotations: [],
-    };
-    const wire = metaRefValue(ref);
-    expect(wire.kind).toBe('reference');
-    expect(applicationIn(wire)).toEqual({
-      name: 'box',
-      arguments: [
-        { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
-        { kind: 'value', value: { text: '3', form: 'UNQUOTED' } },
-      ],
-      annotations: [],
-    });
-  });
-
-  it('nested applications round-trip (box<box<text>>)', () => {
+  it('an application has no data form (§4.1): its text is a token no position reads as an application', () => {
     const inner = {
       name: 'box',
       arguments: [{ kind: 'ref' as const, ref: { name: 'text', arguments: [], annotations: [] } }],
@@ -49,12 +28,17 @@ describe("metaRefValue (the resolved-layer twin of desugar.ts's refValueOf)", ()
     };
     const outer = {
       name: 'box',
-      arguments: [{ kind: 'ref' as const, ref: inner }],
+      arguments: [
+        { kind: 'ref' as const, ref: inner },
+        { kind: 'value' as const, value: { text: '3', form: 'UNQUOTED' as const } },
+      ],
       annotations: [],
     };
-    const back = applicationIn(metaRefValue(outer));
-    expect(back?.name).toBe('box');
-    expect(back?.arguments[0]).toEqual({ kind: 'ref', ref: inner });
+    for (const ref of [inner, outer]) {
+      const wire = metaRefValue(ref);
+      expect(wire.kind).toBe('token');
+      expect(applicationIn(wire)).toBeUndefined();
+    }
   });
 });
 
@@ -199,7 +183,7 @@ describe('createHeldBody', () => {
     ]);
   });
 
-  it('applications() finds a type_ref record form without descending into its own arguments', () => {
+  it('applications() finds none: a data value spells no application (§4.1)', () => {
     const application = {
       annotations: [],
       typeRef: 'array',
@@ -220,13 +204,7 @@ describe('createHeldBody', () => {
         ],
       },
     };
-    const held = createHeldBody(application, ['T']);
-    const applications = held.applications();
-    expect(applications).toHaveLength(1);
-    expect(applications[0]?.name).toBe('box');
-    expect(applications[0]?.arguments).toEqual([
-      { kind: 'ref', ref: { name: 'text', arguments: [], annotations: [] } },
-    ]);
+    expect(createHeldBody(application, ['T']).applications()).toEqual([]);
   });
 
   it('application is the exact DataValue it was built from', () => {

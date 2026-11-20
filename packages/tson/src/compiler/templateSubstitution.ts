@@ -132,13 +132,6 @@ export function substitute(
       };
       return map;
     }
-    case 'reference':
-      return value.reference.kind === 'application'
-        ? {
-            kind: 'reference',
-            reference: substituteReference(value.reference, head, parameters, bindings),
-          }
-        : value;
     case 'empty-brace':
     case 'void':
       return value;
@@ -191,11 +184,7 @@ function substituteArgument(
     return { kind: 'value', text: bound.value.text, form: lexerFormOfMeta(bound.value.form) };
   }
   const wire = referenceToWire(bound.ref);
-  return wire.kind === 'token'
-    ? { kind: 'reference', reference: { kind: 'name', name: wire.text } }
-    : wire.reference.kind === 'application'
-      ? { kind: 'reference', reference: wire.reference }
-      : argument;
+  return { kind: 'reference', reference: { kind: 'name', name: wire.text } };
 }
 
 /** Substitutes a whole held `DataValue`'s own core value, keeping its annotations and type-ref. */

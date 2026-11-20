@@ -79,9 +79,6 @@ function emitCoreValue(core: CoreValue, events: TsonEvent[]): void {
     case 'empty-brace':
       events.push({ kind: 'empty-brace', position: PLACEHOLDER });
       return;
-    case 'reference':
-      events.push({ kind: 'reference', reference: core.reference, position: PLACEHOLDER });
-      return;
     case 'void':
       events.push({ kind: 'void', position: PLACEHOLDER });
       return;

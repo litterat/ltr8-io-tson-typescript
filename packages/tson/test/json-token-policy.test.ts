@@ -26,8 +26,8 @@ import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/c
 import { validateJson } from '../src/json/facade.js';
 import {
   DEFAULT_IDENTIFIER_POLICY,
-  scriptPolicy,
-  type ScriptPolicy,
+  tokenPolicyAt,
+  type TokenPolicy,
 } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
@@ -43,7 +43,7 @@ const SCHEMA = resolveUserSchema(`
 `);
 const COMPILED: JsonCompiledSchema = compileJsonSchema(SCHEMA);
 
-function under(policy: ScriptPolicy | undefined, typeName: string, json: string) {
+function under(policy: TokenPolicy | undefined, typeName: string, json: string) {
   return validateJson(json, {
     schema: COMPILED,
     root: typeName,
@@ -54,7 +54,7 @@ function under(policy: ScriptPolicy | undefined, typeName: string, json: string)
 
 describe('JsonScriptPolicyTest', () => {
   it('a_string_value_whose_scripts_the_policy_refuses_is_refused', () => {
-    const result = under(scriptPolicy('ASCII_ONLY'), 'note', `{"text": "p${CYRILLIC_A}ssword"}`);
+    const result = under(tokenPolicyAt('ASCII_ONLY'), 'note', `{"text": "p${CYRILLIC_A}ssword"}`);
     expect(result.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
     expect(result.value).toBeUndefined();
   });
@@ -73,7 +73,7 @@ describe('JsonScriptPolicyTest', () => {
   it('a_map_key_is_a_token_and_is_reached_by_this_policy', () => {
     // §9.4 names map keys explicitly. They are data, not names, so the *identifier* policy leaves
     // them alone -- this is the surface that does reach them.
-    const result = under(scriptPolicy('ASCII_ONLY'), 'scores', `{"${CYRILLIC_A}": 1}`);
+    const result = under(tokenPolicyAt('ASCII_ONLY'), 'scores', `{"${CYRILLIC_A}": 1}`);
     expect(result.diagnostics.some((d) => d.code === 'RESTRICTED_SCRIPT')).toBe(true);
   });
 
@@ -82,7 +82,7 @@ describe('JsonScriptPolicyTest', () => {
     // reader ever calls `next()` on it -- so a plain `{"text": "..."}` field already exercises a
     // peeked-then-consumed value, the same property the Java module's own stream-riding design
     // exists for.
-    const result = under(scriptPolicy('ASCII_ONLY'), 'note', `{"text": "${CYRILLIC_A}"}`);
+    const result = under(tokenPolicyAt('ASCII_ONLY'), 'note', `{"text": "${CYRILLIC_A}"}`);
     expect(result.diagnostics.length).toBe(1);
     expect(result.diagnostics[0]?.code).toBe('RESTRICTED_SCRIPT');
   });
@@ -92,7 +92,7 @@ describe('JsonScriptPolicyTest', () => {
     // fresh, plain per-call object every time) -- ported as the structural fact that governs: the
     // same compiled schema read twice, once under a strict policy and once under none, reports
     // independently rather than one call's policy leaking into the other's.
-    const strict = under(scriptPolicy('ASCII_ONLY'), 'note', `{"text": "${CYRILLIC_A}"}`);
+    const strict = under(tokenPolicyAt('ASCII_ONLY'), 'note', `{"text": "${CYRILLIC_A}"}`);
     const lenient = under(undefined, 'note', `{"text": "${CYRILLIC_A}"}`);
     expect(strict.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
     expect(lenient.diagnostics).toEqual([]);

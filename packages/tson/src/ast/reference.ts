@@ -1,21 +1,15 @@
 import type { TokenForm } from '../lexer/token.js';
 
 /**
- * A reference as the data grammar spells it (§7.4): the structured value a qualified name with an
- * argument list, `pair<uuid B>`, or a sibling reference, `kind!`, parses to. Uninterpreted: what a
- * name or an argument denotes is the reading type's to judge ([TSON-SCHEMA] §4.2), and a schemaless
- * read resolves nothing (§4.1).
+ * A reference as the schema grammar spells it: a qualified name, an application `pair<uuid B>`, or a
+ * sibling reference `kind!`. None of the last two is a data value (§4.1): in data a reference is a
+ * token, a qualified name. Uninterpreted: what a name or an argument denotes is the reading type's to
+ * judge ([TSON-SCHEMA] §4.2).
  *
- * The model is the grammar's own and carries no referent, closure or annotation: those belong to a
- * schema's reading of a reference, not to the text that spelled one.
+ * The model carries no referent, closure or annotation: those belong to a schema's reading of a
+ * reference, not to the text that spelled one.
  */
 export type Reference = NameReference | ApplicationReference | SiblingReference;
-
-/**
- * The references that are a core value on their own (§7.4): an application or a sibling reference.
- * A bare qualified name is a token, read as a reference by a position typed by one.
- */
-export type CoreReference = ApplicationReference | SiblingReference;
 
 /** A reference that names a type: a bare qualified name or an application. */
 export type TypeReference = NameReference | ApplicationReference;

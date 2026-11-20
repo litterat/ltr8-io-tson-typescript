@@ -125,7 +125,6 @@ describe('policyText: the whole of policy.limits', () => {
         'max schema entries:         65536',
         'max alias chain:            64',
         'max supertype chain:        64',
-        'max materialisation depth:  64',
         'max wait depth:             64',
       ].join('\n'),
     );
@@ -192,7 +191,6 @@ describe('policy report shape', () => {
       max_schema_entries: 65536,
       max_alias_chain: 64,
       max_supertype_chain: 64,
-      max_materialisation_depth: 64,
       max_wait_depth: 64,
     });
     expect(json).not.toHaveProperty('limits_policy');

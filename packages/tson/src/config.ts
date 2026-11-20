@@ -71,7 +71,7 @@ import type {
   NestingLimitOptions,
 } from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
-import type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/policy.js';
+import type { IdentifierPolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
 import { declaredSha256, isAddressable, sha256HexSync, UNADDRESSABLE } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
@@ -256,7 +256,7 @@ export interface Config extends LimitOptions {
    * rule ever applies here: a value has no identifier profile to violate, and no scope to be
    * distinct within, so the other two mechanisms have nothing to say about one.
    */
-  readonly tokenPolicy?: ScriptPolicy;
+  readonly tokenPolicy?: TokenPolicy;
 }
 
 /**
@@ -281,7 +281,7 @@ export function withLimits<C extends Config>(config: C, limits: LimitOverrides):
 }
 
 /** `config` with its token policy (§8.2 "Values") replaced; see {@link withIdentifierPolicy}. */
-export function withTokenPolicy<C extends Config>(config: C, tokenPolicy: ScriptPolicy): C {
+export function withTokenPolicy<C extends Config>(config: C, tokenPolicy: TokenPolicy): C {
   return { ...config, tokenPolicy };
 }
 
@@ -301,7 +301,7 @@ function limitOf(config: Config): NestingLimitOptions {
 /** {@link Config.identifierPolicy} and {@link Config.tokenPolicy}, as the fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, two fields over. */
 function policyOptionsOf(config: Config): {
   readonly identifierPolicy?: IdentifierPolicy;
-  readonly tokenPolicy?: ScriptPolicy;
+  readonly tokenPolicy?: TokenPolicy;
 } {
   return {
     ...(config.identifierPolicy === undefined ? {} : { identifierPolicy: config.identifierPolicy }),

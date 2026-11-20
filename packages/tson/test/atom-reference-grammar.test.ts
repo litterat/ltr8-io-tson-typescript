@@ -4,16 +4,17 @@ import {
   isQualifiedName,
   isSiblingField,
   parseReference,
-  parseTypeReference,
   referenceNames,
   referenceText,
 } from '../src/atom/referenceGrammar.js';
+import type { ApplicationReference } from '../src/ast/reference.js';
 import { TsonAtomParseError } from '../src/core/errors.js';
 
 /**
- * `atom/referenceGrammar.ts` -- [TSON-DATA] §7.4's `reference` production read from text, the form
- * a JSON string at a reference-typed position holds ([TSON-JSON] §5.6). The same rules
- * `stream/dataStream.ts` applies to tokens.
+ * `atom/referenceGrammar.ts` -- a reference's text, whatever the token's form ([TSON-DATA] §2.4,
+ * §7.4): the form a JSON string at a reference-typed position holds ([TSON-JSON] §5.6). A reference
+ * in a value is a qualified name, and an argument list or a dependent type's mark is schema
+ * grammar (§4.1, §7.2.5).
  */
 
 describe('qualified-name (§7.4, §7.7)', () => {
@@ -30,110 +31,72 @@ describe('qualified-name (§7.4, §7.7)', () => {
   });
 });
 
-describe('sibling-ref (§7.4)', () => {
-  it('names one field by a single identifier', () => {
+describe('a dependent type names one field (§7.4, [TSON-SCHEMA] §12.1)', () => {
+  it('is one identifier, a single segment', () => {
     expect(isSiblingField('kind')).toBe(true);
     expect(isSiblingField('a.b')).toBe(false);
     expect(isSiblingField('')).toBe(false);
     expect(isSiblingField('42x')).toBe(false);
   });
-
-  it('is read to a sibling reference, the "!" ending the text', () => {
-    expect(parseReference('kind!')).toEqual({ kind: 'sibling', field: 'kind' });
-    expect(() => parseReference('kind!x')).toThrow(TsonAtomParseError);
-    expect(() => parseReference('a.b!')).toThrow(/single segment/);
-  });
-
-  it('stands only at a record field type: parseTypeReference refuses it (§5.2)', () => {
-    expect(() => parseTypeReference('kind!')).toThrow(TsonAtomParseError);
-    expect(() => parseTypeReference('kind!')).toThrow(/record field's type/);
-  });
 });
 
-describe('reference (§7.4)', () => {
-  it('a name without arguments is a name', () => {
+describe('a reference is a qualified name (§2.4, §4.1)', () => {
+  it('a name is a name', () => {
     expect(parseReference('geo.address')).toEqual({ kind: 'name', name: 'geo.address' });
   });
 
-  it('an application keeps its arguments in order, a nested application a reference of its own', () => {
-    expect(parseReference('map<text list<int32>>')).toEqual({
-      kind: 'application',
-      name: 'map',
-      arguments: [
-        { kind: 'reference', reference: { kind: 'name', name: 'text' } },
-        {
-          kind: 'reference',
-          reference: {
-            kind: 'application',
-            name: 'list',
-            arguments: [{ kind: 'reference', reference: { kind: 'name', name: 'int32' } }],
-          },
-        },
-      ],
-    });
+  it('is read in NFC, so a decomposed spelling is the name its composed one is (§7.7)', () => {
+    expect(parseReference('café')).toEqual({ kind: 'name', name: 'café' });
   });
 
-  it('whitespace and a comma inside the list are free: result< T > and result<T> are one reference', () => {
-    expect(parseReference('result< T >')).toEqual(parseReference('result<T>'));
-    expect(parseReference('pair<a, b>')).toEqual(parseReference('pair<a b>'));
-    expect(parseReference('pair<a b,>')).toEqual(parseReference('pair<a b>'));
+  it('refuses an argument list, saying an application is named by a declaration (§4.1)', () => {
+    for (const text of ['set<text>', 'map<text list<int32>>', 'box<>']) {
+      expect(() => parseReference(text)).toThrow(TsonAtomParseError);
+      expect(() => parseReference(text)).toThrow(/argument list is schema grammar/);
+    }
   });
 
-  it('an argument that is no name is a value, and a quoted one is never a reference', () => {
-    expect(parseReference('x<201 "a b" "T">')).toEqual({
-      kind: 'application',
-      name: 'x',
-      arguments: [
-        { kind: 'value', text: '201', form: 'unquoted' },
-        { kind: 'value', text: 'a b', form: 'single-line' },
-        { kind: 'value', text: 'T', form: 'single-line' },
-      ],
-    });
+  it('refuses a dependent type\'s mark, "kind!" being outside the grammar ([TSON-JSON] §5.6)', () => {
+    expect(() => parseReference('kind!')).toThrow(TsonAtomParseError);
+    expect(() => parseReference('kind!')).toThrow(/schema grammar/);
   });
 
-  it('a quoted argument takes the JSON escapes', () => {
-    expect(parseReference('x<"a\\"b\\\\c\\n\\u0041">')).toMatchObject({
-      arguments: [{ kind: 'value', text: 'a"b\\c\nA' }],
-    });
-    expect(() => parseReference('x<"a\\q">')).toThrow(/no escape/);
-    expect(() => parseReference('x<"a\\u00">')).toThrow(/four hex digits/);
-    expect(() => parseReference('x<"a>')).toThrow(/no closing/);
-  });
-
-  it('refuses a sibling reference as an argument (§7.4)', () => {
-    expect(() => parseReference('box<kind!>')).toThrow(/sibling reference/);
-  });
-
-  it('refuses an unclosed list, an empty one, a missing separator and an argument list on a non-name', () => {
-    expect(() => parseReference('box<text')).toThrow(/no closing/);
-    expect(() => parseReference('box<>')).toThrow(/at least one argument/);
-    expect(() => parseReference('box<a"b">')).toThrow(TsonAtomParseError);
-    expect(() => parseReference('42x<a>')).toThrow(TsonAtomParseError);
-    expect(() => parseReference('box<42x<a>>')).toThrow(/no qualified name/);
-    expect(() => parseReference('box<a> b')).toThrow(/follows the reference/);
+  it('refuses an empty text, an empty segment and a first segment that is no identifier', () => {
     expect(() => parseReference('')).toThrow(/empty/);
+    expect(() => parseReference('a..b')).toThrow(/empty segment/);
+    expect(() => parseReference('.a')).toThrow(/empty segment/);
+    expect(() => parseReference('42x.a')).toThrow(/no name/);
+  });
+
+  it('leaves a segment past the first to the family of what it enters ([TSON-SCHEMA] §5.12)', () => {
+    expect(parseReference('orders.42x')).toEqual({ kind: 'name', name: 'orders.42x' });
   });
 });
 
 describe('canonical text and names (§7.4)', () => {
-  it('writes no whitespace but one space between arguments, a value keeping its form', () => {
-    expect(referenceText(parseReference('map<  text,list<int32>  "a b" 7>'))).toBe(
-      'map<text list<int32> "a b" 7>',
-    );
-    expect(referenceText(parseReference('kind!'))).toBe('kind!');
-  });
+  const application: ApplicationReference = {
+    kind: 'application',
+    name: 'map',
+    arguments: [
+      { kind: 'reference', reference: { kind: 'name', name: 'text' } },
+      {
+        kind: 'reference',
+        reference: {
+          kind: 'application',
+          name: 'list',
+          arguments: [{ kind: 'reference', reference: { kind: 'name', name: 'geo.id' } }],
+        },
+      },
+      { kind: 'value', text: 'a b', form: 'single-line' },
+      { kind: 'value', text: '7', form: 'unquoted' },
+    ],
+  };
 
-  it('text reads back to the reference it spells', () => {
-    const reference = parseReference('geo.pair<a "x \\"y\\"" 3 b<c>>');
-    expect(parseReference(referenceText(reference))).toEqual(reference);
+  it('writes one space between arguments, a value keeping its form', () => {
+    expect(referenceText(application)).toBe('map<text list<geo.id> "a b" 7>');
   });
 
   it('referenceNames lists the head and every reference argument at any depth, never a value', () => {
-    expect(referenceNames(parseTypeReference('map<text list<geo.id> 7 "q">'))).toEqual([
-      'map',
-      'text',
-      'list',
-      'geo.id',
-    ]);
+    expect(referenceNames(application)).toEqual(['map', 'text', 'list', 'geo.id']);
   });
 });

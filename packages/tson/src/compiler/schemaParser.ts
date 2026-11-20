@@ -31,7 +31,7 @@
 import { TsonParseError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { ByteInput, Task } from '../io/bytes.js';
-import { adjacentTo, type TokenForm } from '../lexer/token.js';
+import { adjacentTo, type Token, type TokenForm } from '../lexer/token.js';
 import type { Annotation, DataValue, TokenValue } from '../ast/value.js';
 import type { Declaration, SchemaDocument, SchemaMap } from '../ast/schema/document.js';
 import type {
@@ -82,14 +82,8 @@ import {
 } from './cursor.js';
 import type { NestingLimitOptions } from '../core/limits.js';
 import { parseAnnotationList, parseCoreValue } from './dataValueGrammar.js';
-import {
-  marksSibling,
-  parseHeader,
-  parseTypeRefName,
-  requireQualifiedName,
-  siblingReference,
-} from '../stream/dataStream.js';
-import { isQualifiedName } from '../atom/referenceGrammar.js';
+import { parseHeader, parseTypeRefName, requireQualifiedName } from '../stream/dataStream.js';
+import { isQualifiedName, isSiblingField } from '../atom/referenceGrammar.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
 
 /**
@@ -798,6 +792,51 @@ function* parseTypeExpr(state: CursorState): Task<TypeExpr> {
 }
 
 /**
+ * Whether the token just consumed, `head`, is marked as a sibling reference ([TSON-SCHEMA] §12.1's
+ * `dependent-type = unquoted-token "!"`): the next token is a `!` adjacent to it. A prefix `!` is
+ * adjacent to the token after it and so is never adjacent to the one before. A quoted token is no
+ * identifier, so a `!` after one is refused.
+ */
+function* marksSibling(state: CursorState, head: Token): Task<boolean> {
+  const next = yield* peekToken(state);
+  // A multi-line token's end is past its closing line's terminator, where the next line starts, so
+  // a prefix `!` opening that line would read as adjacent to it.
+  if (next.type !== 'bang' || !adjacentTo(head, next) || head.type === 'multi-line-token') {
+    return false;
+  }
+  if (head.type !== 'unquoted-token') {
+    throw parseError(
+      next,
+      "a quoted token cannot be marked with '!': a dependent type is a field named by one unquoted identifier",
+    );
+  }
+  return true;
+}
+
+/**
+ * The field name `head` and the `!` next at the cursor spell: `dependent-type = unquoted-token "!"`,
+ * the token one identifier (a single segment), and the `!` followed by whitespace or the end of the
+ * document, which keeps a postfix `!` apart from a prefix one.
+ */
+function* siblingField(state: CursorState, head: Token): Task<string> {
+  if (!isSiblingField(head.text)) {
+    throw parseError(
+      head,
+      `'${head.text}!' is no dependent type -- the '!' marks one field of the same record, named by one identifier, a single segment`,
+    );
+  }
+  const bang = yield* advance(state);
+  const next = yield* peekToken(state);
+  if (next.type !== 'eof' && adjacentTo(bang, next)) {
+    throw parseError(
+      next,
+      `a dependent type's '!' must be followed by whitespace: write '${head.text}! ' before ${describe(next)}`,
+    );
+  }
+  return head.text;
+}
+
+/**
  * `sibling-ref / qualified-name ["<" type-args ">"]` -- the name-based tail shared by every type-expr
  * position and by refinement/construction heads. One token of lookahead after the name picks the
  * alternative: an adjacent `!` a sibling reference, an adjacent `<` an application, neither a bare
@@ -807,8 +846,7 @@ function* parseTypeExpr(state: CursorState): Task<TypeExpr> {
 function* parseTypeRefHead(state: CursorState): Task<Reference> {
   const head = yield* expect(state, 'unquoted-token', 'a type reference');
   if (yield* marksSibling(state, head)) {
-    const sibling = yield* siblingReference(state, head);
-    return { kind: 'siblingRef', field: sibling.field };
+    return { kind: 'siblingRef', field: yield* siblingField(state, head) };
   }
   requireQualifiedName(head, 'type', '§12.1');
   const name = head.text;

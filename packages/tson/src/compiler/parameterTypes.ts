@@ -572,9 +572,6 @@ function walkValue(written: CoreValue, declared: TypeRef, slot: string, ctx: Wal
       }
       return;
     }
-    case 'reference':
-      if (written.reference.kind === 'application') walkApplication(written.reference, ctx);
-      return;
     case 'record':
       if (!isTypeSlot(declared.name) && type !== undefined && isRecordBody(type)) {
         walkRecord(written, declared.name, type, ctx);

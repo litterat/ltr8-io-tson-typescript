@@ -84,9 +84,7 @@ function record(_name: string, body: Top): Top {
 // ── renames ──────────────────────────────────────────────────────────────────────────────────
 
 describe('renames', () => {
-  it('§8.2 motivating case: `[box<text>]` written directly re-derives to the name `[T]` closed with `T := text` would take', () => {
-    // The eager name `desugar.ts` minted from the *unreduced* record (as written) -- irrelevant to
-    // this test beyond being a key in `generated`/`declarations`.
+  it('a slot written with an application holds no application a data value could spell (§4.1), so nothing re-derives', () => {
     const eagerName = 'array_box_text_heager1';
     const declarations = new Map<string, Declaration>([
       [
@@ -103,12 +101,10 @@ describe('renames', () => {
         ),
       ],
     ]);
-    // The name the *closed* record (`box<text>` already reduced to its own entry) re-derives to --
-    // exactly what `[T]` closed with `T := text` would mint through `closeHeldTemplate`.
-    const closedName = 'array_boxed_text_hclosed1';
-    const materialiser = stubMaterialiser(() => closedName);
-    const result = renames(declarations, new Set([eagerName]), materialiser);
-    expect(result).toEqual(new Map([[eagerName, closedName]]));
+    const materialiser = stubMaterialiser(() => {
+      throw new Error('closedFormName must not be asked about a form holding no application');
+    });
+    expect(renames(declarations, new Set([eagerName]), materialiser).size).toBe(0);
   });
 
   it('is a no-op when the closed name and the eager name coincide', () => {
@@ -172,7 +168,7 @@ describe('renames', () => {
     expect(renames(declarations, new Set([eagerName]), materialiser).size).toBe(0);
   });
 
-  it('finds an application nested inside an array element (not only at the top slot)', () => {
+  it('an application nested inside an array element is no more a data value than one at the top slot (§4.1)', () => {
     const eagerName = 'array_array_box_text_h1';
     const nestedBinding: RecordValue = {
       kind: 'record',
@@ -197,11 +193,10 @@ describe('renames', () => {
     const declarations = new Map<string, Declaration>([
       [eagerName, generatedDeclaration(eagerName, [], 'array', nestedBinding)],
     ]);
-    const closedName = 'array_array_boxed_text_h2';
-    const materialiser = stubMaterialiser(() => closedName);
-    expect(renames(declarations, new Set([eagerName]), materialiser)).toEqual(
-      new Map([[eagerName, closedName]]),
-    );
+    const materialiser = stubMaterialiser(() => {
+      throw new Error('closedFormName must not be asked about a form holding no application');
+    });
+    expect(renames(declarations, new Set([eagerName]), materialiser).size).toBe(0);
   });
 });
 

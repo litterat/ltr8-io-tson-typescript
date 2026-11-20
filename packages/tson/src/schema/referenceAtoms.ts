@@ -1,15 +1,17 @@
 /**
  * The two atoms that hold a reference (§4.2, [TSON-DATA] §7.4): `type_ref`, a position that names a
- * type, and `reference`, a record field's type, which also admits a sibling reference. The wire form of
- * either is the data grammar's own: a bare qualified name is one token, an application is the structured
- * reference value `pair<uuid B>`, and a sibling reference is `kind!`. The host form is the model's
- * {@link TypeRef} and {@link Reference}.
+ * type, and `reference`, a record field's type. The wire form of either is a bare qualified name, one
+ * token (§4.1). The host form is the model's {@link TypeRef} and {@link Reference}.
  *
- * Both directions live here, between the data grammar's structured reference (`ast/reference.ts`) and
+ * Both directions live here, between the reference model of `ast/reference.ts` and
  * `schema/meta`'s own: the model names no AST type, so this is the one place the two meet.
  */
-import type { CoreReference, Reference as AstReference } from '../ast/reference.js';
-import type { ReferenceValue, TokenValue } from '../ast/value.js';
+import {
+  referenceText,
+  type ApplicationReference,
+  type Reference as AstReference,
+} from '../ast/reference.js';
+import type { TokenValue } from '../ast/value.js';
 import type { TokenForm as LexerTokenForm } from '../lexer/token.js';
 import { parseReference } from '../atom/referenceGrammar.js';
 import type { Reference, SiblingRef, Token, TypeArgument, TypeRef } from './meta/typedef.js';
@@ -70,18 +72,22 @@ export function referenceOfWire(text: string, form: LexerTokenForm): Reference {
   }
 }
 
-/** A reference as its wire form: a bare token for a name, the structured reference value for an application or a sibling. */
-export function referenceToWire(reference: Reference): TokenValue | ReferenceValue {
+/**
+ * A reference as its wire form: a bare token. A data value holds no argument list and no sibling mark
+ * (§4.1), so an application or a sibling reference is written as its canonical text, which no position
+ * reads as a name.
+ */
+export function referenceToWire(reference: Reference): TokenValue {
   if (reference.kind === 'sibling') {
-    return { kind: 'reference', reference: { kind: 'sibling', field: reference.field } };
+    return { kind: 'token', text: `${reference.field}!`, form: 'unquoted' };
   }
   if (reference.arguments.length === 0) {
     return { kind: 'token', text: reference.name, form: 'unquoted' };
   }
-  return { kind: 'reference', reference: applicationToAst(reference) };
+  return { kind: 'token', text: referenceText(applicationToAst(reference)), form: 'unquoted' };
 }
 
-function applicationToAst(reference: TypeRef): CoreReference & { kind: 'application' } {
+function applicationToAst(reference: TypeRef): ApplicationReference {
   return {
     kind: 'application',
     name: reference.name,

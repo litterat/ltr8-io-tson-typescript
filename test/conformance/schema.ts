@@ -37,8 +37,8 @@ import type { Top } from '../../packages/tson/src/schema/meta/typedef.js';
 import { BUNDLED_SCHEMA_IDS } from './bundled-ids.js';
 import { loadSchema, newClass2Tson } from './class2Tson.js';
 import {
-  markedSynthetics,
-  ourSynthetics,
+  markedCompletions,
+  ourCompletions,
   ownEntries,
   readResolved,
   renderDefinition,
@@ -202,9 +202,10 @@ export async function checkSchemaVector(
         if (ourDefinition === undefined) continue; // already reported by the keys assertion above
         expect(renderDefinition(ourDefinition)).toBe(renderDefinition(expectedDefinition));
       }
-      // §8.2's derived @synthetic marker is a claim of its own -- a key-position annotation, not
-      // part of any entry's value, so the keys/body comparison above cannot make it.
-      expect(ourSynthetics(linked)).toEqual(markedSynthetics(sidecar.resolved));
+      // §8.1's key annotation is a claim of its own -- not part of any entry's value, so the
+      // keys/body comparison above cannot make it: each declared completion states, on its key, the
+      // incomplete entries it closed.
+      expect(ourCompletions(linked)).toEqual(markedCompletions(sidecar.resolved));
       return;
     }
     case 'error': {

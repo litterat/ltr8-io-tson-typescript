@@ -38,7 +38,7 @@ import { readTree, validate as validateText } from '../src/facade/tree.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { readJsonTree, validateJson } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
-import { scriptPolicy } from '../src/unicode/policy.js';
+import { tokenPolicyAt } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
@@ -714,7 +714,7 @@ describe('AllOrNothingReadTest: a token refusal leaves nothing (JSON only -- see
     const result = validateJson(json, {
       schema: JSON_SCHEMA,
       root: 'route',
-      tokenPolicy: scriptPolicy('ASCII_ONLY'),
+      tokenPolicy: tokenPolicyAt('ASCII_ONLY'),
     });
     expect(result.value).toBeUndefined();
     expect(result.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);

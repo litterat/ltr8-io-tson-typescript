@@ -3,7 +3,7 @@
  * `validate`/`compile` run carries once (`commands/policy.ts`, `render.ts`). The machine formats
  * are `policy.tn`'s `policy.processor` (spec/m/policy.tn): `identifier_policy`
  * (`policy.identifier_policy`: `level`, `per_segment`, `skeleton_distinctness`, `permitting`),
- * `token_policy` (`policy.script_policy`: `level`, `permitting`), `unicode_data_version`, and
+ * `token_policy` (`policy.token_policy`: `level`, `permitting`), `unicode_data_version`, and
  * `limits` (`policy.limits`). A report is therefore valid data under that type, which
  * `policyNode.test.ts` checks by reading one against it.
  *
@@ -20,12 +20,13 @@ import { arrayNode, atomNode, recordNode, scriptName, type Value } from '@ltr8/t
 import { DEFAULT_LIMITS, type LimitsPolicy } from '@ltr8/tson';
 import type { ProcessorPolicy } from './policyOptions.js';
 
-interface ScriptPolicyJson {
+/** What `policy.identifier_policy` and `policy.token_policy` each state: a level and the combinations admitted over it. */
+interface ScriptRuleJson {
   readonly level: string;
   readonly permitting: readonly (readonly string[])[];
 }
 
-interface IdentifierPolicyJson extends ScriptPolicyJson {
+interface IdentifierPolicyJson extends ScriptRuleJson {
   readonly per_segment: boolean;
   readonly skeleton_distinctness: boolean;
 }
@@ -47,7 +48,6 @@ const LIMIT_MEMBERS = [
   ['max_schema_entries', 'maxSchemaEntries'],
   ['max_alias_chain', 'maxAliasChain'],
   ['max_supertype_chain', 'maxSupertypeChain'],
-  ['max_materialisation_depth', 'maxMaterialisationDepth'],
   ['max_wait_depth', 'maxWaitDepth'],
 ] as const satisfies readonly (readonly [string, keyof LimitsPolicy])[];
 
@@ -61,7 +61,7 @@ void _limitsAreExhaustive;
 
 export interface PolicyJson {
   readonly identifier_policy: IdentifierPolicyJson;
-  readonly token_policy: ScriptPolicyJson;
+  readonly token_policy: ScriptRuleJson;
   readonly unicode_data_version: string;
   readonly limits: Readonly<Record<(typeof LIMIT_MEMBERS)[number][0], number>>;
 }
@@ -156,7 +156,7 @@ function combinationText(combination: readonly string[]): string {
   return combination.join('+');
 }
 
-function scriptPolicySummary(
+function scriptRuleSummary(
   level: string,
   permitting: readonly (readonly string[])[],
   extra: readonly string[] = [],
@@ -168,7 +168,7 @@ function scriptPolicySummary(
 
 function identifierSummary(policy: ProcessorPolicy): string {
   const { identifierPolicy } = policy;
-  const summary = scriptPolicySummary(
+  const summary = scriptRuleSummary(
     identifierPolicy.restrictionLevel,
     permittingNames(identifierPolicy.permittedScripts),
     identifierPolicy.perSegment ? ['per segment'] : [],
@@ -179,7 +179,7 @@ function identifierSummary(policy: ProcessorPolicy): string {
 }
 
 function tokenSummary(policy: ProcessorPolicy): string {
-  return scriptPolicySummary(
+  return scriptRuleSummary(
     policy.tokenPolicy.restrictionLevel,
     permittingNames(policy.tokenPolicy.permittedScripts),
   );

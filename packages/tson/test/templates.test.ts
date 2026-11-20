@@ -8,11 +8,7 @@ import { createHeldBody, type HeldBody } from '../src/compiler/heldBody.js';
 import { refValue } from '../src/compiler/wireForm.js';
 import { canonicalApplication } from '../src/compiler/derivedName.js';
 import { inferAll, kinds as parameterKindsOf } from '../src/compiler/parameterTypes.js';
-import {
-  TsonLimitRefusedError,
-  TsonNotImplementedError,
-  TsonSchemaValidationError,
-} from '../src/core/errors.js';
+import { TsonNotImplementedError, TsonSchemaValidationError } from '../src/core/errors.js';
 import type { ArrayBody, NamedField, RecordBody, RecordField } from '../src/schema/meta/bodies.js';
 import type { Alias, Top, TypeArgument, TypeRef } from '../src/schema/meta/typedef.js';
 import { createDefinitionMetaReader } from '../src/schema/metaReader.js';
@@ -584,13 +580,10 @@ describe('recursion (§5.10)', () => {
     const error = thrownBy(() =>
       materialiser.closeApplication({ name: 'grow', arguments: [ref('text')], annotations: [] }),
     );
-    // A limit refusal ([TSON-SCHEMA] §11.5's "materialisation depth"), not a resolver error --
-    // this deployment declined to spend the resources, distinct from every other reason a
-    // template application fails to close.
-    expect(error).toBeInstanceOf(TsonLimitRefusedError);
-    expect((error as TsonLimitRefusedError).limit).toBe('materialisation-depth');
-    expect((error as TsonLimitRefusedError).message).toContain('does not close');
-    expect((error as TsonLimitRefusedError).message).toContain('grow');
+    // The materialisation-depth limit is gone (§3.1 item 4): the closing backstop is a resolver error.
+    expect(error).toBeInstanceOf(TsonSchemaValidationError);
+    expect((error as TsonSchemaValidationError).message).toContain('does not close');
+    expect((error as TsonSchemaValidationError).message).toContain('grow');
   });
 });
 

@@ -4,13 +4,13 @@
  * order, with the spec's defaults), the refusal every enforcement site raises for a counted
  * limit, and the options that configure it.
  *
- * §9.1 names eleven document-side limits and §11.5 adds six for the work resolving a schema does
+ * §9.1 names eleven document-side limits and §11.5 adds five for the work resolving a schema does
  * on top of a document's own bytes, stated as a Class 2 MUST ("on the same terms, as part of the
  * same policy and reported through the same surfaces"). Each is a positive `int64` on the wire
  * (`policy.limit => !int64 ^ { min: 1 }`); a processor that holds one in a narrower type caps it
  * (§9.1), and this one holds every limit as a safe-integer `number`, capping a larger stated value
- * at {@link MAX_LIMIT}. Seven limits are counted: nesting depth, in the token stream; and §11.5's
- * import closure, schema entries, alias chain, supertype chain, materialisation depth and wait
+ * at {@link MAX_LIMIT}. Six limits are counted: nesting depth, in the token stream; and §11.5's
+ * import closure, schema entries, alias chain, supertype chain and wait
  * depth, each at the site that already walks the thing it counts. The other ten are stated
  * thresholds, configured and reported by the same surfaces and not yet counted, so a document past
  * one of them is not refused for it.
@@ -76,19 +76,16 @@ export const IMPORT_CLOSURE_LIMIT: ResourceLimitName = 'import-closure';
 export const SCHEMA_ENTRIES_LIMIT: ResourceLimitName = 'schema-entries';
 export const ALIAS_CHAIN_LIMIT: ResourceLimitName = 'alias-chain';
 export const SUPERTYPE_CHAIN_LIMIT: ResourceLimitName = 'supertype-chain';
-export const MATERIALISATION_DEPTH_LIMIT: ResourceLimitName = 'materialisation-depth';
 export const WAIT_DEPTH_LIMIT: ResourceLimitName = 'wait-depth';
 
 /** [TSON-SCHEMA] §11.5's default: schema documents reachable from one header through `!!import`. */
 export const DEFAULT_MAX_IMPORT_CLOSURE = 64;
-/** [TSON-SCHEMA] §11.5's default: declarations in one schema map, synthetic and instantiation entries included. */
+/** [TSON-SCHEMA] §11.5's default: declarations in one schema map. */
 export const DEFAULT_MAX_SCHEMA_ENTRIES = 65_536;
 /** [TSON-SCHEMA] §11.5's default: hops from a use site to a terminal entry (§8.3). */
 export const DEFAULT_MAX_ALIAS_CHAIN = 64;
 /** [TSON-SCHEMA] §11.5's default: length of one type's transitive supertype chain (§8.1). */
 export const DEFAULT_MAX_SUPERTYPE_CHAIN = 64;
-/** [TSON-SCHEMA] §11.5's default: nested open synthetics closed for one application (§5.10, §8.2). */
-export const DEFAULT_MAX_MATERIALISATION_DEPTH = 64;
 /** [TSON-SCHEMA] §11.5's default: the longest chain of waits one schema's resolution runs. */
 export const DEFAULT_MAX_WAIT_DEPTH = 64;
 
@@ -135,8 +132,6 @@ export interface LimitsPolicy {
   readonly maxAliasChain: number;
   /** `max_supertype_chain` -- the threshold {@link supertypeChainLimitRefusal} checks against. */
   readonly maxSupertypeChain: number;
-  /** `max_materialisation_depth` -- the threshold {@link materialisationDepthLimitRefusal} checks against. */
-  readonly maxMaterialisationDepth: number;
   /**
    * `max_wait_depth` -- the longest chain of waits resolving one schema may run ([TSON-SCHEMA]
    * §11.5): an entry whose declaration is read against another entry of the same document waits
@@ -164,7 +159,6 @@ export const DEFAULT_LIMITS: LimitsPolicy = {
   maxSchemaEntries: DEFAULT_MAX_SCHEMA_ENTRIES,
   maxAliasChain: DEFAULT_MAX_ALIAS_CHAIN,
   maxSupertypeChain: DEFAULT_MAX_SUPERTYPE_CHAIN,
-  maxMaterialisationDepth: DEFAULT_MAX_MATERIALISATION_DEPTH,
   maxWaitDepth: DEFAULT_MAX_WAIT_DEPTH,
 };
 
@@ -307,18 +301,6 @@ export function supertypeChainLimitRefusal(limit: number, name: string): TsonLim
     `'${name}' accumulates more than ${String(limit)} transitive supertypes, exceeding the ` +
       `configured '${SUPERTYPE_CHAIN_LIMIT}' limit of ${String(limit)} ([TSON-SCHEMA] §8.1, §11.5)`,
     { limit: SUPERTYPE_CHAIN_LIMIT, configuredThreshold: limit },
-  );
-}
-
-/** The refusal thrown when materialising `head`'s own application nests more than `limit` open synthetics deep before any of them closes (§5.10, §8.2). */
-export function materialisationDepthLimitRefusal(
-  limit: number,
-  head: string,
-): TsonLimitRefusedError {
-  return new TsonLimitRefusedError(
-    `'${head}<...>' does not close within ${String(limit)} nested instantiations, exceeding the ` +
-      `configured '${MATERIALISATION_DEPTH_LIMIT}' limit of ${String(limit)} ([TSON-SCHEMA] §5.10, §11.5)`,
-    { limit: MATERIALISATION_DEPTH_LIMIT, configuredThreshold: limit },
   );
 }
 

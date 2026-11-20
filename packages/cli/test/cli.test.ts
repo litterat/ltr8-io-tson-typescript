@@ -520,7 +520,7 @@ describe('policy command', () => {
       limits: Record<string, number>;
     };
     // The whole of `policy.limits` (§9.1, [TSON-SCHEMA] §11.5), every member at its default.
-    expect(Object.keys(parsed.limits)).toHaveLength(17);
+    expect(Object.keys(parsed.limits)).toHaveLength(16);
     expect(parsed.limits.max_depth).toBe(64);
     expect(parsed.limits.max_wait_depth).toBe(64);
     expect(parsed.limits.max_alias_chain).toBe(64);

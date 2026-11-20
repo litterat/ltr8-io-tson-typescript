@@ -34,9 +34,9 @@ const tson = createTson({
 Script combinations are `ScriptId` numbers, not names — `scriptNamed('Latin')` resolves the UCD
 `Script` property's long-form name to one, so `permittedScripts: [[scriptNamed('Latin')!,
 scriptNamed('Cyrillic')!]]` admits that combination in addition to whatever the level already
-allows. `IdentifierPolicy`, `ScriptPolicy` and `ProcessorPolicy` are exported types, with
+allows. `IdentifierPolicy`, `TokenPolicy` and `ProcessorPolicy` are exported types, with
 `DEFAULT_IDENTIFIER_POLICY`, `NO_IDENTIFIER_POLICY`, `perSegment`, `permitting`,
-`withRestrictionLevel`, `withSkeletonDistinctness` and `scriptPolicy` to derive a relaxed copy, and
+`withRestrictionLevel`, `withSkeletonDistinctness` and `tokenPolicyAt` to derive a relaxed copy, and
 `withIdentifierPolicy(config, …)`/`withTokenPolicy(config, …)` to set one on a `Config`.
 
 `Config.tokenPolicy` is the same shape's counterpart over _values_ rather than declared names —

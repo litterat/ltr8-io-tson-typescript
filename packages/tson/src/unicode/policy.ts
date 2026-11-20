@@ -17,20 +17,14 @@ import { limitsPolicyOf, type LimitsPolicy } from '../core/limits.js';
 import { identifierStatusAllowed, UTS39_VERSION, type ScriptId } from './uts39.js';
 
 /**
- * [TSON-DATA] §8.2's restricted-script rule as a policy a caller holds: a UTS #39 §5.2 restriction
- * level and the script combinations admitted over it. It is the **token policy** as it stands (the
- * value surface, §8.2 "Values"), and the script half of an {@link IdentifierPolicy}, which adds
- * what only a name has.
- *
- * **There is no unit.** `_` and `-` are word separators by convention in a name and ordinary
- * characters in a value, so segmenting a value would admit UTS #39's own `Toys-Я-Us`, the spoof a
- * strict token policy exists to refuse. The unit is {@link IdentifierPolicy.perSegment}'s, and a
- * script policy cannot state one.
- *
- * Immutable plain data; {@link permitting} and {@link withRestrictionLevel} return modified copies,
- * so relaxation is always a code decision at the call site and never ambient (§8.2).
+ * The rule §8.2's two policies share: a UTS #39 §5.2 restriction level and the script combinations
+ * admitted over it. Neither policy is built from the other -- §8.2 names the identifier policy and
+ * the token policy side by side, and an identifier policy that extended a token policy would state
+ * one surface as a part of the other -- so each is flat, as `policy.tn` states it, and this is what
+ * the two have in common. It is not part of the published surface; {@link permitting} and
+ * {@link withRestrictionLevel} are generic over it.
  */
-export interface ScriptPolicy {
+export interface ScriptRule {
   /**
    * The UTS #39 §5.2 restriction level (default {@link DEFAULT_RESTRICTION_LEVEL}, "Highly
    * Restrictive", for names). Every one of the six levels is a conforming position -- §8.2: "An
@@ -51,9 +45,28 @@ export interface ScriptPolicy {
 }
 
 /**
+ * [TSON-DATA] §8.2's **token policy** (`policy.token_policy`): a restriction level and the script
+ * combinations admitted over it, applied to the whole of each token's text (§8.2 "Values").
+ *
+ * **There is no unit.** `_` and `-` are word separators by convention in a name and ordinary
+ * characters in a value, so segmenting a value would admit UTS #39's own `Toys-Я-Us`, the spoof a
+ * strict token policy exists to refuse. The unit is {@link IdentifierPolicy.perSegment}'s, and a
+ * token policy cannot state one.
+ *
+ * **The two loosest levels judge a token alike.** Minimally Restrictive differs from Unrestricted by
+ * the identifier profile alone, and no token is read under one, so over a token neither scans
+ * anything. `restrictionLevel` keeps both, the levels being UTS #39's and one enumeration serving
+ * both policies.
+ *
+ * Immutable plain data; {@link permitting} and {@link withRestrictionLevel} return modified copies,
+ * so relaxation is always a code decision at the call site and never ambient (§8.2).
+ */
+export type TokenPolicy = ScriptRule;
+
+/**
  * [TSON-DATA] §8.2's **identifier policy**: all three name-hygiene mechanisms, as a deployment
- * configures them for every position that holds a name. It is a {@link ScriptPolicy} (mechanism 3's
- * level, and mechanism 2, which the level carries: `Identifier_Status` applies at every level but
+ * configures them for every position that holds a name: a {@link ScriptRule} (mechanism 3's level,
+ * and mechanism 2, which the level carries: `Identifier_Status` applies at every level but
  * `'UNRESTRICTED'`, §5.2) plus the two things only a name has.
  *
  * Each axis is independently a deployment's to relax, and relaxing one never silently relaxes
@@ -62,9 +75,9 @@ export interface ScriptPolicy {
  * level reaches it: UTS #39 ties `Identifier_Status` to Unrestricted, and nothing ties a relation
  * over a set to a level that judges one name.
  */
-export interface IdentifierPolicy extends ScriptPolicy {
+export interface IdentifierPolicy extends ScriptRule {
   /**
-   * Mechanism 3's unit: `false` applies {@link ScriptPolicy.restrictionLevel} to the name's
+   * Mechanism 3's unit: `false` applies {@link ScriptRule.restrictionLevel} to the name's
    * complete text, `true` to each `_`/`-` (or profile-separator) delimited segment of it. §8.2
    * names this, not the level, as "the relaxation to reach for first".
    */
@@ -102,9 +115,9 @@ export const NO_IDENTIFIER_POLICY: IdentifierPolicy = {
  * the narrowest relaxation available. Appends to whatever `policy` already admits rather than
  * replacing it, so a caller building up several combinations calls this once per combination.
  *
- * Generic over {@link ScriptPolicy} and {@link IdentifierPolicy} alike.
+ * Generic over {@link TokenPolicy} and {@link IdentifierPolicy} alike.
  */
-export function permitting<P extends ScriptPolicy>(policy: P, ...scripts: readonly ScriptId[]): P {
+export function permitting<P extends ScriptRule>(policy: P, ...scripts: readonly ScriptId[]): P {
   return { ...policy, permittedScripts: [...policy.permittedScripts, scripts] };
 }
 
@@ -121,10 +134,7 @@ export function withSkeletonDistinctness(
  * looser level -- it still refuses every within-word homograph while admitting `id_пользователя`,
  * `url_адрес`, `alpha_α`.
  */
-export function withRestrictionLevel<P extends ScriptPolicy>(
-  policy: P,
-  level: RestrictionLevel,
-): P {
+export function withRestrictionLevel<P extends ScriptRule>(policy: P, level: RestrictionLevel): P {
   return { ...policy, restrictionLevel: level };
 }
 
@@ -138,26 +148,26 @@ function unitOf(policy: IdentifierPolicy): RestrictionUnit {
   return policy.perSegment ? 'PER_SEGMENT' : DEFAULT_RESTRICTION_UNIT;
 }
 
-/** A {@link ScriptPolicy} at `restrictionLevel`, admitting no further combinations. */
-export function scriptPolicy(restrictionLevel: RestrictionLevel): ScriptPolicy {
+/** A {@link TokenPolicy} at `restrictionLevel`, admitting no further combinations. */
+export function tokenPolicyAt(restrictionLevel: RestrictionLevel): TokenPolicy {
   return { restrictionLevel, permittedScripts: NO_PERMITTED_SCRIPTS };
 }
 
 /** §8.2's default for tokens: Unrestricted, so no scan runs at all, and no admitted combinations. */
-export const DEFAULT_TOKEN_POLICY: ScriptPolicy = scriptPolicy('UNRESTRICTED');
+export const DEFAULT_TOKEN_POLICY: TokenPolicy = tokenPolicyAt('UNRESTRICTED');
 
 /**
  * Whether mechanism 2 (`Identifier_Status`) runs for `policy`: at every level but `'UNRESTRICTED'`,
  * which UTS #39 §5.2 says alone drops the identifier profile ("taking `Identifier_Status` with it").
  */
-export function appliesIdentifierProfile(policy: ScriptPolicy): boolean {
+export function appliesIdentifierProfile(policy: ScriptRule): boolean {
   return policy.restrictionLevel !== 'UNRESTRICTED';
 }
 
 /** Whether `text` satisfies `policy` (default {@link DEFAULT_TOKEN_POLICY}, which checks nothing). */
 export function tokenSatisfiesPolicy(
   text: string,
-  policy: ScriptPolicy = DEFAULT_TOKEN_POLICY,
+  policy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): boolean {
   return satisfiesRestrictionLevel(
     text,
@@ -172,7 +182,7 @@ export function tokenSatisfiesPolicy(
  * checks nothing): `undefined` when `text` satisfies `policy`, else prose a caller composes into
  * a refusal message.
  *
- * **Restricted-script is the only rule this can fire** — {@link ScriptPolicy}'s own doc explains
+ * **Restricted-script is the only rule this can fire** — {@link TokenPolicy}'s own doc explains
  * why mechanisms 1 and 2 have no equivalent on the value surface, so unlike
  * {@link nameHygieneRefusal} there is no mechanism to name, no scope to collect, and no `names`
  * array to return; one text, one rule, one detail string.
@@ -185,7 +195,7 @@ export function tokenSatisfiesPolicy(
  */
 export function tokenHygieneRefusal(
   text: string,
-  policy: ScriptPolicy = DEFAULT_TOKEN_POLICY,
+  policy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): string | undefined {
   if (tokenSatisfiesPolicy(text, policy)) return undefined;
   return `does not satisfy UTS #39 §5.2's ${policy.restrictionLevel} restriction level (§8.2 "Values")`;
@@ -377,7 +387,7 @@ export interface ProcessorPolicy {
   /** The policy applied to names -- `Config.identifierPolicy`. */
   readonly identifierPolicy: IdentifierPolicy;
   /** The policy applied to token values -- `Config.tokenPolicy`. */
-  readonly tokenPolicy: ScriptPolicy;
+  readonly tokenPolicy: TokenPolicy;
   /** What this processor will spend reading a document -- §9.1 and [TSON-SCHEMA] §11.5. */
   readonly limits: LimitsPolicy;
   /** The UCD release {@link identifierPolicy}/{@link tokenPolicy} were computed against. */
@@ -393,7 +403,7 @@ export interface ProcessorPolicy {
  */
 export function processorPolicy(
   identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
-  tokenPolicy: ScriptPolicy = DEFAULT_TOKEN_POLICY,
+  tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
   limits: LimitsPolicy = limitsPolicyOf(),
 ): ProcessorPolicy {
   return { identifierPolicy, tokenPolicy, limits, unicodeDataVersion: UTS39_VERSION };

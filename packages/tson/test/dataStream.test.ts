@@ -6,7 +6,6 @@ import {
 } from '../src/core/errors.js';
 import { chunkInput, fromString, runAsync, runSync } from '../src/io/bytes.js';
 import { createDataStream, requireDataDocument } from '../src/stream/dataStream.js';
-import { referenceText } from '../src/ast/reference.js';
 import type { TsonEvent } from '../src/stream/event.js';
 
 /** Drives an {@link EventSource} to completion over already-complete input. */
@@ -49,8 +48,6 @@ function describeEvent(e: TsonEvent): string {
       return 'AnnotationEnd';
     case 'type-ref':
       return `TypeRef(${e.name})`;
-    case 'reference':
-      return `Reference(${referenceText(e.reference)})`;
     case 'token':
       return `Token(${e.text},${e.form})`;
     case 'void':
@@ -892,9 +889,9 @@ describe('naming positions take the identifier grammar (§3.1, §3.2, §7.7)', (
     expect(() => events('@a.42x 1')).toThrow(/not an identifier/);
   });
 
-  it('refuses a tag that carries an argument list or the sibling mark (§3.2, §7.4)', () => {
+  it('refuses a tag that carries an argument list or a trailing mark (§3.2, §7.4)', () => {
     expect(() => events('!box<text> 1')).toThrow(TsonParseError);
-    expect(() => events('!int32! 1')).toThrow(/sibling/);
+    expect(() => events('!int32! 1')).toThrow(TsonParseError);
   });
 });
 
@@ -966,157 +963,66 @@ describe('the §2.8 brace dispatch reads the separator, never the name (§2.5, �
   });
 });
 
-// ── References in data (§4, §7.4, §7.5) ──────────────────────────────────
+// ── References in data (§4.1, §7.2.5, §7.4, §7.5) ────────────────────────
 
-describe('a reference with arguments is one core value (§7.4)', () => {
-  it('an application at a field value', () => {
-    expect(shape('{ t: set<text> }')).toEqual([
-      'DocumentStart(|)',
-      'RecordStart',
-      'FieldName(t)',
-      'Reference(set<text>)',
-      'RecordEnd',
-      'DocumentEnd',
-    ]);
-  });
-
-  it('whitespace and a comma inside the list are free, and a nested application is a reference of its own', () => {
-    expect(shape('{ t: map< text, list<int32> > }')[3]).toBe('Reference(map<text list<int32>>)');
-    expect(shape('{ t: map<text list<int32>> }')[3]).toBe('Reference(map<text list<int32>>)');
-  });
-
-  it("'>>' is two tokens, so nested lists close one at a time (§7.2.5)", () => {
-    expect(shape('a<b<c<d>>>')).toEqual([
-      'DocumentStart(|)',
-      'Reference(a<b<c<d>>>)',
-      'DocumentEnd',
-    ]);
-  });
-
-  it('a qualified head and a value argument of any token form parse (§7.4)', () => {
-    expect(shape('geo.address<T 201 "a b">')[1]).toBe('Reference(geo.address<T 201 "a b">)');
-  });
-
-  it('is a value wherever a value stands: a root, an element, a map key and a map value', () => {
-    expect(shape('box<text>')[1]).toBe('Reference(box<text>)');
-    expect(shape('[ box<text> pair<a b> ]').slice(2, 4)).toEqual([
-      'Reference(box<text>)',
-      'Reference(pair<a b>)',
-    ]);
-    expect(shape('{ box<text> => 1 }')).toEqual([
-      'DocumentStart(|)',
-      'MapStart',
-      'Reference(box<text>)',
-      'MapArrow',
-      'Token(1,unquoted)',
-      'MapEnd',
-      'DocumentEnd',
-    ]);
-    expect(shape('{ k => box<text> }')[4]).toBe('Reference(box<text>)');
-  });
-
-  it('may carry annotations and a tag like any value', () => {
-    expect(shape('@doc:"x" !meta.alias box<text>')).toEqual([
-      'DocumentStart(|)',
-      'AnnotationStart(doc)',
-      'Token(x,single-line)',
-      'AnnotationEnd',
-      'TypeRef(meta.alias)',
-      'Reference(box<text>)',
-      'DocumentEnd',
-    ]);
-  });
-
-  it('a qualified name without arguments is a token, read as a reference only where a type says so (§7.4)', () => {
-    expect(shape('{ t: set }')[3]).toBe('Token(set,unquoted)');
-  });
-
-  it("'<' must be adjacent to the name: 'box <text>' is a parse error (§7.5)", () => {
-    const error = thrownBy('box <text>');
-    expect(error).toBeInstanceOf(TsonParseError);
-    expect((error as Error).message).toContain('adjacent');
-  });
-
-  it('a quoted token is never a reference (§7.4)', () => {
-    expect(() => events('"box"<text>')).toThrow(/quoted token is never a reference/);
-  });
-
-  it('an unclosed argument list, an empty one, and structure inside one are parse errors', () => {
-    expect(() => events('box<text')).toThrow(TsonParseError);
-    expect(() => events('box<>')).toThrow(/at least one argument/);
-    expect(() => events('box<[a]>')).toThrow(TsonParseError);
-    expect(() => events('box<{ a: 1 }>')).toThrow(TsonParseError);
-  });
-
-  it('a head that is no qualified name takes no argument list', () => {
-    expect(() => events('42x<text>')).toThrow(/no qualified name/);
-  });
-
-  it('an unquoted argument that is no name is a value argument, never refused (§7.4)', () => {
-    expect(shape('pair<201 -5>')[1]).toBe('Reference(pair<201 -5>)');
-  });
-
-  it('survives chunked input at every byte boundary', async () => {
-    const text = '{ t: map< text, list<int32> > q: !x { } }';
-    const expected = shape('{ t: map< text, list<int32> > q: !x { } }');
-    const bytes = new TextEncoder().encode(text);
-    const input = chunkInput();
-    const source = createDataStream(input);
-    const feeding = (async (): Promise<void> => {
-      for (const byte of bytes) {
-        input.push(Uint8Array.of(byte));
-        await Promise.resolve();
-      }
-      input.end();
-    })();
-    const seen: TsonEvent[] = [];
-    for (;;) {
-      const event = await runAsync(source.next(), input);
-      seen.push(event);
-      if (event.kind === 'document-end') break;
+describe('no argument list is data syntax: "<" and ">" are parse errors where a value stands (§7.2.5, §4.1)', () => {
+  it('an application is refused at a field value, a root, an element, a map key and a map value', () => {
+    for (const text of [
+      '{ t: set<text> }',
+      'box<text>',
+      '[ box<text> pair<a b> ]',
+      '{ box<text> => 1 }',
+      '{ k => box<text> }',
+      '@doc:"x" !meta.alias box<text>',
+    ]) {
+      expect(() => events(text), text).toThrow(TsonParseError);
     }
-    await feeding;
-    expect(seen.map(describeEvent)).toEqual(expected);
+  });
+
+  it("a '<' reaching a value is refused by name, saying an argument list is schema grammar", () => {
+    expect(() => events('< text')).toThrow(/no role in a data value/);
+    expect(() => events('> text')).toThrow(/no role in a data value/);
+    expect(() => events('[ ]> ')).toThrow(TsonParseError);
+  });
+
+  it('a nested, an empty, an unclosed and a spaced argument list are refused alike', () => {
+    for (const text of [
+      'a<b<c<d>>>',
+      'box<>',
+      'box<text',
+      'box <text>',
+      '"box"<text>',
+      '42x<text>',
+    ]) {
+      expect(() => events(text), text).toThrow(TsonParseError);
+    }
+  });
+
+  it('a qualified name without an argument list is a token, as any token is (§4.1)', () => {
+    expect(shape('{ t: set }')[3]).toBe('Token(set,unquoted)');
+    expect(shape('geo.address')[1]).toBe('Token(geo.address,unquoted)');
+    expect(shape('"geo.address"')[1]).toBe('Token(geo.address,single-line)');
   });
 });
 
-describe('a sibling reference is one core value (§2.5, §7.4, §7.5)', () => {
-  it('an unquoted token and an adjacent "!" followed by whitespace', () => {
-    expect(shape('{ value: kind! }')).toEqual([
-      'DocumentStart(|)',
-      'RecordStart',
-      'FieldName(value)',
-      'Reference(kind!)',
-      'RecordEnd',
-      'DocumentEnd',
-    ]);
-  });
-
-  it('the end of the document counts as the following whitespace', () => {
-    expect(shape('kind!')).toEqual(['DocumentStart(|)', 'Reference(kind!)', 'DocumentEnd']);
-    expect(shape('kind!\n')[1]).toBe('Reference(kind!)');
-  });
-
-  it('it stands as an element and as a first map key', () => {
-    expect(shape('[ kind! x ]').slice(2, 4)).toEqual(['Reference(kind!)', 'Token(x,unquoted)']);
-    expect(shape('{ kind! => 1 }')[2]).toBe('Reference(kind!)');
-  });
-
-  it("'!' not followed by whitespace is a parse error: 'a!b', 'kind!}', 'kind!,', 'kind!]' (§7.5)", () => {
-    for (const text of ['a!b', '{ v: kind!}', '{ v: kind!, }', '[ kind!]', '{ v: kind!? }']) {
-      expect(() => events(text)).toThrow(TsonParseError);
+describe('no sibling form: "kind!" in a data value is a parse error by the separator rule (§7.5, §2.4)', () => {
+  it('is refused at a field value, a root, an element and a map key', () => {
+    for (const text of ['{ value: kind! }', 'kind!', 'kind!\n', '[ kind! x ]', '{ kind! => 1 }']) {
+      expect(() => events(text), text).toThrow(TsonParseError);
     }
   });
 
-  it('a quoted token is never a sibling reference (§7.4)', () => {
-    expect(() => events('"name"!')).toThrow(/quoted token is never a reference/);
+  it("a '!' abutting a token or its delimiter is refused: 'a!b', 'kind!}', 'kind!,', 'kind!]'", () => {
+    for (const text of ['a!b', '{ v: kind!}', '{ v: kind!, }', '[ kind!]', '{ v: kind!? }']) {
+      expect(() => events(text), text).toThrow(TsonParseError);
+    }
   });
 
-  it('the field is one identifier, a single segment: a dotted name is no sibling reference', () => {
-    expect(() => events('a.b! ')).toThrow(/single segment/);
+  it('a quoted token takes no mark either', () => {
+    expect(() => events('"name"!')).toThrow(TsonParseError);
   });
 
-  it("a prefix '!' after whitespace is a tag, so 'x !y 1' is a tag and never a sibling (§7.5)", () => {
+  it("a prefix '!' after whitespace is a tag, so 'x !y 1' is a tag (§7.5)", () => {
     expect(shape('[ x !int32 1 ]')).toEqual([
       'DocumentStart(|)',
       'ArrayStart',
@@ -1126,9 +1032,5 @@ describe('a sibling reference is one core value (§2.5, §7.4, §7.5)', () => {
       'ArrayEnd',
       'DocumentEnd',
     ]);
-  });
-
-  it('a sibling reference is never an argument (§7.4)', () => {
-    expect(() => events('box<kind! >')).toThrow(/sibling reference/);
   });
 });

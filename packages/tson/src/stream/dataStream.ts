@@ -50,22 +50,17 @@
  * module performs no I/O, matching §3.3's "no parse-time I/O" and the "raw URI arguments,
  * uninterpreted" contract {@link DocumentStart} itself documents.
  *
- * ## References (§4, §7.4, §7.5)
+ * ## References (§4.1, §7.4)
  *
- * An unquoted token followed by an adjacent `<` heads a reference with arguments, and one followed
- * by an adjacent `!` is a sibling reference. Each is assembled whole from its tokens and delivered
- * as one {@link ReferenceEvent}, so every reader, skip and replay treats it as the one value it is.
+ * A value that names something is a token, a qualified name, delivered as any token is. `<` and `>`
+ * have no role in a data value (§7.2.5), and a `!` after a token is no part of it: each is a parse
+ * error where a value stands, by the separator rule (§2.4, §7.5).
  */
 
 import { isIriReference } from '../atom/network/uri.js';
 import { TsonInternalError, TsonParseError, TsonUnsupportedDocumentError } from '../core/errors.js';
 import { START, type Position } from '../core/position.js';
-import type {
-  ApplicationReference,
-  ReferenceArgument,
-  SiblingReference,
-} from '../ast/reference.js';
-import { isQualifiedName, isSiblingField } from '../atom/referenceGrammar.js';
+import { isQualifiedName } from '../atom/referenceGrammar.js';
 import type { ByteInput, Task } from '../io/bytes.js';
 import { createLexer, currentToken, type Lexer } from '../lexer/lexer.js';
 import { adjacentTo, type Token, type TokenType } from '../lexer/token.js';
@@ -131,16 +126,9 @@ export function* requireDataDocument(stream: DataStream, at: Position): Task<voi
 // ── State ────────────────────────────────────────────────────────────────
 
 /**
- * The stream's whole mutable state, threaded through this module's generator functions instead
- * of captured by closure or spread across instance fields — a plain record of cursor position,
- * lookahead, the frame stack, and events produced but not yet handed to the caller.
- */
-/**
- * The token cursor the reference productions ({@link referenceArguments}, {@link siblingReference})
- * run over: a lexer, at most two tokens of lookahead and the end of the last token consumed. The
- * stream's own state has this shape, and so does the schema grammar's cursor
- * (`compiler/cursor.ts`), so a reference in a schema payload is read by the one production the data
- * grammar reads it with (§7.4).
+ * The token cursor the shared productions (`parseTypeRefName`, `requireQualifiedName`) run over: a
+ * lexer, at most two tokens of lookahead and the end of the last token consumed. The stream's own
+ * state has this shape, and so does the schema grammar's cursor (`compiler/cursor.ts`).
  */
 export interface TokenCursor {
   readonly lexer: Lexer;
@@ -152,6 +140,11 @@ export interface TokenCursor {
   lastEnd: Position;
 }
 
+/**
+ * The stream's whole mutable state, threaded through this module's generator functions instead
+ * of captured by closure or spread across instance fields — a plain record of cursor position,
+ * lookahead, the frame stack, and events produced but not yet handed to the caller.
+ */
 interface StreamState extends TokenCursor {
   /** The explicit frame stack replacing recursion, LIFO (top = last element). */
   readonly frames: Frame[];
@@ -604,13 +597,6 @@ export function* parseTypeRefName(state: TokenCursor): Task<string> {
         `stands, or name it in the schema ('my_type => ${name.text}<...>') and write '!my_type' here`,
     );
   }
-  if (next.type === 'bang' && adjacentTo(name, next)) {
-    throw parseError(
-      next,
-      `'!${name.text}!' marks a type's name as a sibling reference, and a tag names a type (§7.4): ` +
-        "a tag is '!' and a qualified name, never a reference to a field",
-    );
-  }
   if (next.type === 'question' && adjacentTo(name, next)) {
     throw parseError(
       next,
@@ -626,147 +612,6 @@ export function* parseTypeRefName(state: TokenCursor): Task<string> {
     );
   }
   return name.text;
-}
-
-// ── A reference (§4, §7.4, §7.5) ─────────────────────────────────────────
-
-/**
- * Whether the token just consumed, `head`, opens a reference's argument list: the next token is a
- * `<` adjacent to it. A `<` with whitespace before it opens nothing and is refused, as is one after
- * a quoted token, which is never a reference (§7.5).
- */
-export function* opensArguments(state: TokenCursor, head: Token): Task<boolean> {
-  const next = yield* peekToken(state);
-  if (next.type !== 'less-than') return false;
-  if (!adjacentTo(head, next)) {
-    throw parseError(
-      next,
-      `'<' opens a reference's argument list only adjacent to the name it applies (§7.5): write ` +
-        `'${head.text}<...>' with no whitespace before '<'`,
-    );
-  }
-  if (head.type !== 'unquoted-token') {
-    throw parseError(
-      next,
-      "a quoted token is never a reference, so '<' cannot apply it: write the qualified name unquoted",
-    );
-  }
-  return true;
-}
-
-/**
- * The reference `head` heads, its argument list next at the cursor: `"<" ws type-args ws ">"`, each
- * argument a qualified name (a reference, itself possibly applied) or any other token (a value),
- * separated as an array's elements are. Assembled whole, so the stream delivers one value.
- */
-export function* referenceArguments(state: TokenCursor, head: Token): Task<ApplicationReference> {
-  requireApplicable(head);
-  yield* advance(state); // '<'
-  const args: ReferenceArgument[] = [];
-  const first = yield* peekToken(state);
-  if (first.type === 'greater-than') {
-    throw parseError(
-      first,
-      `an argument list holds at least one argument, and '${head.text}<>' holds none`,
-    );
-  }
-  args.push(yield* referenceArgument(state));
-  while (yield* consumeSeparatorOrCloseCheck(state, 'greater-than')) {
-    args.push(yield* referenceArgument(state));
-  }
-  yield* expect(state, 'greater-than', "a reference's closing '>'");
-  return { kind: 'application', name: head.text, arguments: args };
-}
-
-/** `type-arg = application / token` (§7.4). */
-function* referenceArgument(state: TokenCursor): Task<ReferenceArgument> {
-  const t = yield* peekToken(state);
-  switch (t.type) {
-    case 'unquoted-token': {
-      yield* advance(state);
-      if (yield* marksSibling(state, t)) {
-        throw parseError(
-          t,
-          `a sibling reference ('${t.text}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not at a template argument`,
-        );
-      }
-      const applied = yield* opensArguments(state, t);
-      if (isQualifiedName(t.text)) {
-        return {
-          kind: 'reference',
-          reference: applied ? yield* referenceArguments(state, t) : { kind: 'name', name: t.text },
-        };
-      }
-      if (applied) requireApplicable(t);
-      return { kind: 'value', text: t.text, form: 'unquoted' };
-    }
-    case 'single-line-token':
-    case 'multi-line-token':
-      yield* advance(state);
-      yield* opensArguments(state, t);
-      return { kind: 'value', text: t.text, form: tokenFormOf(t.type) };
-    default:
-      throw mismatch(
-        "a reference's argument: a qualified name, an application or a token (no structure stands in an argument list in data)",
-        t,
-      );
-  }
-}
-
-/**
- * Whether the token just consumed, `head`, is marked as a sibling reference (§7.4): the next token
- * is a `!` adjacent to it. A prefix `!` is adjacent to the token after it and so is never adjacent
- * to the one before. A quoted token is never a reference, so a `!` after one is refused.
- */
-export function* marksSibling(state: TokenCursor, head: Token): Task<boolean> {
-  const next = yield* peekToken(state);
-  // A multi-line token's end is past its closing line's terminator, where the next line starts, so
-  // a prefix `!` opening that line would read as adjacent to it.
-  if (next.type !== 'bang' || !adjacentTo(head, next) || head.type === 'multi-line-token') {
-    return false;
-  }
-  if (head.type !== 'unquoted-token') {
-    throw parseError(
-      next,
-      "a quoted token is never a reference, so '!' cannot mark it as a sibling reference: a " +
-        'sibling is a field named by one unquoted identifier',
-    );
-  }
-  return true;
-}
-
-/**
- * The sibling reference `head` and the `!` next at the cursor spell: `sibling-ref = unquoted-token
- * "!"`, the token one identifier (a single segment), and the `!` followed by whitespace (§7.5) or
- * the end of the document. The whitespace is what keeps a postfix `!` apart from a prefix one, so
- * `a!b`, `kind!}`, `kind!]` and `kind!?` are refused here. Assembled whole.
- */
-export function* siblingReference(state: TokenCursor, head: Token): Task<SiblingReference> {
-  if (!isSiblingField(head.text)) {
-    throw parseError(
-      head,
-      `'${head.text}!' is no sibling reference -- the '!' marks one field of the same record, ` +
-        'named by one identifier, a single segment (§7.4)',
-    );
-  }
-  const bang = yield* advance(state);
-  const next = yield* peekToken(state);
-  if (next.type !== 'eof' && adjacentTo(bang, next)) {
-    throw parseError(
-      next,
-      `a sibling reference's '!' must be followed by whitespace (§7.5): write '${head.text}! ' before ${describe(next)}`,
-    );
-  }
-  return { kind: 'sibling', field: head.text };
-}
-
-function requireApplicable(head: Token): void {
-  if (!isQualifiedName(head.text)) {
-    throw parseError(
-      head,
-      `'${head.text}' is no qualified name, so it takes no argument list -- each segment between the dots is an identifier (§7.7)`,
-    );
-  }
 }
 
 /**
@@ -901,26 +746,12 @@ function* stepCoreValue(state: StreamState): Task<void> {
     case 'single-line-token':
     case 'multi-line-token':
       yield* advance(state);
-      if (yield* opensArguments(state, t)) {
-        state.ready.push({
-          kind: 'reference',
-          reference: yield* referenceArguments(state, t),
-          position: t.start,
-        });
-      } else if (yield* marksSibling(state, t)) {
-        state.ready.push({
-          kind: 'reference',
-          reference: yield* siblingReference(state, t),
-          position: t.start,
-        });
-      } else {
-        state.ready.push({
-          kind: 'token',
-          text: t.text,
-          form: tokenFormOf(t.type),
-          position: t.start,
-        });
-      }
+      state.ready.push({
+        kind: 'token',
+        text: t.text,
+        form: tokenFormOf(t.type),
+        position: t.start,
+      });
       return;
     case 'directive-token': {
       const name = yield* peekDirectiveName(state);
@@ -929,6 +760,12 @@ function* stepCoreValue(state: StreamState): Task<void> {
         `directive '!!${name ?? ''}' is not permitted here: a directive stands only in the document header (§2.2, §3.3)`,
       );
     }
+    case 'less-than':
+    case 'greater-than':
+      throw parseError(
+        t,
+        `'${t.text}' has no role in a data value: an argument list is schema grammar (§7.2.5)`,
+      );
     default:
       throw parseError(
         t,
@@ -968,16 +805,6 @@ function* parseBraceValue(state: StreamState): Task<void> {
       state.ready.push({ kind: 'record-start', position: lbrace.start });
       state.ready.push({ kind: 'field-name', name, position: t1.start });
       pushFrame(state, { kind: 'record' });
-      pushFrame(state, { kind: 'data-value' });
-      return;
-    }
-    if (
-      (t2.type === 'less-than' || (t2.type === 'bang' && t1.type === 'unquoted-token')) &&
-      adjacentTo(t1, t2)
-    ) {
-      // A reference as the first key: the entry's own frame reads it, and the arrow after it.
-      state.ready.push({ kind: 'map-start', position: lbrace.start });
-      pushFrame(state, { kind: 'map', mode: 'awaiting-arrow' });
       pushFrame(state, { kind: 'data-value' });
       return;
     }

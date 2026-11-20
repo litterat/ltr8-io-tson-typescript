@@ -45,7 +45,7 @@ interface SchemalessReadOptions extends NestingLimitOptions {
   readonly schema?: undefined;
   readonly preserveUnknownTypeRefs?: boolean;
   readonly identifierPolicy?: IdentifierPolicy; // §8.2 over names
-  readonly tokenPolicy?: ScriptPolicy; // §8.2 over values; scans nothing by default
+  readonly tokenPolicy?: TokenPolicy; // §8.2 over values; scans nothing by default
 }
 
 interface ValidationResult {
@@ -183,7 +183,7 @@ function createTson(config?: Config): Tson;
 interface Config extends NestingLimitOptions {
   readonly schemaSource?: SchemaSource;
   readonly identifierPolicy?: IdentifierPolicy;   // §8.2 over names
-  readonly tokenPolicy?: ScriptPolicy;       // §8.2 over values; scans nothing by default
+  readonly tokenPolicy?: TokenPolicy;       // §8.2 over values; scans nothing by default
 }
 
 interface Tson {
@@ -200,15 +200,16 @@ interface Tson {
 
 interface ProcessorPolicy {
   readonly identifierPolicy: IdentifierPolicy;
-  readonly tokenPolicy: ScriptPolicy;
+  readonly tokenPolicy: TokenPolicy;
   readonly limits: LimitsPolicy;                             // §9.1
   readonly unicodeDataVersion: string;
 }
 
-// §8.2. ScriptPolicy is the token policy: a level and the combinations admitted over it.
-interface ScriptPolicy { readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[] }
-interface IdentifierPolicy extends ScriptPolicy { readonly perSegment: boolean; readonly skeletonDistinctness: boolean }
-// DEFAULT_IDENTIFIER_POLICY, NO_IDENTIFIER_POLICY, DEFAULT_TOKEN_POLICY; scriptPolicy(level),
+// §8.2. TokenPolicy is the token policy: a level and the combinations admitted over it.
+interface TokenPolicy { readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[] }
+interface IdentifierPolicy {
+  readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[]; readonly perSegment: boolean; readonly skeletonDistinctness: boolean }
+// DEFAULT_IDENTIFIER_POLICY, NO_IDENTIFIER_POLICY, DEFAULT_TOKEN_POLICY; tokenPolicyAt(level),
 // perSegment(p), permitting(p, ...scripts), withRestrictionLevel(p, level), withSkeletonDistinctness(p, on);
 // withIdentifierPolicy(config, p), withTokenPolicy(config, p). A name refusal is not a verdict: isNameRefusal(code).
 

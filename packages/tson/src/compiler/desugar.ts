@@ -89,7 +89,11 @@ import type {
   TypeExpr,
 } from '../ast/schema/typeref.js';
 import type { CoreValue, DataValue, MapEntry, RecordField, RecordValue } from '../ast/value.js';
-import type { ApplicationReference, ReferenceArgument } from '../ast/reference.js';
+import {
+  referenceText,
+  type ApplicationReference,
+  type ReferenceArgument,
+} from '../ast/reference.js';
 import { metaName } from '../schema/meta/kernel.js';
 import { canonicalBinding, ofBinding } from './derivedName.js';
 import { createMintedNames, type MintedNames } from './mintedNames.js';
@@ -1273,24 +1277,11 @@ function namesToken(value: CoreValue, text: string): boolean {
       return value.elements.some((element) => namesToken(element.coreValue, text));
     case 'record':
       return value.fields.some((field) => namesToken(field.value.coreValue, text));
-    case 'reference':
-      return value.reference.kind === 'application' && namesInApplication(value.reference, text);
     case 'map':
     case 'empty-brace':
     case 'void':
       return false;
   }
-}
-
-function namesInApplication(application: ApplicationReference, text: string): boolean {
-  if (application.name === text) return true;
-  return application.arguments.some((argument) =>
-    argument.kind === 'reference'
-      ? argument.reference.kind === 'name'
-        ? argument.reference.name === text
-        : namesInApplication(argument.reference, text)
-      : argument.form === 'unquoted' && argument.text === text,
-  );
 }
 
 /**
@@ -1368,42 +1359,11 @@ function renameValue(value: CoreValue, substitution: ReadonlyMap<string, string>
           value: renameScoped(field.value, substitution),
         })),
       };
-    case 'reference':
-      return value.reference.kind === 'application'
-        ? { kind: 'reference', reference: renameApplication(value.reference, substitution) }
-        : value;
     case 'map':
     case 'empty-brace':
     case 'void':
       return value;
   }
-}
-
-/** An application's own head and arguments renamed alongside the wire record beside it. */
-function renameApplication(
-  application: ApplicationReference,
-  substitution: ReadonlyMap<string, string>,
-): ApplicationReference {
-  return {
-    kind: 'application',
-    name: substitution.get(application.name) ?? application.name,
-    arguments: application.arguments.map((argument): ReferenceArgument => {
-      if (argument.kind === 'reference') {
-        return {
-          kind: 'reference',
-          reference:
-            argument.reference.kind === 'name'
-              ? {
-                  kind: 'name',
-                  name: substitution.get(argument.reference.name) ?? argument.reference.name,
-                }
-              : renameApplication(argument.reference, substitution),
-        };
-      }
-      const renamed = argument.form === 'unquoted' ? substitution.get(argument.text) : undefined;
-      return renamed === undefined ? argument : { ...argument, text: renamed };
-    }),
-  };
 }
 
 /**
@@ -1457,9 +1417,9 @@ function refValueOf(ref: TypeExpr): CoreValue {
       return tokenValue(ref.name, 'unquoted');
     case 'siblingRef':
       // A record template field's type, the one slot a sibling reference reaches here.
-      return { kind: 'reference', reference: { kind: 'sibling', field: ref.field } };
+      return tokenValue(referenceText({ kind: 'sibling', field: ref.field }), 'unquoted');
     case 'applicationRef':
-      return { kind: 'reference', reference: applicationOf(ref) };
+      return tokenValue(referenceText(applicationOf(ref)), 'unquoted');
     default:
       throw new TsonInternalError(
         'refValueOf is only ever called with a name, an application or a sibling reference',

@@ -42,7 +42,6 @@
  * name — see that module's own doc for why.
  */
 import type { CoreValue, RecordField } from '../ast/value.js';
-import type { Reference } from '../ast/reference.js';
 import type { Token, TypeArgument, TypeRef } from '../schema/meta/typedef.js';
 import { fnv1a32, part } from './internalName.js';
 import { canonicalNumber, numericTextOf } from './numericIdentity.js';
@@ -81,30 +80,10 @@ function appendReadable(out: string[], value: CoreValue): void {
         appendReadable(out, entry.value.coreValue);
       });
       break;
-    case 'reference':
-      appendReadableReference(out, value.reference);
-      break;
     case 'empty-brace':
     case 'void':
       out.push('_v');
       break;
-  }
-}
-
-/** An application in a slot, readable as its head and arguments; a sibling reference as its field. */
-function appendReadableReference(out: string[], reference: Reference): void {
-  if (reference.kind === 'sibling') {
-    out.push('_', part(reference.field));
-    return;
-  }
-  out.push('_', part(reference.name));
-  if (reference.kind === 'name') return;
-  for (const argument of reference.arguments) {
-    if (argument.kind === 'reference') {
-      appendReadableReference(out, argument.reference);
-    } else {
-      out.push('_', part(numericTextOf(argument.text, argument.form === 'unquoted')));
-    }
   }
 }
 
@@ -157,54 +136,11 @@ function appendValue(out: string[], value: CoreValue): void {
       });
       out.push(')');
       break;
-    // An application in a slot is its parsed form, so two spellings of one are one binding (§8.2); a
-    // sibling reference is a third spelling of a slot, kept apart from a name and an application.
-    case 'reference':
-      if (value.reference.kind === 'sibling') {
-        out.push('s');
-        appendText(out, value.reference.field);
-      } else {
-        out.push('p');
-        appendAstReference(out, value.reference);
-      }
-      break;
     case 'empty-brace':
     case 'void':
       out.push('?');
       break;
   }
-}
-
-/** A parsed reference rendered structurally, as {@link appendRef} renders a resolved one. */
-function appendAstReference(out: string[], reference: Reference): void {
-  if (reference.kind === 'sibling') {
-    out.push('s');
-    appendText(out, reference.field);
-    return;
-  }
-  out.push('n');
-  appendText(out, reference.name);
-  out.push('(');
-  if (reference.kind === 'application') {
-    for (const argument of reference.arguments) {
-      if (argument.kind === 'reference') {
-        out.push('r');
-        appendAstReference(out, argument.reference);
-      } else if (
-        argument.form === 'unquoted' &&
-        canonicalNumber(argument.text, true) === undefined
-      ) {
-        // An unquoted token that is no number renders as the reference it parses as.
-        out.push('r');
-        appendAstReference(out, { kind: 'name', name: argument.text });
-      } else {
-        out.push('v');
-        appendText(out, argument.form);
-        appendNumberAware(out, argument.text, argument.form === 'unquoted');
-      }
-    }
-  }
-  out.push(')');
 }
 
 // ── An application: the instantiation entry a closure produces ─────────────────────────────────

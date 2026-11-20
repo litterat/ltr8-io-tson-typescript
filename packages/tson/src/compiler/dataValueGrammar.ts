@@ -26,17 +26,9 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
-  ReferenceValue,
   TokenValue,
 } from '../ast/value.js';
-import {
-  marksSibling,
-  opensArguments,
-  parseTypeRefName,
-  referenceArguments,
-  requireQualifiedName,
-  siblingReference,
-} from '../stream/dataStream.js';
+import { parseTypeRefName, requireQualifiedName } from '../stream/dataStream.js';
 import {
   advance,
   check,
@@ -141,21 +133,13 @@ export function* parseCoreValue(state: CursorState): Task<CoreValue> {
     case 'single-line-token':
     case 'multi-line-token':
       yield* advance(state);
-      // §7.4: a token followed by an adjacent `<` heads a reference with arguments, and one
-      // followed by an adjacent `!` is a sibling reference -- the productions the data stream reads.
-      if (yield* opensArguments(state, t)) {
-        return {
-          kind: 'reference',
-          reference: yield* referenceArguments(state, t),
-        } satisfies ReferenceValue;
-      }
-      if (yield* marksSibling(state, t)) {
-        return {
-          kind: 'reference',
-          reference: yield* siblingReference(state, t),
-        } satisfies ReferenceValue;
-      }
       return { kind: 'token', text: t.text, form: tokenFormOf(t.type) } satisfies TokenValue;
+    case 'less-than':
+    case 'greater-than':
+      throw parseError(
+        t,
+        `'${t.text}' has no role in a data value: an argument list is schema grammar (§7.2.5)`,
+      );
     default:
       throw parseError(
         t,

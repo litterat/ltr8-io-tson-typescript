@@ -486,19 +486,17 @@ describe('field-marks validation (§5.2)', () => {
 // ── Parameter-bearing forms: open synthetics (§5.10) ─────────────────────
 
 describe('open (parameter-bearing) synthetics', () => {
-  it('lifts a form naming a template parameter to an open synthetic, referenced by application', () => {
+  it('lifts a form naming a template parameter to an open synthetic, referenced by the application text', () => {
     const document = desugarDoc('holder => <T> { xs: [T] }');
     const injected = onlyInjected(document, 'array');
     const instance = instanceOf(document, 'holder');
     const xsField = fieldAt(requiredField(instance, 'fields'), 0);
     const typeValue = namedField(xsField, 'type');
     if (typeValue === undefined) throw new Error("'xs' field has no type");
-    // The open synthetic is named by an application, a reference value of the data grammar (§7.4).
-    if (typeValue.kind !== 'reference' || typeValue.reference.kind !== 'application') {
-      throw new Error("'xs' type is not an application");
-    }
-    expect(typeValue.reference.name).toBe(injected.name);
-    expect(typeValue.reference.arguments).toHaveLength(1);
+    // A data value spells no application (§4.1), so the open synthetic is named by the application's
+    // canonical text, a token.
+    if (typeValue.kind !== 'token') throw new Error("'xs' type is not a token");
+    expect(typeValue.text.startsWith(`${injected.name}<`)).toBe(true);
   });
 
   it('renames a parameter positionally (p0, p1, ...), so alpha-equivalent forms land on one entry', () => {

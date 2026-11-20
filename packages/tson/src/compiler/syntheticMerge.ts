@@ -27,7 +27,6 @@ import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/erro
 import type { CoreValue, RecordField } from '../ast/value.js';
 import type { Declaration } from '../ast/schema/document.js';
 import type { Top, TypeRef } from '../schema/meta/typedef.js';
-import { applicationIn } from './wireForm.js';
 import { mapBodyRefs, type TemplateMaterialiser } from './templates.js';
 
 /**
@@ -119,8 +118,6 @@ function closedName(
  */
 function holdsApplication(value: CoreValue): boolean {
   switch (value.kind) {
-    case 'reference':
-      return applicationIn(value) !== undefined;
     case 'record':
       return value.fields.some((f) => holdsApplication(f.value.coreValue));
     case 'array':
