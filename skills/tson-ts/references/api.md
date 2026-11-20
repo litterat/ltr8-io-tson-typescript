@@ -191,6 +191,7 @@ interface Tson {
   readonly schemas: ReadonlyMap<string, LinkedSchema>;   // keyed by canonical identity
   register(schema: LinkedSchema): void;
   resolveSchema(source: string | Uint8Array): LinkedSchema;  // synchronous; never fetches
+  loadSchema(source: string | Uint8Array): Promise<LinkedSchema>; // fetches imports + externs' schemas, then resolves and registers
   compile(schema: LinkedSchema): CompiledSchema;
   fetch(reference: string): Promise<Uint8Array>;             // raw bytes only
   preload(references: readonly string[]): Promise<void>;     // fetch+resolve+link+register, in order
@@ -221,7 +222,8 @@ function mapSchemaSource(
 ): SchemaSource;
 ```
 
-`preload` is idempotent per reference (an already-registered one is never re-fetched), verifies any
+`loadSchema` puts the document in flight under its own `!!id` before fetching, so a reference
+reaching it is a cycle (never a fetch); `preload` is idempotent per reference (an already-registered one is never re-fetched), verifies any
 declared `?sha256=` pin, and rejects a document whose own `!!id` is not the identity requested.
 
 ### The compile pipeline
@@ -304,7 +306,9 @@ are **not** the writers to take a content hash over.
 
 The §8 resolver output as a value model. An entry **is its value** (§8.1): `Top` is the closed union
 of a type (`Type`: every atom, product and sum body, each carrying a `TypeChain` of `parents`,
-`supertypes` and `subtypes`), a `Reference`, a held `TemplateBody` and a `Namespace` value. A record's
+`supertypes` and `subtypes`; a record with `parameters` is a parametric record), an `Alias`, an
+`Extern`, an `IncompleteEntry` and a `ValueEntry`, which holds a `Namespace` value among others. A type
+slot is a `TypeExpr`: a `TypeRef` or a `TypeInline`, a type written in place. A record's
 `fields` is a `Namespace` keyed by field name, and a meta layer's own namespace entries are held as
 generic `MetaValue`s. `EntryFacts` carries what an entry has beyond its value (`schema/meta/typedef.ts`,
 `bodies.ts`, `algebra.ts`, the atom families, `atoms-network.ts` and `position.ts`). It **names no compiler type**,

@@ -151,7 +151,10 @@ text, whatever --schema/--root say -- unlike the reference implementation's own 
 infers JSON for stdin from a binding alone (see STATUS.md's own note on the divergence).
 
 options:
-  --schema <file-or-url>   schema to validate against (a local path or an https:// URL)
+  --schema <file-or-url>   schema to validate against (a local path or an https:// URL). Give it
+                           again for each further schema document the first imports or names
+                           through an extern: each is served by its !!id, and nothing else is
+                           ever fetched
   --root <name>            the schema entry the root value reads against (with --schema)
   --input tson|json        force every input's encoding instead of the by-extension default
   --format text|json|tson  output format (default: text)
@@ -168,10 +171,13 @@ const COMPILE_USAGE =
 
 const COMPILE_HELP = `usage: tson compile [<policy options>] [--format text|json|tson] <schema>...
 
-Resolves and links each schema document against the bundled standard library (meta,
-numeric, temporal, net, core, policy) and reports whether it compiles -- composition, refinement, template
-application, reference validity, choice disjointness. Does not force every declared
-entry's reader; see this command's own module doc for why.
+Loads each schema document -- resolves and links it against the bundled standard library
+(meta, numeric, temporal, net, core, policy) and the other schemas given here -- and reports
+whether it compiles: composition, refinement, application, reference validity, choice
+disjointness. Each file is served by its !!id to the others, so a schema's imports and the
+schemas its externs name are found among the files given; one no file declares is not fetched
+and rejects the schema. Does not force every declared entry's reader; see this command's own
+module doc for why.
 
 options:
   --format text|json|tson  output format (default: text)
@@ -231,7 +237,7 @@ the file is never rewritten.
 Removed or shortened, and nothing else:
   !!id                       dropped
   ?query on a header         dropped (the ?sha256= pin); a #fragment stays
-  meta, numeric, temporal, net, core   shortened to revision and name, "39/core"; other references keep their URL
+  meta, numeric, temporal, net, core   shortened to revision and name, "40/core"; other references keep their URL
   @doc                       dropped (with --keep-docs, kept)
 
 Whitespace is collapsed to one space, never removed; one line per header directive and per
@@ -307,6 +313,7 @@ function parseValidateArgs(
 ): { options: ValidateOptions; format: Format } {
   let format: Format = 'text';
   let schemaLocation: string | undefined;
+  const dependencies: string[] = [];
   let root: string | undefined;
   let input: InputKind | undefined;
   const files: string[] = [];
@@ -323,9 +330,14 @@ function parseValidateArgs(
       case '--':
         literal = true;
         break;
-      case '--schema':
-        schemaLocation = requireValue(args, ++i, '--schema');
+      case '--schema': {
+        // The first names the schema the files are read against; each further one is served by
+        // its `!!id` to what that schema imports or names through an extern.
+        const location = requireValue(args, ++i, '--schema');
+        if (schemaLocation === undefined) schemaLocation = location;
+        else dependencies.push(location);
         break;
+      }
       case '--root':
         root = requireValue(args, ++i, '--root');
         break;
@@ -345,6 +357,7 @@ function parseValidateArgs(
       files,
       policy,
       ...(schemaLocation === undefined ? {} : { schemaLocation }),
+      ...(dependencies.length === 0 ? {} : { dependencies }),
       ...(root === undefined ? {} : { root }),
       ...(input === undefined ? {} : { input }),
     },

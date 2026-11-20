@@ -20,10 +20,10 @@ REF_DIR="$REPO_ROOT/.references"
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
 JAVA_PIN="7fe582759319d60a28df613a669d36362281f9f2"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
-# 944 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
-# 2026 Revision 39 baseline: one directive (`!!import`) and a root tagged `!schema`, one namespace
-# per schema, the merged kernel with nested schema maps, references as data grammar, dependent
-# fields, and record templates as their own constructor.
+# 1438 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
+# 2026 Revision 40 baseline: one directive (`!!import`) and a root tagged `!schema`, one namespace
+# per schema, the merged kernel with nested schema maps, types written in place, parametric
+# records, incomplete entries, dependent fields, and the extern.
 SUITE_PIN="3d769b5999bbe118f400d6e6f4f6e2e6bb3ace63"
 
 if [ "${1:-}" = "--force" ]; then
