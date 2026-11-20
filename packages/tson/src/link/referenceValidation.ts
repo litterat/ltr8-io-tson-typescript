@@ -33,7 +33,12 @@ import { ValuesByName } from './valuesByName.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { lexerFormOfMeta } from '../compiler/tokenForms.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
-import { resolvesToConstructor, terminal, type EntryLookup } from './aliasChain.js';
+import {
+  resolvesToConstructor,
+  terminal,
+  terminalDefinition,
+  type EntryLookup,
+} from './aliasChain.js';
 import type { ChoiceBody, NamedField } from '../schema/meta/bodies.js';
 import { isNestedMap } from '../schema/meta/schemaPaths.js';
 import { namedFields, typeExprText, typeNameOf } from '../schema/meta/bodies.js';
@@ -84,7 +89,7 @@ export interface ValidateReferencesOptions {
 
 /**
  * Validates every reference in `merged` — every declared `source`, every `supertypes`/`subtypes`
- * entry, every field/element/key/value/variant type, every held template's applications, and
+ * entry, every field/element/key/value/variant type, every application written in place, and
  * every declared parameter's actual use (§5.10) — reporting (or throwing) a
  * {@link TsonSchemaValidationError} per entry that fails, or a {@link TsonBindMismatchError} when
  * a `Data` body breaks its own `references()` contract (see {@link validateBody}).
@@ -320,6 +325,7 @@ function validateType(
       checkVariantsAreDistinct(subject, body, namespace);
       checkVariantsAreNotVoid(subject, body, namespace);
       checkVariantsAreNamed(subject, trail, body, namespace);
+      checkChoiceVariantsAreDisjoint(subject, trail, body, namespace);
       return;
     }
     case 'record':
@@ -557,7 +563,19 @@ function validateName(
   if (target === undefined) {
     throw new TsonSchemaValidationError(`${context} has an unresolved reference '${ref.name}'`);
   }
-  if (position.alias === true || position.construction === true) return;
+  if (position.alias === true) {
+    // `meta.alias.target` is a `meta.type_ref`, whose `of` is `meta.type`: a value entry is no member of it, at
+    // the immediate target or at the end of its hops (§4.1, §8.3). Anything else an alias may name.
+    const end = namespace.get(terminal(ref.name, lookupIn(namespace)));
+    if (end !== undefined && isValueEntry(end)) {
+      throw new TsonSchemaValidationError(
+        `${context} names '${ref.name}', which ${end === target ? 'is' : 'reaches'} a value and not a type -- ` +
+          'an alias is another name for a type, and an entry applying a namespace type is a value of it (§4.1, §8.3)',
+      );
+    }
+    return;
+  }
+  if (position.construction === true) return;
   if (isValueEntry(target)) {
     // An entry applying a namespace type is a value, never a type (§4.1).
     throw new TsonSchemaValidationError(
@@ -707,6 +725,39 @@ function checkVariantsAreNamed(
     `'${subject}'${trail}: the choice '${typeExprText({ kind: 'inline', head: 'meta.choice', of: choice })}' ` +
       `is not disjoint, so each value names its variant with a tag, and the variant '${typeExprText(inPlace)}' ` +
       'is written in place, which no tag names (§4.2, §5.4): declare it under a name and list that name',
+  );
+}
+
+/**
+ * A variant that is a choice is disjoint, judged at the end of its alias chain (§5.4, §8.3): a value of it carries
+ * the tag naming it, and a value carries one tag ([TSON-DATA] §3.2), so it is read at the nested choice untagged,
+ * where a choice that is not disjoint could select nothing. A choice nests one deep.
+ */
+function checkChoiceVariantsAreDisjoint(
+  subject: string,
+  trail: string,
+  choice: ChoiceBody,
+  namespace: ReadonlyMap<string, Top>,
+): void {
+  const lookup = lookupIn(namespace);
+  const nested = new Map<string, readonly string[]>();
+  for (const variant of choice.variants) {
+    if (variant.kind === 'inline' || variant.param === true) continue;
+    const inner = terminalDefinition(variant.name, lookup);
+    if (inner?.kind !== 'choice' || isChoiceDisjoint(inner.variants, namespace)) continue;
+    nested.set(variant.name, inner.variants.map(typeExprText));
+  }
+  if (nested.size === 0) return;
+  const written = choice.variants.map(typeExprText);
+  const listed = [...new Set(written.flatMap((variant) => nested.get(variant) ?? [variant]))];
+  const names = [...nested.keys()].join(', ');
+  throw new TsonSchemaValidationError(
+    `'${subject}'${trail}: the choice '( ${written.join(' | ')} )' has ` +
+      (nested.size === 1
+        ? `a variant '${names}' that is a choice`
+        : `variants [${names}] that are choices`) +
+      ' not disjoint -- a value of one carries the tag naming it and no other, so it is read there untagged ' +
+      `and none of its variants could be selected (§5.4): list its variants in its place, '( ${listed.join(' | ')} )'`,
   );
 }
 

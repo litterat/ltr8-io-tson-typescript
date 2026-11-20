@@ -69,6 +69,13 @@ export type DefinitionMetaReader = (type: string, value: DataValue) => Top;
 export type DefinitionValueReader = (type: string, value: DataValue) => MetaValue;
 
 /**
+ * The declarations of the document being resolved that may be the member of the family `base` a value's pins
+ * select, `pins` the value's written selector tokens by field (§3.4.1, §5.2; `familyJoiners.ts`): what a read
+ * placing a value by its pins waits on, beside the members the closure already records.
+ */
+export type MemberJoiners = (base: string, pins: ReadonlyMap<string, string>) => readonly string[];
+
+/**
  * Reads an annotation's value through the type its name refers to (Part 2 §6: "an annotation
  * `@T` (or `@T:value`) names a type `T`", with the value "validated against `T`'s contract").
  * `type` is the annotation's own name, already resolved one hop against the governing target's

@@ -10,7 +10,7 @@
 import { TsonInternalError, TsonSchemaValidationError } from '../core/errors.js';
 import type { DataValue, RecordField } from '../ast/value.js';
 import type { RecordBody } from '../schema/meta/bodies.js';
-import type { IncompleteEntry } from '../schema/meta/typedef.js';
+import type { IncompleteEntry, MetaValue } from '../schema/meta/typedef.js';
 
 /** Why `name`, naming `incomplete`, is refused where a type is named. */
 export function noType(name: string, incomplete: IncompleteEntry): string {
@@ -128,6 +128,7 @@ export function refined(
   base: IncompleteEntry,
   payload: DataValue,
   fields: ReadonlyMap<string, DataValue>,
+  read: ReadonlyMap<string, MetaValue>,
   closed: string,
 ): IncompleteEntry {
   const absent = base.absent.filter((field) => !fields.has(field));
@@ -145,6 +146,7 @@ export function refined(
     head: base.head,
     absent,
     written: record(payload, base.head, merged),
+    read: new Map([...base.read, ...read]),
     bases: closedThrough(closed, base),
   };
 }

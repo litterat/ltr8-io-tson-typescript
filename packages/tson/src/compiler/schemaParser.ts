@@ -333,8 +333,7 @@ function* parseTypeDef(
 
   const head = yield* parseTypeRefHead(state);
   if (yield* check(state, 'caret')) {
-    // `refined-def` is gone (§12.1): `^` follows `!name` and takes values, and a record is derived by
-    // composition alone.
+    // `^` follows `!name` and takes values (§5.7, §12.1), and a record is derived by composition alone (§5.8).
     const written = head.kind === 'nameRef' ? head.name : `${head.name}<...>`;
     throw parseError(
       yield* peekToken(state),
@@ -973,7 +972,8 @@ function* parseTypeRefHead(state: CursorState): Task<TypeRef> {
       );
     }
     yield* advance(state);
-    const args = yield* parseTypeArgs(state);
+    // An argument list is a level of nesting (§9.1): `a<a<a<...` recurses through here and nowhere else.
+    const args = yield* nested(state, less, () => parseTypeArgs(state));
     yield* expect(state, 'greater-than', "a type argument list's closing '>'");
     return { kind: 'applicationRef', name, args };
   }
@@ -1087,9 +1087,9 @@ function* parseTypeArg(state: CursorState): Task<TypeExpr> {
     );
   }
   if (t.type === 'unquoted-token') return yield* parseTypeRefHead(state);
-  if (t.type === 'lparen') return yield* parseChoiceRef(state);
-  if (t.type === 'lbracket') return yield* parseBracket(state);
-  if (t.type === 'lbrace') return yield* parseBraceType(state);
+  if (t.type === 'lparen') return yield* nested(state, t, () => parseChoiceRef(state));
+  if (t.type === 'lbracket') return yield* nested(state, t, () => parseBracket(state));
+  if (t.type === 'lbrace') return yield* nested(state, t, () => parseBraceType(state));
   if (t.type === 'void-token') {
     throw parseError(t, "the void sentinel '_' is not valid in a type argument position (§7.6)");
   }
@@ -1141,8 +1141,23 @@ function* parseSizeSpec(state: CursorState, closing: 'rbracket' | 'rbrace'): Tas
   return { kind: 'exact', bound: lower };
 }
 
+/**
+ * `size-bound = unquoted-token`, whose text MUST match `decimal-natural` ([TSON-DATA] §7.6; [TSON-SCHEMA] §5.3,
+ * §12.1): a non-negative decimal count with no leading zero. A based or signed integer, a fraction and a name are
+ * none, a parameter included -- a parameter is a type, never a count (§5.10).
+ */
 function* expectSizeBound(state: CursorState): Task<string> {
-  return (yield* expect(state, 'unquoted-token', 'a size bound')).text;
+  const bound = yield* expect(state, 'unquoted-token', 'a size bound');
+  const number = tryParseNumber(bound.text);
+  if (number?.kind !== 'integer' || number.sign !== undefined) {
+    throw parseError(
+      bound,
+      `'${bound.text}' is no size bound: a size bound is a count written as a decimal natural, '0' or a ` +
+        'decimal integer with no sign and no leading zero (§5.3, [TSON-DATA] §7.6) -- a parameter, a type, is ' +
+        'never a count (§5.10)',
+    );
+  }
+  return bound.text;
 }
 
 // ── Names and Small Helpers ──────────────────────────────────────────────

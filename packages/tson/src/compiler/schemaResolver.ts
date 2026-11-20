@@ -29,6 +29,7 @@ import {
   TsonInternalError,
   TsonNameHygieneRefusedError,
   TsonNotImplementedError,
+  TsonReadError,
   TsonSchemaFetchError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
@@ -63,7 +64,7 @@ import {
   withCompletion,
 } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
-import { DEFAULT_MAX_WAIT_DEPTH, waitDepthLimitRefusal } from '../core/limits.js';
+import { DEFAULT_MAX_WAIT_DEPTH } from '../core/limits.js';
 import {
   createDefinitionResolver,
   type DefinitionResolver,
@@ -75,8 +76,10 @@ import type {
   DefinitionMetaReader,
   DefinitionValueReader,
   EntryFactsTable,
+  MemberJoiners,
   SourceBodyEncoder,
 } from './resolverTypes.js';
+import { createWaitOrder } from './waitOrder.js';
 import * as ParameterTypes from './parameterTypes.js';
 import * as ParametricRegularity from './parametricRegularity.js';
 import * as Ancestry from './ancestry.js';
@@ -172,13 +175,29 @@ export interface ResolverReaders {
   readonly annotation?: AnnotationValueReader;
 }
 
+/** A checkpoint of a resolution (§3.4.1): the imports and the entries ready so far, with their facts and origins. */
+export interface Checkpoint {
+  readonly id: string;
+  readonly imports: readonly string[];
+  readonly entries: ReadonlyMap<string, Top>;
+  readonly facts: ReadonlyMap<string, EntryFacts>;
+  readonly origins: ReadonlyMap<string, string>;
+}
+
 /**
  * Every dependency {@link resolveSchema} needs beyond the document in hand. `readers` is a factory because
  * the readers consult the namespace being built -- a constructor's own declaration supplies its fields'
  * defaults -- so they are made over the lookup this resolution runs.
  */
 export interface SchemaResolverDeps {
-  readonly readers: (lookup: DefinitionGetter) => ResolverReaders;
+  readonly readers: (lookup: DefinitionGetter, joiners?: MemberJoiners) => ResolverReaders;
+  /**
+   * The annotation reader over a checkpoint of the document being resolved: its imports and the entries ready so
+   * far, `id` its own identity. What an annotation's value of an imported type is read through where it reaches
+   * past the declaring import's closure -- a member of an imported family this document declares (§3.4.1, §6).
+   * Omitted, such a value is read through the declaring import's compile alone.
+   */
+  readonly checkpointAnnotations?: (checkpoint: Checkpoint) => AnnotationValueReader;
   readonly encodeSourceBody?: SourceBodyEncoder;
   /** Resolves an `!!import` URI's namespace. Omitted means "no loader": a document with no `!!import` is unaffected; one that writes any reports {@link TsonNotImplementedError}. */
   readonly resolveImport?: ImportResolver;
@@ -322,143 +341,96 @@ export function resolveSchema(
     }
   };
 
-  // Resolve on demand, following dependencies rather than source order (§3.4.1). `resolving` catches a cycle
-  // through a wait; ordinary recursion through field references never enters it. `resolverBox` breaks the
-  // construction cycle between this getter and the `DefinitionResolver` that needs it.
-  const resolving = new Set<string>();
+  // Resolve on demand, following dependencies rather than source order (§3.4.1), through the wait order
+  // (`waitOrder.ts`). `resolverBox` breaks the construction cycle between the order and the `DefinitionResolver`
+  // that looks up through it.
   const resolverBox: { current?: DefinitionResolver } = {};
-  const maxWaitDepth = deps.maxWaitDepth ?? DEFAULT_MAX_WAIT_DEPTH;
-  // For each entry being made ready, the declarations of this document it has waited on so far, and each ready
-  // declaration's wait depth: none for an entry that waits on nothing of this document, one more than the
-  // deepest entry it waits on otherwise. An import is ready before the resolution starts, so a wait ends at one.
-  const waits = new Map<string, Set<string>>();
-  const depths = new Map<string, number>();
+  const order = createWaitOrder(
+    namespace,
+    declarations,
+    deps.maxWaitDepth ?? DEFAULT_MAX_WAIT_DEPTH,
+  );
   // The declarations whose resolution failed and was reported: each has its verdict, and a later check is not a second.
   const failed = new Set<string>();
-
-  /** Records that the entry being made ready waits on `name`, one of this document's declarations. */
-  const waited = (name: string): void => {
-    const waiting = [...resolving].at(-1);
-    if (waiting !== undefined && waiting !== name && declarations.has(name)) {
-      waits.get(waiting)?.add(name);
-    }
-  };
-
-  /** `name`'s wait depth, from the depths of the entries it waited on, refused past the limit. */
-  const measure = (name: string): void => {
-    let depth = 0;
-    for (const on of waits.get(name) ?? []) {
-      depth = Math.max(depth, (depths.get(on) ?? 0) + 1);
-    }
-    if (depth > maxWaitDepth) throw waitDepthLimitRefusal(maxWaitDepth, name);
-    depths.set(name, depth);
-  };
-
-  const namespaceGetter: DefinitionGetter = (name) => {
-    const already = namespace.get(name);
-    if (already !== undefined) {
-      waited(name);
-      return already;
-    }
-    const declaration = declarations.get(name);
-    if (declaration === undefined) {
-      return undefined; // not a local entry -- an as-yet-unverified reference a later phase validates
-    }
-    if (resolving.has(name)) {
-      // An entry reached again while it is being made ready waits on itself: the cycle, from its first wait.
-      const chain = [...resolving];
-      const cycle = [...chain.slice(chain.indexOf(name)), name];
-      throw new TsonSchemaValidationError(
-        `${cycle.map((entry) => `'${entry}'`).join(' waits on ')}: entries waiting on each other are never ` +
-          "ready -- an entry's declaration is read against its head, the types of its annotations, its " +
-          "refinement source and its '&' operands, and every type a part of it is read against, each of " +
-          'which must be ready first ([TSON-SCHEMA] §3.4.1). A name at a type position orders nothing: ' +
-          'type a field by the entry instead of reading a value against it',
-      );
-    }
-    waited(name);
-    if (resolving.size > maxWaitDepth) {
-      // The entries being made ready are a chain of waits, and this one lengthens it past the limit: refused at
-      // its head, which no order can make shallower, before the recursion runs any deeper.
-      throw waitDepthLimitRefusal(maxWaitDepth, [...resolving][0] ?? name);
-    }
-    resolving.add(name);
-    waits.set(name, new Set());
-    try {
+  order.readyWith({
+    resolve(name, declaration): Top {
       const resolver = resolverBox.current;
       if (resolver === undefined) {
         throw new TsonInternalError(
-          'namespaceGetter was invoked before its own DefinitionResolver was assigned',
+          'the wait order was asked for an entry before its own DefinitionResolver was assigned',
         );
       }
-      const position = positionOf(declaration, positions);
       refuseShadowingParameters(name, typeParamsOf(declaration.typeDef));
-      const resolved = resolver.resolve(declaration, position);
+      const resolved = resolver.resolve(declaration, positionOf(declaration, positions));
       refuseHeadAbstraction(name, resolved);
-      measure(name);
-      namespace.set(name, resolved);
       return resolved;
-    } catch (e: unknown) {
-      if (!isReportable(e)) {
-        throw e;
-      }
-      if (receiver === undefined) {
-        throw e;
-      }
+    },
+    failed(name, declaration, error): Top {
+      if (!isReportable(error) || receiver === undefined) throw error;
       const position = positionOf(declaration, positions);
       failed.add(name);
-      receiver.report(schemaProblem(id, name, e, position));
-      const placeholder = unresolvedPlaceholder(typeParamsOf(declaration.typeDef));
+      receiver.report(schemaProblem(id, name, error, position));
       if (position !== undefined) facts.set(name, { position });
-      namespace.set(name, placeholder);
-      depths.set(name, 0);
-      return placeholder;
-    } finally {
-      resolving.delete(name);
-      waits.delete(name);
-    }
-  };
-
-  /**
-   * Whether `head`, past its alias hops, is a parametric record, asked without making it ready: a parametric
-   * record's application orders nothing (§3.4.1). A declaration of this document answers by its parameter list.
-   */
-  const opens = (head: string): boolean => {
-    let current = head;
-    for (let hop = 0; hop < 64; hop++) {
-      const ready = namespace.get(current);
-      if (ready !== undefined) {
-        if (ready.kind !== 'alias') return isParametric(ready);
-        current = ready.target.name;
-        continue;
-      }
-      const declaration = declarations.get(current);
-      if (declaration === undefined) return false;
-      if (typeParamsOf(declaration.typeDef).length > 0) return true;
-      const typeDef = declaration.typeDef;
-      if (typeDef.kind === 'typeExprDef' && typeDef.ref.kind === 'nameRef') {
-        current = typeDef.ref.name;
-        continue;
-      }
-      return false;
-    }
-    return false;
-  };
+      return unresolvedPlaceholder(typeParamsOf(declaration.typeDef));
+    },
+  });
+  const namespaceGetter: DefinitionGetter = order.definition;
+  const opens = order.opens;
 
   // Where a construction head and an annotation type resolve: the whole namespace, each entry made ready on
   // demand, in dependency order. The kernel resolves through the same lookup: every head it applies is one of
   // its own entries, ready before the instance that applies it is read (§3.4).
   const heads: DefinitionGetter = namespaceGetter;
-  const readers = deps.readers(heads);
+  // A value placed by its pins waits on each declaration of this document that may be its member (§3.4.1).
+  const readers = deps.readers(heads, order.joiners);
   // An annotation's value is read through the compiled readers of the import that declared its type, else
   // through the resolution's own; a type this document declares itself has no compiled reader yet, so its
   // value is read with no type to read it against (`looseAnnotation.ts`).
   const annotationValueReader: AnnotationValueReader = (type, value) => {
     const own = annotationReaders.get(type);
-    if (own !== undefined) return own(type, value);
+    if (own !== undefined) return readImported(own, type, value);
     return readers.annotation !== undefined
       ? readers.annotation(type, value)
       : looseAnnotationValue(value);
+  };
+
+  /**
+   * An annotation's value of an imported type, read through the declaring import's compile, or -- where it reaches
+   * past that closure -- at a checkpoint of this document (§6: a value is read in the namespace of the schema
+   * writing it). The value is read first in this document's namespace, which makes ready what it reaches, a member
+   * its pins select among them (§3.4.1); a refusal there is the import's verdict, kept as it gave it.
+   */
+  const readImported = (
+    own: AnnotationValueReader,
+    type: string,
+    value: Parameters<AnnotationValueReader>[1],
+  ): unknown => {
+    try {
+      return own(type, value);
+    } catch (refusal) {
+      if (!(refusal instanceof TsonReadError) || deps.checkpointAnnotations === undefined)
+        throw refusal;
+      if (readers.value === undefined) throw refusal;
+      try {
+        readers.value(type, value);
+      } catch {
+        throw refusal;
+      }
+      const localOrigins = new Map(origins);
+      for (const name of namespace.keys()) if (!localOrigins.has(name)) localOrigins.set(name, id);
+      try {
+        return deps.checkpointAnnotations({
+          id,
+          imports: document.imports,
+          entries: new Map(namespace),
+          facts,
+          origins: localOrigins,
+        })(type, value);
+      } catch (error) {
+        if (error instanceof TsonReadError) throw refusal;
+        throw error;
+      }
+    }
   };
 
   // One materialiser for the whole schema, created before the driving loop because resolution itself asks it for
@@ -472,7 +444,7 @@ export function resolveSchema(
     facts,
     applications,
     heldRecursion,
-    resolving: () => [...resolving].at(-1),
+    resolving: () => order.current(),
     restatements,
     placeholder: unresolvedPlaceholder,
   });
@@ -501,6 +473,12 @@ export function resolveSchema(
     const declaration = requiredGet(declarations, name, 'resolveSchema');
     receiver.report(schemaProblem(id, name, error, positionOf(declaration, positions)));
   };
+
+  // Every entry is ready: the judgements that walk a name to what it names run now (§3.4.1's sixth rule).
+  resolver.judgeDeferred((name, error) => {
+    if (receiver === undefined) throw error;
+    if (!failed.has(name)) report(name, error);
+  });
 
   // §5.10 materialisation, after every declaration has resolved and before anything reads the result: closing an
   // application needs the parametric record's own resolved form, which only exists once the driving loop has run.

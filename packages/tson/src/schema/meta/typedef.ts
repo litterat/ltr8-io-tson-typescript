@@ -75,7 +75,7 @@ import {
  * (§6, §8.1). `value` is `unknown` because its TypeScript shape depends on how the carrying
  * document was read -- bound against a governing type when one resolves, kept as a raw
  * structural fragment otherwise -- and this package, which never binds anything, cannot name
- * either. The resolver-attached `@application` carries a {@link TypeRef}.
+ * either. The resolver-attached `@meta.application` carries a {@link ApplyBody}, a `meta.apply` value (§8.1).
  *
  * A local, data-only stand-in for `src/annotations`' own `Annotation`: the real carrier
  * additionally exposes lookup methods (`get`, `value`, `has`, ...), but `schema/meta`
@@ -102,9 +102,7 @@ export type Annotations = readonly Annotation[];
 export type TokenForm = 'UNQUOTED' | 'SINGLE_LINE_QUOTED' | 'MULTI_LINE_QUOTED';
 
 /**
- * A raw, unresolved scalar literal -- a field's default/fixed value (§5.2), or a
- * type-argument's literal (§5.10: "a bare token... never annotated, never typed, never a
- * container").
+ * A raw, unresolved scalar literal -- a field's default or fixed value (§5.2), held as written.
  *
  * A local stand-in for `ast.TokenValue`, declared here rather than imported because
  * `schema/meta` depends on nothing but itself and `core/`. A caller on the compiler side
@@ -236,14 +234,17 @@ export function dependentOn(expr: TypeExpr): string | undefined {
  *
  * `head` is the constructor it builds past its alias hops; `absent` the required fields it leaves absent, in
  * declaration order, never empty; `written` the binding record as written, the parsed node, opaque here since this
- * model names no compiler type; `bases` the incomplete entries it was built from by `^`, nearest first, each past
- * its alias hops.
+ * model names no compiler type; `read` each written field as its declared type read it where it was written, what
+ * the names it holds are judged by when its schema links (a field typed by a type written in place names no type to
+ * read against, and is read where the entry is completed); `bases` the incomplete entries it was built from by `^`,
+ * nearest first, each past its alias hops.
  */
 export interface IncompleteEntry {
   readonly kind: 'incomplete';
   readonly head: string;
   readonly absent: readonly string[];
   readonly written: object;
+  readonly read: ReadonlyMap<string, MetaValue>;
   readonly bases: readonly string[];
 }
 
@@ -414,17 +415,38 @@ export interface ValueEntry {
  * which is what a qualified name's field step reads and what resolved output writes back.
  */
 export type MetaValue =
-  | { readonly form: 'token'; readonly token: Token; readonly slot?: NameSlot }
+  | {
+      readonly form: 'token';
+      readonly token: Token;
+      readonly slot?: NameSlot;
+      readonly annotations?: Annotations;
+    }
   | { readonly form: 'void' }
-  | { readonly form: 'list'; readonly elements: readonly MetaValue[] }
+  | {
+      readonly form: 'list';
+      readonly elements: readonly MetaValue[];
+      readonly annotations?: Annotations;
+    }
   | {
       readonly form: 'map';
       readonly entries: readonly (readonly [MetaValue, MetaValue])[];
+      readonly annotations?: Annotations;
     }
   | MetaRecordValue
   | MetaHeldValue
-  | { readonly form: 'namespace'; readonly value: Namespace<MetaValue> }
+  | {
+      readonly form: 'namespace';
+      readonly value: Namespace<MetaValue>;
+      readonly annotations?: Annotations;
+    }
   | { readonly form: 'schema_map'; readonly members: Namespace<Top> };
+
+/**
+ * The forms of {@link MetaValue} that carry the annotations written in front of them (§6): each annotation's name
+ * resolved, and its value judged, in the namespace of the schema writing the value, the value kept as written.
+ * Present only where any was written. A name at a reference carries none: its type is its referent's.
+ */
+export type AnnotatedMetaValue = Extract<MetaValue, { readonly annotations?: Annotations }>;
 
 /**
  * A dependent field's value held as written (§5.2): the type its sibling names is one of the namespace the
@@ -470,6 +492,7 @@ export interface MetaRecordValue {
   readonly form: 'record';
   readonly type?: string;
   readonly fields: ReadonlyMap<string, MetaValue>;
+  readonly annotations?: Annotations;
 }
 
 /**

@@ -385,13 +385,22 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
     expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
   });
 
-  it('a subtype’s own name is still not admissible at the choice’s tag -- this fix only reaches the variant’s own name', () => {
-    const result = validate(
-      sealedChoiceCompiled,
-      'c1',
-      disjointBytes('!dog { pet_type: dog  name: Rex  breed: corgi }'),
-    );
-    expect(result.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+  it('§5.4, §7.2: a member’s own name selects the one variant it IS-A, and validates as the member', () => {
+    expect(
+      validate(
+        sealedChoiceCompiled,
+        'c1',
+        disjointBytes('!dog { pet_type: dog  name: Rex  breed: corgi }'),
+      ).diagnostics,
+    ).toEqual([]);
+    // Read as a `dog`: a field `dog` does not declare is refused there.
+    expect(
+      validate(
+        sealedChoiceCompiled,
+        'c1',
+        disjointBytes('!dog { pet_type: dog  name: Rex  indoor: true }'),
+      ).diagnostics.length,
+    ).toBeGreaterThan(0);
   });
 
   it('the same sealed base at an ordinary (non-choice) position still refuses its own name -- this fix is choice-routed only', () => {

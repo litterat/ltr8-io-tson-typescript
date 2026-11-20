@@ -37,7 +37,7 @@ import type {
   Annotation as WrittenAnnotation,
 } from '../ast/value.js';
 import type { DiagnosticCode } from '../core/diagnostic.js';
-import type { DefinitionValueReader } from '../compiler/resolverTypes.js';
+import type { DefinitionValueReader, MemberJoiners } from '../compiler/resolverTypes.js';
 import {
   TsonAtomParseError,
   TsonAtomValidationError,
@@ -109,8 +109,9 @@ export function readValueEntry(
   value: DataValue,
   meta: EntryLookup,
   identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
+  joiners?: MemberJoiners,
 ): MetaValue {
-  const read = new ValueBodyReader(meta, identifierPolicy);
+  const read = new ValueBodyReader(meta, identifierPolicy, joiners);
   // The payload's own tag names its type, which the position states already.
   const untagged: DataValue = value.typeRef === type ? withoutTag(value) : value;
   return read.value(untagged, type, []);
@@ -126,8 +127,9 @@ function withoutTag(value: DataValue): DataValue {
 export function createDefinitionValueReader(
   meta: EntryLookup,
   identifierPolicy?: IdentifierPolicy,
+  joiners?: MemberJoiners,
 ): DefinitionValueReader {
-  return (type, value) => readValueEntry(type, value, meta, identifierPolicy);
+  return (type, value) => readValueEntry(type, value, meta, identifierPolicy, joiners);
 }
 
 /**
@@ -161,6 +163,14 @@ function namespaceMapValue(value: Namespace<MetaValue>): CoreValue {
 
 /** `value` as the data value it was read from (§8.1): a name as the token it was, a record tagged where its tag names a member. */
 export function metaDataValue(value: MetaValue): DataValue {
+  const written = unannotatedDataValue(value);
+  const annotations = 'annotations' in value ? (value.annotations ?? []) : [];
+  return annotations.length === 0
+    ? written
+    : { ...written, annotations: annotations.map(writtenAnnotationOf) };
+}
+
+function unannotatedDataValue(value: MetaValue): DataValue {
   switch (value.form) {
     case 'token':
       return {
@@ -229,6 +239,7 @@ class ValueBodyReader {
   constructor(
     private readonly meta: EntryLookup,
     private readonly policy: IdentifierPolicy,
+    private readonly joiners?: MemberJoiners,
   ) {}
 
   /** The name a type slot holds, or the source spelling of a type written in place there (§4.2). */
@@ -363,8 +374,51 @@ class ValueBodyReader {
     return core.text;
   }
 
-  value(value: DataValue, slot: string | TypeExpr, path: readonly string[]): MetaValue {
-    const { name, body } = this.resolved(slot);
+  value(written: DataValue, slot: string | TypeExpr, path: readonly string[]): MetaValue {
+    const position = this.resolved(slot);
+    // A name carries no annotation (its type is its referent's), and `_` holds nothing to annotate: both refuse
+    // one where they read. Every other value keeps its own, read in this schema's namespace (§6).
+    if (
+      position.body.kind === 'ref' ||
+      written.coreValue.kind === 'void' ||
+      written.annotations.length === 0
+    ) {
+      return this.unannotated(written, position, path);
+    }
+    const annotations = this.annotations(written.annotations, path);
+    const read = this.unannotated({ ...written, annotations: [] }, position, path);
+    return read.form === 'void' || read.form === 'held' || read.form === 'schema_map'
+      ? read
+      : { ...read, annotations };
+  }
+
+  /**
+   * The annotations written in front of a value (§6), each name resolved and each value judged against the type it
+   * names, in the namespace of the schema writing the value -- whichever schema declared the value's type. The
+   * values are kept as written, as a key's are.
+   */
+  private annotations(written: readonly WrittenAnnotation[], path: readonly string[]): Annotations {
+    return written.map((annotation) => {
+      const end = terminal(annotation.name, this.meta);
+      if (this.meta(end) === undefined) {
+        throw new TsonReadError({
+          code: 'UNKNOWN_TYPE_REF',
+          message: `${at(path)}the annotation '@${annotation.name}' names no type of this schema's namespace (§6)`,
+        });
+      }
+      if (annotation.value !== undefined) {
+        this.value(annotation.value, annotation.name, [...path, `@${annotation.name}`]);
+      }
+      return annotationOf(annotation);
+    });
+  }
+
+  private unannotated(
+    written: DataValue,
+    position: { readonly name: string; readonly body: Top },
+    path: readonly string[],
+  ): MetaValue {
+    const { name, body, value } = this.subsumed(written, position);
     const type = name;
     if (body.kind === 'incomplete' || isParametric(body)) {
       throw new TsonReadError({
@@ -438,6 +492,30 @@ class ValueBodyReader {
         return { form: 'token', token };
       }
     }
+  }
+
+  /**
+   * The type `value` is read under: the position's, or the one its tag names where that type IS-A the position's
+   * and is built as it is (§7.2) -- a refinement of a namespace, array or map type, or of an atom, stands where its
+   * source is wanted and is read as itself. A record and a choice judge their own tags; any other tag is left on
+   * the value, for the read to refuse.
+   */
+  private subsumed(
+    value: DataValue,
+    position: { readonly name: string; readonly body: Top },
+  ): { readonly name: string; readonly body: Top; readonly value: DataValue } {
+    const tag = value.typeRef;
+    const kind = position.body.kind;
+    if (tag === undefined || kind === 'record' || kind === 'choice' || kind === 'ref') {
+      return { ...position, value };
+    }
+    const name = terminal(tag, this.meta);
+    const body = this.meta(name);
+    const isA =
+      body !== undefined &&
+      (name === position.name ||
+        (body.kind === kind && supertypesOf(body).includes(position.name)));
+    return isA ? { name, body, value: withoutTag(value) } : { ...position, value };
   }
 
   /** Whether `of` names a constructor, so a reference over it holds a type's name rather than a value's (§4.2). */
@@ -548,6 +626,10 @@ class ValueBodyReader {
       }
       name = tagged.name;
       body = tagged.body;
+    } else if (body.extension === 'ABSTRACT' && body.discriminators !== undefined) {
+      const member = this.placedByPins(value, name, body, path);
+      name = member.name;
+      body = member.body;
     }
     if (body.extension === 'ABSTRACT') {
       const members = subtypesOf(body).filter((subtype) => {
@@ -650,6 +732,68 @@ class ValueBodyReader {
       }
     }
     return { form: 'record', ...(name === declared ? {} : { type: name }), fields };
+  }
+
+  /**
+   * The member of the family `base` an untagged value is placed at by its pins (§5.2): the one record IS-A `base`,
+   * with instances of its own, whose pin on every selector is the value's written one. Its candidates are the
+   * members the closure records and the declarations of the schema being resolved that may join the family, each
+   * made ready as the read reaches it -- a value placed by its pins waits on each declaration that may be its member
+   * (§3.4.1).
+   */
+  private placedByPins(
+    value: DataValue,
+    base: string,
+    body: RecordBody,
+    path: readonly string[],
+  ): { readonly name: string; readonly body: RecordBody } {
+    const core = value.coreValue;
+    const selectors = body.discriminators ?? [];
+    const pins = new Map<string, string>();
+    for (const field of core.kind === 'record' ? core.fields : []) {
+      const token = field.value.coreValue;
+      if (selectors.includes(field.name) && token.kind === 'token')
+        pins.set(field.name, token.text);
+    }
+    const missing = selectors.find((selector) => !pins.has(selector));
+    if (missing !== undefined) {
+      throw new TsonReadError({
+        code: 'FIELD_REQUIRED',
+        message:
+          `${at(path)}'${base}' places a value at its member by the pin on '${missing}', and the value writes ` +
+          'no token there (§5.2)',
+      });
+    }
+    const candidates = new Set([...subtypesOf(body), ...(this.joiners?.(base, pins) ?? [])]);
+    const members: string[] = [];
+    const placed: { name: string; body: RecordBody }[] = [];
+    for (const candidate of candidates) {
+      const name = terminal(candidate, this.meta);
+      const member = this.meta(name);
+      if (member?.kind !== 'record' || member.extension === 'ABSTRACT') continue;
+      if (name !== base && !supertypesOf(member).includes(base)) continue;
+      members.push(name);
+      const pinned = selectors.every((selector) => {
+        const field = member.fields.entries.get(selector);
+        return field?.role === 'FIXED' && field.value?.text === pins.get(selector);
+      });
+      if (pinned && !placed.some((found) => found.name === name))
+        placed.push({ name, body: member });
+    }
+    const [only] = placed;
+    if (placed.length === 1 && only !== undefined) return only;
+    const stated = selectors
+      .map((selector) => `${selector}: ${pins.get(selector) ?? ''}`)
+      .join(', ');
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message:
+        placed.length === 0
+          ? `${at(path)}no member of '${base}' pins ${stated}, the value this record states -- ` +
+            `expected one of (${[...new Set(members)].join(', ')}) (§5.2)`
+          : `${at(path)}${placed.map((found) => `'${found.name}'`).join(' and ')} each pin ${stated}, so ` +
+            `the value places at no one member of '${base}' (§5.2)`,
+    });
   }
 
   /**

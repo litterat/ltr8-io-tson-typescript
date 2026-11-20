@@ -8,8 +8,8 @@
  * **Where it resolves.** A `name_type` an author wrote resolves in the schema's own namespace
  * first, then the governing meta's, as an enum's does (§7.4): `field_name => !identifier_type {
  * start_add: "@" }` declared locally is what `name_type: field_name` names. The absent default is
- * the kernel's `field_name`, resolved in the governing meta first, so a schema's own `field_name`
- * does not retype every record that states nothing. Two name types are one by the entry they
+ * `meta.identifier` (§5.2), resolved in the governing meta first, so a schema's own entry of that
+ * spelling does not retype every record that states nothing. Two name types are one by the entry they
  * resolve to (§8.3), never by spelling.
  *
  * **What may stand there** is a member of `identifier_kind` (§4.2): an entry built with
@@ -24,10 +24,7 @@ import { metaName } from '../schema/meta/kernel.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
 import { identifierProfileOf, profileAdmits } from '../unicode/identifier-profile.js';
 
-/** The kernel's `field_name` (§5.2), the name type a record that states none has. */
-export const FIELD_NAME = metaName('field_name');
-
-/** The kernel's `identifier` (§7.7), the entry `field_name` resolves to. */
+/** The kernel's `identifier` (§7.7): an enum's default name type, and the name type a record stating none has (§5.2). */
 const IDENTIFIER = metaName('identifier');
 
 /** A resolved name type: the terminal entry's name, its value, and the namespace its own names resolve in. */
@@ -50,7 +47,7 @@ export function recordNameType(
   local: EntryLookup,
   structure: EntryLookup | undefined,
 ): ResolvedNameType | undefined {
-  const written = body.nameType ?? FIELD_NAME;
+  const written = body.nameType ?? IDENTIFIER;
   const order: readonly (EntryLookup | undefined)[] =
     body.nameType === undefined ? [structure, local] : [local, structure];
   for (const [index, namespace] of order.entries()) {
@@ -72,8 +69,7 @@ export function isIdentifierFamily(
 }
 
 /**
- * Whether `type` is the kernel's `identifier` -- an enum's default, and through `field_name` a
- * record's -- whose values a refusal calls identifiers, where it names any other type, the author's
+ * Whether `type` is the kernel's `identifier` -- an enum's default and a record's (§5.2) -- whose values a refusal calls identifiers, where it names any other type, the author's
  * own.
  */
 export function isKernelIdentifier(

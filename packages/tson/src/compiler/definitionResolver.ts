@@ -23,7 +23,7 @@
  *
  * **A type slot holds a name or a type written in place (§4.2).** A field's type is a reference, or the
  * construction a sugar form or an applied constructor denotes, read through its constructor and held at the
- * field as a {@link TypeInline}; nothing is lifted, minted or merged.
+ * field as a {@link TypeInline}, where it is used.
  *
  * **Field groups (§5.11) flatten**: each member becomes an ordinary `RecordField` with `optional: true`; the
  * group itself is recorded separately as a `FieldGroup`.
@@ -71,6 +71,7 @@ import type {
   Completion,
   EntryFacts,
   IncompleteEntry,
+  MetaValue,
   Param,
   Top,
   Type,
@@ -144,6 +145,7 @@ import {
 } from './constructionRewrite.js';
 import { constructs } from './constructionSugar.js';
 import * as IncompleteEntries from './incompleteEntries.js';
+import * as CollectionFacets from './collectionFacets.js';
 import * as Ancestry from './ancestry.js';
 import * as Substitution from './substitution.js';
 import * as TypeSlots from '../schema/meta/typeSlots.js';
@@ -207,6 +209,14 @@ interface ResolverContext extends DefinitionResolverDeps {
   readonly rewrite: ConstructionRewrite;
   /** What each declared completion closed, nearest first (§8.1). */
   readonly completions: Map<string, Completion>;
+  /** The judgements left for after every entry is ready ({@link DefinitionResolver.judgeDeferred}). */
+  readonly deferred: Deferred[];
+}
+
+/** One judgement left for after every entry is ready, against the declaration that needs it. */
+interface Deferred {
+  readonly declaration: string;
+  readonly check: () => void;
 }
 
 export interface DefinitionResolver {
@@ -237,6 +247,14 @@ export interface DefinitionResolver {
    * names a type; any other form is refused, to be declared under a name.
    */
   parameterType(parameter: string, written: AstTypeExpr): TypeRef;
+
+  /**
+   * Runs the judgements resolution left for after every entry is ready (§3.4.1's sixth rule), in the order they
+   * were left, handing each failure to `failure` with the declaration it is against. A judgement that walks a name
+   * to the entry it names belongs here: a name at a type position orders nothing, so walking it while entries are
+   * still being made ready would make one wait on what it only names.
+   */
+  judgeDeferred(failure: (declaration: string, error: TsonSchemaValidationError) => void): void;
 }
 
 export function createDefinitionResolver(given: DefinitionResolverDeps): DefinitionResolver {
@@ -249,6 +267,7 @@ export function createDefinitionResolver(given: DefinitionResolverDeps): Definit
     facts,
     rewrite: createConstructionRewrite(given.namespaceDefinitions, opens),
     completions: new Map(),
+    deferred: [],
   };
   return {
     resolve(declaration: Declaration, position?: SourcePosition): Top {
@@ -278,6 +297,17 @@ export function createDefinitionResolver(given: DefinitionResolverDeps): Definit
     },
     parameterType(parameter: string, written: AstTypeExpr): TypeRef {
       return boundOf(parameter, written);
+    },
+    judgeDeferred(failure: (declaration: string, error: TsonSchemaValidationError) => void): void {
+      const judging = deps.deferred.splice(0);
+      for (const judgement of judging) {
+        try {
+          judgement.check();
+        } catch (e) {
+          if (!(e instanceof TsonSchemaValidationError)) throw e;
+          failure(judgement.declaration, e);
+        }
+      }
     },
   };
 }
@@ -1158,7 +1188,7 @@ function refuseWrittenParameters(name: string, head: string, written: DataValue)
 /**
  * `name => !T { ... }` where `T` is no constructor: a value entry, an instance of the ordinary type `T`
  * (§4.1), its payload read against `T` as a data value is and held as the value ({@link ValueEntry}). It
- * is no type, so nothing is minted or lifted for it, and its tag is `T`.
+ * is no type, and its tag is `T`.
  *
  * Refused: a head that is itself a value, since a value has no instances; and a braced payload at an atom
  * type, which reads as no value of it and is almost always an atom refinement missing its `^`.
@@ -1301,9 +1331,7 @@ function resolveAtomRefinement(
     );
   }
   if (isType(source) && collectionConstructor(deps, sourceName, source) !== undefined) {
-    throw new TsonNotImplementedError(
-      `'${name}': refining '!${written}', a type a collection constructor built, is not implemented (§5.7)`,
-    );
+    return refineCollection(deps, name, sourceName, source, refinement.bindings);
   }
   if (!isAtom(source)) {
     throw new TsonSchemaValidationError(
@@ -1320,13 +1348,19 @@ function resolveAtomRefinement(
   }
   refuseWrittenChain(name, refinement.bindings);
   const constructorName = headOf(deps, sourceName, source);
-  const merged = mergeWithSource(
-    deps,
-    name,
-    withoutChain(source),
-    refinement.bindings,
-    constructorName,
-  );
+  // An enum's `name_type` is fixed where it is constructed, and restated by the entry it reaches (§5.7, §8.3).
+  const bindings =
+    source.kind === 'enum'
+      ? restatedByEntry(
+          deps,
+          name,
+          sourceName,
+          new Map([[NAME_TYPE_FIELD, source.nameType]]),
+          refinement.bindings,
+          enumNameTypeReplaced,
+        )
+      : refinement.bindings;
+  const merged = mergeWithSource(deps, name, withoutChain(source), bindings, constructorName);
   const body = bindAtomInstance(deps, name, merged);
   checkNarrows(name, written, source, body);
   return {
@@ -1354,6 +1388,155 @@ function collectionConstructor(
     COLLECTION_CONSTRUCTORS.has(ancestor),
   );
   return collection ? constructorName : undefined;
+}
+
+/**
+ * `!T ^ { … }`, `T` a type a collection constructor built ({@link collectionConstructor}): a refinement by the same
+ * constructor, IS-A `T` and its chain, each written facet judged by its kind over effective values (§5.7,
+ * `collectionFacets.ts`). A pinned field is a facet fixed at construction, which a refinement restates as a value
+ * or leaves alone: the constructor's reader compares a written value against the pin.
+ */
+function refineCollection(
+  deps: ResolverContext,
+  name: string,
+  sourceName: string,
+  source: Type,
+  bindings: DataValue,
+): Resolved {
+  const constructorName = collectionConstructor(deps, sourceName, source);
+  const constructor =
+    constructorName === undefined ? undefined : deps.metaDefinitions(constructorName);
+  if (
+    constructorName === undefined ||
+    !isRecordBody(constructor) ||
+    !CollectionFacets.isCollection(source)
+  ) {
+    // A schema's own composition of a collection constructor builds no type here, so nothing it built reaches this.
+    throw new TsonNotImplementedError(
+      `'${name}': refining '!${sourceName}', built by '${constructorName ?? headOf(deps, sourceName, source)}', ` +
+        'is not implemented (§5.7)',
+    );
+  }
+  refuseWrittenChain(name, bindings);
+  let payload = deps.rewrite.inPlace(bindings, DESUGARED.has(bindings));
+  IncompleteEntries.requireDeclared(
+    name,
+    constructorName,
+    constructor,
+    bracedPayload(name, sourceName, payload),
+  );
+  payload = restatedByEntry(
+    deps,
+    name,
+    sourceName,
+    namedSlots(source),
+    payload,
+    CollectionFacets.replaced,
+  );
+  const body = bindAtomInstance(
+    deps,
+    name,
+    mergeWithSource(deps, name, withoutChain(source), payload, constructorName),
+  );
+  const violations = CollectionFacets.isCollection(body)
+    ? CollectionFacets.narrowing(source, body)
+    : [`a '${body.kind}' replaces the source's own ${source.kind} type`];
+  if (violations.length > 0) {
+    throw new TsonSchemaValidationError(
+      `'${name}': not a valid refinement of '!${sourceName}' (§5.7): ${violations.join('; ')}`,
+    );
+  }
+  return {
+    value: withChain(body, typeChain(ofParent(deps, sourceName))),
+    head: headOf(deps, sourceName, source),
+  };
+}
+
+/**
+ * The type slots of a type a collection constructor built that hold a name, by field name, to that name. A slot
+ * holding a type written in place is no name's, so no name restates it.
+ */
+function namedSlots(source: CollectionFacets.CollectionBody): Map<string, string> {
+  const slots: [string, TypeExpr][] =
+    source.kind === 'array'
+      ? [['element_type', source.elementType]]
+      : [
+          ['key_type', source.keyType],
+          ['value_type', source.valueType],
+        ];
+  const named = new Map<string, string>();
+  for (const [slot, held] of slots) {
+    if (held.kind !== 'inline') named.set(slot, held.name);
+  }
+  return named;
+}
+
+/** The kernel's `meta.enum_type` field naming the identifier family an enum's members are names of. */
+const NAME_TYPE_FIELD = 'name_type';
+
+/** A family's violation for a fixed facet written as `written` where its source holds `source`. */
+type Replaced = (facet: string, source: string, written: string) => string;
+
+/** An enum's: its `name_type` is fixed where it is constructed (§5.7, §7.4). */
+const enumNameTypeReplaced: Replaced = (_facet, source, written) =>
+  `name_type '${written}' replaces the source's own '${source}'; an enum's name_type is fixed where it is ` +
+  'constructed, and a refinement narrows its members';
+
+/**
+ * `payload` without each field of `held` it restates by another name, which is judged once every entry is ready
+ * ({@link DefinitionResolver.judgeDeferred}) to reach the entry the source's name reaches, and refused with
+ * `replaced`'s violation where it does not. A fixed slot is one by the entry its name resolves to and not by
+ * spelling, and the resolved value states it as the source wrote it (§5.2, §5.7, §8.3): leaving the field out lets
+ * the merge carry the source's spelling. A name at such a slot orders nothing, so waiting on it here would make the
+ * refinement wait on what it only names.
+ */
+function restatedByEntry(
+  deps: ResolverContext,
+  name: string,
+  sourceName: string,
+  held: ReadonlyMap<string, string>,
+  payload: DataValue,
+  replaced: Replaced,
+): DataValue {
+  const record = payload.coreValue;
+  if (record.kind !== 'record') return payload;
+  const kept = record.fields.filter((field) => {
+    const source = held.get(field.name);
+    const token = field.value.coreValue;
+    if (
+      source === undefined ||
+      field.value.typeRef !== undefined ||
+      token.kind !== 'token' ||
+      token.text === source
+    ) {
+      return true;
+    }
+    const written = token.text;
+    deps.deferred.push({
+      declaration: name,
+      check: () => {
+        const reached = entryReached(deps, written);
+        if (reached === undefined || reached !== entryReached(deps, source)) {
+          throw new TsonSchemaValidationError(
+            `'${name}': not a valid refinement of '!${sourceName}' (§5.7): ${replaced(field.name, source, written)}`,
+          );
+        }
+      },
+    });
+    return false;
+  });
+  if (kept.length === record.fields.length) return payload;
+  return {
+    ...payload,
+    coreValue: kept.length === 0 ? { kind: 'empty-brace' } : { kind: 'record', fields: kept },
+  };
+}
+
+/** The entry at the end of `written`'s alias chain, or `undefined` where no namespace holds the name. */
+function entryReached(deps: ResolverContext, written: string): string | undefined {
+  const lookup =
+    deps.metaDefinitions(written) !== undefined ? deps.metaDefinitions : deps.namespaceDefinitions;
+  return lookup(written) === undefined ? undefined : terminal(written, lookup);
 }
 
 /**
@@ -1388,10 +1571,51 @@ function constructOpen(
       head: constructorName,
       absent,
       written: IncompleteEntries.record(payload, constructorName, fields),
+      read: readEachField(deps, name, constructorName, constructor, fields),
       bases: [],
     },
     head: constructorName,
   };
+}
+
+/**
+ * Each field of `written` read against the type `constructor` declares it with, where it is written, and what each
+ * read (§5.5): a field of an incomplete entry is a value of its declared type completed or not, and the names it
+ * holds are judged when the schema links. A field typed by a type written in place names no type to read against,
+ * and is read where the entry is completed; a resolution reading no value entries (the kernel's) reads none.
+ */
+function readEachField(
+  deps: ResolverContext,
+  name: string,
+  constructorName: string,
+  constructor: RecordBody,
+  written: ReadonlyMap<string, DataValue>,
+): Map<string, MetaValue> {
+  const read = new Map<string, MetaValue>();
+  const reader = deps.definitionValueReader;
+  if (reader === undefined) return read;
+  for (const [field, value] of written) {
+    const type = constructor.fields.entries.get(field)?.type;
+    if (type === undefined || type.kind === 'inline') continue;
+    try {
+      read.set(field, reader(type.name, value));
+    } catch (e) {
+      if (e instanceof TsonReadError) {
+        throw new TsonSchemaValidationError(
+          `'${name}': '${field}' is no value of '${type.name}', its type in '${constructorName}' -- ${e.message}`,
+          { cause: e },
+        );
+      }
+      if (e instanceof TsonNotImplementedError) {
+        throw new TsonNotImplementedError(
+          `'${name}': '${field}' cannot yet be read against '${type.name}' -- ${e.message}`,
+          { cause: e },
+        );
+      }
+      throw e;
+    }
+  }
+  return read;
 }
 
 /**
@@ -1413,8 +1637,9 @@ function refineIncomplete(
   const fields = bracedPayload(name, target, payload);
   IncompleteEntries.requireWritable(name, base.head, constructor, fields);
   IncompleteEntries.requireWrittenOnce(name, target, base, fields);
+  const read = readEachField(deps, name, base.head, constructor, fields);
   return {
-    value: IncompleteEntries.refined(name, target, base, payload, fields, baseName),
+    value: IncompleteEntries.refined(name, target, base, payload, fields, read, baseName),
     head: base.head,
   };
 }
@@ -2206,8 +2431,8 @@ function requireOneNameType(
 
 /**
  * Whether two records' name types are one type: the same entry at the end of each one's reference
- * chain (§8.3), not the same spelling, so `jn => json_name` is `json_name` and the kernel's
- * `field_name` is `identifier`. A stated one resolves in the schema's own namespace first, the
+ * chain (§8.3), not the same spelling, so `jn => json_name` is `json_name`, and a record stating
+ * none has `meta.identifier`'s (§5.2). A stated one resolves in the schema's own namespace first, the
  * absent default in the structure; two that resolve to nothing are compared as written, the linker
  * refusing each on its own.
  */
@@ -2222,9 +2447,8 @@ function sameNameType(
 }
 
 /**
- * `nameType`'s terminal entry (§8.3), or `undefined` where it names none. The absent default is the
- * kernel's `field_name`, which is `meta.identifier` through its alias (§5.2); it is stated here, not
- * looked up, since every record that states no name type asks, and the kernel's own records ask while
+ * `nameType`'s terminal entry (§8.3), or `undefined` where it names none. The absent default is
+ * `meta.identifier` (§5.2); it is stated here, not looked up, since every record that states no name type asks, and the kernel's own records ask while
  * its entries are still being made.
  */
 function nameTypeIdentity(deps: ResolverContext, nameType: string | undefined): string | undefined {

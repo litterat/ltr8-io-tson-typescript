@@ -376,6 +376,37 @@ incomplete entry's per-field read (5), an enum `name_type` restated through an a
 (`FamilyJoiners`, not ported: `a-member-declared-after-the-value-that-selects-it-by-pin-is-waited-on`),
 item 111 (2); **WP2D 63** — externs (61) and the two import cycles.
 
+### WP2B review: repairs, after WP2C
+
+An adversarial review of `439026f..e0ed1b5`, with probes. Repaired in one pass after WP2C lands:
+
+1. **Closing in place is exponential** (`parametricMaterialiser.ts` `instantiate`): `r_i => <T> {
+a: r_{i+1}<T>  b: r_{i+1}<T> }` then `x => r0<text>` doubles per level (n=18 2.3 s; n≈30 never
+   ends). Memoise a closed in-place record by canonical application outside an active recursion —
+   a pure function of its key, so no verdict changes. The reference has the same code: report
+   upstream (item 29 bounds a path, not the work).
+2. **In-place closing has no nesting guard**: a 3000-deep chain of applications throws a JS
+   `RangeError` out of `validateSchema`. Bound it and report a positioned schema diagnostic.
+3. **Applied-parent edges ignore alias arguments and imported alias heads**
+   (`schemaResolver.ts` `completed()`, `appliedParentEdges`): `pet_of<dog_alias>` loses the edge
+   `pet_of<dog_type>` gets, against §8.2's "every argument's alias chain followed". Dereference both
+   sides. Same in the reference: report upstream.
+4. **Regularity and passed-on bound checks read the head as written** (`parametricRegularity.ts`,
+   `parameterTypes.ts`): `sw => swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct
+   spelling is refused; same for bounds through `bx => boxed`. Follow the head to its parametric
+   record (§8.3, §5.10: an alias of one is applied as it is), as `heldRecursion.ts` already does.
+   Same in the reference: report upstream.
+5. **`checkRange` prints `[object Object]`** for a temporal bound (`atomCoherence.ts`): use
+   `renderBoundValue`.
+6. **Stale TSDoc**: `value/equality.ts` still says `compareTime` does not wrap; `link/restatedFields.ts`
+   has two consecutive doc blocks and `checkRestatedFieldTypes` none; `atom/temporal/date.ts` "a a".
+7. **Deferred argument checks dedupe by name** (`checkArguments` keys drop `param`): key on whether a
+   name is a parameter, as the reference's record equality does.
+
+Upstream only: a refinement switching a bound's strictness (`!p ^ { exclusive_min: 5 }` over `min:
+1`) merges to both options and is refused (§5.7's field-wise merge with §5.11); the reference
+refuses it too, and no spelling moves an inclusive floor to an exclusive one.
+
 ### WP2C: open construction, derivation, dependent fields, choices (#4, #6, #7, #8, #10–#12, #15–#17, #19)
 
 Change log §4.5 "Open construction and record derivation", "Dependent fields", "Choices and tags",

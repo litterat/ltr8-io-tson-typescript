@@ -4,6 +4,7 @@ import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonNameHygieneRefusedError,
+  TsonSchemaValidationError,
 } from '../src/core/errors.js';
 import { createReferenceParser, createQualifiedNameParser } from '../src/atom/reference.js';
 import { compile, validate } from '../src/compiler/compile.js';
@@ -234,6 +235,18 @@ describe('values by name ([TSON-SCHEMA] §5.12)', () => {
           other  => !interface { m => { response: orders } }`),
       );
     expect(response).toThrow(/a value and not a type/);
+  });
+
+  it('§4.1, §8.3: an alias of a namespace entry is refused where it is declared, as its use would be', () => {
+    const aliased = (uses: string) => () =>
+      withLayer().resolveSchema(
+        governed(`order => { sku: text }
+          orders => !interface { m => { response: order } }
+          o => orders
+          ${uses}`),
+      );
+    expect(aliased('')).toThrow(/'o' names 'orders', which is a value and not a type/);
+    expect(aliased('holder => { f: o }')).toThrow(TsonSchemaValidationError);
   });
 });
 

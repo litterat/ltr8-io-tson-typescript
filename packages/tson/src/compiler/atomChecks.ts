@@ -62,6 +62,7 @@ import type {
   IriType,
   Normalization,
   UriType,
+  UuidType,
 } from '../schema/meta/atoms-text.js';
 import { parseNetworkBlock, whyNoValue } from '../atom/network/cidrParsing.js';
 import { parseIpv4Octets } from '../atom/network/ipv4.js';
@@ -1310,6 +1311,25 @@ function enumCoherence(t: EnumBody): string[] {
 }
 
 /**
+ * `version` names RFC 9562's version field, a UUID layout rather than a bound (§5.5, §5.7): the versions are
+ * disjoint sets, not progressively smaller ones, so a refinement changing one claims an IS-A that does not hold --
+ * no v7 UUID is a v4 UUID. Setting it where the source left it unset narrows, every versioned UUID being a UUID, so
+ * it is settable once.
+ */
+function uuidNarrows(source: UuidType, refined: UuidType): string[] {
+  const out: string[] = [];
+  checkSettableOnce(
+    out,
+    'version',
+    source.version,
+    refined.version,
+    (a, b) => a === b,
+    'the versions are disjoint layouts, not narrower sets',
+  );
+  return out;
+}
+
+/**
  * An enum's value set is written out in full, so narrowing is plain subset containment (`members`
  * may drop members but never introduce one the source does not admit). `name_type` is fixed where
  * the enum is constructed (§5.7): a refinement narrows the members and never the name type, so
@@ -1486,11 +1506,13 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'media_type_type'
         ? mediaTypeNarrows(source, refined)
         : mismatch('a media_type', refined);
-    // No orderable facet and no selector at all: `value_type` and `void_type` (empty
-    // vocabularies), `uuid_type`, `mac_type` and `host_type` (spec-pinned, no facet of their own
-    // to compare).
-    case 'void_type':
     case 'uuid_type':
+      return refined.kind === 'uuid_type'
+        ? uuidNarrows(source, refined)
+        : mismatch('a uuid', refined);
+    // No orderable facet and no selector at all: `void_type` (an empty vocabulary), `mac_type` and
+    // `host_type` (spec-pinned, no facet of their own to compare).
+    case 'void_type':
     case 'mac_type':
     case 'host_type':
       return [];
@@ -1538,7 +1560,7 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
  * Whether a resolved body is an `Atom` — the one question `definitionResolver.ts`'s own
  * `checkNarrows`/`checkCoherent` need before consulting {@link checkAtomNarrows}/
  * {@link checkAtomCoherence}, since every other `Top` shape (a container, a sum, a reference, the
- * open `Data` extension point, a held template body) has no constraint facets to narrow or
+ * open `Data` extension point) has no constraint facets to narrow or
  * contradict.
  */
 export function isAtom(body: Top): body is Atom {

@@ -254,9 +254,8 @@ function typed<T extends TypeBase>(inner: RecordBinding<T>): RecordBinding<T> {
 const textBinding: Binding<string> = atom<string>('text');
 
 /**
- * A bare, unquoted lexeme used as a name -- the kernel's `field_name`/`type_name`/`param_name`,
- * every one of which is a `REFERENCE`-kind alias to `identifier` in the resolved output
- * (`SchemaMetaNameBinder.ALIASES` maps all three to `"identifier"` for exactly this reason). The
+ * A bare, unquoted lexeme used as a name -- the kernel's `type_name`/`param_name`, each an alias
+ * of `identifier` in the resolved output, and a field's name. The
  * host value is the token's own text; `form` is not carried here (§7.4/§7.7's identifier grammar
  * -- `XID_Start` initial, `XID_Continue ∪ { - }` thereafter, in NFC -- is a strict subset of the
  * unquoted-token profile, so a well-formed identifier is never written quoted, and this
@@ -264,7 +263,7 @@ const textBinding: Binding<string> = atom<string>('text');
  * for the position that keeps `form` too.
  *
  * **Does not itself enforce the identifier grammar.** This binding reads/writes the raw token
- * text for the wire shape `type_name`/`field_name`/`param_name`/`enum_set` share; validating that
+ * text for the wire shape `type_name`/`param_name`/`enum_set` and a field's name share; validating that
  * text against §7.7's `XID_Start`/`XID_Continue` profile is the job of a dedicated `identifier`
  * atom parser (mirroring the Java reference's `IdentifierParser`, `atom/contract.ts`'s `AtomType`
  * shape) once one exists in this port -- see this module's own report for exactly where that
@@ -375,7 +374,7 @@ function decimalFromWire(w: unknown): Decimal {
 }
 
 /**
- * `discriminators` is `[field_name; 1..]` (§5.2, §8.1): a family is member-dispatched exactly where
+ * `discriminators` is `[text; 1..]` (§5.2, §8.1): a family is member-dispatched exactly where
  * the list is present, so an empty list would be a second spelling of tag dispatch. It is refused
  * where it is read, so a present list is never empty for any consumer.
  */
@@ -901,7 +900,7 @@ const fieldMapBinding: MapBinding<Namespace<RecordField>> = map<
 });
 
 /**
- * `field_group.members` is `[[field_name; 1..]; 1..]` and `optional_members` is `[field_name; 1..]`
+ * `field_group.members` is `[[text; 1..]; 1..]` and `optional_members` is `[text; 1..]`
  * (§5.11, §8.1): a group has an option, an option has a member, and an absent `optional_members`
  * is the one spelling of "no member marked". An empty list at any of the three is refused where it
  * is read, so a group that is present is never degenerate for any consumer.
@@ -1108,6 +1107,21 @@ const mapBodyBinding: RecordBinding<MapBody> = typed(
 );
 
 /**
+ * `meta.namespace`'s `voidable`, pinned false (`voidable?: = false`): a body may restate the pin, which the
+ * schema's reader holds it to, and the host keeps nothing for it, so it is never written (§5.5, §8.1).
+ */
+const namespaceVoidableSlot: FieldSlot<boolean> = {
+  index: 2,
+  wireName: 'voidable',
+  key: 'voidable',
+  required: false,
+  unbound: false,
+  binding: booleanBinding,
+  isPresent: () => false,
+  get: () => false,
+};
+
+/**
  * The kernel's `meta.namespace` (§4.1, §8.1): a refinement of `meta.map` whose `key_type` is an
  * identifier family, `voidable` is pinned false and `access_pattern`/`size_type` are fixed, so none of
  * those three is written. An instance, `schema => !meta.namespace { key_type: meta.type_name  value_type:
@@ -1118,14 +1132,16 @@ const namespaceBodyBinding: RecordBinding<NamespaceBody> = typed(
     fields: [
       field<NamespaceBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
       field<NamespaceBody, 'valueType'>(1, 'value_type', 'valueType', typeExprBinding),
-      field<NamespaceBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding),
-      optional<NamespaceBody, 'minItems'>(3, 'min_items', 'minItems', countBinding),
-      optional<NamespaceBody, 'maxItems'>(4, 'max_items', 'maxItems', countBinding),
+      namespaceVoidableSlot,
+      field<NamespaceBody, 'ordered'>(3, 'ordered', 'ordered', booleanBinding),
+      optional<NamespaceBody, 'minItems'>(4, 'min_items', 'minItems', countBinding),
+      optional<NamespaceBody, 'maxItems'>(5, 'max_items', 'maxItems', countBinding),
     ],
     construct: (slots) => {
-      const [keyType, valueType, ordered, minItems, maxItems] = slots as [
+      const [keyType, valueType, , ordered, minItems, maxItems] = slots as [
         TypeRef,
         TypeExpr,
+        boolean | undefined,
         boolean,
         bigint | undefined,
         bigint | undefined,
@@ -2342,12 +2358,11 @@ export {
  * the wire names {@link topBinding} matches on, plus the kernel's supporting records. A later work
  * package building the real `BindingRegistry`/reader wiring (definition resolution, linking) is
  * free to `chain()` this behind or in front of its own tables; this is deliberately not the full
- * `SchemaMetaNameBinder`-equivalent alias set (`field_name`/`type_name`/`param_name` -> `identifier`,
- * and the like), since those three are entry *names*, not value shapes -- {@link
- * topBinding} dispatches on the applied-constructor tag a body's own wire form carries (`record`,
- * `array`, `reference`, ...), and a `field_name`-named entry's own body reads through the
- * `reference` tag like any other alias's, whether or not a use site elsewhere names `field_name`
- * itself (§8.3: a use site keeps the author's own name and is never rewritten past it).
+ * `SchemaMetaNameBinder`-equivalent alias set (`type_name`/`param_name` -> `identifier`, and the
+ * like), since those are entry *names*, not value shapes -- {@link topBinding} dispatches on the
+ * applied-constructor tag a body's own wire form carries (`record`, `array`, `alias`, ...), and an
+ * alias's own body reads through the `alias` tag like any other's, whether or not a use site elsewhere
+ * names it (§8.3: a use site keeps the author's own name and is never rewritten past it).
  */
 export const metaBindings: BindingRegistry = registry({
   ...Object.fromEntries(topBinding.members.map((member) => [member.wireName, member.binding])),

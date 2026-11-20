@@ -131,8 +131,8 @@ export interface GroupMember {
  * `N` into `N..N` is a resolution-time equivalence (§5.3: "two spellings of the same
  * application"), not a grammar fact, and this layer only builds the grammar's own AST.
  *
- * Each bound is preserved as raw token text; `size-bound` is `decimal-natural` (§12.1), which the desugar
- * phase checks, naming a parameter written there as the slot a parameter cannot stand at (§5.10).
+ * Each bound is preserved as raw token text; `size-bound` is `decimal-natural` (§12.1), which the schema
+ * parser checks as it reads the token, so a bound here is always one.
  */
 export type SizeSpec = SizeSpecExact | SizeSpecRanged | SizeSpecMin | SizeSpecMax;
 

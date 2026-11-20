@@ -78,10 +78,13 @@ import { linkSchema, type LinkedSchema } from './link/link.js';
 import { closureIdentity, importIdentities, linkImportClosure } from './link/importClosure.js';
 import {
   resolveSchema as resolveSchemaCore,
+  type Checkpoint,
   type ImportResolver,
   type ImportedSchema,
 } from './compiler/schemaResolver.js';
-import type { DefinitionGetter } from './compiler/resolverTypes.js';
+import type { Normalization } from './schema/meta/atoms-text.js';
+import type { FieldNameType } from './link/fieldNames.js';
+import type { DefinitionGetter, MemberJoiners } from './compiler/resolverTypes.js';
 import { parseSchemaDocument } from './compiler/schemaParser.js';
 import { createDataStream } from './stream/dataStream.js';
 import { compile as compileCore, type CompiledSchema } from './compiler/compile.js';
@@ -492,6 +495,38 @@ function headerImports(bytes: Uint8Array): readonly string[] {
   }
 }
 
+/**
+ * A checkpoint of a resolution as the schema its readers are compiled over (§3.4.1): the imports and the entries
+ * ready so far, each import's enum forms and name types carried over. A local entry has none recorded yet, so a
+ * value at a local enum or record of a stated name type is read in the default form; the schema's own link judges
+ * it in full.
+ */
+function checkpointSchema(
+  checkpoint: Checkpoint,
+  schemas: ReadonlyMap<string, LinkedSchema>,
+  imports: readonly string[],
+): LinkedSchema {
+  const enumForms = new Map<string, Normalization>();
+  const nameTypes = new Map<string, FieldNameType>();
+  for (const uri of imports) {
+    const imported = schemas.get(canonicalizeIdentity(uri));
+    if (imported === undefined) continue;
+    for (const [name, form] of imported.enumForms) enumForms.set(name, form);
+    for (const [name, nameType] of imported.nameTypes) nameTypes.set(name, nameType);
+  }
+  return {
+    id: checkpoint.id,
+    imports: checkpoint.imports,
+    entries: checkpoint.entries,
+    facts: checkpoint.facts,
+    keyAnnotations: new Map(),
+    bootstrap: false,
+    origins: checkpoint.origins,
+    enumForms,
+    nameTypes,
+  };
+}
+
 /** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
 function resolveAgainstRegistry(
   schemas: ReadonlyMap<string, LinkedSchema>,
@@ -515,10 +550,17 @@ function resolveAgainstRegistry(
   const resolved = resolveSchemaCore(document, {
     // The readers consult the namespace being built: a constructor's own declaration supplies its
     // fields' defaults, and a value entry's type its record's shape (§4.1, §5.5).
-    readers: (lookup: DefinitionGetter) => ({
+    readers: (lookup: DefinitionGetter, joiners?: MemberJoiners) => ({
       meta: createDefinitionMetaReader(lookup),
-      value: createDefinitionValueReader(lookup, identifierPolicy),
+      value: createDefinitionValueReader(lookup, identifierPolicy, joiners),
     }),
+    checkpointAnnotations: (checkpoint) =>
+      createAnnotationValueReader(
+        compileCore(checkpointSchema(checkpoint, schemas, document.imports), {
+          judgesReferenceMembers: false,
+          ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
+        }),
+      ),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
     maxWaitDepth: limits.maxWaitDepth,

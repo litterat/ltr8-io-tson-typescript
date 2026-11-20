@@ -56,7 +56,7 @@ export interface ResolvedEntry {
 
 /**
  * Reads a `class2/schema/` `valid` vector's `resolved` text -- a `!schema { name => value }` document,
- * each entry its value (`!meta.record {...}`, `!meta.alias {...}`, `!meta.template {...}`) and each
+ * each entry its value (`!meta.record {...}`, `!meta.alias {...}`, `!meta.array {...}`) and each
  * schema map an entry nested as `!meta.schema { ... }` -- into the entries it denotes, keyed by path.
  *
  * Each value is read through its own top-level call of the meta reader, keyed by the constructor its

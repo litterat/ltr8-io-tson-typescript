@@ -52,7 +52,7 @@ import { resolvedOutput } from '../src/schema/resolvedOutput.js';
  * `data-value` against the fixture's under {@link canonical}'s rules. Comparing host objects instead
  * would test this port against itself: the fixture's authority is its wire form. A nested map is
  * compared member by member under its path, since one namespace holds every declaration at every depth
- * (§2.2.3), and a resolver-minted name's hash is normalised on both sides (RUNNER.md).
+ * (§2.2.3), and names compare as written: no resolver mints one (§8.2).
  */
 
 const SPEC = fileURLToPath(new URL('../../../spec/', import.meta.url));
@@ -84,15 +84,6 @@ type Canonical = unknown;
 
 /** "Fields at their default values are omitted." An absent list and an empty one are the same (§8.1). */
 const FALSE_BY_DEFAULT = new Set(['constructor', 'disjoint', 'optional', 'voidable']);
-
-/**
- * A held template's text reduced to the structure it denotes (§5.10, §8.2): the application is
- * identity, never its spelling, so two spellings that differ in whitespace are one template.
- */
-function parsedTemplate(text: string): string {
-  const parsed = runSync(parseDocument(fromBytes(new TextEncoder().encode(text))));
-  return JSON.stringify(canonical(parsed.document.root));
-}
 
 /** Text-valued facets of an identifier profile: the form a token is written in is not meaning for a `text` position (Part 1 §2.4), so these compare by their text. */
 const TEXT_FACETS = new Set(['start_add', 'continue_add', 'medial', 'exclude']);
@@ -147,28 +138,13 @@ const SET_TYPED = new Set(['subtypes', 'supertypes', 'members']);
 const MONOMORPHIC = new Set([
   'type_chain',
   'field_map',
-  'template_param',
   'record_field',
   'field_group',
   'tuple_element',
   'type_ref',
-  'record_template_field',
-  'type_argument',
   'integer_size',
   'annotation',
 ]);
-
-/**
- * "Instantiation entries are internally named (implementation-chosen, non-normative)": the
- * fixture spells every generated name's hash suffix `xxhash`. Applied to entry keys and to every
- * reference to one.
- */
-function canonicalName(text: string): string {
-  // Every hash in a minted name, not only the last: a form minted over another minted form embeds
-  // that form's hash (`array_array_field_name_1_5d4d7dc5_1_xxhash`), which is as much an
-  // implementation's own as the trailing one. Both spellings normalise to one placeholder.
-  return text.replace(/_(?:[0-9a-f]{8}|xxhash)(?=_|$)/g, '_xxhash');
-}
 
 /** A constructor's own name: the last segment of its path (`meta.array` is `array`). */
 function baseOf(head: string): string {
@@ -258,7 +234,7 @@ function liftedAnnotations(value: CoreValue): Canonical[] {
 function canonicalCore(value: CoreValue, head?: string): Canonical {
   switch (value.kind) {
     case 'token':
-      return value.form === 'unquoted' ? canonicalName(value.text) : JSON.stringify(value.text);
+      return value.form === 'unquoted' ? value.text : JSON.stringify(value.text);
     case 'empty-brace':
       return {};
     case 'void':
@@ -275,12 +251,7 @@ function canonicalCore(value: CoreValue, head?: string): Canonical {
         const held =
           TEXT_FACETS.has(field.name) && core.kind === 'token'
             ? JSON.stringify(core.text)
-            : field.name === 'template' &&
-                head !== undefined &&
-                baseOf(head) === 'template' &&
-                core.kind === 'token'
-              ? JSON.stringify(parsedTemplate(core.text))
-              : canonical(field.value);
+            : canonical(field.value);
         if (Array.isArray(held) && held.length === 0) continue;
         // An empty braced value and an empty map are one empty field map (§8.1: absent and
         // empty are the same, and `fields: {}` is how a document writes an empty map).
@@ -329,15 +300,15 @@ function canonical(value: DataValue): Canonical {
 }
 
 /**
- * A resolved entry's key-position annotations (§6): `@doc` on a declared name, and the derived
- * `@synthetic` marker every sugar-lifted entry carries (§8.2).
+ * A resolved entry's key-position annotations (§6): `@doc` on a declared name, `@meta.application` on a
+ * declared application's key and `@meta.completion` on a declared completion's (§8.1).
  */
 function canonicalKeyAnnotations(annotations: readonly Annotation[]): Canonical[] {
   // `@doc` is excluded on BOTH sides and checked separately, against the source rather than the
   // fixture -- see `preserves every @doc verbatim` below. The fixture's own header says it carries
   // long `@doc` strings abbreviated and that "a conforming resolver preserves them verbatim", so
   // the fixture cannot be the oracle for their text; it can and does remain the oracle for every
-  // other key annotation, `@synthetic` above all.
+  // other key annotation.
   return annotations
     .filter((a) => a.name !== 'doc')
     .map((a) => {
@@ -431,7 +402,7 @@ function entriesOf(label: string, root: DataValue): Map<string, FixtureEntry> {
       if (key.kind !== 'token') {
         throw new Error(`${label}: a schema-map key is not a token`);
       }
-      const path = canonicalName(`${prefix}${key.text}`);
+      const path = `${prefix}${key.text}`;
       const nested = entry.value.coreValue;
       if (entry.value.typeRef === 'meta.schema' && nested.kind === 'map') {
         add(`${prefix}${key.text}.`, nested.entries);
@@ -551,7 +522,7 @@ function differences(name: string): string[] {
     // A resolved form holds complete entries only (§8.1): an incomplete entry, and an alias of one, is held
     // in the namespace and written nowhere.
     if (isIncompleteOrItsAlias(value, schema.entries)) continue;
-    ours.set(canonicalName(key), key);
+    ours.set(key, key);
   }
   const out: string[] = [];
 

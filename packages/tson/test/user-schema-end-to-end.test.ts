@@ -403,7 +403,8 @@ describe('a non-conforming document is rejected with a located, named diagnostic
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]).toMatchObject({
       code: 'TYPE_MISMATCH',
-      message: "'!site' names no member of 'sample' (temperature | pressure)",
+      message:
+        "'!site' names no member of 'sample' (temperature | pressure), nor a type that IS-A exactly one",
       path: '/sample',
       schemaPointer: '/reading/sample',
       expected: 'one of (temperature | pressure)',

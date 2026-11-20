@@ -151,14 +151,29 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
     expect(diagnostics.diagnostics.every((d) => d.code === 'SCHEMA_ERROR')).toBe(true);
   });
 
-  it('admits an alias of an entry applying a namespace type: an alias target names an entry (§8.3)', () => {
+  it('refuses an alias of an entry applying a namespace type: an alias target is a meta.type_ref (§4.1, §8.3)', () => {
     const merged = new Map<string, Top>([
       ['myapi', apiValue()],
       ['user', def({ kind: 'alias', target: ref('myapi') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).not.toThrow();
+    }).toThrow(/'user' names 'myapi', which is a value and not a type/u);
+  });
+
+  it('judges an alias by the entry its hops reach, so an alias of such an alias is refused too (§8.3)', () => {
+    const merged = new Map<string, Top>([
+      ['myapi', apiValue()],
+      ['user', def({ kind: 'alias', target: ref('myapi') })],
+      ['again', def({ kind: 'alias', target: ref('user') })],
+    ]);
+    const diagnostics = collector();
+    validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
+    expect(diagnostics.diagnostics.map((d) => d.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/'again' names 'user', which reaches a value and not a type/u),
+      ]),
+    );
   });
 
   it('allows a reference to the enclosing declaration`s own type parameter', () => {

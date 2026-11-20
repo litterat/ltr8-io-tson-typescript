@@ -1,6 +1,6 @@
 /**
  * What a schema-governed record's field names are judged by as a reader meets them ([TSON-SCHEMA]
- * §5.2, §7.2, §7.7): the record's name type, the kernel's `field_name` where it states none. Shared
+ * §5.2, §7.2, §7.7): the record's name type, `meta.identifier`'s where it states none. Shared
  * by every reader of both encodings -- the text tree and bind readers and the JSON record reader
  * ([TSON-JSON] §6.1.1, §9.4) -- so a document's verdict does not depend on which one read it, nor on
  * which encoding carried it. It lives beside the linker's own judgement of the declared names
@@ -34,7 +34,7 @@ import type { FieldNameType } from './fieldNames.js';
 
 /** One record's field-name rule: its name type, read once when the reader is built. */
 export interface FieldNameRule {
-  /** The name type the record states, for a message -- `undefined` for the kernel's `field_name`. */
+  /** The name type the record states, for a message -- `undefined` where it states none. */
   readonly typeName?: string;
   /** The form a name is matched in. */
   readonly form: Normalization;
@@ -43,7 +43,7 @@ export interface FieldNameRule {
   refusal(name: string): string | undefined;
 }
 
-/** The kernel's `field_name`: [TSON-DATA] §7.7's grammar, asked of every name of an ordinary document. */
+/** A record stating no name type has `meta.identifier`'s (§5.2): [TSON-DATA] §7.7's grammar. */
 export const FIELD_NAME_RULE: FieldNameRule = {
   form: 'NFC',
   profile: NAME_PROFILE,

@@ -43,7 +43,7 @@
  * **An invalid sugar form is reported per declaration, not thrown**, when a {@link DesugarFailureReporter} is
  * supplied, so an author sees every independent problem in one pass.
  */
-import { at, atValue } from './parameterTypes.js';
+import { atValue } from './parameterTypes.js';
 import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/errors.js';
 import type { Position } from '../core/position.js';
 import type { Declaration, SchemaDocument, SchemaMap } from '../ast/schema/document.js';
@@ -354,9 +354,7 @@ function typeRef(ref: TypeExpr, pass: DesugarPass): TypeExpr {
     case 'mapExpr':
     case 'tupleExpr':
     case 'choiceExpr': {
-      const binding = sugarBinding(ref, pass);
-      refuseParameterBound(binding, pass);
-      return inline(binding);
+      return inline(sugarBinding(ref, pass));
     }
     case 'recordExpr':
       return inline(recordBinding(recordDef(ref.body, pass), pass));
@@ -742,17 +740,6 @@ function sizeFields(size: SizeSpec, shown: string): RecordField[] {
       return [nameField(MIN_ITEMS, size.lower), nameField(MAX_ITEMS, size.upper)];
     case 'exact':
       return [nameField(MIN_ITEMS, size.bound), nameField(MAX_ITEMS, size.bound)];
-  }
-}
-
-/** A size bound naming one of the enclosing declaration's parameters, `[T; N]`, refused naming the slot (§5.10). */
-function refuseParameterBound(binding: Binding, pass: DesugarPass): void {
-  for (const f of binding.fields) {
-    if (f.name !== MIN_ITEMS && f.name !== MAX_ITEMS) continue;
-    const value = f.value.coreValue;
-    if (value.kind === 'token' && pass.currentParameters.includes(value.text)) {
-      throw at(value.text, `a size bound (${binding.head}.${f.name})`);
-    }
   }
 }
 

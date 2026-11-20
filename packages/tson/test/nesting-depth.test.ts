@@ -199,6 +199,18 @@ describe('a schema document is bounded too, on every path into it', () => {
       'a nested choice type',
       (n) => `${HEADER}!schema { t => ${'('.repeat(n)}text|text${')'.repeat(n)} }\n`,
     ],
+    [
+      'a nested type argument (§12.1 type-arg)',
+      (n) => `${HEADER}!schema { t => { f: ${'a<'.repeat(n)}text${'>'.repeat(n)} } }\n`,
+    ],
+    [
+      'a record body written as a type argument (§12.1 brace-type)',
+      (n) => `${HEADER}!schema { t => { f: ${'a<{ f: '.repeat(n)}text${' }>'.repeat(n)} } }\n`,
+    ],
+    [
+      'a bracket or choice written as a type argument',
+      (n) => `${HEADER}!schema { t => { f: ${'a<[a<('.repeat(n)}text|text${')>]>'.repeat(n)} } }\n`,
+    ],
   ];
 
   it.each(VECTORS)('%s is refused rather than overflowing the stack', (_name, make) => {
@@ -211,6 +223,8 @@ describe('a schema document is bounded too, on every path into it', () => {
     expect(thrown).toBeInstanceOf(TsonLimitRefusedError);
     expect((thrown as TsonLimitRefusedError).message).toContain('nests deeper');
     expect((thrown as TsonLimitRefusedError).limit).toBe('nesting-depth');
+    // Positioned at the token that opened the level one past the limit.
+    expect((thrown as TsonLimitRefusedError).position).toBeDefined();
   });
 
   it.each(VECTORS)('%s honours a configured limit', (_name, make) => {

@@ -106,7 +106,7 @@ export function checkValuesByName(
   const judge = new ValuesByName(merged, options);
   for (const entry of localNames) {
     const value = merged.get(entry);
-    if (value === undefined || !isNamespaceValue(value)) continue;
+    if (value === undefined) continue;
     for (const held of namesIn(value)) {
       const where = `'${entry}' at ${pointer(held.path)}`;
       try {
@@ -130,9 +130,21 @@ export function checkValuesByName(
   }
 }
 
-/** Every name `value` holds at a kind-, reference- or `type_ref`-typed slot, with its path. */
+/**
+ * Every name `entry` holds at a kind-, reference- or `type_ref`-typed slot, with its path: a value entry's, and an
+ * incomplete entry's fields as their declared types read them -- judged as a construction's are where it writes
+ * them, completed or not (§4.2, §5.5).
+ */
 function namesIn(entry: Top): readonly HeldName[] {
+  if (entry.kind === 'incomplete') {
+    return [...entry.read].flatMap(([field, read]) => namesInValue(read, [field]));
+  }
   if (!isValueEntry(entry) || entry.value.form === 'schema_map') return [];
+  return namesInValue(entry.value, []);
+}
+
+/** Every name `value`, at `at`, holds at a kind-, reference- or `type_ref`-typed slot, with its path. */
+function namesInValue(value: MetaValue, at: readonly string[]): HeldName[] {
   const found: HeldName[] = [];
   const walk = (meta: MetaValue, path: readonly string[]): void => {
     switch (meta.form) {
@@ -164,7 +176,7 @@ function namesIn(entry: Top): readonly HeldName[] {
         return;
     }
   };
-  walk(entry.value, []);
+  walk(value, at);
   return found;
 }
 

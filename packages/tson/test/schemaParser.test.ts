@@ -733,6 +733,31 @@ describe('bracket forms: array and tuple (§5.3)', () => {
     expect(def.ref.size).toEqual({ kind: 'max', upper: '2' });
   });
 
+  it('§5.3, §12.1: a size bound is decimal-natural, so 0 and 1_000 are bounds', () => {
+    for (const bound of ['0', '7', '1_000']) {
+      const def = typeDefOf(`[text; ${bound}..]`);
+      if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
+        throw new Error('expected an array ref');
+      expect(def.ref.size).toEqual({ kind: 'min', lower: bound });
+    }
+  });
+
+  it.each([
+    ['a based integer', '[text; 0x10]'],
+    ['a leading zero', '[text; 010]'],
+    ['a sign', '[text; +1]'],
+    ['a fraction', '[text; 1.0]'],
+    ['an exponent', '[text; 1e2]'],
+    ['a name', '[text; N]'],
+    ['a based upper bound', '[text; 1..0b11]'],
+    ['a based bound on a map', '{text => text; ..0o7}'],
+  ])('§5.3, §12.1: %s is no size bound, refused where the parser reads it', (_what, form) => {
+    const thrown = thrownBy(`!schema { x => ${form} }`);
+    expect(thrown).toBeInstanceOf(TsonParseError);
+    expect((thrown as TsonParseError).message).toMatch(/is no size bound: .* decimal natural/u);
+    expect((thrown as TsonParseError).position).toBeDefined();
+  });
+
   it('two or more elements is a tuple, each position carrying its own "?"', () => {
     const def = typeDefOf('[text, integer?]');
     if (def.kind !== 'typeExprDef' || def.ref.kind !== 'tupleExpr')

@@ -254,7 +254,7 @@ interface RecordPlan {
   /** Each field's slot, keyed by its NFC name in the name type's form ({@link nameKey}). */
   readonly index: ReadonlyMap<string, number>;
   readonly groups: readonly FieldGroup[];
-  /** The record's field-name rule: its name type, or the kernel's `field_name` ([TSON-SCHEMA] §5.2). */
+  /** The record's field-name rule: its name type, or `meta.identifier`'s ([TSON-SCHEMA] §5.2). */
   readonly fieldNames: FieldNameRule;
   /** Whether two spellings may be one name here, so a repeat names where the field was first given. */
   readonly folds: boolean;
@@ -602,7 +602,7 @@ function* duplicateField(
   const spelling = plan.folds
     ? ` -- the field '${declared}' is already given, as '${first.name}' at ` +
       `${String(first.position.line)}:${String(first.position.column)}, and under its name type ` +
-      `'${plan.fieldNames.typeName ?? 'field_name'}' the two are one name`
+      `'${plan.fieldNames.typeName ?? 'meta.identifier'}' the two are one name`
     : '';
   where.report(
     'DUPLICATE_FIELD',

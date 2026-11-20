@@ -46,8 +46,7 @@ import { createEmitter, stringSink } from './emitter.js';
  * {@link AtomEncoder} instead.
  */
 export const defaultAtomEncoder: AtomEncoder = (binding: AtomBinding<unknown>, value: unknown) => {
-  // A reference position (`meta.type_ref`, `meta.field_type_ref`): a bare name is one token, an
-  // application or a sibling reference the structured value the data grammar reads (§7.4).
+  // A reference position (`meta.type_ref`, a `meta.ref`): a name is one token (§4.2).
   if (binding.wireType === 'type_ref' || binding.wireType === 'reference') {
     return referenceToWire(value as TypeRef);
   }

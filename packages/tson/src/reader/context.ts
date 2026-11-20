@@ -32,6 +32,7 @@ import {
 } from '../core/limits.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
 import type { ReadContext } from './contracts.js';
+import { skipAnnotations } from './tree/grammar.js';
 
 // ---------------------------------------------------------------------------------------------
 // RFC 6901 escaping -- `~` before `/`, matching `tree/accessors.ts`'s own (unexported) helper.
@@ -403,4 +404,35 @@ export function* lookingAhead<T>(
       for (const event of pending) cursor.rewound.push(event);
     }
   }
+}
+
+/**
+ * Takes the `!type-ref` of the data-value at the cursor out of the stream, leaving its annotations where they are: a
+ * tag spent naming a position, which the reader below must not weigh again -- a choice listed as a variant, which a
+ * tag naming it selects and is read untagged inside (§5.4). The annotations are looked past and put back, and the
+ * type-ref behind them is the one event taken out of the queue; a no-op where the value carries none.
+ *
+ * Spent by a read, never inside a lookahead: a lookahead records what it reads to rewind it, and a type-ref taken out
+ * from under one would be missing from what it puts back.
+ */
+export function* spendTypeRef(ctx: ReadContext): Task<void> {
+  const cursor = (ctx as ReadContext & CursorCarrier)[CURSOR];
+  if (cursor === undefined) {
+    throw new TsonInternalError(
+      'spendTypeRef was called with a ReadContext this module did not create',
+    );
+  }
+  if (cursor.recording !== undefined) {
+    throw new TsonInternalError('a type-ref is spent by a read, never inside a lookahead');
+  }
+  const annotations = yield* lookingAhead(ctx, function* (ahead): Task<TsonEvent[]> {
+    yield* skipAnnotations(ahead);
+    return [...(cursor.recording ?? [])];
+  });
+  cursor.rewound.splice(0, annotations.length);
+  if ((yield* ctx.peek()).kind === 'type-ref') yield* ctx.next();
+  // Put back front-to-back, linearly, as {@link lookingAhead} does: an annotation run may be long.
+  const pending = cursor.rewound.splice(0, cursor.rewound.length);
+  for (const event of annotations) cursor.rewound.push(event);
+  for (const event of pending) cursor.rewound.push(event);
 }

@@ -111,8 +111,7 @@ function locationOf(schema: LinkedSchema, name: string): SchemaLocation {
   };
 }
 
-// One runtime guard per shape, so each branch below narrows `Top` on its own -- the held template
-// body carries no `kind` to switch on.
+// One runtime guard per shape, so each branch below narrows `Top` on its own.
 function isRecordBody(body: Top): body is RecordBody {
   return body.kind === 'record';
 }
@@ -288,6 +287,25 @@ function buildReader(
       ...(enumForm === undefined ? {} : { enumForm }),
     });
     return guard(built);
+  }
+  if (body.kind === 'incomplete') {
+    // No type, so nothing is read against it (§5.5). A schema naming one at a type position is refused when it
+    // links; what reaches this is a data tag naming it, the document's mistake.
+    const schemaLocation = location();
+    return {
+      *read(ctx: ReadContext): Task<Value> {
+        const at = ctx.underDeclaration(schemaLocation);
+        at.report(
+          'TYPE_MISMATCH',
+          `'${name}' is an incomplete '${body.head}' with [${body.absent.join(', ')}] absent, not a type, so ` +
+            'nothing is read against it -- tag the value with a type its schema declares by completing it (§5.5)',
+          'a type, not an incomplete entry',
+          `!${name}`,
+        );
+        yield* skipDataValue(at);
+        return abandonedValue();
+      },
+    };
   }
   if (body.kind === 'apply') {
     throw new TsonNotImplementedError(

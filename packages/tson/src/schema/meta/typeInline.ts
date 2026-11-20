@@ -76,18 +76,46 @@ export function sameTypeExpr(a: TypeExpr, b: TypeExpr): boolean {
   if (a.kind !== 'inline' || b.kind !== 'inline') {
     return a.kind !== 'inline' && b.kind !== 'inline' && sameRef(a, b);
   }
-  return a.head === b.head && identity(a.of) === identity(b.of);
+  return a.head === b.head && sameStructure(a.of, b.of);
 }
 
-/** `value`'s structure as identity compares it: annotations and an in-place record's application left out. */
-function identity(value: unknown): string {
-  return JSON.stringify(value, (key, held: unknown) => {
-    if (key === 'annotations' || key === 'application' || key === 'keyAnnotations')
-      return undefined;
-    if (typeof held === 'bigint') return `${held.toString()}n`;
-    if (held instanceof Map) return [...(held as Map<unknown, unknown>).entries()];
-    return held;
-  });
+/** Keys identity leaves out: annotations, and an in-place record's application. */
+const NOT_IDENTITY = new Set(['annotations', 'application', 'keyAnnotations']);
+
+/**
+ * Whether `a` and `b` have one structure as identity compares it (§8.2), the way the reference compares records:
+ * a record's or a map's members by name whatever order they were built in, a list's in order, and
+ * {@link NOT_IDENTITY}'s keys -- and a key holding nothing -- taking no part.
+ */
+function sameStructure(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((element: unknown, i) => sameStructure(element, b[i]))
+    );
+  }
+  if (a instanceof Map || b instanceof Map) {
+    if (!(a instanceof Map && b instanceof Map) || a.size !== b.size) return false;
+    for (const [key, held] of a as Map<unknown, unknown>) {
+      if (!b.has(key) || !sameStructure(held, b.get(key))) return false;
+    }
+    return true;
+  }
+  const left = identityKeys(a);
+  const right = identityKeys(b);
+  if (left.length !== right.length) return false;
+  const held = (o: object, key: string): unknown => (o as Record<string, unknown>)[key];
+  return left.every((key) => right.includes(key) && sameStructure(held(a, key), held(b, key)));
+}
+
+function identityKeys(o: object): string[] {
+  return Object.keys(o).filter(
+    (key) => !NOT_IDENTITY.has(key) && (o as Record<string, unknown>)[key] !== undefined,
+  );
 }
 
 /**

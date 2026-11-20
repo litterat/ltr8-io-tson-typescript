@@ -369,7 +369,7 @@ describe('positive classification of a failed declaration', () => {
   });
 });
 
-// ── §5.3 sugar lift and the @synthetic key marker (§8.2) ────────────────────────────────────────
+// ── §5.3 a sugar form in place (§4.2) ───────────────────────────────────────────────────────────
 
 describe('a sugar form stays where it is written (§4.2, §5.3)', () => {
   it('holds [text] at the field in place, lifting no entry and marking no key', () => {

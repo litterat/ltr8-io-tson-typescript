@@ -10,13 +10,15 @@ import { subtypesIn, supertypesIn } from './model-fixtures.js';
 
 describe('§5.10 a parametric record’s body is a record body', () => {
   it('a parameter list before a construction of a constructor is refused: an argument is a type, never a slot value', () => {
-    expect(loadError('rows => <T> !meta.array { element_type: T  min_items: 1 }')).toBeDefined();
+    expect(loadError('rows => <T> !meta.array { element_type: T  min_items: 1 }')).toMatch(
+      /a parametric record's body is a record body .* constructs 'meta\.array'/,
+    );
   });
 
   it('a parameter list before a reference -- a parametric alias -- is refused', () => {
     expect(
       loadError('pair => <A, B> { first: A  second: B }\nuuid_pair => <B> pair<uuid, B>'),
-    ).toBeDefined();
+    ).toMatch(/would be a parametric alias/);
   });
 
   it('a literal argument is no type, and is refused where it is written', () => {
@@ -32,11 +34,15 @@ describe('§5.10 where a parameter stands', () => {
   });
 
   it('nowhere else: a field’s default or fixed value is a value, never a parameter', () => {
-    expect(loadError('retry => <N> { attempts?: int32 ~ N }')).toBeDefined();
+    expect(loadError('retry => <N> { attempts?: int32 ~ N }')).toMatch(
+      /declares the type parameter 'N' and never references it/,
+    );
   });
 
   it('a parameter is never an operand of &', () => {
-    expect(loadError('x => <T> T & { a: int32 }')).toBeDefined();
+    expect(loadError('x => <T> T & { a: int32 }')).toMatch(
+      /a parameter is never an operand of '&'/,
+    );
   });
 
   it('a parameter spelled like an entry of the namespace is refused at the declaration', () => {
@@ -59,7 +65,9 @@ describe('§5.10 no position names a parametric record bare', () => {
   });
 
   it('at an operand of &', () => {
-    expect(loadError('box => <T> { v: T }\nx => box & { a: int32 }')).toBeDefined();
+    expect(loadError('box => <T> { v: T }\nx => box & { a: int32 }')).toMatch(
+      /'box' is a parametric record and is applied to no arguments/,
+    );
   });
 });
 
@@ -80,7 +88,9 @@ describe('§5.10 a bound is written and judged at the application', () => {
   });
 
   it('a bound naming a constructor admits nothing and is refused at the declaration', () => {
-    expect(loadError('boxed => <T: unicode.text_type> { a: T }')).toBeDefined();
+    expect(loadError('boxed => <T: unicode.text_type> { a: T }')).toMatch(
+      /'unicode\.text_type' is a constructor, not a type/,
+    );
   });
 });
 

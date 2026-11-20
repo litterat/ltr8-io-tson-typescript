@@ -350,6 +350,29 @@ function refuseSeveralOptions(def: Top | undefined, value: DataValue, type: stri
 }
 
 /**
+ * A field the constructor pins (`voidable?: = false` on `meta.namespace`) may be restated at its pinned value and
+ * at no other (§5.2, §5.7): a pin is the constructor's statement, which no construction or refinement moves. A pin
+ * on a token is compared by its text; a structured pin is left to the binding, which keeps nothing for it.
+ */
+function refuseMovedPins(def: Top | undefined, value: DataValue, type: string): void {
+  const body = recordBodyOf(def);
+  const core = value.coreValue;
+  if (body === undefined || core.kind !== 'record') return;
+  for (const written of core.fields) {
+    const declared = body.fields.entries.get(written.name);
+    if (declared?.role !== 'FIXED' || declared.value === undefined) continue;
+    const token = written.value.coreValue;
+    if (token.kind !== 'token' || token.text === declared.value.text) continue;
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message:
+        `'${written.name}' is fixed at ${declared.value.text} by '${type}', and the body writes ${token.text} -- ` +
+        'a pinned field is restated at its pinned value or left alone (§5.2, §5.7)',
+    });
+  }
+}
+
+/**
  * Builds a {@link DefinitionMetaReader} governed by `lookupConstructorDef` -- the same structure
  * namespace a caller already threads through `DefinitionResolverDeps.metaDefinitions`/
  * `SchemaResolverDeps.metaDefinitions` (`resolverTypes.ts`'s own `DefinitionGetter`), passed here
@@ -384,7 +407,9 @@ export function createDefinitionMetaReader(
       const nestedName = NESTED_BINDING_NAMES.get(resolved);
       return nestedName === undefined ? undefined : policyFor(lookupConstructorDef(nestedName));
     };
-    refuseSeveralOptions(lookupConstructorDef(type), value, type);
+    const constructor = lookupConstructorDef(type);
+    refuseSeveralOptions(constructor, value, type);
+    refuseMovedPins(constructor, value, type);
     return fromDataValue(binding, value, decodeAtom, fieldsFor) as Top;
   };
 }
