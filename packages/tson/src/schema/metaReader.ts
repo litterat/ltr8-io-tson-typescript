@@ -89,6 +89,7 @@ import {
 import { NUMERIC_MAP, kernelName, metaName } from './meta/kernel.js';
 import {
   fieldOmission,
+  groupViolations,
   isGroupMember,
   namedFields,
   type NamedField,
@@ -328,6 +329,27 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
 // -------------------------------------------------------------------------------------------
 
 /**
+ * A constructor's own field groups bind what its body may write (§5.11): `integer_type`'s
+ * `( min | exclusive_min )?` admits at most one option, so a body writing both is no instance of the
+ * constructor. Only a second chosen option is refused here -- a group's other refusals (a missing member, an
+ * unchosen required group) are judged where the body is completed against the constructor's defaults.
+ */
+function refuseSeveralOptions(def: Top | undefined, value: DataValue, type: string): void {
+  const body = recordBodyOf(def);
+  const core = value.coreValue;
+  if (body === undefined || core.kind !== 'record') return;
+  const written = new Set(core.fields.map((f) => f.name));
+  for (const group of body.groups) {
+    for (const violation of groupViolations(group, (member) => written.has(member))) {
+      if (violation.kind !== 'SEVERAL_CHOSEN') continue;
+      const named = violation.options.map((i) => (group.members[i] ?? []).join(', '));
+      const message = `'${type}' admits one option of a field group (§5.11), and the body writes ${named.join(' and ')}`;
+      throw new TsonReadError({ code: 'FIELD_GROUP', message });
+    }
+  }
+}
+
+/**
  * Builds a {@link DefinitionMetaReader} governed by `lookupConstructorDef` -- the same structure
  * namespace a caller already threads through `DefinitionResolverDeps.metaDefinitions`/
  * `SchemaResolverDeps.metaDefinitions` (`resolverTypes.ts`'s own `DefinitionGetter`), passed here
@@ -362,6 +384,7 @@ export function createDefinitionMetaReader(
       const nestedName = NESTED_BINDING_NAMES.get(resolved);
       return nestedName === undefined ? undefined : policyFor(lookupConstructorDef(nestedName));
     };
+    refuseSeveralOptions(lookupConstructorDef(type), value, type);
     return fromDataValue(binding, value, decodeAtom, fieldsFor) as Top;
   };
 }

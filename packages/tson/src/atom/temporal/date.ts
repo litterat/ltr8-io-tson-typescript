@@ -8,7 +8,7 @@
  * in one hand-written pass -- shape and calendar validity together, since JS has nothing to
  * split the work with. A non-leap 29th of February therefore fails inside `readFullDate` itself
  * and reads back the same way the Java's `DateTimeParseException` does: a {@link
- * TsonAtomParseError}, not a {@link TsonAtomValidationError} -- the token never denotes a real
+ * TsonAtomParseError}, not a a validation error -- the token never denotes a real
  * calendar date at all, so this isn't a value falling outside a declared bound.
  *
  * See `CONFORMANCE.md` and `rfc3339.ts`'s own TSDoc for why `!date` rejects ISO 8601's
@@ -16,10 +16,11 @@
  * accept.
  */
 
-import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
+import { TsonAtomParseError } from '../../core/errors.js';
 import type { DateType } from '../../schema/meta/atoms-temporal.js';
 import type { PlainDate } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
+import { checkChronologicalBounds } from './bounds.js';
 import { compareDate, formatFullDate, readFullDate } from './rfc3339.js';
 
 /**
@@ -38,22 +39,7 @@ export function createDateParser(typeRef: string, constraints: DateType): AtomTy
       );
     }
     const value = parsed.value;
-    if (constraints.min !== undefined && compareDate(value, constraints.min) < 0) {
-      const bound = formatFullDate(constraints.min);
-      throw new TsonAtomValidationError(
-        typeRef,
-        `'${text}' is before the minimum ${bound}`,
-        `>= ${bound}`,
-      );
-    }
-    if (constraints.max !== undefined && compareDate(value, constraints.max) > 0) {
-      const bound = formatFullDate(constraints.max);
-      throw new TsonAtomValidationError(
-        typeRef,
-        `'${text}' is after the maximum ${bound}`,
-        `<= ${bound}`,
-      );
-    }
+    checkChronologicalBounds(typeRef, value, text, constraints, compareDate, formatFullDate);
     return value;
   }
 

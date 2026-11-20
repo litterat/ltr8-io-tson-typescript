@@ -947,21 +947,46 @@ function bytesCoherence(t: BytesType): string[] {
 
 function dateNarrows(source: DateType, refined: DateType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min', source.min, refined.min, compareCalendarDate);
-  checkAtMost(out, 'max', source.max, refined.max, compareCalendarDate);
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareCalendarDate,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareCalendarDate,
+  );
   return out;
 }
 
 function dateCoherence(t: DateType): string[] {
   const out: string[] = [];
-  checkOrdered(out, 'min', t.min, 'max', t.max, compareCalendarDate);
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareCalendarDate,
+  );
   return out;
 }
 
 function timeNarrows(source: TimeType, refined: TimeType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min', source.min, refined.min, compareOffsetTime);
-  checkAtMost(out, 'max', source.max, refined.max, compareOffsetTime);
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareOffsetTime,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetTime,
+  );
   // `fraction_digits` is an upper bound on the value's own fractional-second grid (§5.5: "a
   // constraint on the value, not on a spelling"), so it refines the way every other upper bound
   // does: a refinement may lower it (a coarser grid), never raise it.
@@ -971,23 +996,45 @@ function timeNarrows(source: TimeType, refined: TimeType): string[] {
 
 function timeCoherence(t: TimeType): string[] {
   const out: string[] = [];
-  checkOrdered(out, 'min', t.min, 'max', t.max, compareOffsetTime);
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetTime,
+  );
   checkWithin(out, 'fraction_digits', t.fractionDigits, 0n, 9n);
   return out;
 }
 
 function dateTimeNarrows(source: DateTimeType, refined: DateTimeType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min', source.min, refined.min, compareOffsetDateTime);
-  checkAtMost(out, 'max', source.max, refined.max, compareOffsetDateTime);
-  // As for `time`: an upper bound on the value's own grid refines downward only (§5.5).
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareOffsetDateTime,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetDateTime,
+  );
+  // `fraction_digits` is an upper bound on the value's own fractional-second grid (§5.5: "a
+  // constraint on the value, not on a spelling"), so it refines the way every other upper bound
+  // does: a refinement may lower it (a coarser grid), never raise it.
   checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareBigint);
   return out;
 }
 
 function dateTimeCoherence(t: DateTimeType): string[] {
   const out: string[] = [];
-  checkOrdered(out, 'min', t.min, 'max', t.max, compareOffsetDateTime);
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetDateTime,
+  );
   checkWithin(out, 'fraction_digits', t.fractionDigits, 0n, 9n);
   return out;
 }

@@ -20,6 +20,7 @@ import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.j
 import type { DateTimeType } from '../../schema/meta/atoms-temporal.js';
 import type { PlainDateTime } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
+import { checkChronologicalBounds } from './bounds.js';
 import {
   type ComparableTime,
   compareDateTime,
@@ -45,11 +46,31 @@ function toComparableTime(value: PlainDateTime): ComparableTime {
   };
 }
 
-function formatBound(bound: NonNullable<DateTimeType['min']>): string {
+interface ComparableDateTime {
+  readonly date: PlainDateTime['date'];
+  readonly time: ComparableTime;
+}
+
+function toComparableDateTime(value: PlainDateTime): ComparableDateTime {
+  return { date: value.date, time: toComparableTime(value) };
+}
+
+function boundOf(bound: DateTimeType['min']): ComparableDateTime | undefined {
+  return bound === undefined
+    ? undefined
+    : { date: bound.date, time: { ...bound.time, offsetSeconds: bound.offsetSeconds } };
+}
+
+/** The instant on the UTC timeline alone; two spellings of one instant tie (§5.5). */
+function compareInstants(a: ComparableDateTime, b: ComparableDateTime): number {
+  return compareDateTime(a.date, a.time, b.date, b.time);
+}
+
+function renderBound(bound: ComparableDateTime): string {
   const date = formatFullDate(bound.date);
   const time = formatFullTime({
     ...bound.time,
-    offsetMinutes: Math.round(bound.offsetSeconds / 60),
+    offsetMinutes: Math.round(bound.time.offsetSeconds / 60),
   });
   return `${date}T${time}`;
 }
@@ -102,38 +123,19 @@ export function createDateTimeParser(
         `on the fraction-digits-${constraints.fractionDigits.toString()} grid`,
       );
     }
-    if (constraints.min !== undefined) {
-      const bound = constraints.min;
-      if (
-        compareDateTime(value.date, toComparableTime(value), bound.date, {
-          ...bound.time,
-          offsetSeconds: bound.offsetSeconds,
-        }) < 0
-      ) {
-        const boundText = formatBound(bound);
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' is before the minimum ${boundText}`,
-          `>= ${boundText}`,
-        );
-      }
-    }
-    if (constraints.max !== undefined) {
-      const bound = constraints.max;
-      if (
-        compareDateTime(value.date, toComparableTime(value), bound.date, {
-          ...bound.time,
-          offsetSeconds: bound.offsetSeconds,
-        }) > 0
-      ) {
-        const boundText = formatBound(bound);
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' is after the maximum ${boundText}`,
-          `<= ${boundText}`,
-        );
-      }
-    }
+    checkChronologicalBounds(
+      typeRef,
+      toComparableDateTime(value),
+      text,
+      {
+        min: boundOf(constraints.min),
+        exclusiveMin: boundOf(constraints.exclusiveMin),
+        max: boundOf(constraints.max),
+        exclusiveMax: boundOf(constraints.exclusiveMax),
+      },
+      compareInstants,
+      renderBound,
+    );
     return value;
   }
 

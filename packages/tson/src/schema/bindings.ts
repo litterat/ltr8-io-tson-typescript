@@ -1761,11 +1761,24 @@ const dateTypeBinding: RecordBinding<DateType> = typed(
   record<DateType>({
     fields: [
       optional<DateType, 'min'>(0, 'min', 'min', calendarDateBinding),
-      optional<DateType, 'max'>(1, 'max', 'max', calendarDateBinding),
+      optional<DateType, 'exclusiveMin'>(1, 'exclusive_min', 'exclusiveMin', calendarDateBinding),
+      optional<DateType, 'max'>(2, 'max', 'max', calendarDateBinding),
+      optional<DateType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', calendarDateBinding),
     ],
     construct: (slots) => {
-      const [min, max] = slots as [CalendarDate | undefined, CalendarDate | undefined];
-      return { kind: 'date_type', ...opt('min', min), ...opt('max', max) };
+      const [min, exclusiveMin, max, exclusiveMax] = slots as [
+        CalendarDate | undefined,
+        CalendarDate | undefined,
+        CalendarDate | undefined,
+        CalendarDate | undefined,
+      ];
+      return {
+        kind: 'date_type',
+        ...opt('min', min),
+        ...opt('exclusiveMin', exclusiveMin),
+        ...opt('max', max),
+        ...opt('exclusiveMax', exclusiveMax),
+      };
     },
   }),
 );
@@ -1774,11 +1787,15 @@ const timeTypeBinding: RecordBinding<TimeType> = typed(
   record<TimeType>({
     fields: [
       optional<TimeType, 'min'>(0, 'min', 'min', offsetTimeBinding),
-      optional<TimeType, 'max'>(1, 'max', 'max', offsetTimeBinding),
-      optional<TimeType, 'fractionDigits'>(2, 'fraction_digits', 'fractionDigits', countBinding),
+      optional<TimeType, 'exclusiveMin'>(1, 'exclusive_min', 'exclusiveMin', offsetTimeBinding),
+      optional<TimeType, 'max'>(2, 'max', 'max', offsetTimeBinding),
+      optional<TimeType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', offsetTimeBinding),
+      optional<TimeType, 'fractionDigits'>(4, 'fraction_digits', 'fractionDigits', countBinding),
     ],
     construct: (slots) => {
-      const [min, max, fractionDigits] = slots as [
+      const [min, exclusiveMin, max, exclusiveMax, fractionDigits] = slots as [
+        OffsetTime | undefined,
+        OffsetTime | undefined,
         OffsetTime | undefined,
         OffsetTime | undefined,
         bigint | undefined,
@@ -1786,7 +1803,9 @@ const timeTypeBinding: RecordBinding<TimeType> = typed(
       return {
         kind: 'time_type',
         ...opt('min', min),
+        ...opt('exclusiveMin', exclusiveMin),
         ...opt('max', max),
+        ...opt('exclusiveMax', exclusiveMax),
         ...opt('fractionDigits', fractionDigits),
       };
     },
@@ -1797,16 +1816,30 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = typed(
   record<DateTimeType>({
     fields: [
       optional<DateTimeType, 'min'>(0, 'min', 'min', offsetDateTimeBinding),
-      optional<DateTimeType, 'max'>(1, 'max', 'max', offsetDateTimeBinding),
+      optional<DateTimeType, 'exclusiveMin'>(
+        1,
+        'exclusive_min',
+        'exclusiveMin',
+        offsetDateTimeBinding,
+      ),
+      optional<DateTimeType, 'max'>(2, 'max', 'max', offsetDateTimeBinding),
+      optional<DateTimeType, 'exclusiveMax'>(
+        3,
+        'exclusive_max',
+        'exclusiveMax',
+        offsetDateTimeBinding,
+      ),
       optional<DateTimeType, 'fractionDigits'>(
-        2,
+        4,
         'fraction_digits',
         'fractionDigits',
         countBinding,
       ),
     ],
     construct: (slots) => {
-      const [min, max, fractionDigits] = slots as [
+      const [min, exclusiveMin, max, exclusiveMax, fractionDigits] = slots as [
+        OffsetDateTime | undefined,
+        OffsetDateTime | undefined,
         OffsetDateTime | undefined,
         OffsetDateTime | undefined,
         bigint | undefined,
@@ -1814,7 +1847,9 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = typed(
       return {
         kind: 'datetime_type',
         ...opt('min', min),
+        ...opt('exclusiveMin', exclusiveMin),
         ...opt('max', max),
+        ...opt('exclusiveMax', exclusiveMax),
         ...opt('fractionDigits', fractionDigits),
       };
     },

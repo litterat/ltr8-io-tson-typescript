@@ -26,6 +26,7 @@ import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.j
 import type { TimeType } from '../../schema/meta/atoms-temporal.js';
 import type { PlainTime } from '../../value/types.js';
 import type { AtomToken, AtomType } from '../contract.js';
+import { checkChronologicalBounds } from './bounds.js';
 import { type ComparableTime, compareTime, formatFullTime, readFullTime } from './rfc3339.js';
 
 /** Whether `nanosecond` is a whole number of 10⁻ᴺ seconds -- the `fraction_digits: N` value grid (§5.5), shared by `datetime.ts`'s identical check. */
@@ -42,6 +43,16 @@ function toComparable(value: PlainTime): ComparableTime {
     nanosecond: value.nanosecond,
     offsetSeconds: value.offset.totalMinutes * 60,
   };
+}
+
+type TimeBound = NonNullable<TimeType['min']>;
+
+function boundOf(bound: TimeBound | undefined): ComparableTime | undefined {
+  return bound === undefined ? undefined : { ...bound.time, offsetSeconds: bound.offsetSeconds };
+}
+
+function renderBound(bound: ComparableTime): string {
+  return formatFullTime({ ...bound, offsetMinutes: Math.round(bound.offsetSeconds / 60) });
 }
 
 /**
@@ -77,38 +88,19 @@ export function createTimeParser(typeRef: string, constraints: TimeType): AtomTy
         `on the fraction-digits-${constraints.fractionDigits.toString()} grid`,
       );
     }
-    if (constraints.min !== undefined) {
-      const bound = constraints.min;
-      if (
-        compareTime(toComparable(value), { ...bound.time, offsetSeconds: bound.offsetSeconds }) < 0
-      ) {
-        const boundText = formatFullTime({
-          ...bound.time,
-          offsetMinutes: Math.round(bound.offsetSeconds / 60),
-        });
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' is before the minimum ${boundText}`,
-          `>= ${boundText}`,
-        );
-      }
-    }
-    if (constraints.max !== undefined) {
-      const bound = constraints.max;
-      if (
-        compareTime(toComparable(value), { ...bound.time, offsetSeconds: bound.offsetSeconds }) > 0
-      ) {
-        const boundText = formatFullTime({
-          ...bound.time,
-          offsetMinutes: Math.round(bound.offsetSeconds / 60),
-        });
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${text}' is after the maximum ${boundText}`,
-          `<= ${boundText}`,
-        );
-      }
-    }
+    checkChronologicalBounds(
+      typeRef,
+      toComparable(value),
+      text,
+      {
+        min: boundOf(constraints.min),
+        exclusiveMin: boundOf(constraints.exclusiveMin),
+        max: boundOf(constraints.max),
+        exclusiveMax: boundOf(constraints.exclusiveMax),
+      },
+      compareTime,
+      renderBound,
+    );
     return value;
   }
 

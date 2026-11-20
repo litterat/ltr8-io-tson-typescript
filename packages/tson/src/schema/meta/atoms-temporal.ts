@@ -29,9 +29,9 @@ export interface LocalTime {
 
 /**
  * A time-of-day with a fixed UTC offset, mirroring `java.time.OffsetTime` — used by
- * {@link TimeType}'s bounds. Bounds compare on this shape's own ordering rule (own contract,
- * not enforced here): normalise to the instant on a shared day before comparing, so a bound
- * written in one offset is comparable with one written in another.
+ * {@link TimeType}'s bounds. A time's value is its time of day in UTC on [00:00:00, 24:00:00)
+ * (§5.5): the offset is a spelling, `11:00:00+01:00` ties with `10:00:00Z`, and `23:30:00-02:00`
+ * is `01:30:00Z`, so the order wraps at midnight (own contract, not enforced here).
  */
 export interface OffsetTime {
   readonly time: LocalTime;
@@ -40,9 +40,9 @@ export interface OffsetTime {
 
 /**
  * A calendar date and time-of-day with a fixed UTC offset, mirroring
- * `java.time.OffsetDateTime` — used by {@link DateTimeType}'s bounds. Bounds compare by
- * instant first (own contract, not enforced here), so two bounds written in different
- * offsets remain comparable.
+ * `java.time.OffsetDateTime` — used by {@link DateTimeType}'s bounds. Bounds compare by the
+ * instant on the UTC timeline alone (§5.5; own contract, not enforced here): two spellings of
+ * one instant tie.
  */
 export interface OffsetDateTime {
   readonly date: CalendarDate;
@@ -52,7 +52,8 @@ export interface OffsetDateTime {
 
 /**
  * `temporal.date_type` constructor (§5.4's `date` atom, RFC 3339 `full-date`).
- * Both bounds are inclusive — this family has no exclusive facet.
+ * Each end is a field group (§5.11): `( min | exclusive_min )?` and `( max | exclusive_max )?`
+ * (§5.5, §5.7), so at most one of each pair is present.
  *
  * Also an {@link Atom} variant: `date => !date_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with both bounds absent.
@@ -60,7 +61,9 @@ export interface OffsetDateTime {
 export interface DateType extends TypeBase {
   readonly kind: 'date_type';
   readonly min?: CalendarDate;
+  readonly exclusiveMin?: CalendarDate;
   readonly max?: CalendarDate;
+  readonly exclusiveMax?: CalendarDate;
 }
 
 /**
@@ -83,7 +86,9 @@ export interface DateType extends TypeBase {
 export interface TimeType extends TypeBase {
   readonly kind: 'time_type';
   readonly min?: OffsetTime;
+  readonly exclusiveMin?: OffsetTime;
   readonly max?: OffsetTime;
+  readonly exclusiveMax?: OffsetTime;
   readonly fractionDigits?: bigint;
 }
 
@@ -99,7 +104,9 @@ export interface TimeType extends TypeBase {
 export interface DateTimeType extends TypeBase {
   readonly kind: 'datetime_type';
   readonly min?: OffsetDateTime;
+  readonly exclusiveMin?: OffsetDateTime;
   readonly max?: OffsetDateTime;
+  readonly exclusiveMax?: OffsetDateTime;
   readonly fractionDigits?: bigint;
 }
 
