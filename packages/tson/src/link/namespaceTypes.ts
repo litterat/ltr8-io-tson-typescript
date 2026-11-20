@@ -26,6 +26,7 @@ import { isKindMember, namesTypes, ofRefusal } from './kindMembers.js';
 import { isA } from './restatedFields.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
 import { nameTypeDotRefusal } from './nameType.js';
+import type { ExternHops } from './externHops.js';
 
 /** The constructor whose instances an identifier family is (§7.7): what a namespace's `key_type` must be built with. */
 const IDENTIFIER_TYPE = kernelName(UNICODE_MAP, 'identifier_type');
@@ -37,6 +38,8 @@ export interface NamespaceTypeOptions {
   /** The schema's one namespace -- the merged entries a name resolves in. */
   readonly structureNamespace?: ReadonlyMap<string, Top>;
   readonly receiver?: DiagnosticsReceiver;
+  /** The namespace's externs, each a member of a reference where the entry it lands on is (§5.13). */
+  readonly hops?: ExternHops;
 }
 
 /** Judges the rules this module's top note lists over every local entry of `merged`. */
@@ -60,7 +63,7 @@ export function checkKindsReferencesAndNamespaceTypes(
           checkNamespaceType(spelled(name), value, local, heads);
           break;
         case 'record':
-          checkReferencePins(name, value, local, heads, spelled);
+          checkReferencePins(name, value, local, heads, spelled, options.hops);
           break;
         default:
           break;
@@ -169,6 +172,7 @@ function checkReferencePins(
   local: EntryLookup,
   heads: (name: string) => string | undefined,
   spelled: (name: string) => string,
+  hops: ExternHops | undefined,
 ): void {
   for (const field of namedFields(record)) {
     const value = field.value;
@@ -178,7 +182,7 @@ function checkReferencePins(
     if (reference?.kind !== 'ref' || !namesTypes(reference.of.name, local)) {
       continue;
     }
-    if (isKindMember(value.text, reference.of.name, local, heads)) continue;
+    if (isKindMember(value.text, reference.of.name, local, heads, hops)) continue;
     throw new TsonSchemaValidationError(
       `'${name}': field '${field.name}' is typed '${spelled(typeNameOf(field))}', the names of the types built ` +
         `with '${reference.of.name}', and its ${field.role === 'DEFAULT' ? 'default' : 'fixed value'} ` +

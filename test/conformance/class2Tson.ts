@@ -54,10 +54,15 @@ export async function loadImports(tson: Tson, subject: Uint8Array): Promise<void
   await tson.preload(importsOf(subject));
 }
 
-/** Loads `subject`'s imports and then resolves `subject` itself as a schema document. */
+/**
+ * Loads `subject` as a schema document through the front door (`Tson.loadSchema`): everything it names -- its
+ * `!!import`s and the schema of each extern it declares ([TSON-SCHEMA] §3.4.1, §5.13) -- is obtained first, with
+ * the subject in flight under its own `!!id`, so a reference reaching that identity is the library's reference
+ * cycle (§2.2.3) and never a fetch the corpus source would answer `not-found` (RUNNER.md, "Every subject is a
+ * complete document").
+ */
 export async function loadSchema(tson: Tson, subject: Uint8Array): Promise<LinkedSchema> {
-  await loadImports(tson, subject);
-  return tson.resolveSchema(subject);
+  return tson.loadSchema(subject);
 }
 
 /** Serves the corpus's own schemas, by the path under `schemas/` an identity ends in. */

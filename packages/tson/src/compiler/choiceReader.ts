@@ -61,6 +61,8 @@ import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
 import { discriminationClassOf, type DiscriminationClass } from '../link/disjointness.js';
 import { admitting, terminal } from '../link/aliasChain.js';
 import { hasChoiceSelfTag } from './subsumption.js';
+import type { ExternHops } from '../link/externHops.js';
+import type { ExternVariantNames } from '../link/externAdmission.js';
 import type { TsonEvent } from '../stream/event.js';
 
 /** [TSON-DATA] §4's fixed base-type order, mapped onto §5.4's own classes -- the token half of {@link classifyEvent}. */
@@ -105,6 +107,15 @@ function classifyEvent(event: TsonEvent): DiscriminationClass | undefined {
   }
 }
 
+/**
+ * What a choice reader asks of the externs among its variants (§5.4, §5.13): the hops a variant is classified
+ * through, and the names an extern variant answers to (`link/externAdmission.ts`'s `externVariantNames`).
+ */
+export interface ChoiceExterns {
+  readonly hops: ExternHops;
+  readonly externVariants: (variant: string) => ExternVariantNames | undefined;
+}
+
 /** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
 export function choiceTreeReader(
   name: string,
@@ -114,6 +125,7 @@ export function choiceTreeReader(
   schemaLocation: SchemaLocation,
   disjoint: boolean,
   namespace: ReadonlyMap<string, Top>,
+  externs?: ChoiceExterns,
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
     name: typeExprText(variant),
@@ -137,6 +149,35 @@ export function choiceTreeReader(
       if (!byWrittenName.has(written)) byWrittenName.set(written, variant);
     }
   }
+  // An extern variant answers to every name of this scope reaching its target, and selects by a name reaching an
+  // entry IS-A its target where that name means no variant and is IS-A no other (§5.4, §5.13).
+  const selectsNone = new Map<string, readonly string[]>();
+  if (externs !== undefined) {
+    const below = new Map<string, (typeof variants)[number][]>();
+    const externNames = variants.map((variant) =>
+      variant.expr.kind === 'inline' ? undefined : externs.externVariants(variant.expr.name),
+    );
+    variants.forEach((variant, index) => {
+      for (const written of externNames[index]?.named ?? []) {
+        if (!byWrittenName.has(written)) byWrittenName.set(written, variant);
+      }
+    });
+    variants.forEach((variant, index) => {
+      for (const written of externNames[index]?.subtypes ?? []) {
+        if (byWrittenName.has(written)) continue;
+        below.set(written, [...(below.get(written) ?? []), variant]);
+      }
+    });
+    for (const [written, isA] of below) {
+      const only = isA[0];
+      if (isA.length === 1 && only !== undefined) byWrittenName.set(written, only);
+      else
+        selectsNone.set(
+          written,
+          isA.map((variant) => variant.name),
+        );
+    }
+  }
 
   // Untagged recovery's own `class -> variant` map -- built only when `disjoint` says the classes
   // are distinct, and rebuilt from the classes themselves rather than trusted blindly: a
@@ -147,7 +188,7 @@ export function choiceTreeReader(
   if (disjoint) {
     byClass = new Map();
     for (const variant of variants) {
-      const variantClass = discriminationClassOf(variant.expr, namespace);
+      const variantClass = discriminationClassOf(variant.expr, namespace, externs?.hops);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass = undefined;
         break;
@@ -214,6 +255,18 @@ export function choiceTreeReader(
 
       const typeRefName = lookahead.typeRefName;
       const variant = byWrittenName.get(typeRefName);
+      const among = selectsNone.get(typeRefName);
+      if (variant === undefined && among !== undefined) {
+        choiceCtx.report(
+          'TYPE_MISMATCH',
+          `'!${typeRefName}' is a subtype of more than one variant of '${displayName}' -- [${among.join(', ')}] ` +
+            '-- and names none of them, so it selects none (§5.4)',
+          `one of (${names})`,
+          `!${typeRefName}`,
+        );
+        yield* skipDataValue(choiceCtx);
+        return abandonedValue();
+      }
       if (variant === undefined) {
         // §7.2's own two-step resolution rule: a name `namespace` declares nothing under is
         // `UNKNOWN_TYPE_REF` ("a built-in annotation name not defined by the active schema is an

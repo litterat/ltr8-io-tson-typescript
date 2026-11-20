@@ -134,6 +134,7 @@ import { APPLY, FIELDS, PARAMETERS } from './wireForm.js';
 import { resolveFieldMarks } from './fieldModifiers.js';
 import { checkAtomNarrows, checkBodyCoherence, isAtom } from './atomChecks.js';
 import { terminal, terminalDefinition } from '../link/aliasChain.js';
+import { EXTERN_HEAD, sealedExtern, terminalExtern } from '../link/externs.js';
 import { metaFormOfLexer } from './tokenForms.js';
 import {
   argumentNotAName,
@@ -899,6 +900,16 @@ function unclosed(
   if (definition === undefined) {
     return new TsonSchemaValidationError(`'${name}' has an unresolved reference '${head}'`);
   }
+  const extern = terminalExtern(head, deps.namespaceDefinitions);
+  if (extern !== undefined) {
+    return sealedExtern(
+      `'${name}'`,
+      `'${head}<...>' applies`,
+      head,
+      terminal(head, deps.namespaceDefinitions),
+      extern,
+    );
+  }
   const parameters = parametersOf(definition).map((parameter) => parameter.name);
   if (parameters.length === 0) {
     return new TsonSchemaValidationError(
@@ -1287,6 +1298,9 @@ function resolveAtomRefinement(
       `'${name}': '!${written}' is an alias whose chain ends at '${sourceName}', which names no entry (§8.3)`,
     );
   }
+  if (source.kind === 'extern') {
+    throw sealedExtern(`'${name}'`, "'^' refines", written, sourceName, source);
+  }
   if (source.kind === 'incomplete') {
     return refineIncomplete(deps, name, written, sourceName, source, refinement.bindings);
   }
@@ -1586,6 +1600,16 @@ function resolveConstructorTarget(
         'structure namespace does not declare (§8.3)',
     );
   }
+  if (atEnd.kind === 'extern') {
+    throw sealedExtern(`'${name}'`, `'!${target} { ... }' constructs`, target, terminalName, atEnd);
+  }
+  if (terminalName !== target && terminalName === EXTERN_HEAD) {
+    throw new TsonSchemaValidationError(
+      `'${name}': '!${target}' reaches '${terminalName}' through its alias hops, and an extern is written ` +
+        `'!${EXTERN_HEAD}': its head is how a document's externs are found before any name resolves ` +
+        '([TSON-SCHEMA] §5.13)',
+    );
+  }
   return { name: terminalName, definition: atEnd };
 }
 
@@ -1765,6 +1789,16 @@ function resolveComposition(
     // the composed vocabulary is the terminal's while the recorded name is the author's.
     const supertypeVocabulary = vocabularyOf(deps, supertypeName) ?? supertypeDef;
     refuseUnappliedParametricRecord(name, supertypeName, supertypeVocabulary, 'supertype', '&');
+    const sealedOperand = terminalExtern(supertypeName, deps.namespaceDefinitions);
+    if (sealedOperand !== undefined) {
+      throw sealedExtern(
+        `'${name}'`,
+        "'&' and '-' compose",
+        supertypeName,
+        terminal(supertypeName, deps.namespaceDefinitions),
+        sealedOperand,
+      );
+    }
     if (!isRecordBody(supertypeVocabulary)) {
       throw new TsonSchemaValidationError(
         `'${name}': supertype '${supertypeName}' has no fields to contribute -- its body is a binding record, ` +
@@ -1941,6 +1975,9 @@ function parametricOperand(
   }
   const end = terminal(head, deps.namespaceDefinitions);
   const atEnd = deps.namespaceDefinitions(end);
+  if (atEnd?.kind === 'extern') {
+    throw sealedExtern(`'${name}'`, `'${head}<...>' applies`, head, end, atEnd);
+  }
   if (constructs(end, atEnd) || atEnd?.kind === 'incomplete') {
     // A constructor applied is a construction (§5.3), a binding record with elements or slots, not fields.
     throw new TsonSchemaValidationError(

@@ -100,6 +100,38 @@ interface Cursor {
   recording: TsonEvent[] | undefined;
   /** §9.1's nesting bound for this read, checked by {@link ReadContext.field}/{@link ReadContext.index}. */
   readonly maxNestingDepth: number;
+  /** The foreign value the cursor is inside, innermost first; `undefined` in the document's own scope (§7.9). */
+  scope: Scope | undefined;
+}
+
+/**
+ * The scope a foreign value is read in ([TSON-SCHEMA] §7.9): the foreign schema whose namespace its names resolve
+ * in, the extern it was read through, and the schema declaring that extern, which is the enclosing scope's. A
+ * diagnostic raised inside the value names both.
+ */
+export interface ForeignScope {
+  readonly extern: string;
+  readonly declaredIn: string;
+  readonly schema: string;
+}
+
+/**
+ * One foreign value's scope, entered at `start`: the schema pointer renders the steps after it, into the foreign
+ * schema, and a diagnostic raised inside names every boundary crossed.
+ */
+interface Scope {
+  readonly boundary: ForeignScope;
+  readonly parent: Scope | undefined;
+  readonly start: PathStep | undefined;
+}
+
+/** What a diagnostic raised inside `scope` adds to its message: every boundary crossed, innermost first. */
+function scopeSuffix(scope: Scope): string {
+  let out = ` (read in the scope of ${scope.boundary.schema}, through the extern '${scope.boundary.extern}' of ${scope.boundary.declaredIn}`;
+  for (let outer = scope.parent; outer !== undefined; outer = outer.parent) {
+    out += `, within '${outer.boundary.extern}' of ${outer.boundary.declaredIn}`;
+  }
+  return `${out}; [TSON-SCHEMA] §7.9)`;
 }
 
 /**
@@ -119,6 +151,13 @@ const CURSOR = Symbol.for('io.ltr8.tson.readContext.cursor');
 /** A context carrying its cursor, which is every context {@link makeContext} builds. */
 interface CursorCarrier {
   [CURSOR]?: Cursor;
+}
+
+/** The key a context carries {@link readingAcross}'s implementation under, which only the context itself can do. */
+const CROSSING = Symbol.for('io.ltr8.tson.readContext.crossing');
+
+interface CrossingCarrier {
+  [CROSSING]?: <T>(boundary: ForeignScope, read: (inner: ReadContext) => Task<T>) => Task<T>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -145,9 +184,19 @@ function renderPath(tail: PathStep | undefined): string {
 }
 
 /** The schema pointer: the anchor's own pointer (verbatim, already `/`-prefixed by whoever built it), plus every `schemaToo` step. */
-function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | undefined): string {
+function renderSchemaPointer(
+  anchor: SchemaAnchor | undefined,
+  tail: PathStep | undefined,
+  scope?: Scope,
+): string {
   let out = anchor?.pointer ?? '';
+  // Inside a foreign value the pointer runs into the foreign schema, from the step the scope began at.
+  let started = scope?.start === undefined;
   for (const step of collectSteps(tail)) {
+    if (!started) {
+      started = step === scope?.start;
+      continue;
+    }
     if (step.schemaToo) out = appendStep(out, step);
   }
   return out;
@@ -233,7 +282,7 @@ function makeContext(
 
     schemaLocation(): SchemaLocation | undefined {
       if (schemaAnchor === undefined) return undefined;
-      const pointer = renderSchemaPointer(schemaAnchor, tail);
+      const pointer = renderSchemaPointer(schemaAnchor, tail, cursor.scope);
       return {
         schemaId: schemaAnchor.schemaId,
         ...(pointer === '' ? {} : { pointer }),
@@ -312,11 +361,13 @@ function makeContext(
     report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void {
       const path = renderPath(tail);
       const schemaPointer =
-        schemaAnchor === undefined ? undefined : renderSchemaPointer(schemaAnchor, tail);
+        schemaAnchor === undefined
+          ? undefined
+          : renderSchemaPointer(schemaAnchor, tail, cursor.scope);
       const position = currentPosition();
       const diagnostic: Diagnostic = {
         code,
-        message,
+        message: cursor.scope === undefined ? message : message + scopeSuffix(cursor.scope),
         path,
         ...(schemaAnchor === undefined ? {} : { schemaId: schemaAnchor.schemaId }),
         ...(schemaPointer === undefined || schemaPointer === '' ? {} : { schemaPointer }),
@@ -335,6 +386,18 @@ function makeContext(
   };
 
   (ctx as ReadContext & CursorCarrier)[CURSOR] = cursor;
+  (ctx as ReadContext & CrossingCarrier)[CROSSING] = function* <T>(
+    boundary: ForeignScope,
+    read: (inner: ReadContext) => Task<T>,
+  ): Task<T> {
+    const enclosing = cursor.scope;
+    cursor.scope = { boundary, parent: enclosing, start: tail };
+    try {
+      return yield* read(makeContext(cursor, tail, undefined, positionOverride));
+    } finally {
+      cursor.scope = enclosing;
+    }
+  };
   return ctx;
 }
 
@@ -356,6 +419,7 @@ export function createReadContext(
     rewound: [],
     recording: undefined,
     maxNestingDepth: maxNestingDepthOf(options),
+    scope: undefined,
   };
   return makeContext(cursor, undefined, undefined, undefined);
 }
@@ -403,4 +467,25 @@ export function* lookingAhead<T>(
       for (const event of pending) cursor.rewound.push(event);
     }
   }
+}
+
+/**
+ * Reads a foreign value at `ctx`'s cursor ([TSON-SCHEMA] §7.9): `read` runs on a copy of `ctx` with no schema
+ * location established, so the foreign reader seeds its own and the schema pointer runs into the foreign schema from
+ * here, and every diagnostic raised inside names `boundary` and each one enclosing it. The cursor, receiver, limits
+ * and data path are the document's: a foreign value is part of the document that holds it.
+ */
+export function* readingAcross<T>(
+  ctx: ReadContext,
+  boundary: ForeignScope,
+  read: (inner: ReadContext) => Task<T>,
+): Task<T> {
+  const crossing = (ctx as ReadContext & CrossingCarrier)[CROSSING];
+  if (crossing === undefined) {
+    throw new TsonInternalError(
+      'readingAcross was called with a ReadContext this module did not create -- ' +
+        'reader/context.ts is the only implementation of the interface',
+    );
+  }
+  return yield* crossing(boundary, read);
 }
