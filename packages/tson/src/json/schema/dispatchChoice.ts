@@ -13,56 +13,37 @@
  * does not hold, the tag is REQUIRED.
  *
  * **A tag is always accepted**, disjoint or not (§8.1): a value's own `$type` places it by name,
- * checked against the variant list **flattened for alias, not for subtype** -- an alias of a
- * variant is admitted, a proper subtype of one is not, matching this port's own text-encoding
- * choice reader (`compiler/choiceReader.ts`).
- *
- * **Alias flattening.** §3.3 requires `$type` to be "admissible at the position under
- * [TSON-SCHEMA] §7.2's subsumption rule (... a variant of it at choice positions ...)", and §5.4's
- * own "Resolution" paragraph already reads a variant by what it *resolves to*, not by its written
- * spelling ("the resolver validates that each variant resolves to a distinct type"); §8.3 states
- * the general principle a variant reference shares with every other one -- "a reference is a hop,
- * not a rewrite... the same type under another name" -- so an alias of a variant names the variant
- * it points to, the same identity question `link/aliasChain.ts`'s own `admitting` already
- * answers for record subsumption and this reader now shares it for (`ctx.linkedSchema.entries`
- * flattens the written variant names the same way `dispatchTag.ts` flattens a family's declared
- * subtypes). The reference implementation's own `DispatchChoiceReader` agrees: `context.admitting`
- * over the variant list, in its own Javadoc's words, "an alias of one... by its tag".
- *
- * **No subtype admission, a deliberate divergence from the reference.** The reference additionally
- * flattens each variant's own `subtypes` into the route table ("a subtype of one by its tag", its
- * own Javadoc). This port does not: §7.2's own text carves this position out of the rule its
- * subtype-inclusive supertype-chain test governs -- "Choice-typed positions discriminate by
- * variant membership (§5.4) ... under their own membership relations; this rule governs every
- * *other* typed position" -- and §8.4 gives the structural reason a choice has none to extend: "a
- * choice has no expected supertype for a tag to be admitted *into*, only a closed variant list a
- * name either names or does not... the discriminator is a property of a record family and lives
- * with the records (§6.1.5)". An author who wants a subtype reachable by tag types the position by
- * the record family instead (§8.4's own closing paragraph), which is the edit that buys it.
+ * and §5.4 says which variant a name selects (`choiceSelection.ts`): a name meaning a variant
+ * selects it, before any variant it only IS-A; a name IS-A exactly one variant and meaning none
+ * selects that one; a name IS-A more than one and meaning none selects none. "Meaning" is
+ * §8.3's identity: a reference is a hop, not a rewrite, so an alias of a variant is the variant
+ * (`link/aliasChain.ts`'s `admitting`, which `dispatchTag.ts` applies to a family's subtypes too).
+ * A type IS-A one variant by the namespace's `subtypes` index, and is read **as itself**: the
+ * `$type` names it directly, never through the variant -- `{ "$type": "circle", … }` at a choice
+ * holding `shape`, and no wrapper naming `shape` around a value naming `circle` (§3.3's one type
+ * name). A subtype of a variant that is no record is read at the subtype's own reader, whose facets
+ * the variant's would not check; one below a sealed family's variant is placed by that family's own
+ * selectors, which a choice cannot bypass.
  *
  * **§8.3.1's map escape.** An object whose first member is an annotation member is read as the
  * tagged form before anything else, even at an untagged, disjoint choice whose brace-class variant
  * is an object-form map: a map's keys are data that may legitimately spell one of the three, and this is
  * the one combination where an untagged object could be misread as an annotation object.
  *
- * **A sealed or abstract-with-subtypes variant's own name is still an admissible tag, and reading
- * it does not reach that variant's own "the base has no direct instances" refusal.** No-subtype-
- * admission (above) means a choice over such a family admits no more specific written name than
- * the variant's own -- `json/schema/dispatchMember.ts`'s own reader would otherwise be the only
- * thing standing between an author and an unwritable schema for this shape (§8.4's closing
- * paragraph assumes it is usable). Where the resolved variant offers
- * `json/schema/route.ts`'s own `ChoiceSelfTagReadable` capability, `tagged` (below) consumes the
- * object's opening brace and that leading tag for real and hands off to it directly, instead of
- * going through the ordinary `Route`; every other variant (records with direct instances, atoms,
- * arrays, ...) is unaffected; and a tag naming a *subtype* of such a variant is still refused --
- * this fix is about the variant's own name, never about admitting a name the choice does not
- * otherwise admit.
+ * **A sealed or abstract-with-subtypes variant's own name is an admissible tag, and reading it
+ * does not reach that variant's own "the base has no direct instances" refusal.**
+ * `json/schema/dispatchMember.ts`'s own reader would otherwise be the only thing standing between
+ * an author and an unwritable schema for this shape (§8.4's closing paragraph assumes it is
+ * usable). Where the resolved variant offers `json/schema/route.ts`'s own `ChoiceSelfTagReadable`
+ * capability, `tagged` (below) consumes the object's opening brace and that leading tag for real
+ * and hands off to it directly, instead of going through the ordinary `Route`; every other variant
+ * (records with direct instances, atoms, arrays, ...) is unaffected.
  */
 import type { TypeExpr } from '../../schema/meta/typedef.js';
 import { typeExprText } from '../../schema/meta/bodies.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { choiceDisjoint, type Top } from '../../schema/meta/typedef.js';
+import { choiceDisjoint, subtypesOf, type Top } from '../../schema/meta/typedef.js';
 import { discriminationClassOf, type DiscriminationClass } from '../../link/disjointness.js';
 import { admitting, terminal } from '../../link/aliasChain.js';
 import type { ChoiceBody } from '../../schema/meta/bodies.js';
@@ -74,7 +55,8 @@ import { skipNextValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
 import { lead as leadOf, leadPresent, TYPE, type Lead } from './tagMembers.js';
 import { CHOICE, refusesScope } from './tags.js';
-import { hasChoiceSelfTag, routeTo, type Route } from './route.js';
+import { selectChoice } from './choiceSelection.js';
+import { hasChoiceSelfTag, isKeyedType, routeTo, type Route } from './route.js';
 import type { JsonTypeReader } from './types.js';
 
 const CLASS_LABEL: Record<DiscriminationClass, string> = {
@@ -113,7 +95,8 @@ export function buildChoiceReader(
   // A type written in place is named by no tag (§4.2): only a named variant is reached by `$type`.
   const variantNames = body.variants.flatMap((v) => (v.kind === 'inline' ? [] : [v.name]));
   const namesList = body.variants.map(typeExprText).join(' | ');
-  const disjoint = isDisjoint(ctx, name);
+  // The body's own fact: a choice written in place is no entry, so its fact is on the body the link set it on.
+  const disjoint = choiceDisjoint(body) === true;
 
   const byClass = new Map<DiscriminationClass, TypeExpr>();
   if (disjoint) {
@@ -131,30 +114,53 @@ export function buildChoiceReader(
     .sort()
     .join(', ');
 
-  // Alias-flattened (this module's own top note): every name whose alias chain terminates at
-  // a variant is admitted, routed to the variant itself -- never to a subtype, which this reader
-  // does not flatten in. A written variant name is flattened to *its own* terminal first
-  // (`terminal`), then `admitting` collects every name (including the variant's own
-  // written spelling) whose chain ends there too: a variant that is itself an alias (`either2 =>
-  // (n_of | count)`, `n_of => note`) admits its target (`note`) and every sibling alias
-  // (`n2 => note`) as well, not only its own written spelling -- §5.4's own "resolves to a
-  // distinct type" reading, applied one hop further than a variant that already names a terminal
-  // needs it to be. `resolvers` keeps each written name's own lazy resolver alongside its
-  // `Route`, so `tagged` (below) can reach the raw reader directly for the sealed/abstract
-  // self-tag continuation (`route.ts`'s own `ChoiceSelfTagReadable`), which needs the reader
-  // itself rather than the `Route` wrapper built around it.
-  const variantTerminals = Array.from(
-    new Set(
-      variantNames.map((written) => terminal(written, (n) => ctx.linkedSchema.entries.get(n))),
-    ),
+  // §5.4's selection ({@link selectChoice}): a name meaning a variant -- the variant itself, or an alias
+  // of what it resolves to ("resolves to a distinct type", §5.4's own "Resolution" paragraph) -- selects
+  // it before any variant the name only IS-A, and a name IS-A exactly one variant selects that one. A
+  // written variant name is flattened to *its own* terminal first (`terminal`), then `admitting`
+  // collects every name whose chain ends there too: a variant that is itself an alias (`either2 =>
+  // (n_of | count)`, `n_of => note`) admits its target (`note`) and every sibling alias (`n2 => note`)
+  // as well. `resolvers` keeps each name's own lazy resolver alongside its `Route`, so `tagged` (below)
+  // can reach the raw reader directly for the sealed/abstract self-tag continuation (`route.ts`'s own
+  // `ChoiceSelfTagReadable`), which needs the reader itself rather than the `Route` wrapper.
+  const entries = ctx.linkedSchema.entries;
+  const lookup = (n: string): Top | undefined => entries.get(n);
+  const terminalOf = new Map<string, string>(
+    variantNames.map((written) => [written, terminal(written, lookup)]),
+  );
+  const selection = selectChoice(
+    variantNames,
+    (variant) => admitting([terminalOf.get(variant) ?? variant], entries),
+    (variant) => {
+      const definition = lookup(terminalOf.get(variant) ?? variant);
+      return definition === undefined ? [] : admitting(subtypesOf(definition), entries);
+    },
   );
   const routes = new Map<string, Route>();
   const resolvers = new Map<string, () => JsonTypeReader>();
-  for (const written of admitting(variantTerminals, ctx.linkedSchema.entries)) {
-    const resolveThis = () => ctx.resolve(written);
-    resolvers.set(written, resolveThis);
-    routes.set(written, routeTo(resolveThis));
+  for (const [written, variant] of selection.selects) {
+    const keyed = isKeyedType(written, entries);
+    if (selection.named.has(written)) {
+      const resolveThis = () => ctx.resolve(written);
+      resolvers.set(written, resolveThis);
+      routes.set(written, routeTo(resolveThis, keyed));
+      continue;
+    }
+    // A subtype of the variant, selected by its own name and read as itself: a record variant that
+    // places by its own selectors -- a sealed family, whose discriminators this position cannot bypass --
+    // receives the value and places it itself, and anything else reads the subtype at its own reader,
+    // whose facets the variant's reader would not check.
+    const variantDefinition = lookup(terminalOf.get(variant) ?? variant);
+    const sealed =
+      variantDefinition?.kind === 'record' &&
+      variantDefinition.extension === 'ABSTRACT' &&
+      variantDefinition.discriminators !== undefined;
+    routes.set(
+      written,
+      sealed ? routeTo(() => ctx.resolve(variant)) : routeTo(() => ctx.resolve(written), keyed),
+    );
   }
+  const selectsNone = selection.selectsNone;
 
   return {
     *read(readCtx: JsonReadContext): Task<unknown> {
@@ -174,6 +180,7 @@ export function buildChoiceReader(
             namesList,
             routes,
             resolvers,
+            selectsNone,
             ctx.linkedSchema.entries,
           );
         }
@@ -192,11 +199,6 @@ export function buildChoiceReader(
   };
 }
 
-function isDisjoint(ctx: CompileContext, name: string): boolean {
-  const def = ctx.linkedSchema.entries.get(name);
-  return def !== undefined && choiceDisjoint(def) === true;
-}
-
 function* tagged(
   ctx: JsonReadContext,
   lead: Lead,
@@ -204,6 +206,7 @@ function* tagged(
   namesList: string,
   routes: ReadonlyMap<string, Route>,
   resolvers: ReadonlyMap<string, () => JsonTypeReader>,
+  selectsNone: ReadonlyMap<string, readonly string[]>,
   entries: ReadonlyMap<string, Top>,
 ): Task<unknown> {
   const { type } = lead;
@@ -226,19 +229,32 @@ function* tagged(
   }
   const route = routes.get(type);
   if (route === undefined) {
-    if (!nameHygieneRefuses(ctx.field(TYPE), type)) {
+    const among = selectsNone.get(type);
+    if (among !== undefined) {
+      // §5.4: a name IS-A more than one variant and meaning none selects none.
+      ctx
+        .field(TYPE)
+        .report(
+          'TYPE_MISMATCH',
+          `'$type' names '${type}', a subtype of more than one variant of '${displayName}' -- ` +
+            `(${among.join(' | ')}) -- and of none by name, so it selects none (§8.1)`,
+          among.join(' | '),
+          type,
+        );
+    } else if (!nameHygieneRefuses(ctx.field(TYPE), type)) {
       // §7.2's own two-step resolution rule, the same split `compiler/choiceReader.ts` and
       // `json/schema/dispatchTag.ts` both apply: a name `entries` declares nothing under is
-      // `UNKNOWN_TYPE_REF` (it resolves nowhere); a name that resolves to a real entry that just
-      // isn't one of this choice's variants is `TYPE_MISMATCH` (admitted somewhere, not admitted
-      // here).
+      // `UNKNOWN_TYPE_REF` (it resolves nowhere); a name that resolves to a real entry that is
+      // neither a variant nor a type IS-A exactly one is `TYPE_MISMATCH` (admitted somewhere, not
+      // admitted here).
       const resolves = entries.has(type);
       ctx
         .field(TYPE)
         .report(
           resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
           resolves
-            ? `'$type' names '${type}', which is not a variant of '${displayName}'`
+            ? `'$type' names '${type}', which is neither a variant of '${displayName}' nor a ` +
+                'subtype of exactly one (§5.4, §8.1)'
             : `'$type' names '${type}', which does not resolve in the governing schema's ` +
                 `namespace (§7.2) -- expected one of (${namesList})`,
           namesList,

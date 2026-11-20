@@ -55,6 +55,7 @@ import type { Position } from '../../core/position.js';
 import type { Task } from '../../io/bytes.js';
 import { fieldNameRule, matchKey, type FieldNameRule } from '../../link/fieldNameRule.js';
 import { selfNames, terminalDefinition } from '../../link/aliasChain.js';
+import { bodyNameType } from '../../link/bodyNameType.js';
 import {
   fieldOmission,
   groupRefusals,
@@ -292,7 +293,12 @@ function buildRecordPlan(
   // §6.1.1: member names are NFC-normalized before matching, per [TSON-DATA] §7.2.1's resolver
   // rule, and then put into the record's name type's form ([TSON-SCHEMA] §5.5), so a name the type
   // holds equal to a field is that field.
-  const fieldNames = fieldNameRule(ctx.linkedSchema.nameTypes.get(name));
+  // A record written in place is no entry, so the name type it states is read off its own body.
+  const fieldNames = fieldNameRule(
+    ctx.linkedSchema.entries.has(name)
+      ? ctx.linkedSchema.nameTypes.get(name)
+      : bodyNameType(body, ctx.linkedSchema.entries),
+  );
 
   fields.forEach((field, i) => {
     const fieldName = toNfc(field.name);

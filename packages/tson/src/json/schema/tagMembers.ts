@@ -188,24 +188,30 @@ export function* lead(
  * `$value` comes last (§6.1.6: member order carries no meaning), and any member other than the
  * three annotation members is a resolver error — "the wrapper is apparatus, not a record".
  */
-export function* readWrapped(ctx: JsonReadContext, target: JsonTypeReader): Task<unknown> {
+export function* readWrapped(
+  ctx: JsonReadContext,
+  target: JsonTypeReader,
+  keyed = false,
+): Task<unknown> {
   yield* ctx.next(); // object-start
-  return yield* walkWrapper(ctx, target, IMPORT, false, undefined);
+  return yield* walkWrapper(ctx, target, keyed, IMPORT, false, undefined);
 }
 
 /**
  * The rest of a wrapper whose leading members a caller has already read and whose `$value` name it
  * has just consumed — for a record reader that met `$value` straight after its own leading,
- * redundant `$type` (`json/schema/record.ts`'s own use).
+ * redundant `$type` (`json/schema/record.ts`'s own use) -- a record being no map, `$value` holds no
+ * annotation object.
  */
 export function* readWrappedValue(ctx: JsonReadContext, target: JsonTypeReader): Task<unknown> {
-  const value = yield* target.read(ctx.field(VALUE));
-  return yield* walkWrapper(ctx, target, undefined, true, value);
+  const value = yield* readValue(ctx, target, false);
+  return yield* walkWrapper(ctx, target, false, undefined, true, value);
 }
 
 function* walkWrapper(
   ctx: JsonReadContext,
   target: JsonTypeReader,
+  keyed: boolean,
   next: string | undefined,
   foundValue: boolean,
   value: unknown,
@@ -248,7 +254,7 @@ function* walkWrapper(
         yield* skipNextValue(ctx.field(name));
         continue;
       }
-      value = yield* target.read(ctx.field(VALUE));
+      value = yield* readValue(ctx, target, keyed);
       found = true;
       awaiting = undefined;
       continue;
@@ -273,6 +279,47 @@ function* walkWrapper(
     }
     yield* skipNextValue(ctx.field(name));
   }
+}
+
+/**
+ * A wrapper's `$value`, read at `target`. **One value, one type name** ([TSON-JSON] §3.3): `$value` is
+ * the annotated value itself, as the value after a tag is in text, and no annotation object -- so where
+ * the selected type is not map-typed, an object there that leads with an annotation member is a resolver
+ * error, in either form, before `target` sees it: the value's type is the wrapper's one `$type`, and a
+ * second would be a second tag in text, which has none. At a map-typed selection the members of `$value`
+ * are keys (§3.2, §8.3.1) and nothing is refused.
+ *
+ * @param keyed whether the selected type is map-typed (`route.ts`'s `isKeyedType`)
+ */
+function* readValue(ctx: JsonReadContext, target: JsonTypeReader, keyed: boolean): Task<unknown> {
+  const at = ctx.field(VALUE);
+  if (!keyed && (yield* at.peek()).kind === 'object-start') {
+    const found = yield* lead(at);
+    if (leadPresent(found)) {
+      if (found.imports) {
+        // The one refusal an `$import` meets at every value position (§3.3).
+        at.field(IMPORT).report(
+          'SCOPE_NOT_ADMITTED',
+          "'$import' binds the document to the schemas it names, which it does at the top of the " +
+            "document alone (§3.3) -- '$value' is the annotated value itself, and no annotation object",
+          'no $import at this position',
+          IMPORT,
+        );
+      } else {
+        const member = found.typed ? TYPE : VALUE;
+        at.field(member).report(
+          'UNKNOWN_TYPE_REF',
+          "'$value' is the annotated value itself, and no annotation object: a value's type is " +
+            "written once, in the wrapper's '$type', which names a subtype directly (§3.3)",
+          'the value, with no annotation member of its own',
+          member,
+        );
+      }
+      yield* skipNextValue(at);
+      return undefined;
+    }
+  }
+  return yield* target.read(at);
 }
 
 /**

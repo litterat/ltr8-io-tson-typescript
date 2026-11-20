@@ -884,7 +884,7 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(isVerdict(diagnostic.code)).toBe(false);
   });
 
-  it('a parametric record, no type until applied, is a gap and not a verdict (§5.10)', () => {
+  it('a parametric record, no type a value is read against, is a validation error and no gap (§3.3, §3.4, §5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
         box: entry(parametricRecord(['T'], record([]))),
@@ -896,8 +896,8 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
       identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
-    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
-    expect(isVerdict(diagnostic.code)).toBe(false);
+    expect(diagnostic.code).toBe('TYPE_MISMATCH');
+    expect(isVerdict(diagnostic.code)).toBe(true);
   });
 
   it('a schema with unreadable entries still compiles: the gap is per entry, not per schema (aSchemaWithUnreadableEntriesStillCompiles)', () => {
