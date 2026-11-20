@@ -2,19 +2,20 @@
 
 ← back to the [README](README.md)
 
-Built against TSON Part 1 (lexer + data format) of the **2026 Revision 39** series, a working draft:
-https://tson.io/raw/2026/39/tson-part1-data.md, Part 2 (schema grammar + type system), also a
-working draft: https://tson.io/raw/2026/39/tson-part2-schema.md, and Part 3 (the JSON encoding,
-`./json`): https://tson.io/raw/2026/39/tson-part3-json.md.
+Built against TSON Part 1 (lexer + data format) of the **2026 Revision 40** series, a working draft:
+https://tson.io/raw/2026/40/tson-part1-data.md, Part 2 (schema grammar + type system), also a
+working draft: https://tson.io/raw/2026/40/tson-part2-schema.md, and Part 3 (the JSON encoding,
+`./json`): https://tson.io/raw/2026/40/tson-part3-json.md. Revision 40 is proposed, not adjudicated;
+the reference is pinned on its proposal branch, so a few small changes may still follow.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 944 subjects
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 1438 subjects
 over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: 944 / 944 subjects passing at the pinned suite commit, Class 1 and Class 2.**
+**Conformance: 1438 / 1438 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
-Class 1 (316): 28 identity, 35 lexer, 56 parser, 34 reader, 14 resolver, 149 vocabulary. Class 2
-(628): 264 schema, 133 link, 231 validate.
+Class 1 (319): 28 identity, 35 lexer, 60 parser, 33 reader, 14 resolver, 149 vocabulary. Class 2
+(1119): 516 schema, 222 link, 381 validate.
 
 `RUNNER.md` in the corpus is normative for runners, and every rule it states is implemented.
 Sidecars are parsed with this implementation's own parser. Subjects are fed as raw bytes —
@@ -28,8 +29,12 @@ five fetch codes — never satisfies an error vector. A reader-layer subject is 
 before the read is asserted, so a vector that had become a parse error cannot pass for the wrong
 reason. §8.2's refusal is asserted as the outcome apart from §8.1's four categories that it is:
 something was refused, _and_ nothing was also reported under one of the four. No position is ever
-asserted. A resolver-minted name's content hash is normalised wherever it appears — as an entry's
-own key, inside a body, or in a list of names a sidecar states — not only at the end of a key.
+asserted. Every name is compared as written: no entry is minted (Part 2 §8.2), so nothing carries a
+resolver-chosen suffix. An expected resolved form lists complete entries only, and the runner
+compares each key's `@meta.application` and `@meta.completion`. An extern's schema is served by the
+fixture rule an import's is, and a reference reaching the subject's own `!!id` is a cycle, never
+served. A `parser`-category validate vector is judged by the subject failing a Class 1 parse, since
+a Class 2 read reports base syntax under no category.
 
 The identity layer (`class1/identity/`, RUNNER.md rule 3e) judges a subject's first directive
 alone, nothing fetched: a `!!id` must be written in canonical form, an `!!import` may be any
@@ -101,6 +106,13 @@ day it does not match is the day it matters.
       `ABSENT`, `'absent'`, `ABSENT_MAP_KEY`, `Emitter.absentValue()`) are gone. A required field not
       written reads `(missing)`, and "absent" survives only for a field or facet a body does not
       state
+- [x] The data grammar carries no reference (§2.3, §2.4, §4.1, §7.2.5, §7.5) — six core-value
+      kinds, no argument list and no sibling form: `<` and `>` are reserved for the schema grammar
+      and a parse error wherever a value stands (a field, an element, a map key, a schema
+      document's payload read as data, a resolved form read as data), and `kind!` is a parse error
+      by the separator rule, `!` being the type prefix alone. A schemaless read reads a qualified
+      name as the token it is. A quoted token at a position typed by a reference is the reference
+      its text spells (`schema/referenceAtoms.ts`); the lexer is unchanged
 - [x] Event stream — the Tier 2 pull source
 - [x] Data parser — the Tier 3 AST
 - [x] Base types — null, boolean, string, numbers (integer, float, hex-float, based-integer),
@@ -148,40 +160,98 @@ day it does not match is the day it matters.
       refines onto a FINAL record; every subtype pins each selector FIXED, pairwise distinct as
       values (`1` and `0x1` collide); a member-dispatched position looks ahead within one record
       since the selector may arrive after the fields it selects
-- [x] The kernel, one namespace per schema (§4.1, §4.2, §8.1) — an entry is its value: a resolved schema is a map
-      from name to `Top`, a closed union of a type, a reference, a held template body and a
-      namespace value (`schema/meta/`). `type` is a kernel kind that `atom`, `product` and `sum`
-      compose, and every type carries `chain: { parents? supertypes? subtypes? }` — `parents` what
-      was written, `supertypes` the closed sorted chain of bare names (a chained refinement
-      records every ancestor), `subtypes` the linker's inverse; IS-A is read off the chain.
-      `top`, `type`, the three base kinds and `namespace` are ABSTRACT, and applying one directly
-      is refused. A record template is a `record` with `parameters`, not held: its fields are
-      resolved with the parameters standing in `type` and `value`, and its `chain.parents` are the
-      parents as written, an application among them. A record-bodied template as a family base is
-      ABSTRACT by derivation and nameable bare at a type position; the template itself is never
-      credited as a subtype of its own base, only its instantiations
-- [x] Namespaces (§4.1, §5.12) — `namespace` is a constructor whose instances are maps, and
-      `schema` and `field_map` are its two kernel compositions; a schema declares its own, and
-      an entry applying one is a value, never a type (naming it where a type is expected is a
-      resolver error). A record's `fields` is a map from name to `record_field` with no `name`
-      inside, so a name written twice is a duplicate map key. A schema's own namespace records are read into
-      a generic `MetaValue` directed by its declarations (`schema/namespaceReader.ts`)
-- [x] Kinds, references and values by name (§4.2, §5.3, §5.12) — `kind<C>` is an atom whose values
-      are the names of the types built with `C`, and every slot that names the type of a value
-      is `type_kind` holding one bare name; `type_ref` stands only where an application may.
-      A kind's `members` is computed at link by construction, over the governing closure
-      (`link/kindMembers.ts`). `ref<T>` (kernel vocabulary only) is an atom whose values are
-      qualified names, and a slot typed `ref<T>` holds one, judged at link step by step through
-      namespace keys and record fields (`link/valuesByName.ts`); a slot typed `T` holds the value
-      inline
-- [x] `@application` — a derived key annotation on an entry that closes an application (a
-      declaration naming one, a minted instantiation), written by the resolver and never by a
-      declaration
+- [x] The kernel, one namespace per schema (§4.1, §4.2, §8.1) — `spec/m/meta.tn` loads and its resolved form
+      matches `spec/fixtures/meta-resolved.tn` (83 entries, 80 written; the wait cycle around
+      `meta.record` holds 31 entries and its closure 66). An entry is its value: a resolved schema
+      is a map from name to `Top`, a closed union of a type, a value, an incomplete entry, an
+      alias, an extern and a namespace value (`schema/meta/`). `type` is a kernel kind that
+      `atom`, `product` and `sum` compose (`meta.apply` and a dependent sum compose it directly),
+      and every type carries `chain: { parents? supertypes? subtypes? }` — `parents` what was
+      written, `supertypes` and `subtypes` sets of bare names, IS-A read off the chain. No entry has
+      a derived kind label: a consumer reads a kind from the constructor. `top`, `type`, the three
+      base kinds and `namespace` are ABSTRACT, and applying one directly is refused
+- [x] Types written in place (§4.2, §5.2, §5.3, §8.2, #5) — a type slot holds a name or a type
+      written in place, `meta.type_expr` (a `meta.type_ref` or a `meta.type_inline { of }`).
+      Nothing is lifted, minted or merged: sugar (`[T]`, `{K => V}`, `T?`, a record body, an applied
+      constructor) resolves where it stands to `{ of: !C { … } }`. A type in place has no name, no
+      chain and no parameters, IS-A nothing, is named by no tag and is a member of nothing; a name
+      and a type in place are never one type, two equal types in place are one, compared canonically
+      (`schema/meta/typeInline.ts`); a diagnostic locates one by its field path. A value at such a
+      position carries no tag in the tree. A choice that is not disjoint names every variant
+- [x] Parametric records (§5.10, §5.10.1, #3, #18, #20) — a parametric record is a `meta.record` with
+      `parameters`, and nothing else takes parameters. A parameter is a type, standing at a field's
+      type, at a slot of a type in place there, or as an argument; anywhere else a resolver error
+      naming the slot. A bound is written, never inherited, names a type and not a constructor, and
+      a parameter passed to a bounded one carries a bound that IS-A it
+      (`compiler/parameterTypes.ts`). `H<args>` is `meta.apply`: declared, the substituted record
+      under that name carrying `@meta.application`; at an operand absorbed; at a type slot closed in
+      place, never looked up; over a parameter held until the holder is applied
+      (`compiler/parametricMaterialiser.ts`, `compiler/substitution.ts`). No application is IS-A
+      its head; no position, operand or `subtypes` index names a parametric record bare; an alias of
+      one is another name for it. A recursive application ties to the declaration closing it
+      (`compiler/heldRecursion.ts`), a record that could never close is refused at its declaration,
+      closing holds each parametric record at most once on a path
+      (`compiler/parametricRegularity.ts`), and a family is an abstract base, a parametric record
+      composing it and members composing a declared application (`compiler/familyJoiners.ts`). A
+      canonical application is compared by a string key (`compiler/canonicalApplication.ts`)
+- [x] Namespaces (§4.1, §5.12) — `namespace` is a constructor whose instances are maps
+      (`meta.map & { … }`), and `schema` and `field_map` are its two kernel compositions; a schema
+      declares its own, and an entry applying one is a value, never a type (naming it where a type
+      is expected is a resolver error). A record's `fields` is a map from name to `record_field`
+      with no `name` inside, so a name written twice is a duplicate map key. A schema's own
+      namespace records are read into a generic `MetaValue` directed by its declarations
+      (`schema/namespaceReader.ts`)
+- [x] References, qualified names and values by name (§4.2, §5.3, §5.12) — `meta.ref` is the one
+      reference constructor and its `of` says whether it names types or values. A qualified name is
+      the text of one token of either form, split at `.`, each segment a name of the family of what
+      it enters and matched in the family's form (so `get` selects `GET` under a case-folding
+      family); a namespace `key_type` or a record `name_type` admitting `.` is a resolver error. A
+      reference over a constructor admits every type built with it
+      (`link/kindMembers.ts`); a reference over values is judged at link step by step through
+      namespace keys and record fields (`link/valuesByName.ts`); a slot typed by a type holds the
+      value inline
+- [x] `@meta.application` — a derived key annotation, a `meta.apply` value, on a declared
+      application's key alone; applications compare as values, head and arguments
+- [x] `@meta.completion` — a derived key annotation naming the incomplete entries a declaration
+      completed (§8.1), compared by the harness beside `@meta.application`
+- [x] Open construction and incomplete entries (§5.5, §5.7, #10) — `!C ^ { values }` over a constructor
+      declares an incomplete entry: no type and no value, written field by field through
+      `!X ^ { values }`, completed by `!X { … }`, `!X value` or `X<A …>`, imported like any entry,
+      written in no resolved form, and refused wherever a type is named (a field's type, a variant,
+      a bound, an operand of `&`, a reference's `of`, an annotation, a parameter's name, a tag in
+      data) (`compiler/incompleteEntries.ts`). The kernel's `meta.set_type` and `enum` are
+      incomplete entries and `set` an alias of `meta.set_type`. `C<args>` over a constructor is
+      construction over its argument slots — the required fields holding a type, in declaration
+      order (`compiler/constructionRewrite.ts`, `compiler/constructionSugar.ts`)
+- [x] Record derivation and restatement (§5.7, §5.8, #11, #12) — `^` follows `!name` and takes
+      values; `&` is the one way to derive a record; `!R ^ { … }` over a record is a resolver error
+      naming the composition; a restated field's rules are judged at link
+      (`compiler/restatements.ts`, `link/restatedFields.ts`). `!T ^ { values }` refines a type built
+      by `meta.array`, `meta.map` or a constructor IS-A either, namespace types included
+- [x] Dependent fields (§5.2, #6) — a dependent field's type is a sum written in place, `{ of:
+!meta.dependent { on: kind } }`, whose sugar `kind!` stands at a record field's or a group
+      member's type alone; `on` is `text`; its sibling is typed `meta.type_ref` or
+      `meta.type_expr` (`link/dependentFields.ts`)
+- [x] Choices and tags (§5.4, §7.2, #15) — a tag at a choice names a variant, or a type that IS-A
+      exactly one, by the entry it reaches; a tag IS-A two variants and naming neither is a
+      validation error; a choice listed as a variant is disjoint; variants compare in order
+      (`link/choiceSelection.ts`)
+- [x] Externs (§5.13, §7.9, §11.5, #13) — `!meta.extern { schema: …  type: … }` names one entry of
+      another schema under a local name: a hop judged by its target's identity, naming a type a value
+      can have, sealed against `&`, `-`, `^`, a construction or application head, defaults, pins and
+      qualified names through it (`link/extern*.ts`). The foreign schema is a dependency loaded with
+      the imports (`Tson.loadSchema`) on the same library, policy and kernel, the reference
+      relation acyclic, the import-closure count including it. A value at an extern position is
+      read under its own schema in TSON text, the tag in front of it the enclosing scope's, and a
+      diagnostic inside it names the foreign schema and the extern
+      (`compiler/externReader.ts`); binding to host classes is `NOT_IMPLEMENTED`, as in the
+      reference
 - [x] Declared applications as entries — a declaration naming a fully-bound application
-      (`bx => box<text>`) resolves to the closed record itself with no minted twin and no
-      `!reference` hop; a use-site application still resolves to the owning declaration
+      (`bx => box<text>`) resolves to the closed record itself under that name, no twin and no
+      alias hop; a use-site application closes in place
 - [x] Enum classes (§5.4) — an enum's class is read off its members under its `name_type`;
-      `text_enum` is gone, and `enum_set`'s element type is `text`
+      `enum` is an incomplete entry, so a slot holding an enum type is `meta.enum_type`, and
+      `enum_set`'s element type is `text`
 - [x] `text_type.members`, settable once beside `pattern` (also settable once); every member
       checked against the facets beside it
 - [x] `disjoint` class stability — an approximate atom still admitting NaN or infinity, and a map
@@ -205,7 +275,7 @@ day it does not match is the day it matters.
 - [x] Name hygiene at the schema layer (§11.4) — the four scopes §11.4 names: one enum's members,
       one record's field names including group labels, one schema's declared names, and the merged
       namespace at `!!import`, where two schemas each clean alone collide on import; plus a fifth
-      this implementation adds, a template's own type parameters, which §11.4's list omits though
+      this implementation adds, a parametric record's own type parameters, which §11.4's list omits though
       `<T, Т>` is exactly the substitution hazard §8.2 exists to refuse. Within a scope the
       collision relation runs first and the two per-name rules after, so a pair that is both
       confusable and individually mixed-script reports as confusable. Choice
@@ -220,27 +290,27 @@ day it does not match is the day it matters.
       group however it is spelled (a `!record { groups: [ … ] }` literal included), and every group
       refusal reads `FIELD_GROUP`. Removing a group's other options leaves the surviving member's
       voidability alone; a map's voidable values count for inhabitance (§5.10.1)
-- [x] Typed template parameters (§5.2, §5.10, #9) — `<N, T, V: T>`: a value parameter carries a
-      type, may name an earlier parameter only, and is checked at the call site; a literal type
-      argument is refused at the declaration that wrote it, not at a minted name
-      (`compiler/templateSubstitution.ts`, `compiler/templates.ts`)
+- [x] Bounded parameters (§5.10, #9) — `<T: bound>`: a bound is written and names a type; an
+      argument outside its bound is refused where the application closes, and an argument is a name
+      or a parameter, never a literal, a sugar form or an application (`compiler/parameterTypes.ts`)
 - [x] Declared family members (§5.2, §5.10, §8.2) — a family's members are the declarations that
       name them; two members pinning one selector value are refused, comparing pins under the
-      selector's own type; only a pin on an _unmarked_ name is a selector
+      selector's own type; only a pin on an _unmarked_ name is a selector; a value placed by its
+      pins waits on each declaration that may be its member (item 101)
 - [x] Identifier families (§5.4, §5.5, §7.7, #7) — `identifier` is a text family with a profile
       (`identifier_type`: `start`/`start_add`/`continue`/`continue_add`/`medial`/`exclude`,
       `normalization`), refinable but fixed once moved; a value of the family is a name, so §8.2's
       mechanisms reach it under its profile (`unicode/identifier-profile.ts`)
 - [x] `enum_type` (§7.4) — an enum's `name_type` is an identifier family whose form implies
       NFC, and its members are judged under that type's profile; a pinned `name_type` is followed
-      through enum refinements and a template's held body to the constructor that pins it, and a
+      through enum refinements to the constructor that pins it, and a
       schema's own constructor refining `enum_type` reads through its binding. A closed set of
       text is `!text ^ { members }`; an enum over a text family is refused. A narrowed member set
       keeps the inherited order
 - [x] Name types (Part 2 §5.2, §7.2, §7.7, §11.4; Part 1 §2.5, §8.2) — a record's field names are
       values of its `name_type`: set where declared, a composition's supertypes' one type
-      (templates applied at an operand included), `field_name` by default, resolved in the
-      author's namespace first. Judged at link (`link/fieldNames.ts`): an identifier family, `NONE`
+      (applications at an operand included), `meta.identifier` by default (item 123), resolved in
+      the author's namespace first. Judged at link (`link/fieldNames.ts`): an identifier family, `NONE`
       refused, `ASCII_CASEFOLD` only over an all-ASCII profile, every declared name and selector a
       value, two spellings of one value refused; a profile may add no Default_Ignorable, control,
       or space but U+0020. The tree reader matches a document's names in the type's form, judges a
@@ -254,27 +324,33 @@ day it does not match is the day it matters.
 - [x] `void` and facets by family — `void_type` in the kernel; every facet holding a value of the constrained
       family is typed by that family's own instance and every count by `numeric.count` (#16, #17)
 - [x] Processor policy (Part 1 §8.2, `m/policy.tn`) — `TokenPolicy` (a UTS #39 level and its
-      permitted scripts), `IdentifierPolicy` (a script policy plus `perSegment` and
-      `skeletonDistinctness`), a token policy, §9.1's limits and the UTS #39 data version, held in
+      permitted scripts; `policy.token_policy`, whose two loosest levels judge a token alike),
+      `IdentifierPolicy` (a level, the permitted scripts, `perSegment` and
+      `skeletonDistinctness`), §9.1's limits (no materialisation-depth limit: closing holds each
+      parametric record at most once on a path) and the UTS #39 data version, held in
       one `ProcessorPolicy`. `policy.tn` is the sixth bundled schema, served by identity; nothing
       loads a policy document and no document selects its own policy. A name refusal
       (`CONFUSABLE_NAMES`/`RESTRICTED_*`) and a §9.1 limit refusal (`LIMIT_REFUSED`) are not verdicts (`isRefusal`), and a schema-load
       refusal carries its §8.2 code and a pointer to the refused key
-- [x] Resolved output names the applied constructor (§8.1) — `enum_set` writes `!meta.set_type { … }`
-      as the fixture does, from the head recorded in the entry's facts; the five bundled fixtures
-      (`spec/fixtures/*-resolved.tn`) compare equal in written form with no remaining deferral
+- [x] Resolved output names the applied constructor (§8.1) — a closed entry is written under the
+      constructor recorded in its facts (`!numeric.integer_type { … }`, `!meta.record { … }`), a
+      completion under its base constructor (`!meta.array { … }`, `!meta.enum_type { … }`) with
+      `@meta.completion` on its key; a type in place as `{ of: !C { … } }`; a parametric record as
+      `!meta.record { parameters: … }`; no synthetic entry, no incomplete entry, no kind label. The
+      five bundled fixtures (`spec/fixtures/*-resolved.tn`) compare equal in written form
 - [x] `tson strip` (`compiler/strip.ts`, the reference's `TsonSchemaStripper`; `tson strip [--keep-docs] <schema>`) — drops `!!id`,
       a header argument's `?query` and the reader-facing annotations (or none under
-      `--keep-docs`), shortens a bundled identity (`meta`, `numeric`, `temporal`, `net` and `core` become `"39/net"` and so on),
+      `--keep-docs`), shortens a bundled identity (`meta`, `numeric`, `temporal`, `net` and `core` become `"40/net"` and so on),
       and re-parses its own output
-- [x] Desugaring — every sugar form lifted to a closed synthetic entry
-- [x] Resolution — composition, refinement, constructor application, templates
+- [x] Desugaring — every sugar form resolved in place where it is written (`compiler/desugar.ts`)
+- [x] Resolution — composition, refinement, constructor application, construction, parametric
+      records and their applications
 - [x] Linking — reference validation, transitive `!!import` merge (diamonds unified), `subtypes`
       reverse-index population, choice disjointness and `@disjoint` assertion checking
 - [x] Identity and hashing — canonical `!!id` (`link/identity.ts`), `?sha256=` pinning and content
       hashing via a hand-written, zero-dependency SHA-256 (`link/contentHash.ts`'s own
       `sha256HexSync`; `sha256Hex` is the same computation wrapped `async` for existing callers).
-      Registering a schema (`config.ts`'s `resolveSchema`/`preload`) pin-checks it like a fetched
+      Registering a schema (`config.ts`'s `resolveSchema`/`loadSchema`/`preload`) pin-checks it like a fetched
       one either way — its own `!!id` pin against its own content, and a later pinned reference to
       its identity against the recorded hash
 - [x] Bundled schemas — `meta.tn` (the kernel), `numeric.tn`, `temporal.tn`, `net.tn` and `core.tn` resolving
@@ -313,7 +389,7 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
 - [x] Revision 37 changes (§3.1, §5, §6, §8.5, §9.4) — duplicate member names judged after the key
       type's `normalization`, then NFC; identifier families string-class under their profile;
       text put into its form before facets; `uri`/`iri` refusing a relative reference; a leap
-      second refused; a set may be empty; `tuple1<T>` a one-element array; an `ordered` map
+      second refused; a set may be empty; a one-position tuple a one-element array; an `ordered` map
       delivered in the order read, object form and pairs form alike; `FIELD_GROUP` for a group
       that is not optional admitting exactly one option, an optional group at most one, `+` any
       non-empty subset; an identifier-typed value judged under its family's profile and an
@@ -322,8 +398,15 @@ against [TSON-JSON] (`spec/tson-part3-json.md`).
       (`json/schema/declared.ts`) reads an object led by `$type`, a qualified name read against the
       governing closure; a bare value or an object with no leading `$type` is `VALIDATION_ERROR`, a
       `$type` outside the closure `UNKNOWN_TYPE`. `$import` stands for the header's `!!import`s and
-      at any value position is `SCOPE_NOT_ADMITTED` (`json/schema/tags.ts`). A reference or
-      application at a `meta.reference_type` position is a JSON string read as an unquoted token
+      at any value position is `SCOPE_NOT_ADMITTED` (`json/schema/tags.ts`)
+- [x] Revision 40 changes (§1.3, §3.3, §3.4, §5.6, §6.3, §8.1, §8.3.1; change log §3.4, §4.7) — a
+      JSON string at a reference holds a qualified name, each segment a name of its family, and
+      `"set<text>"` and `"kind!"` are strings outside the grammar; a `$type`, or a root type
+      supplied out of band, naming a parametric record is refused, and a type in place has no
+      `$type`; `$type` at a choice names a variant or a type IS-A exactly one; one value, one
+      type name (a wrapper's `$value` carries no `$type`); the map escape names the variant;
+      sorting leads with the annotation members only for records of `meta.identifier` names; a set
+      is described by its facets and a one-position tuple is declared
 - [x] Front door (`json/facade.ts`) — `readJsonTree`/`readJsonTreeAsync`,
       `validateJson`/`validateJsonAsync`, sync over bytes and async over a chunked `Task<T>` source
       exactly as the text stack's `readTree`/`validate`; a caller supplies an already-compiled
@@ -398,8 +481,12 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
       `tson policy`.
       Bootstraps its own copy of
       the six bundled schemas, embedded at build time from `spec/m/` via a generator script
-      under `scripts/`, so `validate --schema`/`compile` work offline with no `SchemaSource`
-      configured. `hash` is read-only: it prints the pinned reference rather than rewriting the
+      under `scripts/`, so `validate --schema`/`compile` work offline. Both load a schema
+      with `Tson.loadSchema`, so what it imports and what its externs name are fetched too —
+      from the other schema files on the command line alone, served by their `!!id`
+      (`compile a.tn b.tn`; a repeated `--schema`, the first binding the run), never from the
+      network or a directory; a reference no file declares is unobtainable (`compile` rejects,
+      `validate` exits `69`). `hash` is read-only: it prints the pinned reference rather than rewriting the
       input file in place. Verified end to end: `init-example`, `validate --schema --root`,
       `compile`, and `hash` all run against a real generated example and exit `0`
 - [x] Dual ESM/CJS publish — `npm run build` (tsup) produces `dist/*.{js,cjs,d.ts,d.cts}` for every
@@ -414,32 +501,54 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
 
 ## Known gaps
 
-- **Revision 39 gaps the reference carries too** (the reference's `BACKLOG.md`; this port runs what the
-  reference runs, so each is open in both):
-  - **A refinement source's closing is order-dependent (change log #1).** `x => box<text> ^ { … }`
-    should be IS-A the entry `box<text>` denotes whichever declaration is written first. Written
-    after `tb => box<text>`, `x` is IS-A a minted synthetic with no edge to `box`.
-  - **An applied parent earns no edge to its head (#20).** Under the expansion rule `ok_of =>
-ok<text>` over `ok => <T> result<T> & { note: text }` is IS-A `result` as well as
-    `result<text>`; here its supertypes are `[ok]`, plus `result<text>` only where a declaration
-    names it.
+- **Revision 40 gaps the reference carries too** (change log §5's "remainder" rows and the reference's
+  `BACKLOG.md`; this port runs what the reference runs, so each is open in both):
+  - **A parametric record nothing applies is judged only in part at its declaration (#3).** Part 2
+    §5.2, §5.10 and §5.10.1 judge it there, and the implementation does not report a name in it that
+    resolves to nothing while nothing applies it, a recursion that can never close
+    (`bad => <T> { v: T  inner: bad<T> }`) until `use => bad<text>` applies it, or its selectors
+    (`p => <T> { k: base =?  v: T }` over a record `base` loads where the same selector on a closed
+    record is refused). A literal under a closed type in one (`n?: int8 ~ 500`) is judged when an
+    application closes it.
+  - **A name in a schema document's annotation value is not judged at link (#8, §5.12).** The
+    value's shape is checked and the name is delivered unjudged; a data document's is judged at the
+    read.
+  - **A dependent field whose sibling holds a type written in place is not read by a tree read
+    (#5, §5.2).** A tree read, in either encoding, reports the value as `NOT_IMPLEMENTED`; a sibling
+    holding a dependent type is refused as naming no type a value can be read against.
+  - **Two points on deriving a record with `&` (#11, §5.8).** A restatement that changes a pin loads
+    where the text says it MUST NOT, and a constructor composed with `&` that adds no field
+    (`minlist => meta.array & { min_items?: = 1 }`) loads and cannot be applied: `minlist<text>`
+    reports not implemented.
+  - **Five points on the extern (#13, §5.13, §7.9, §11.5; Part 3 §8.6).** In TSON text a root typed by an
+    extern, and an extern reached through an alias of a container, write no boundary tag; a tag
+    naming an extern at a position no extern types is refused in both encodings; a map key typed by
+    an extern reports outside the foreign scope in JSON; no JSON writer writes a `$type`, a boundary's
+    included. **Divergence from the reference:** the import-closure limit counts a schema an extern
+    reaches (§11.5); the reference counts nothing.
+  - **A field of an incomplete entry typed by a type written in place is read only where the entry is
+    completed (§5.5).** A wrong value there is reported at the completion, and a name it holds is not
+    judged when an entry never completed links.
   - **A float's bounds skip NaN and the infinities (#23).** `!float64 ^ { max: 100 }` accepts
     `+.inf` and `.nan`; an infinity is ordered and should be judged against the bounds, and a body
     with any bound admits no NaN.
   - **A float's bounds are compared after rounding (§5.5).** §5.5 validates a bound against the
     value as written, before rounding, so `!float32 ^ { max: 1.0 }` accepts a written `1.00000001`
     that rounds to `1.0`.
+  - **An explicit `!meta.alias { target: C }` cannot be applied (§8.3)**, where the text applies the
+    explicit spelling of an alias as its target is (`compiler/desugar.ts`'s `checkApplication`).
+  - **A parameter's bound naming an alias of a constructor, a value entry or a bare parametric record
+    passes (§5.10)**, where the text refuses a bound that names none of a type
+    (`compiler/parameterTypes.ts`).
+  - **A refinement switching a bound's strictness is refused (§5.7, §5.11).** `!p ^ { exclusive_min: 5 }`
+    over `min: 1` merges to both options, and no spelling moves an inclusive floor to an exclusive one.
   - **Resolved output is not ingested (§8.1, §10.1).** A schema is always re-resolved from source,
-    so no path reads a resolved `{ type_name => top }` map and verifies it: the recorded
-    `template_param.type`/`bound` against the held body, the family checks, §5.11's group rules and
-    each kind-typed slot's name against its kind.
+    so no path reads a resolved `{ type_name => top }` map and verifies it: the family checks, §5.11's
+    group rules and each reference-typed slot's name against its kind.
 
 - **The bind readers have no dependent field (§5.11).** A dependent field reads through the tree
   readers in both encodings. The class-binding readers have no notion of a field whose type a
   sibling names, so a bound record with one is not read.
-- **Parameter-type inference refuses `<X, Q> pin2<X, Q> & { … }` (§5.10).** It reads `Q` as both `X`
-  and `T`. No vector writes this form, so the case is open against the reference's current
-  `ParameterTypes`.
 - **A JSON dependent member's order-exception refusal (§6.1.6) is positioned at the cursor**, not at
   the member, because the JSON read context carries no position override. No vector asserts a
   position.
@@ -460,9 +569,11 @@ ok<text>` over `ok => <T> result<T> & { note: text }` is IS-A `result` as well a
     read with no binding at all.
   - **§8.5's declared positions** (`meta.declared_type`) are read (`json/schema/declared.ts`)
     against the closure of the schema the position belongs to; the encoding has no registry or
-    loader and fetches no schema. A template naming no `extension` — a genuine open template used
-    bare, never applied — still takes a `NOT_IMPLEMENTED` reader in JSON, where the text reader
-    reads it.
+    loader and fetches no schema.
+  - **A value at an extern position (§8.6) is not read by the JSON stack.** The text reader reads
+    it under its own schema; the JSON compiler gives an extern a `NOT_IMPLEMENTED` reader, so a
+    `.json` input reaching one reports it as a gap, not a verdict. §8.6's leading `$type` is the
+    enclosing scope's and every other name the foreign schema's.
   - **The §3.5 `TSON-Schema`/`TSON-Accept-Schema` header fields are not implemented.** They are an
     HTTP-transport convention over §3.4's out-of-band route; nothing in this package or the CLI
     reads or writes them. A caller wiring an HTTP layer implements them itself, on top of the
@@ -526,23 +637,6 @@ ok<text>` over `ok => <T> result<T> & { note: text }` is IS-A `result` as well a
     category these violations belong to. Whether a dedicated code (a new `RESERVED_MEMBER_MISPLACED`
     or similar) is worth adding to the closed set, over continuing to overload `UNKNOWN_TYPE_REF`,
     is an open question rather than a settled one; recorded here so it is not lost between reviews.
-  - **A choice variant that is itself a sealed or abstract-with-no-discriminators record family is
-    tagged by its own name, never by a subtype's.** [TSON-JSON] §7.2 (schema series) carves choice
-    positions out of the subtype-inclusive subsumption rule it states for "every other typed
-    position", giving them §5.4's own variant-membership relation instead
-    (`json/schema/dispatchChoice.ts`'s and `compiler/choiceReader.ts`'s own top notes have the
-    full citation); the reference implementation's own `DispatchChoiceReader` flattens subtypes in
-    too ("a variant, an alias of one, or a subtype of one by its tag"), and this port follows it
-    for the alias half only, deliberately. Where the variant's own name has no direct instances
-    (an ABSTRACT-with-discriminators/SEALED family, or an ABSTRACT-with-subtypes family reached
-    inline), `json/schema/route.ts`'s own `ChoiceSelfTagReadable`/`compiler/subsumption.ts`'s own
-    `ChoiceSelfTagReader` let the variant's own name still place a value — reading its
-    discriminators exactly as the untagged route would — since it is the only spelling admissible
-    at the choice's own tag and the shape would otherwise be unwritable inline in the text
-    encoding (JSON alone has a second route via the wrapper form's fresh `$value` object). A
-    subtype's own name stays refused at the choice's tag either way; reaching one still means
-    typing the position by the record family instead (Part 3 §8.4's own closing paragraph), or,
-    in JSON only, wrapping (`{"$type": "<family>", "$value": {"$type": "<subtype>", ...}}`).
 
 - **Resolved-output ingest is unimplemented.** §8.1 says ingest reads `chain` as stated, keeps
   `@application`, recomputes a kind's `members` and re-runs the family checks over the closure, and
@@ -555,13 +649,6 @@ ok<text>` over `ok => <T> result<T> & { note: text }` is IS-A `result` as well a
   it and re-lexes its own output, so memory is proportional to the document rather than to its
   nesting depth. A schema document is small and the command is a one-shot, so this is a deliberate
   departure from CLAUDE.md's streaming rule rather than an oversight.
-
-- **A template's held application is re-serialised, not preserved as written.** §5.10 holds the
-  application _as written_, and `compiler/heldBody.ts` builds the text with
-  `writeDataValue(application)` from the parsed form, so the author's own spacing does not survive. §5.10 and §8.2 make whitespace free for
-  identity — comparison is over the parsed form — so nothing compares wrongly; the resolved output
-  simply does not round-trip the source byte for byte. Closing it means carrying the source span
-  through the schema parser to the held body.
 
 - **A data document's annotations are preserved but never resolved (§6).** §6 says an annotation
   names a type reachable one hop through the governing target — the `!!import` closure for a data
@@ -656,16 +743,18 @@ record for 'base', found an array`) names the terminal regardless of how many al
   | annotations            | on one value                                             | 64         |
   | total values           | all values in one document, containers and scalars alike | 16,777,216 |
 
-  **All six of [TSON-SCHEMA] §11.5's schema-side limits are enforced**: import closure, schema
-  entries, alias chain, supertype chain, materialisation depth and wait depth. Each has its own
-  refusal builder in `core/limits.ts`. They are enforced in these places, in that order:
-  `config.ts`'s `resolveAgainstRegistry` (import closure and schema entries), `link/aliasChain.ts`'s
-  `walk`, `compiler/definitionResolver.ts`'s `checkSupertypeChainLimit`, `compiler/templates.ts`'s
-  depth guard, and `compiler/schemaResolver.ts`'s wait-order lookup. §11.5 makes all six a Class 2
-  MUST on the same terms as the document-side limits. Each is configured on the instance through
+  **All five of [TSON-SCHEMA] §11.5's schema-side limits are enforced**: import closure, schema
+  entries, alias chain, supertype chain and wait depth. Each has its own refusal builder in
+  `core/limits.ts`. They are enforced in these places, in that order: `config.ts`'s
+  `resolveAgainstRegistry` (import closure, which counts a schema an extern reaches, and schema
+  entries), `link/aliasChain.ts`'s `walk`, `compiler/definitionResolver.ts`'s
+  `checkSupertypeChainLimit`, and `compiler/schemaResolver.ts`'s wait-order lookup. §11.5 makes all
+  five a Class 2 MUST on the same terms as the document-side limits. Closing an application is
+  bounded by structure, not by a limit: each parametric record of the closure is held at most once on
+  a path. Each is configured on the instance through
   `Config.limits` (`withLimits`), with one exception: the alias chain is walked at its §11.5 default,
   `DEFAULT_MAX_ALIAS_CHAIN`, as the reference's `AliasChain` is, so a stated `max_alias_chain` is
-  reported but not consulted. `Tson.limitsPolicy` reports all seventeen thresholds, and so do the
+  reported but not consulted. `Tson.limitsPolicy` reports all sixteen thresholds, and so do the
   CLI's `tson policy` and every `validate`/`compile` report (`limits_policy`, beside `policy`),
   reachable with no document in hand, as §9.1 asks.
 
@@ -695,17 +784,12 @@ record for 'base', found an array`) names the terminal regardless of how many al
   form, with one documented difference.** `subtypes` is exact against `meta-resolved.tn`, and every key annotation (§6) now resolves with its
   value: `schema/annotationReader.ts` reads one through the governing meta's own compiled reader
   for the annotation's name, over `compiler/dataValueEvents.ts`'s replay of the written value.
-  `@synthetic` is compared against the fixture exactly; `@doc` is compared against the **source
+  `@meta.application` and `@meta.completion` are compared against the fixture exactly; `@doc` is compared against the **source
   document** instead, because `*-resolved.tn`'s own header says it carries long `@doc` strings
   abbreviated and that "a conforming resolver preserves them verbatim" — so the fixture cannot be
   the oracle for their text, and the source is a stronger one.
   `packages/tson/test/bundled-schemas-resolve.test.ts` holds the difference as an assertion
-  rather than a skip:
-  - A held `template` text is re-serialised from the parsed form
-    (`compiler/heldBody.ts`'s `writeDataValue(application)`) rather than carried through as
-    written, so it loses its author's spacing. §5.10 and §8.2 make whitespace free for
-    identity, so nothing compares wrongly; the resolved output just does not round-trip byte for
-    byte. Closing it means carrying the source span through the schema parser to the held body.
+  rather than a skip.
 
 - **Tree mode's variant dispatch still buffers a value's whole annotation run.** §3.2's
   `!type-ref` sits behind a run of annotations of any length, so a dispatch has to reach past it,
@@ -748,7 +832,7 @@ record for 'base', found an array`) names the terminal regardless of how many al
 - [x] Conformance harness — discovers and pairs every vector at the pinned suite commit, under
       RUNNER.md's rules, the identity layer's rule 3e included
 - [x] Reference fetch — pinned Java source and the vector suite
-- [x] Vendored `spec/` — the three spec parts, the Revision 39 change log and the six bundled
+- [x] Vendored `spec/` — the three spec parts, the Revision 40 change log and the six bundled
       schemas with their five fixtures, byte for byte
 - [x] Unicode tables — `XID_Start` / `XID_Continue` / `Nd`, generated and checked in
 - [x] IDNA2008 and Bidi tables — RFC 5892's derived property and `Bidi_Class`, generated into

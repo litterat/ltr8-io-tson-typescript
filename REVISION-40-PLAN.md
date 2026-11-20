@@ -513,4 +513,99 @@ applied-head paragraph against the new kernel), `IDIOM-DEBT.md`, `ORCHESTRATION.
 
 ## To report upstream
 
-Collected from the stage reports.
+Collected from the stage reports and the reviews above. Each entry says the section, what the
+reference does, what this port does, and why. "Same" means the reference's code behaves as the port's
+did before its repair, so the finding is the reference's too.
+
+### Spec and reference
+
+1. **Part 2 §12.1, `size-bound = decimal-natural`.** _Reference:_ the grammar is not enforced at the
+   bound; the parse defers to `min_items`, so `[text; 0x10]` loads with `min_items` 16. _Port:_ the
+   schema parser judges the bound as decimal-natural and refuses `0x10`. _Why:_ §12.1 states the
+   production; a hex size is a grammar error, and a bound naming a parameter (`[T; N]`) is a parse
+   error too, where §5.3 calls it a resolver error (the two sections disagree on the category).
+2. **Part 2 §8.3, an explicit `!meta.alias { target: C }`.** _Reference:_ cannot be applied
+   (`SchemaDesugarer.java:587`). _Port:_ the same (`compiler/desugar.ts`'s `checkApplication`).
+   _Why:_ §8.3 says the explicit spelling of an alias is applied as its target is; both run the
+   other reading, and no vector pins it.
+3. **Part 2 §5.10, a parameter's bound naming an alias of a constructor, a value entry or a bare
+   parametric record.** _Reference:_ passes (`ParameterTypes.java:218`). _Port:_ passes
+   (`compiler/parameterTypes.ts`). _Why:_ §5.10 says a bound names a type and never a constructor or an
+   incomplete entry; following an alias to its terminal would refuse all three.
+4. **Part 2 §5.10.1 / §3.4.1 item 29, closing in place is exponential.** `r_i => <T> { a:
+r_{i+1}<T>  b: r_{i+1}<T> }` then `x => r0<text>` doubles per level (n=18 takes 2.3 s; n=30
+   does not end). _Reference:_ the same code; item 29 bounds a path, not the work. _Port:_ memoises a
+   closed in-place record by canonical application outside an active recursion (WP2E), a pure
+   function of its key, so no verdict changes. _Why:_ a schema is routinely fetched from elsewhere;
+   exponential closing is a denial of service the §11.5 limits do not cover.
+5. **Part 2 §8.2, an applied parent's edge over aliases.** `pet_of<dog_alias>` loses the IS-A edge
+   `pet_of<dog_type>` gets, against §8.2's "every argument's alias chain followed", and an imported
+   alias head is not followed either. _Reference:_ the same. _Port:_ dereferences both sides
+   (`compiler/schemaResolver.ts`, `completed()`/`appliedParentEdges`) (WP2E).
+6. **Part 2 §8.3, §5.10, regularity and passed-on bound checks read the head as written.** `sw =>
+swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is refused; the same
+   through `bx => boxed` for a bound. _Reference:_ the same. _Port:_ follows the head to its
+   parametric record, as the held-recursion check already did (WP2E). _Why:_ §8.3 and §5.10 say an
+   alias of a parametric record is applied as it is.
+7. **Part 2 §5.7, §5.11, a refinement switching a bound's strictness.** `!p ^ { exclusive_min: 5 }`
+   over `min: 1` merges to both options and is refused. _Reference:_ refuses it. _Port:_ refuses it.
+   _Why:_ §5.7's field-wise merge with §5.11's one-option group leaves no spelling that moves an
+   inclusive floor to an exclusive one; the text should say how, or say it cannot.
+8. **Part 2 §5.12, a name in a qualified value reference under hygiene.** _Reference:_ judges no
+   segment. _Port:_ judges the entry segment alone. _Why:_ §11.4 names the scopes a name is judged in;
+   a qualified name's first segment is a declared name, a later one a field or key already judged in
+   its own scope.
+9. **Part 2 §11.5, the import closure counts a schema an extern reaches.** _Reference:_ counts
+   nothing. _Port:_ counts it. _Why:_ §11.5 and §5.13 say the closure includes every dependency read
+   with the imports.
+10. **Part 2 §5.8, §5.2, pins compared by token text.** _Reference:_ accepts a restatement that changes
+    a pin (its backlog), so it compares none. _Port:_ `refuseMovedPins` refuses a changed pin, and
+    `placedByPins` places a value by its pins, each comparing a pin by its token text, so `0xFF` and
+    `255` are two pins. _Why:_ §5.8 says a restatement MUST NOT change a pin and §5.5 makes `= 255` over
+    `= 0xFF` the identity case; token text is stricter than the text and refuses a legal restatement
+    until the comparison moves to the field type's own equality.
+11. **Part 2 §6, §5.12, an annotation value of an imported type.** _Reference:_ checkpoints the read in
+    the document's namespace. _Port:_ reads it through the import's own compile and falls back to a
+    checkpoint read when that refuses the value. _Why:_ the import's compiled reader is the declared
+    type's, and a value naming a name of the annotating document only resolves in the checkpoint.
+    Annotation names in front of a foreign value are judged in the enclosing scope and their values
+    are not read, as the reference does.
+12. **Part 2 §4.1, §5.10, "no parametric record is a type a position names".** The text states the
+    refusal on references (§4.1's predicate keeps `meta.record` a type); the port follows the
+    reference, so a parametric record is left out of `subtypes` and refused by a reference's `of`.
+    Both readings are the change log's own "for confirmation".
+13. **Part 2 §5.2, item 42, a default or pin at a field typed in place.** Admitted only where the
+    type in place is a reference. A value read at a type in place carries no tag in the tree. Both are
+    the port's readings of §5.3 and §7.2, matched to the reference; no vector separates them from the
+    alternative.
+14. **Part 2 §5.9, §5.11, one option per field group in a constructor body.** The port judges it where a
+    constructor body is read (`schema/metaReader.ts`'s `refuseSeveralOptions`); the resolver's
+    constructor-body check is the better home. A vector pinning a body that states two options of one
+    group would say which phase's error it is.
+15. **The corpus, `validate` `parser` vectors (Part 1 §8.1, RUNNER.md).** A `parser`-category
+    vector at the validate layer is judged by the subject failing a Class 1 parse, because a Class 2
+    read reports base syntax under `VALIDATION_ERROR`, which the runner maps to `validation`. The
+    reference lists this as an open backlog entry; the harness rule is the same in both.
+16. **The reference's `BACKLOG.md` items the port runs the same way, from change log §5's "remainder"
+    rows:** a parametric record nothing applies is judged only in part (#3); a name in a schema
+    document's annotation value is not judged at link (#8); a dependent field whose sibling holds a
+    type written in place is not read by a tree read (#5); a restatement that changes a pin loads and
+    a constructor composed with `&` that adds no field cannot be applied (#11); five extern points
+    (#13). `STATUS.md` lists them as known gaps.
+
+### Ported behaviour the reference's Java fixture test cannot see
+
+17. **Part 2 §8.1, resolved output names the applied constructor.** The port compares written form;
+    the reference's `ResolvedFixtureTest` binds the fixture into the value model and compares bodies,
+    so two spellings of one body (a head, or a restated field at its default) arrive as one value
+    there and cannot differ. A text comparison is the stricter check of the fixtures' own text.
+
+### Divergences that are not spec questions
+
+- **CLI.** The reference's `validate` takes a flat file list and classifies each file as a schema or
+  data document; this port keeps `--schema`/`--root` and takes the schemas an import or an extern
+  names as further `--schema` files, served by `!!id` and never fetched (`compile` serves every file
+  it is given to the others). Both refuse a schema with no `!!id` (the reference's backlog item
+  asks for a file-URI identity instead): this port reports it as a rejected schema.
+- **Identity by string key** for a canonical application, and by structure for a type in place
+  (`IDIOM-DEBT.md` §12): a JavaScript `Map` has no record equality.

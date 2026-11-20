@@ -345,6 +345,70 @@ describe('compile', () => {
     expect(io.stdout()).toContain('rejected');
   });
 
+  describe('a schema whose externs name schemas the library does not bundle ([TSON-SCHEMA] §7.8)', () => {
+    const CORE = '!!import:"https://tson.io/2026/40/m/core.tn"';
+    async function externSchemas(): Promise<{ one: string; shipping: string }> {
+      const one = join(dir, 'order-1.tn');
+      const shipping = join(dir, 'shipping.tn');
+      await writeFile(
+        one,
+        `!!id:"https://example.test/cli-order-1.tn"\n${CORE}\n!schema { order => { id: text  payment: card }  card => { number: text } }\n`,
+        'utf8',
+      );
+      await writeFile(
+        shipping,
+        `!!id:"https://example.test/cli-shipping.tn"\n${CORE}\n!schema {\n  order_v1 => !meta.extern { schema: "https://example.test/cli-order-1.tn"  type: order }\n  envelope => { id: text  body: order_v1 }\n}\n`,
+        'utf8',
+      );
+      return { one, shipping };
+    }
+
+    it('compile loads it when the file declaring the extern target is given too, exit 0', async () => {
+      const { one, shipping } = await externSchemas();
+      const io = captureOutput();
+      expect(await main(['compile', shipping, one])).toBe(EXIT.OK);
+      expect(io.stdout()).toContain('compiles');
+    });
+
+    it('compile rejects it when no file declares the extern target, exit 1, fetching nothing', async () => {
+      const { shipping } = await externSchemas();
+      const io = captureOutput();
+      expect(await main(['compile', shipping])).toBe(EXIT.INVALID);
+      expect(io.stdout()).toContain('rejected');
+      expect(io.stdout()).toContain('cli-order-1.tn');
+    });
+
+    it('validate --schema serves each further --schema by its !!id, and reads a foreign value under its own schema', async () => {
+      const { one, shipping } = await externSchemas();
+      const good = join(dir, 'good.tn');
+      const bad = join(dir, 'bad.tn');
+      await writeFile(
+        good,
+        '{ id: e  body: !order_v1 { id: A  payment: !card { number: "1" } } }',
+        'utf8',
+      );
+      await writeFile(bad, '{ id: e  body: !order_v1 { id: A  payment: { count: "1" } } }', 'utf8');
+      const binding = ['validate', '--schema', shipping, '--schema', one, '--root', 'envelope'];
+      const ok = captureOutput();
+      expect(await main([...binding, good])).toBe(EXIT.OK);
+      expect(ok.stdout()).toContain('valid');
+      vi.restoreAllMocks();
+      const rejected = captureOutput();
+      expect(await main([...binding, bad])).toBe(EXIT.INVALID);
+      expect(rejected.stdout()).toContain('/body/payment');
+    });
+
+    it('validate --schema without the further --schema is an unobtainable schema, exit 69', async () => {
+      const { shipping } = await externSchemas();
+      const good = join(dir, 'good.tn');
+      await writeFile(good, '{ id: e  body: !order_v1 { id: A } }', 'utf8');
+      captureOutput();
+      expect(await main(['validate', '--schema', shipping, '--root', 'envelope', good])).toBe(
+        EXIT.SCHEMA_UNAVAILABLE,
+      );
+    });
+  });
+
   it('no files: usage error, exit 2', async () => {
     const code = await main(['compile']);
     expect(code).toBe(EXIT.USAGE);

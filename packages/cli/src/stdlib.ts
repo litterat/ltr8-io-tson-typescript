@@ -8,7 +8,7 @@
  * so `commands/*.ts` say what they want ("the standard library") rather than how it is assembled.
  */
 import { standardLibrary } from '@ltr8/tson/stdlib';
-import type { Config, Tson } from '@ltr8/tson';
+import type { Config, SchemaSource, Tson } from '@ltr8/tson';
 
 /**
  * A fresh {@link Tson} with the standard library registered.
@@ -18,13 +18,17 @@ import type { Config, Tson } from '@ltr8/tson';
  * Resolving six small, already-in-memory schemas costs nothing a CLI invocation needs to
  * amortise.
  *
+ * `schemaSource`, when given, is what `Tson.loadSchema` fetches a schema's imports and externs'
+ * schemas through beyond the bundled library (`schemaSupply.ts`); omitted, nothing beyond the
+ * library is ever supplied.
+ *
  * `config` is forwarded to `standardLibrary` unchanged -- in practice `configOf`'s (`policyOptions.ts`): the
  * identifier and token policies and the two depth bounds. `identifierPolicy` is what
- * `Tson.resolveSchema` applies to a schema's own declared names at link time ([TSON-SCHEMA]
+ * `Tson.loadSchema` applies to a schema's own declared names at link time ([TSON-SCHEMA]
  * §11.4). The kernel (`meta.tn`)'s own bootstrap stays pinned to the library's default regardless
  * (`config.ts`'s own note on `identifierPolicy`), so relaxing this can never change whether the
  * kernel itself loads.
  */
-export function stdlibTson(config?: Config): Tson {
-  return standardLibrary(config);
+export function stdlibTson(config?: Config, schemaSource?: SchemaSource): Tson {
+  return standardLibrary(schemaSource === undefined ? config : { ...config, schemaSource });
 }
