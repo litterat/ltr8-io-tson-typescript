@@ -25,7 +25,7 @@ open, prefer the reference's shape.
 
 |                      | Revision 39                                     | Revision 40                                                      |
 | -------------------- | ----------------------------------------------- | ---------------------------------------------------------------- |
-| `JAVA_PIN`           | `c48b744707128531e82cfe87b0fd584a2e26bc8f`      | `7fe582751fb8d20f35dd3f4add15c4b0a6f8fd81` (proposal branch)     |
+| `JAVA_PIN`           | `c48b744707128531e82cfe87b0fd584a2e26bc8f`      | `7fe582759319d60a28df613a669d36362281f9f2` (proposal branch)     |
 | `SUITE_PIN`          | `fb8757fb2e4ed947e0446a8de247145f990de905`      | `3d769b5999bbe118f400d6e6f4f6e2e6bb3ace63`                       |
 | Conformance subjects | 944 (Class 1 316, Class 2 628)                  | **1438** (Class 1 319; schema 516, link 222, validate 381)       |
 | Spec vendored        | Parts 1–3, Rev 39 change log, `m/`, `fixtures/` | Parts 1–3, **Rev 40 change log**, `m/` (six), `fixtures/` (five) |
