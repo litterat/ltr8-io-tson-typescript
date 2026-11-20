@@ -274,6 +274,45 @@ left out of `subtypes`. What the remaining 336 Class 2 failures need:
   type name, and a record in place with its own `name_type` gets no reader name type in either
   encoding.
 
+### WP2A review: repairs, after WP2B
+
+An adversarial review of `439026f` against the spec and the reference. Repaired in one pass once
+WP2B lands, since most of it is in files WP2B owns:
+
+1. **An alias of a value entry is refused** (the reading above was wrong). `meta.alias.target` is
+   a `meta.type_ref`, whose `of` is `meta.type`, so a value entry's name is no member; the reference
+   refuses it (`TsonSchemaLinker.validateTypeRef`, `target instanceof ValueEntry`). Judge the
+   terminal entry past alias hops, not only the immediate target
+   (`link/referenceValidation.ts`, the `alias: true` path returning before `isValueEntry`). Today
+   `o => orders` over a value entry loads and a field typed `o` reaches a `NotImplemented` — a
+   non-verdict where the reference gives a verdict.
+2. **The schema parser's type-argument path skips the nesting guard**: `parseTypeArg` reaches
+   `parseChoiceRef`/`parseBracket`/`parseBraceType` and the `name<` path without `nested()`, and a
+   record body can now be an argument, so `{ f: a<{ f: a<{ …` overflows the JS stack instead of the
+   §9.1 nesting-limit parse error. Route every structural descent through the guard; add a test.
+3. **Two equal types in place compare by `JSON.stringify`** (`schema/meta/typeInline.ts`), so key
+   order decides identity. Compare canonically (the reference uses record equality).
+4. **Tests that accept any error**: `test/schema-read-helpers.ts`'s `loadError` returns any
+   message, `TsonNotImplementedError` included, and six assertions in
+   `parametric-records.test.ts` check only `toBeDefined()`. Assert the class or the message.
+5. **Dead Revision 39 text**: `bundled-schemas-resolve.test.ts`'s `canonicalName` still normalises
+   `_[0-9a-f]{8}` (remove: names compare as written), its `parsedTemplate`, `MONOMORPHIC` set and
+   `@synthetic` docs; comments naming deleted files or concepts in `compiler/tokenForms.ts`,
+   `schema/meta/typedef.ts` (`@application` is a `meta.apply`; no "type-argument's literal"),
+   `definitionResolver.ts` and `link/fieldNameRule.ts` (the kernel's `field_name` is gone),
+   `write/bindingWriter.ts` (`meta.field_type_ref`), `test/conformance/resolvedForm.ts`
+   (`!meta.template`); `json/schema/record.ts`'s diagnostic showing `'field_name'`;
+   `schemaParser.ts`'s "`refined-def` is gone" narrates history.
+6. **`size-bound` is not judged as `decimal-natural`** (§12.1): `[text; 0x10]` loads with
+   `min_items` 16. The reference defers to `min_items` too; judge it in the parser, and correct
+   `ast/schema/fields.ts`'s claim that desugar checks it. Report upstream.
+
+Shared with the reference, to report rather than diverge on: an explicit `!meta.alias { target: C }`
+cannot be applied (`desugar.ts checkApplication` / `SchemaDesugarer.java:587`), against §8.3's "the
+explicit spelling of the alias … applied as its target is"; and a parameter's bound naming an alias
+of a constructor, a value entry or a bare parametric record passes (`parameterBounds.ts` /
+`ParameterTypes.java:218`), against §5.10.
+
 ### WP2B: parametric records and applications (#3, #18, #20; references #2, #14, §5.12)
 
 Change log §1's six steps, §4.5 "Parametric records", "Applications", "References and qualified
@@ -310,6 +349,32 @@ ConstructionSugar, ConstructionRewrite, DefinitionResolver}` and the deleted `Te
   error (items 117–118). A tag naming a parametric record in data is a validation error.
 - The change log §5 "#3 (remainder)" lists what the reference itself does not yet do; match the
   reference, and note any vector that depends on it.
+
+### WP2B outcome, and WP2C's facet slice
+
+WP2B landed; the facet slice of WP2C ran beside it in a worktree and was cherry-picked; the
+validate harness took the reference's rule for a `parser`-category vector (the document fails the
+Class 1 parse, since a Class 2 read reports base syntax under no category). Class 1 319/319; Class
+2 **982/1119** (schema 477/516, link 186/222, validate 319/381); unit 4084/4084. New:
+`compiler/{parametricMaterialiser,heldRecursion,parametricRegularity,substitution,
+canonicalApplication,restatements}.ts`, `schema/meta/typeSlots.ts`; `parameterBounds.ts` became
+`parameterTypes.ts` with `checkSlots`; off-the-chain restatements (applied and subtraction
+operands, #962) are judged at link. The harness's resolved-form comparison skips an in-place
+node's `application`, a message-only field model identity already ignores. The facet slice added
+exclusive bounds on date, time and datetime, a time's instant wrapping at midnight, and one option
+per field group in a constructor body (`schema/metaReader.ts`'s `refuseSeveralOptions`; the
+resolver's constructor-body check is the better home, and WP2C may move it).
+
+Readings to note: name hygiene on a value's qualified name judges the entry segment only (the
+reference judges none); `@meta.application` is found on a direct import's keys only, so an applied
+parent two imports away is missed (no vector); a canonical application compares by a string key
+(an `IDIOM-DEBT.md` line). `typeInline.ts`'s `applicationsOf`/`parameterIn`/`mapInPlace` overlap
+`typeSlots.ts`.
+
+Remaining 137: **WP2C ~74** — `!T ^` over a collection or namespace type (54), choices (11), an
+incomplete entry's per-field read (5), an enum `name_type` restated through an alias, item 101
+(`FamilyJoiners`, not ported: `a-member-declared-after-the-value-that-selects-it-by-pin-is-waited-on`),
+item 111 (2); **WP2D 63** — externs (61) and the two import cycles.
 
 ### WP2C: open construction, derivation, dependent fields, choices (#4, #6, #7, #8, #10–#12, #15–#17, #19)
 
