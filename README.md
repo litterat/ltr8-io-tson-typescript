@@ -3,7 +3,7 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: all three spec parts implemented, including the Part 3 JSON encoding; 1438/1438 shared
+> **Status: all three spec parts implemented, including the Part 3 JSON encoding; 1454/1454 shared
 > conformance subjects passing at the pinned suite commit, Class 1 and Class 2.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
@@ -360,7 +360,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test                        # unit
-npm run test:conformance        # 1438 shared subjects, at the pinned suite commit
+npm run test:conformance        # 1454 shared subjects, at the pinned suite commit
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 

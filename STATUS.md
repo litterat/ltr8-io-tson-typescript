@@ -9,13 +9,13 @@ working draft: https://tson.io/raw/2026/40/tson-part2-schema.md, and Part 3 (the
 the reference is pinned on its proposal branch, so a few small changes may still follow.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
-corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 1438 subjects
+corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 1454 subjects
 over `tests/<class>/<layer>/<bucket>/`.
 
-**Conformance: 1438 / 1438 subjects passing at the pinned suite commit, Class 1 and Class 2.**
+**Conformance: 1454 / 1454 subjects passing at the pinned suite commit, Class 1 and Class 2.**
 
 Class 1 (319): 28 identity, 35 lexer, 60 parser, 33 reader, 14 resolver, 149 vocabulary. Class 2
-(1119): 516 schema, 222 link, 381 validate.
+(1135): 530 schema, 222 link, 383 validate.
 
 `RUNNER.md` in the corpus is normative for runners, and every rule it states is implemented.
 Sidecars are parsed with this implementation's own parser. Subjects are fed as raw bytes —

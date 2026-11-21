@@ -26,9 +26,9 @@ port is written against:
   port target cannot move underneath the work. Its `spec/` holds the spec snapshots, the six
   live bundled schemas `spec/m/{meta,numeric,temporal,net,core,policy}.tn` (`meta.tn` is the kernel)
   and the `*-resolved.tn` resolver-output fixtures of the first five, under `spec/fixtures/`.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 1438
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 1454
   subjects over `tests/<class>/<layer>/<bucket>/`: Class 1 (319: `lexer`, `parser`, `reader`,
-  `resolver`, `vocabulary` and `identity`) and Class 2 (1119: `schema`, `link`, `validate`). **Pinned**, like the Java: a corpus that tracked
+  `resolver`, `vocabulary` and `identity`) and Class 2 (1135: `schema`, `link`, `validate`). **Pinned**, like the Java: a corpus that tracked
   `main` turned this repo's CI red on an upstream commit with no change here.
 
 Both are required before the conformance project will run. A SessionStart hook fetches them

@@ -25,9 +25,9 @@ open, prefer the reference's shape.
 
 |                      | Revision 39                                     | Revision 40                                                      |
 | -------------------- | ----------------------------------------------- | ---------------------------------------------------------------- |
-| `JAVA_PIN`           | `c48b744707128531e82cfe87b0fd584a2e26bc8f`      | `7fe582759319d60a28df613a669d36362281f9f2` (proposal branch)     |
-| `SUITE_PIN`          | `fb8757fb2e4ed947e0446a8de247145f990de905`      | `3d769b5999bbe118f400d6e6f4f6e2e6bb3ace63`                       |
-| Conformance subjects | 944 (Class 1 316, Class 2 628)                  | **1438** (Class 1 319; schema 516, link 222, validate 381)       |
+| `JAVA_PIN`           | `c48b744707128531e82cfe87b0fd584a2e26bc8f`      | `014891681c9009ef0aa7ac3ac39ef5187f2d0efc` (proposal + PR #972)  |
+| `SUITE_PIN`          | `fb8757fb2e4ed947e0446a8de247145f990de905`      | `d30c9d7868d5023134fdbc89e5773569ab5e957f`                       |
+| Conformance subjects | 944 (Class 1 316, Class 2 628)                  | **1454** (Class 1 319; schema 530, link 222, validate 383)       |
 | Spec vendored        | Parts 1–3, Rev 39 change log, `m/`, `fixtures/` | Parts 1–3, **Rev 40 change log**, `m/` (six), `fixtures/` (five) |
 | Bundled identities   | `tson.io/2026/39/m/*`                           | `tson.io/2026/40/m/*`                                            |
 | Package version      | 0.39.0                                          | 0.40.0                                                           |
@@ -510,6 +510,27 @@ applied-head paragraph against the new kernel), `IDIOM-DEBT.md`, `ORCHESTRATION.
 `skills/tson-ts/`, `examples/web-demo/`, `.claude/agents/tson-porter.md`.
 
 **Gate:** the full CI list in `CLAUDE.md`, in order, green.
+
+## Catch-up: the proposal tip and PR #972 (done)
+
+The pins moved from `7fe58275`/`3d769b59` to `014891681` (the head of Java PR #972 over the
+proposal tip `a8254819`) and `d30c9d78` (corpus PR #212): sixteen vectors, Parts 1–3 unchanged,
+the change log re-vendored. Two packages in parallel:
+
+- **C1** (`08490016`, `b92143e4`, `1f024810`): a constructor over one constructor of types that
+  adds no field is applied and constructed as its parent is (`schema/meta/composedOver.ts`), and
+  one that adds a field or composes `meta.record` is a gap rather than a silent mis-bind; a
+  parameter in a completion written in place is substituted, and refused at a scalar slot; guards
+  no admitted input reaches are faults; the CLI reports a `--schema` gap as exit 70 and a refusal
+  as exit 1; a JSON map keyed by a value reference reads in object form.
+- **C2** (`99135120`, `01489168`): a restatement that changes a pin is refused at the link,
+  comparing values at the inherited field's type rather than token text; a parametric record is
+  judged at its declaration, applied or not (references, productivity, selectors, a changed pin
+  naming no parameter), once and in declaration order, and a declared application of a refused
+  record reports nothing further. The port reports per phase, each phase in declaration order,
+  where the reference interleaves all checks in one order; nothing in §5.10 fixes the order.
+
+**Gate:** the full CI list green; 1454/1454, unit 4480.
 
 ## To report upstream
 
