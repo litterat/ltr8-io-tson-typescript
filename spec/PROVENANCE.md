@@ -2,14 +2,14 @@
 
 Everything else in this directory is **vendored verbatim** from the reference implementation at
 https://github.com/litterat/ltr8-io-tson-java, pinned to commit
-`c48b744707128531e82cfe87b0fd584a2e26bc8f` (the same commit `scripts/fetch-references.sh` pins).
+`014891681c9009ef0aa7ac3ac39ef5187f2d0efc` (the same commit `scripts/fetch-references.sh` pins).
 
 | File | What it is |
 | --- | --- |
-| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 39, Working Draft. |
-| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 39, Working Draft. |
-| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 39. |
-| `tson-rev39-changelog.md` | The Revision 39 change log: every adjudicated change against Revision 38, by section. |
+| `tson-part1-data.md` | TSON Part 1 — text data format. 2026 Revision 40, Working Draft. |
+| `tson-part2-schema.md` | TSON Part 2 — type system and schema. 2026 Revision 40, Working Draft. |
+| `tson-part3-json.md` | TSON Part 3 — the JSON encoding. 2026 Revision 40. |
+| `tson-rev40-changelog.md` | The Revision 40 change log: every adjudicated change against Revision 39, by section. |
 | `m/meta.tn` | The kernel, pre-loaded: the root vocabulary and the six nested maps (`meta`, `atom`, `numeric`, `unicode`, `net`, `binary`). |
 | `m/numeric.tn`, `m/temporal.tn`, `m/net.tn` | The three data-format libraries, each importing the kernel alone. |
 | `m/core.tn` | Imports the three libraries and declares the author annotations. |
