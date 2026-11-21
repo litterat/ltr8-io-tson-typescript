@@ -896,16 +896,16 @@ describe('restatement through composition (§5.8)', () => {
     }).not.toThrow();
   });
 
-  it('restating a pinned field with a genuinely different value is still refused (§5.8)', () => {
+  it('a restatement changing a pin is left to the link, which reads both values at the field type (§5.8)', () => {
     const doc = parse(`
       x => { n?: int32 = 255 }
       y => x & { n?: = 254 }
     `);
     const { resolver, entries } = harness();
     entries.set('x', resolver.resolve(declarationOf(doc, 'x')));
-    const error = thrownBy(() => resolveOne(resolver, doc, 'y'));
-    expect(error).toBeInstanceOf(TsonSchemaValidationError);
-    expect((error as TsonSchemaValidationError).message).toContain('different value');
+    expect(() => {
+      resolveOne(resolver, doc, 'y');
+    }).not.toThrow();
   });
 
   it('restating a pinned text field with a different Unicode normalisation form of the same content is not a change of pin (§5.8: "text pins compare NFC-normalised")', () => {

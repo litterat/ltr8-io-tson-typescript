@@ -503,21 +503,13 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
 
 - **Revision 40 gaps the reference carries too** (change log §5's "remainder" rows and the reference's
   `BACKLOG.md`; this port runs what the reference runs, so each is open in both):
-  - **A parametric record nothing applies is judged only in part at its declaration (#3).** Part 2
-    §5.2, §5.10 and §5.10.1 judge it there, and the implementation does not report a name in it that
-    resolves to nothing while nothing applies it, a recursion that can never close
-    (`bad => <T> { v: T  inner: bad<T> }`) until `use => bad<text>` applies it, or its selectors
-    (`p => <T> { k: base =?  v: T }` over a record `base` loads where the same selector on a closed
-    record is refused). A literal under a closed type in one (`n?: int8 ~ 500`) is judged when an
-    application closes it.
   - **A name in a schema document's annotation value is not judged at link (#8, §5.12).** The
     value's shape is checked and the name is delivered unjudged; a data document's is judged at the
     read.
   - **A dependent field whose sibling holds a type written in place is not read by a tree read
     (#5, §5.2).** A tree read, in either encoding, reports the value as `NOT_IMPLEMENTED`; a sibling
     holding a dependent type is refused as naming no type a value can be read against.
-  - **Two points on deriving a record with `&` (#11, §5.8).** A restatement that changes a pin loads
-    where the text says it MUST NOT, and a constructor composed with `&` that adds no field
+  - **A constructor composed with `&` that adds no field (#11, §5.8)**
     (`minlist => meta.array & { min_items?: = 1 }`) loads and cannot be applied: `minlist<text>`
     reports not implemented.
   - **Five points on the extern (#13, §5.13, §7.9, §11.5; Part 3 §8.6).** In TSON text a root typed by an

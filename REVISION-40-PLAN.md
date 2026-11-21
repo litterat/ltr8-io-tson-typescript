@@ -558,12 +558,13 @@ swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is r
 9. **Part 2 §11.5, the import closure counts a schema an extern reaches.** _Reference:_ counts
    nothing. _Port:_ counts it. _Why:_ §11.5 and §5.13 say the closure includes every dependency read
    with the imports.
-10. **Part 2 §5.8, §5.2, pins compared by token text.** _Reference:_ accepts a restatement that changes
-    a pin (its backlog), so it compares none. _Port:_ `refuseMovedPins` refuses a changed pin, and
-    `placedByPins` places a value by its pins, each comparing a pin by its token text, so `0xFF` and
-    `255` are two pins. _Why:_ §5.8 says a restatement MUST NOT change a pin and §5.5 makes `= 255` over
-    `= 0xFF` the identity case; token text is stricter than the text and refuses a legal restatement
-    until the comparison moves to the field type's own equality.
+10. **Part 2 §5.2, §5.7, constructor-body pins compared by token text.** _Reference:_ compares the pin a
+    constructor body restates, and the pin a value is placed by, as values. _Port:_ `refuseMovedPins`
+    and `placedByPins` compare a pin by its token text, so `0xFF` and `255` are two pins there. A
+    record's restatement is compared as the reference compares it, at the link, by the inherited
+    field's type (`link/restatedFields.ts`'s `changedPin`), so `= 255` over `= 0xFF` is the identity
+    case; no corpus vector reaches the constructor-body spelling. _Why:_ the constructor-body
+    comparison is token text until it moves to the field type's own equality.
 11. **Part 2 §6, §5.12, an annotation value of an imported type.** _Reference:_ checkpoints the read in
     the document's namespace. _Port:_ reads it through the import's own compile and falls back to a
     checkpoint read when that refuses the value. _Why:_ the import's compiled reader is the declared
@@ -587,11 +588,11 @@ swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is r
     read reports base syntax under `VALIDATION_ERROR`, which the runner maps to `validation`. The
     reference lists this as an open backlog entry; the harness rule is the same in both.
 16. **The reference's `BACKLOG.md` items the port runs the same way, from change log §5's "remainder"
-    rows:** a parametric record nothing applies is judged only in part (#3); a name in a schema
-    document's annotation value is not judged at link (#8); a dependent field whose sibling holds a
-    type written in place is not read by a tree read (#5); a restatement that changes a pin loads and
-    a constructor composed with `&` that adds no field cannot be applied (#11); five extern points
-    (#13). `STATUS.md` lists them as known gaps.
+    rows:** a name in a schema document's annotation value is not judged at link (#8); a dependent
+    field whose sibling holds a type written in place is not read by a tree read (#5); a constructor
+    composed with `&` that adds no field cannot be applied (#11); five extern points (#13).
+    `STATUS.md` lists them as known gaps. The reference closed its #3 remainder (a parametric record
+    nothing applies) and the pin half of #11 in `014891681` and `99135120`, and the port with them.
 
 ### Ported behaviour the reference's Java fixture test cannot see
 

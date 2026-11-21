@@ -42,8 +42,9 @@ import {
 import type { ChoiceBody, NamedField } from '../schema/meta/bodies.js';
 import { isNestedMap } from '../schema/meta/schemaPaths.js';
 import { namedFields, typeExprText, typeNameOf } from '../schema/meta/bodies.js';
-import type { Token, Top, Type, TypeExpr, TypeRef } from '../schema/meta/typedef.js';
+import type { Annotations, Token, Top, Type, TypeExpr, TypeRef } from '../schema/meta/typedef.js';
 import {
+  applicationOf,
   dependentOn,
   isParametric,
   isValueEntry,
@@ -93,6 +94,11 @@ export interface ValidateReferencesOptions {
    * every enum matches as written.
    */
   readonly enumForms?: ReadonlyMap<string, Normalization>;
+  /**
+   * Each entry's key annotations, which record the application a declared one closes (§8.2): a declared application
+   * of a parametric record that was refused is not judged again.
+   */
+  readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
 }
 
 /**
@@ -101,6 +107,12 @@ export interface ValidateReferencesOptions {
  * every declared parameter's actual use (§5.10) — reporting (or throwing) a
  * {@link TsonSchemaValidationError} per entry that fails, or a {@link TsonBindMismatchError} when
  * a `Data` body breaks its own `references()` contract (see {@link validateBody}).
+ *
+ * **A parametric record is judged at its declaration** (§5.10): every name that is no parameter resolves and every
+ * literal is a value of its type, applied or not. Its verdict is known before any application is judged and is
+ * reported where it stands, so diagnostics keep declaration order; a declared application of a refused one reports
+ * nothing further, and a failure inside a record an application closes in place, on a name the parametric record
+ * wrote, is the parametric record's own, reported once.
  */
 export function validateReferences(
   merged: ReadonlyMap<string, Top>,
@@ -117,7 +129,7 @@ export function validateReferences(
     structureNamespace: merged,
     ...(facts === undefined ? {} : { structureFacts: facts }),
   });
-  for (const [name, def] of merged) {
+  const judge = (name: string, def: Top): ReportableLinkError | undefined => {
     try {
       validateEntry(
         name,
@@ -129,16 +141,87 @@ export function validateReferences(
         enumForms,
         byName,
       );
+      return undefined;
     } catch (e: unknown) {
-      if (!isReportableLinkError(e)) {
-        throw e;
-      }
-      if (receiver === undefined) {
-        throw e;
-      }
-      receiver.report(linkProblem(schemaId, name, facts, e));
+      if (!isReportableLinkError(e)) throw e;
+      return e;
     }
+  };
+  const report = (name: string, failure: ReportableLinkError): void => {
+    if (receiver === undefined) throw failure;
+    receiver.report(linkProblem(schemaId, name, facts, failure));
+  };
+  // A parametric record's own text is judged at its declaration (§5.10), so its verdict is known before any
+  // application of it is judged, and is still reported where the parametric record stands.
+  const parametricFailures = new Map<string, ReportableLinkError>();
+  for (const [name, def] of merged) {
+    if (!isParametric(def)) continue;
+    const failure = judge(name, def);
+    if (failure !== undefined) parametricFailures.set(name, failure);
   }
+  const blamedOnce = new Set<string>();
+  for (const [name, def] of merged) {
+    // A declared application is its head's body substituted, so the head's verdict would be repeated here: an
+    // application of a refused parametric record reports nothing further.
+    const head = appliedHead(name, merged, options.keyAnnotations);
+    if (head !== undefined && parametricFailures.has(head)) continue;
+    const failure = isParametric(def) ? parametricFailures.get(name) : judge(name, def);
+    if (failure === undefined) continue;
+    if (failure instanceof UnresolvedReference && failure.inPlace) {
+      // The text of a parametric record surfaces again inside each record an application closes to in place, at a
+      // line that is not wrong and does not contain the name: the verdict belongs to the parametric record, and one
+      // mistake in it is reported once however many holders apply it. A name no parametric record wrote is the
+      // holder's own.
+      const author = parametricWriting(failure.reference, merged, facts);
+      if (author !== undefined) {
+        const own = parametricFailures.get(author);
+        const itsOwn =
+          author !== name &&
+          own instanceof UnresolvedReference &&
+          own.reference === failure.reference;
+        const key = `${author}\u0000${failure.reference}`;
+        if (!itsOwn && !blamedOnce.has(key)) {
+          blamedOnce.add(key);
+          report(
+            author,
+            new UnresolvedReference(
+              `'${author}' has an unresolved reference '${failure.reference}'`,
+              failure.reference,
+            ),
+          );
+        }
+        continue;
+      }
+    }
+    report(name, failure);
+  }
+}
+
+/** The declared parametric record that writes `reference`, in a name or inside a type it holds in place. */
+function parametricWriting(
+  reference: string,
+  merged: ReadonlyMap<string, Top>,
+  facts: FactsTable | undefined,
+): string | undefined {
+  for (const [candidate, def] of merged) {
+    if (!isParametric(def) || facts?.get(candidate)?.position === undefined) continue;
+    const written = new Set<string>();
+    collectBodyNames(def, written);
+    if (written.has(reference)) return candidate;
+  }
+  return undefined;
+}
+
+/** The parametric record a declared application applies, past its head's alias hops (§8.3); `undefined` otherwise. */
+function appliedHead(
+  name: string,
+  merged: ReadonlyMap<string, Top>,
+  keyAnnotations: ReadonlyMap<string, Annotations> | undefined,
+): string | undefined {
+  const application = applicationOf(keyAnnotations?.get(name));
+  if (application === undefined) return undefined;
+  const head = terminal(application.head.name, (n) => merged.get(n));
+  return isParametric(merged.get(head)) ? head : undefined;
 }
 
 /**
@@ -168,6 +251,26 @@ function linkProblem(
     schemaPointer: `/${name}`,
     ...schemaPositionOf(facts, name),
   };
+}
+
+/**
+ * A name that resolves to nothing (§3.3.1), carried with the name so a verdict can be moved to the declaration that
+ * wrote it. `inPlace` is set once the failure surfaced inside a record written in place, where the text it read may be
+ * a parametric record's, closed there by an application.
+ */
+class UnresolvedReference extends TsonSchemaValidationError {
+  constructor(
+    message: string,
+    readonly reference: string,
+    readonly inPlace = false,
+  ) {
+    super(message);
+  }
+
+  /** The same failure, found inside a record written in place. */
+  heldInPlace(): UnresolvedReference {
+    return new UnresolvedReference(this.message, this.reference, true);
+  }
 }
 
 // ── Per-entry validation ─────────────────────────────────────────────────────────────────────
@@ -277,7 +380,15 @@ function validateBody(
           }
         }
       }
-      checkRestatedFieldTypes(entryName, def, namespace, hops);
+      checkRestatedFieldTypes(
+        entryName,
+        def,
+        namespace,
+        hops,
+        undefined,
+        isParametric(def),
+        enumForms,
+      );
       return;
     }
     default:
@@ -581,7 +692,13 @@ function validateTypeExpr(
           'inside a type, nor at any other slot (§5.2)',
       );
     }
-    validateType(expr.of, namespace, hops, ownParameters, subject, trail);
+    try {
+      validateType(expr.of, namespace, hops, ownParameters, subject, trail);
+    } catch (error: unknown) {
+      throw error instanceof UnresolvedReference && expr.of.kind === 'record'
+        ? error.heldInPlace()
+        : error;
+    }
     return;
   }
   validateName(expr, namespace, ownParameters, subject, trail);
@@ -612,7 +729,7 @@ function validateName(
   if (ref.param === true || ownParameters.includes(ref.name)) return;
   const target = namespace.get(ref.name);
   if (target === undefined) {
-    throw new TsonSchemaValidationError(`${context} has an unresolved reference '${ref.name}'`);
+    throw new UnresolvedReference(`${context} has an unresolved reference '${ref.name}'`, ref.name);
   }
   if (position.alias === true) {
     // `meta.alias.target` is a `meta.type_ref`, whose `of` is `meta.type`: a value entry is no member of it, at
@@ -676,7 +793,10 @@ function validateApplication(
   }
   const referenced = namespace.get(terminal(head.name, lookupIn(namespace)));
   if (namespace.get(head.name) === undefined || referenced === undefined) {
-    throw new TsonSchemaValidationError(`${context} has an unresolved reference '${head.name}'`);
+    throw new UnresolvedReference(
+      `${context} has an unresolved reference '${head.name}'`,
+      head.name,
+    );
   }
   const parameters = typeParameters(referenced);
   if (parameters.length === 0) {

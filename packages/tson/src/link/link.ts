@@ -391,6 +391,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     schemaId: schema.id,
     facts,
     enumForms,
+    keyAnnotations: schema.keyAnnotations,
     structureNamespace: merged,
     ...(receiver === undefined ? {} : { receiver }),
   });
@@ -411,9 +412,17 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   });
   // §5.8's rule over the restatements the closed chain does not reach, each local closed entry's.
   for (const [name, found] of schema.restatements ?? []) {
-    if (!localNames.has(name) || isParametric(merged.get(name))) continue;
+    if (!localNames.has(name)) continue;
     try {
-      checkRestatementsOffTheChain(name, found, merged, hops);
+      // A parametric record's are judged for a changed pin alone, the rest waiting for its applications.
+      checkRestatementsOffTheChain(
+        name,
+        found,
+        merged,
+        hops,
+        isParametric(merged.get(name)),
+        enumForms,
+      );
     } catch (error: unknown) {
       if (!(error instanceof TsonSchemaValidationError)) throw error;
       if (receiver === undefined) throw error;
@@ -429,6 +438,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   checkEveryEntryIsInhabited(merged, localNames, {
     schemaId: schema.id,
     facts,
+    keyAnnotations: schema.keyAnnotations,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkRecordExtension(merged, localNames, {

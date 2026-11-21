@@ -598,20 +598,35 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
     }).not.toThrow();
   });
 
-  it('leaves a parametric record to its applications: it is no type until applied (§5.10, §5.10.1)', () => {
-    // `tree => <T> { v: T  next: tree<T> }` -- a required self-application judged only where applied.
+  it('walks a parametric record as a record, its parameters assumed inhabited (§5.10.1)', () => {
+    // `tree => <T> { v: T  next: tree<T> }` -- a required self-application, refused at the declaration.
     const tree = parametricRecord(
       ['T'],
       record([
-        field('v', ref('T')),
+        field('v', { name: 'T', annotations: [], param: true }),
         field('next', {
           kind: 'inline',
           head: 'meta.apply',
-          of: { kind: 'apply', head: ref('tree'), arguments: [ref('T')] },
+          of: {
+            kind: 'apply',
+            head: ref('tree'),
+            arguments: [{ name: 'T', annotations: [], param: true }],
+          },
         }),
       ]),
     );
     const merged = new Map<string, Top>([['tree', def(tree)]]);
+    expect(() => {
+      check(merged);
+    }).toThrow(/'tree' can never be satisfied by any document: tree needs tree/);
+  });
+
+  it('a parameter-typed required field demands nothing the declaration can refuse (§5.10.1)', () => {
+    const box = parametricRecord(
+      ['T'],
+      record([field('v', { name: 'T', annotations: [], param: true })]),
+    );
+    const merged = new Map<string, Top>([['box', def(box)]]);
     expect(() => {
       check(merged);
     }).not.toThrow();

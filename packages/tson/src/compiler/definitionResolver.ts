@@ -116,11 +116,6 @@ import {
   sameTypeExpr,
   withParametersMarked,
 } from '../schema/meta/typeInline.js';
-import type { Token } from '../schema/meta/typedef.js';
-import { tryParseNumber } from '../base/numberGrammar.js';
-import { toExactDecimal, toExactInteger } from '../base/numberNarrowing.js';
-import { toNfc } from '../unicode/nfc.js';
-import type { TsonDecimal } from '../value/types.js';
 import type {
   AnnotationValueReader,
   DefinitionGetter,
@@ -2749,9 +2744,9 @@ function restateMemberMark(
  * {@link fieldOmission}'s own group carve-out (§5.11): a member's omission is always `'ABSENT'`
  * on both sides, so the axis never fires for one, whatever its role restates to.
  *
- * **Identity.** A restatement may change a **default** value freely but MUST NOT change a
- * **pin** -- the one thing "restated as itself" polices beyond the three orders. Two pins compare
- * as the *values* they denote (§5.5, §5.7: `= 255` and `= 0xFF` collide), not as spelled text.
+ * **A pin is not compared here.** A restatement MUST NOT change a pin (§5.8), but telling a changed pin from a
+ * respelled one reads both values at the inherited field's type, which needs the type's body ready: the link asks
+ * it (`link/restatedFields.ts`'s `changedPin`).
  */
 function checkFieldRefinementOrder(
   declarationName: string | undefined,
@@ -2784,63 +2779,6 @@ function checkFieldRefinementOrder(
         'forward through FREE, DEFAULT, FIXED, never back (§5.7)',
     );
   }
-  if (inherited.role === 'FIXED' && tightened.role === 'FIXED') {
-    const before = inherited.value;
-    const after = tightened.value;
-    if (before !== undefined && after !== undefined && !pinTokensEqual(before, after)) {
-      throw new TsonSchemaValidationError(
-        `${prefix}restates the pinned field '${fieldName}' with a different value -- a restatement ` +
-          'may change a default but MUST NOT change a pin (§5.7)',
-      );
-    }
-  }
-}
-
-/**
- * Two `TsonDecimal`s (`unscaled * 10^exponent`) denoting the same magnitude regardless of scale
- * (§5.7: `= 1` and `= 1.0` collide) -- normalises the one with the coarser exponent up to the
- * other's before comparing the unscaled magnitudes.
- */
-function decimalEquals(a: TsonDecimal, b: TsonDecimal): boolean {
-  if (a.exponent === b.exponent) return a.unscaled === b.unscaled;
-  const [lo, hi] = a.exponent < b.exponent ? [a, b] : [b, a];
-  return hi.unscaled * 10n ** BigInt(hi.exponent - lo.exponent) === lo.unscaled;
-}
-
-/** `text` as the exact numeric value it denotes, when it matches the `number` production at all (§4.3) -- `undefined` for every other token, numeric or not (a special value like `nan`, or an ordinary identifier/boolean spelling). */
-function numericTokenValue(text: string): TsonDecimal | undefined {
-  const form = tryParseNumber(text);
-  if (form === undefined) return undefined;
-  if (form.kind === 'integer' || form.kind === 'based-integer') {
-    return { unscaled: toExactInteger(form), exponent: 0 };
-  }
-  if (form.kind === 'float') {
-    return toExactDecimal(form);
-  }
-  return undefined;
-}
-
-/**
- * Whether two FIXED-field tokens denote the same value (§5.7: "`= 255` and `= 0xFF` collide, `= 1`
- * and `= 1.0` collide, text pins compare NFC-normalised") -- the two cases this resolver can
- * decide without a type-directed read of the field's own declared type: two unquoted numeric
- * literals compare by exact magnitude regardless of base, digit grouping or scale, and two quoted
- * text tokens (already escape-decoded, §7.2.2–§7.2.3) compare NFC-normalised ([TSON-DATA] §7.1).
- * Everything else -- an identifier spelling, a boolean, an enum member, or either token failing to
- * parse as a number -- falls back to exact text, which is the right answer for every atom family
- * whose value identity is its own spelling.
- */
-export function pinTokensEqual(before: Token, after: Token): boolean {
-  if (before.form === after.form && before.text === after.text) return true;
-  if (before.form === 'UNQUOTED' && after.form === 'UNQUOTED') {
-    const a = numericTokenValue(before.text);
-    const b = numericTokenValue(after.text);
-    return a !== undefined && b !== undefined && decimalEquals(a, b);
-  }
-  if (before.form !== 'UNQUOTED' && after.form !== 'UNQUOTED') {
-    return toNfc(before.text) === toNfc(after.text);
-  }
-  return false;
 }
 
 type FieldOrigin = 'SUPERTYPE' | 'BODY_FIELD' | 'GROUP_MEMBER';

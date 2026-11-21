@@ -48,7 +48,13 @@ import { valuesEqual } from '../reader/tree/equality.js';
 import { readSchemaLiteral } from '../reader/tree/support.js';
 import type { RecordBody, RecordField } from '../schema/meta/bodies.js';
 import { typeNameOf } from '../schema/meta/bodies.js';
-import { isParametric, supertypesOf, type Annotations, type Top } from '../schema/meta/typedef.js';
+import {
+  applicationOf,
+  isParametric,
+  supertypesOf,
+  type Annotations,
+  type Top,
+} from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import type { FactsTable } from './facts.js';
 
@@ -79,6 +85,14 @@ export interface CheckRecordExtensionOptions {
   readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
 }
 
+/**
+ * Judges every family of `merged` (§5.2) and every parametric record's selectors (§5.10).
+ *
+ * A parametric record's selector types name no parameter, so every application states the same selectors: they are
+ * judged once, at its declaration, applied or not, and an application declared under a name repeats its head's
+ * verdict, so a declared application of a refused one is not judged again. A family over a parametric record's
+ * application is judged where the application closes.
+ */
 export function checkRecordExtension(
   merged: ReadonlyMap<string, Top>,
   localNames: ReadonlySet<string>,
@@ -86,12 +100,52 @@ export function checkRecordExtension(
 ): void {
   // Every family in the closure is judged, not only one with a part declared here (§3.3.4): two
   // schemas that each link cleanly can each add a member to one imported family, and the schema
-  // importing both holds a family neither did. A parametric record's selectors are each application's,
-  // judged where an application closes (§5.10).
+  // importing both holds a family neither did.
+  const refused = new Set<string>();
   for (const [name, def] of merged) {
-    if (!isRecordBody(def) || def.discriminators === undefined || isParametric(def)) continue;
+    if (!isRecordBody(def) || def.discriminators === undefined) continue;
+    if (isParametric(def)) {
+      if (!selectorsAreAtoms(name, def.discriminators, selectorOf(def), merged, options)) {
+        refused.add(name);
+      }
+      continue;
+    }
+    const head = appliedHead(name, merged, options.keyAnnotations);
+    if (head !== undefined && refused.has(head)) continue;
     checkFamily(name, def.discriminators, selectorOf(def), merged, localNames, options);
   }
+}
+
+/** The parametric record a declared application applies, past its head's alias hops (§8.3); `undefined` otherwise. */
+function appliedHead(
+  name: string,
+  merged: ReadonlyMap<string, Top>,
+  keyAnnotations: ReadonlyMap<string, Annotations> | undefined,
+): string | undefined {
+  const application = applicationOf(keyAnnotations?.get(name));
+  if (application === undefined) return undefined;
+  const head = terminal(application.head.name, (n) => merged.get(n));
+  return isParametric(merged.get(head)) ? head : undefined;
+}
+
+/** Whether every selector of `baseName` is typed by an atom-family instance or an enum (§5.2), reporting each that is not. */
+function selectorsAreAtoms(
+  baseName: string,
+  discriminators: readonly string[],
+  selectorField: (fieldName: string) => RecordField | undefined,
+  merged: ReadonlyMap<string, Top>,
+  options: CheckRecordExtensionOptions,
+): boolean {
+  let ok = true;
+  for (const fieldName of discriminators) {
+    if (
+      checkSelectorType(baseName, fieldName, selectorField(fieldName), merged, options) ===
+      undefined
+    ) {
+      ok = false;
+    }
+  }
+  return ok;
 }
 
 // ── A family member is declared (§5.2, §8.2) ─────────────────────────────────────────────────
