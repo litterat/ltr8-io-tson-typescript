@@ -96,7 +96,8 @@ export interface CompiledSchema {
    * that does not resolve, so a caller reaching this with an unresolved name is asking this
    * schema a question its own linking already answered "no" to, not presenting a document
    * problem. Throws {@link TsonNotImplementedError} for a well-formed entry this compiler has no
-   * reader for yet (a parametric record, or a value entry named where a type is expected).
+   * reader for yet (a parametric record or an unclosed application), and {@link TsonInternalError} for an entry that is
+   * no type, which linking admits at no position that reads a value.
    *
    * Given a type written in place (§4.2), the reader of its body, built where it stands and cached by
    * identity, named by its spelling.
@@ -339,8 +340,8 @@ function buildReader(
   }
   // A value entry, an incomplete entry, an extern or a dependent type named where a type is expected -- a
   // resolver error checked at schema load, so reaching it here through an already-linked schema means
-  // something upstream let it through; reported as this module's own gap rather than silently misread.
-  throw new TsonNotImplementedError(
+  // something upstream let it through: a fault, which no input a schema admits reaches.
+  throw new TsonInternalError(
     `'${name}' (a '${body.kind}' entry) is not a data type a value is read against, and has no compiled reader`,
   );
 }

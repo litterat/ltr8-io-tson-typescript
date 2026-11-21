@@ -1025,16 +1025,29 @@ describe('annotations (§6)', () => {
     expect((error as Error).message).toContain("'t'");
   });
 
-  it('still relabels every other failure as TsonNotImplementedError (the catch-all is unchanged for anything else)', () => {
+  it('relabels a gap the annotation reader reached as a gap named against the declaration', () => {
     const doc = parse('t => @doc:"hello" { x: token }');
     const { resolver, structure } = harness({
       annotationValueReader: () => {
-        throw new Error('some unrelated failure');
+        throw new TsonNotImplementedError('no factory');
       },
     });
     structure.set('doc', entry({ kind: 'void_type' }));
     const error = thrownBy(() => resolveOne(resolver, doc, 't'));
     expect(error).toBeInstanceOf(TsonNotImplementedError);
+    expect((error as Error).message).toContain("'t'");
+  });
+
+  it('propagates any other failure of the annotation reader as the fault it is, not a gap', () => {
+    const doc = parse('t => @doc:"hello" { x: token }');
+    const fault = new Error('an invariant broke');
+    const { resolver, structure } = harness({
+      annotationValueReader: () => {
+        throw fault;
+      },
+    });
+    structure.set('doc', entry({ kind: 'void_type' }));
+    expect(thrownBy(() => resolveOne(resolver, doc, 't'))).toBe(fault);
   });
 });
 
@@ -1212,6 +1225,33 @@ describe('constructor application (§5.5, §5.6)', () => {
     const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
     expect(error).toBeInstanceOf(TsonSchemaValidationError);
     expect((error as TsonSchemaValidationError).message).toContain('not valid data for');
+  });
+
+  it('a failure of the construction reader that is no gap propagates as itself, a fault and not a gap', () => {
+    const doc = parse('bad => !integer { min: 1 }');
+    const fault = new Error('an invariant broke');
+    const { resolver, structure } = harness({
+      definitionMetaReader: () => {
+        throw fault;
+      },
+    });
+    structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
+    expect(thrownBy(() => resolveOne(resolver, doc, 'bad'))).toBe(fault);
+  });
+
+  it('a gap the construction reader reached stays a gap, named against the declaration', () => {
+    const doc = parse('bad => !integer { min: 1 }');
+    const { resolver, structure } = harness({
+      definitionMetaReader: () => {
+        throw new TsonNotImplementedError('no factory');
+      },
+    });
+    structure.set('integer', integerTypeStructure());
+    structure.set('integer_type', integerTypeStructure());
+    const error = thrownBy(() => resolveOne(resolver, doc, 'bad'));
+    expect(error).toBeInstanceOf(TsonNotImplementedError);
+    expect((error as Error).message).toContain("'bad'");
   });
 
   it('rejects a body whose own facets contradict each other (§7.2 coherence)', () => {
@@ -1472,7 +1512,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     },
   );
 
-  it('reports a missing SourceBodyEncoder as a coverage gap, not a schema error', () => {
+  it('reports a missing SourceBodyEncoder as a fault, not a schema error', () => {
     const doc = parse(`
       int8 => !integer { min: -128 }
       big  => !int8 ^ { min: -500 }
@@ -1481,9 +1521,7 @@ describe('atom refinement (§5.5, §5.7)', () => {
     structure.set('integer', integerTypeStructure());
     structure.set('integer_type', integerTypeStructure());
     entries.set('int8', resolver.resolve(declarationOf(doc, 'int8')));
-    expect(thrownBy(() => resolveOne(resolver, doc, 'big'))).toBeInstanceOf(
-      TsonNotImplementedError,
-    );
+    expect(thrownBy(() => resolveOne(resolver, doc, 'big'))).toBeInstanceOf(TsonInternalError);
   });
 });
 
@@ -1530,13 +1568,13 @@ describe('coverage gaps reported as TsonNotImplementedError, never silently mis-
     expect(thrownBy(() => resolver.resolve(declaration))).toBeInstanceOf(TsonInternalError);
   });
 
-  it('closing a declared application with no application closer is a gap, never a verdict (§5.10)', () => {
+  it('closing a declared application with no application closer is a fault, never a verdict (§5.10)', () => {
     const doc = parse('box => <T> { v: T }\nclosed => box<text>');
     const { resolver, entries } = harness();
     entries.set('text', entry({ kind: 'text_type', normalization: 'NONE' }));
     entries.set('box', resolveOne(resolver, doc, 'box'));
     const error = thrownBy(() => resolveOne(resolver, doc, 'closed'));
-    expect(error).toBeInstanceOf(TsonNotImplementedError);
+    expect(error).toBeInstanceOf(TsonInternalError);
   });
 });
 

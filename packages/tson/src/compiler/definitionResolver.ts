@@ -902,7 +902,7 @@ function resolveApplication(
       Ancestry.parametricHead(generic.name, deps.namespaceDefinitions),
     );
     if (isParametric(definition) && parametersOf(definition).length === generic.args.length) {
-      throw new TsonNotImplementedError(
+      throw new TsonInternalError(
         `'${name}': closing the application '${applicationText(generic)}' needs an application closer, and ` +
           'this resolver was built without one (§5.10)',
       );
@@ -1224,7 +1224,7 @@ function resolveValueEntry(
     );
   }
   if (deps.definitionValueReader === undefined) {
-    throw new TsonNotImplementedError(
+    throw new TsonInternalError(
       `'${name}': '!${target}' builds a value entry, and this resolver was built without a value reader`,
     );
   }
@@ -1718,7 +1718,7 @@ function mergeWithSource(
   constructorName: string,
 ): DataValue {
   if (deps.encodeSourceBody === undefined) {
-    throw new TsonNotImplementedError(
+    throw new TsonInternalError(
       `'${name}': merging an atom refinement's source needs a SourceBodyEncoder, and this resolver was built ` +
         'without one',
     );
@@ -1879,10 +1879,15 @@ function bindAtomInstance(deps: ResolverContext, name: string, value: DataValue)
         cause: e,
       });
     }
-    throw new TsonNotImplementedError(
-      `'${name}': failed to bind '${constructorName}' via the compiled meta-schema reader: ${errorMessage(e)}`,
-      { cause: e },
-    );
+    // A gap the read reached stays one, named against this declaration; anything else is a fault, and propagates as
+    // one.
+    if (e instanceof TsonNotImplementedError) {
+      throw new TsonNotImplementedError(
+        `'${name}': failed to bind '${constructorName}' via the compiled meta-schema reader: ${errorMessage(e)}`,
+        { cause: e },
+      );
+    }
+    throw e;
   }
   checkCoherent(name, constructorName, body);
   return body;
@@ -3137,10 +3142,13 @@ function bindAnnotationValue(
     if (e instanceof TsonBindMismatchError) {
       throw new TsonBindMismatchError(`'${declaration}': ${e.message}`, { cause: e });
     }
-    throw new TsonNotImplementedError(
-      `'${declaration}': failed to bind the value of annotation '@${annotationName}' via the compiled ` +
-        `meta-schema reader: ${errorMessage(e)}`,
-      { cause: e },
-    );
+    if (e instanceof TsonNotImplementedError) {
+      throw new TsonNotImplementedError(
+        `'${declaration}': failed to bind the value of annotation '@${annotationName}' via the compiled ` +
+          `meta-schema reader: ${errorMessage(e)}`,
+        { cause: e },
+      );
+    }
+    throw e;
   }
 }

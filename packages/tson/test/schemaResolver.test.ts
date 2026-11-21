@@ -6,7 +6,6 @@ import { collector } from '../src/core/diagnostic.js';
 import {
   TsonBindMismatchError,
   TsonInternalError,
-  TsonNotImplementedError,
   TsonSchemaFetchError,
   TsonLimitRefusedError,
   TsonSchemaValidationError,
@@ -242,14 +241,14 @@ describe('!!import merging into the type-name namespace', () => {
     ).toThrow(TsonSchemaValidationError);
   });
 
-  it('reports TsonNotImplementedError for a document that writes !!import with no loader supplied', () => {
+  it('reports TsonInternalError for a document that writes !!import with no loader supplied', () => {
     const doc = parse(
       '!!id:"https://example.com/s.tn" ' + '!!import:"https://example.com/i.tn"',
       'x => { v: text }',
     );
     const { resolveImport: _loader, ...noLoader } = deps();
     void _loader;
-    expect(() => resolveSchema(doc, noLoader)).toThrow(TsonNotImplementedError);
+    expect(() => resolveSchema(doc, noLoader)).toThrow(TsonInternalError);
   });
 });
 

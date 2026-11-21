@@ -415,6 +415,52 @@ describe('compile', () => {
   });
 });
 
+describe('validate --schema: whose failure a broken schema is (exit codes)', () => {
+  const HEAD =
+    '!!import:"https://tson.io/2026/40/m/meta.tn"\n!!import:"https://tson.io/2026/40/m/core.tn"\n';
+
+  async function schemaAndData(body: string): Promise<{ schema: string; data: string }> {
+    const schema = join(dir, 'schema.tn');
+    const data = join(dir, 'data.tn');
+    await writeFile(
+      schema,
+      `!!id:"https://example.test/cli-gap.tn"\n${HEAD}!schema {\n${body}\n}\n`,
+      'utf8',
+    );
+    await writeFile(data, '{ name: Ada }', 'utf8');
+    return { schema, data };
+  }
+
+  it('a gap in the schema is exit 70 and reported as NOT_IMPLEMENTED, not as the schema being wrong', async () => {
+    const { schema, data } = await schemaAndData(
+      'c => meta.product & { extra: text }\nx => !c { extra: "hello" }\nperson => { name: text }',
+    );
+    const io = captureOutput();
+    const code = await main(['validate', '--schema', schema, '--root', 'person', data]);
+    expect(code).toBe(EXIT.FAULT);
+    expect(io.stdout()).toContain('NOT_IMPLEMENTED');
+    expect(io.stderr()).not.toContain('internal error');
+  });
+
+  it('a schema document past the depth limit is declined, not a fault: REJECTED, exit 1', async () => {
+    const levels = 400;
+    const { schema, data } = await schemaAndData(
+      `person => ${'{ a: '.repeat(levels)}text${' }'.repeat(levels)}`,
+    );
+    const io = captureOutput();
+    const code = await main(['validate', '--schema', schema, '--root', 'person', data]);
+    expect(code).toBe(EXIT.INVALID);
+    expect(io.stdout()).toContain('LIMIT_REFUSED');
+    expect(io.stdout()).not.toContain('NOT_IMPLEMENTED');
+  });
+
+  it('a schema that is itself invalid is a usage error, exit 2', async () => {
+    const { schema, data } = await schemaAndData('person => { name: no_such_type }');
+    captureOutput();
+    expect(await main(['validate', '--schema', schema, '--root', 'person', data])).toBe(EXIT.USAGE);
+  });
+});
+
 describe('hash', () => {
   /**
    * `core.tn`'s own published pin, read out of the file rather than copied into this test. That is

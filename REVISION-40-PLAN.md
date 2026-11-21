@@ -590,7 +590,8 @@ swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is r
     rows:** a parametric record nothing applies is judged only in part (#3); a name in a schema
     document's annotation value is not judged at link (#8); a dependent field whose sibling holds a
     type written in place is not read by a tree read (#5); a restatement that changes a pin loads and
-    a constructor composed with `&` that adds no field cannot be applied (#11); five extern points
+    an instance of a constructor composed with `&` that adds a field, or composes `meta.record`,
+    cannot be applied (#11); five extern points
     (#13). `STATUS.md` lists them as known gaps.
 
 ### Ported behaviour the reference's Java fixture test cannot see

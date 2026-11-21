@@ -20,10 +20,10 @@
  * callees wrote, so no order among parametric records is needed. A constructor's slot judges the argument that
  * arrives when the record is applied, so a parameter at one (`meta.map<K text>`, `[T]`) needs no bound.
  */
-import { TsonNotImplementedError, TsonSchemaValidationError } from '../core/errors.js';
+import { TsonSchemaValidationError } from '../core/errors.js';
 import type { CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
 import type { MapBody, RecordBody, RecordField } from '../schema/meta/bodies.js';
-import type { Param, Top, TypeExpr, TypeRef } from '../schema/meta/typedef.js';
+import type { IncompleteEntry, Param, Top, TypeExpr, TypeRef } from '../schema/meta/typedef.js';
 import { dependentOn, isParametric, parametersOf, supertypesOf } from '../schema/meta/typedef.js';
 import { metaName } from '../schema/meta/kernel.js';
 import { applicationsOf } from '../schema/meta/typeInline.js';
@@ -237,7 +237,7 @@ function isA(
  * **A type written in place is walked into**, its `{ of: !C { … } }` body against `C`'s vocabulary. A parameter at a
  * slot there that holds a type or a name -- `type: { of: !meta.array { element_type: T } }` -- stands as it does at a
  * field's type. A parameter at a slot that holds no type is refused for where it stands, inside the wrapper as
- * outside it; inside a construction whose constructor cannot be read yet it is a gap.
+ * outside it. An incomplete entry's completion is walked against the constructor the entry builds.
  */
 export function checkSlots(
   parameters: readonly string[],
@@ -278,6 +278,7 @@ function resolve(name: string, meta: DefinitionGetter): Top | undefined {
 
 interface Walk {
   payload(payload: CoreValue, constructor: string, vocabulary: RecordBody): void;
+  completion(payload: CoreValue, incomplete: IncompleteEntry, vocabulary: RecordBody): void;
 }
 
 function walk(parameters: readonly string[], meta: DefinitionGetter, inPlace: boolean): Walk {
@@ -344,49 +345,48 @@ function walk(parameters: readonly string[], meta: DefinitionGetter, inPlace: bo
     }
   }
 
-  /** A type written in place, `{ of: !C { … } }`, walked as the construction of `C` it holds. */
+  /**
+   * A type written in place, `{ of: !C { … } }`, walked as the construction of `C` it holds, or of the constructor an
+   * incomplete `C` completes. Every head declared in the schema is ready before this walk, so a `C` that is neither
+   * names no constructor, and the construction's own read refuses it whatever its slots hold.
+   */
   function wrapped(wrapper: RecordValue): void {
     for (const field of wrapper.fields) {
       if (field.name !== OF) continue; // a field the wrapper does not declare, which its own reader reports
       const construction = field.value;
       const constructor = construction.typeRef;
       const inside = walk(parameters, meta, true);
-      const vocabulary = constructor === undefined ? undefined : resolve(constructor, meta);
-      if (constructor !== undefined && vocabulary?.kind === 'record') {
-        inside.payload(construction.coreValue, constructor, vocabulary);
-      } else {
-        anyParameter(construction.coreValue);
+      const head = constructor === undefined ? undefined : resolve(constructor, meta);
+      if (constructor !== undefined && head?.kind === 'record') {
+        inside.payload(construction.coreValue, constructor, head);
+      } else if (head?.kind === 'incomplete') {
+        const vocabulary = resolve(head.head, meta);
+        if (vocabulary?.kind === 'record')
+          inside.completion(construction.coreValue, head, vocabulary);
       }
     }
   }
 
-  /** Refuses, as the gap it is, a parameter anywhere in `written`. */
-  function anyParameter(written: CoreValue): void {
-    switch (written.kind) {
-      case 'token':
-        if (declares(written.text)) {
-          throw new TsonNotImplementedError(
-            `parameter '${written.text}' stands at a type written in place, inside a construction whose ` +
-              'constructor is not yet resolved, so which of its slots hold a type cannot be told -- write the ' +
-              'type in place with a kernel constructor, or declare the constructor first',
-          );
-        }
-        return;
-      case 'array':
-        for (const element of written.elements) anyParameter(element.coreValue);
-        return;
-      case 'map':
-        for (const entry of written.entries) {
-          anyParameter(entry.key.coreValue);
-          anyParameter(entry.value.coreValue);
-        }
-        return;
-      case 'record':
-        for (const field of written.fields) anyParameter(field.value.coreValue);
-        return;
-      default:
-        return;
+  /**
+   * A completion of an incomplete entry, `!nonempty { element_type: T }`: the construction of the entry's constructor,
+   * so its slots are that constructor's (§5.5). A payload that is no braced record is the value of the one field the
+   * entry leaves absent, §5.6's positional form as a completion reads it.
+   */
+  function completion(
+    written: CoreValue,
+    incomplete: IncompleteEntry,
+    vocabulary: RecordBody,
+  ): void {
+    const constructor = incomplete.head;
+    if (written.kind === 'record') {
+      record(written, constructor, vocabulary);
+      return;
     }
+    const [absent, ...rest] = incomplete.absent;
+    if (absent === undefined || rest.length > 0) return;
+    const declared = vocabulary.fields.entries.get(absent);
+    const type = declared === undefined ? undefined : ownType(declared);
+    if (type !== undefined) value(written, type, `${constructor}.${absent}`);
   }
 
   /** A map slot: the key against `key_type`, the value against `value_type`. */
@@ -414,5 +414,5 @@ function walk(parameters: readonly string[], meta: DefinitionGetter, inPlace: bo
     });
   }
 
-  return { payload };
+  return { payload, completion };
 }

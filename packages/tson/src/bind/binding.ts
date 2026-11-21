@@ -354,7 +354,7 @@ export interface VariantBinding<T> extends BindingBase<T> {
    * record by the one record member.
    */
   readonly untagged?: boolean;
-  /** The host value a member's decoded value becomes, given the member's wire name -- the tag the value carried. */
+  /** The host value a member's decoded value becomes, given the tag the value carried: the member's wire name, or the name of a constructor composed over it (§5.8) read as that member. */
   fromMember?(value: unknown, wireName: string): unknown;
   /** Register another implementation at runtime. Present only on an open ({@link sealed} `false`) variant. */
   addMember?(member: VariantMember): void;
