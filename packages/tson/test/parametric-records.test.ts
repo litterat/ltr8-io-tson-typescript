@@ -109,3 +109,52 @@ describe('§5.10, §8.2 a family member is the application a declaration names',
     expect(loadError(`${pets}kennel => { k: dog_of<text> }`)).toMatch(/dog_of<text>/);
   });
 });
+
+describe('§5.10, §5.5 a parameter inside a completion written in place', () => {
+  const META = '!!import:"https://tson.io/2026/40/m/meta.tn"';
+  const NONEMPTY = 'nonempty => !meta.array ^ { min_items: 1 }\n';
+
+  /** The type held at field `v` of the application `a`, which the declaration closes. */
+  function fieldType(body: string): unknown {
+    const entry = load(`${body}\na => arr<int32>`, META).entries.get('a');
+    if (entry?.kind !== 'record') throw new Error('expected a record');
+    return entry.fields.entries.get('v')?.type;
+  }
+
+  it.each([
+    [
+      'the kernel’s set_type',
+      'arr => <T> !meta.record { fields: { v => { type: { of: !meta.set_type { element_type: T } } } } }',
+      'arr => <T> { v: meta.set_type<T> }',
+    ],
+    [
+      'a schema’s own incomplete entry, braced',
+      `${NONEMPTY}arr => <T> !meta.record { fields: { v => { type: { of: !nonempty { element_type: T } } } } }`,
+      `${NONEMPTY}arr => <T> { v: nonempty<T> }`,
+    ],
+    [
+      'a schema’s own incomplete entry, positional',
+      `${NONEMPTY}arr => <T> !meta.record { fields: { v => { type: { of: !nonempty T } } } }`,
+      `${NONEMPTY}arr => <T> { v: nonempty<T> }`,
+    ],
+  ])('%s: the explicit spelling and the sugar close to one type', (_what, explicit, sugar) => {
+    expect(fieldType(explicit)).toEqual(fieldType(sugar));
+  });
+
+  it('a parameter at a slot that holds no type is refused inside a completion as outside it', () => {
+    expect(
+      loadError(
+        `${NONEMPTY}sized => <N> !meta.record { fields: { v => { type: { of: !nonempty { element_type: text  max_items: N } } } } }`,
+        META,
+      ),
+    ).toMatch(/parameter 'N' stands at meta\.array\.max_items/);
+  });
+
+  it('a type written in place whose head names no constructor is refused for the head, whatever its slots hold', () => {
+    const body = (argument: string): string =>
+      `arr => <T> !meta.record { fields: { v => { type: { of: !missing_head { element_type: ${argument} } } } } }`;
+    const withParameter = loadError(body('T'), META);
+    expect(withParameter).toBeDefined();
+    expect(withParameter).toBe(loadError(body('text'), META));
+  });
+});

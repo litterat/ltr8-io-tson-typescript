@@ -509,9 +509,10 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
   - **A dependent field whose sibling holds a type written in place is not read by a tree read
     (#5, §5.2).** A tree read, in either encoding, reports the value as `NOT_IMPLEMENTED`; a sibling
     holding a dependent type is refused as naming no type a value can be read against.
-  - **A constructor composed with `&` that adds no field (#11, §5.8)**
-    (`minlist => meta.array & { min_items?: = 1 }`) loads and cannot be applied: `minlist<text>`
-    reports not implemented.
+  - **An instance of a constructor composed with `&` that adds a field, or that composes
+    `meta.record`, cannot be applied (#11, §5.8).** It reports not implemented. A constructor over
+    one constructor of types that adds no field (`minlist => meta.array & { min_items?: = 1 }`) is
+    applied as its parent is, its pin in force (`schema/meta/composedOver.ts`).
   - **Five points on the extern (#13, §5.13, §7.9, §11.5; Part 3 §8.6).** In TSON text a root typed by an
     extern, and an extern reached through an alias of a container, write no boundary tag; a tag
     naming an extern at a position no extern types is refused in both encodings; a map key typed by

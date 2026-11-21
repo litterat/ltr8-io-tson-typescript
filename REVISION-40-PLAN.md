@@ -589,10 +589,12 @@ swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is r
     reference lists this as an open backlog entry; the harness rule is the same in both.
 16. **The reference's `BACKLOG.md` items the port runs the same way, from change log §5's "remainder"
     rows:** a name in a schema document's annotation value is not judged at link (#8); a dependent
-    field whose sibling holds a type written in place is not read by a tree read (#5); a constructor
-    composed with `&` that adds no field cannot be applied (#11); five extern points (#13).
-    `STATUS.md` lists them as known gaps. The reference closed its #3 remainder (a parametric record
-    nothing applies) and the pin half of #11 in `014891681` and `99135120`, and the port with them.
+    field whose sibling holds a type written in place is not read by a tree read (#5); an instance of
+    a constructor composed with `&` that adds a field, or composes `meta.record`, cannot be applied
+    (#11); five extern points (#13). `STATUS.md` lists them as known gaps. The reference closed its #3
+    remainder (a parametric record nothing applies) and the pin half of #11 in `014891681` and
+    `99135120`, and the port with them; a constructor over one constructor of types that adds no field
+    is applied as its parent is (`08490016`).
 
 ### Ported behaviour the reference's Java fixture test cannot see
 

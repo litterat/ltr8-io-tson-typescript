@@ -135,6 +135,7 @@ const SCHEMA_SOURCE = `
   c1          => !customer { name: Ada }
   order_ref   => meta.ref<order>
   order_pick  => { which: order_ref  also?: meta.ref<order> ~ o1 }
+  order_index => { m: { order_ref => int32 } }
   a_host       => !net.host_type {}
   host_or_port => ( a_host | int32 )
   addressed    => { at: host_or_port }
@@ -986,6 +987,21 @@ describe('§5.6 a reference position reads a name: never an application, a value
       ]);
     }
     sameVerdict('order_pick', '{ which: o1  also: c1 }', '{"which": "o1", "also": "c1"}');
+  });
+
+  /**
+   * A reference naming values is an atom, so a map keyed by one takes the object form ([TSON-JSON] §6.4) and each
+   * member name is judged as the same string at a field is: a key reaching a value of the type is admitted, and one
+   * reaching nothing, a value of another type or a type is refused by both, on the same code at the same pointer.
+   */
+  it('a map keyed by a value reference is judged by what each key reaches in both', () => {
+    bothAccept('order_index', '{ m: { o1 => 1 } }', '{"m": {"o1": 1}}');
+    for (const refused of ['nope', 'c1', 'order']) {
+      sameVerdict('order_index', `{ m: { ${refused} => 1 } }`, `{"m": {"${refused}": 1}}`);
+      expect(verdictsOf(tson('order_index', `{ m: { ${refused} => 1 } }`)), refused).toEqual([
+        { code: 'ATOM_CONSTRAINT_VIOLATION', path: `/m/${refused}` },
+      ]);
+    }
   });
 
   /**

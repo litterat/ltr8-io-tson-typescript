@@ -3,7 +3,8 @@
  * inspecting the value:
  *
  * - **Object form** — `K` resolves, after its alias chain, to an atom-family instance,
- *   `identifier`, or an enum (never `value` or `void`, neither of which reads token content). The
+ *   `identifier`, an enum, or a reference (never `value` or `void`, neither of which reads token content; a
+ *   reference is an atom, and each key is judged by what its name reaches, as at a field). The
  *   map is a JSON object; each member name is a key token, faced to `K`'s own parsing contract
  *   exactly as §5.1 hands value strings, and identity is over the decoded key's value space —
  *   `"1"`/`"1.0"` under a `number` key are one key.
@@ -64,7 +65,9 @@ function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValuePa
   if (body.kind === 'void_type') return undefined; // no content grammar
   if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/declared
   try {
-    return fieldValueParser(terminalName, body as Atom, enumFormOf(formIn, terminalName));
+    return fieldValueParser(terminalName, body as Atom, enumFormOf(formIn, terminalName), {
+      readsReferences: true,
+    });
   } catch {
     return undefined;
   }
@@ -74,6 +77,7 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'value_type',
   'void_type',
   'enum',
+  'ref',
   'integer_type',
   'text_type',
   'identifier_type',

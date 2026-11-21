@@ -91,9 +91,20 @@ export interface RecordFieldPolicy {
  * this particular binding) falls back to {@link fromCoreValue}'s own self-contained heuristic --
  * see its own doc.
  */
-export type RecordFieldsProvider = (
-  binding: RecordBinding<unknown>,
-) => RecordFieldPolicy | undefined;
+export interface RecordFieldsProvider {
+  (binding: RecordBinding<unknown>): RecordFieldPolicy | undefined;
+  /**
+   * The names a {@link VariantBinding} position tries after a value's own `!type-ref` names no member, in order: the
+   * constructors a composed constructor that adds no field binds as (§5.8). A tag naming no member and no such
+   * parent is still refused. The member read is the parent's, and the value keeps the tag it was written under.
+   */
+  readonly memberNamesFor?: (typeRef: string) => readonly string[];
+  /**
+   * The {@link RecordFieldPolicy} of the constructor a value was tagged with, for the parent's member read under a
+   * composed constructor's tag: its pins and defaults are the composed constructor's, not the parent's (§5.8).
+   */
+  readonly policyOfTag?: (typeRef: string) => RecordFieldPolicy | undefined;
+}
 
 /** Resolves a {@link BindingRef} past any number of {@link LazyBinding} hops -- identical to `encode.ts`'s own private helper. */
 function resolveRef<T>(ref: BindingRef<T>): Exclude<Binding<T>, { readonly kind: 'lazy' }> {
@@ -243,19 +254,60 @@ export function fromDataValue<T>(
         `a '${resolved.members.map((m) => m.wireName).join('/')}' value needs its own !type-ref to say which member it is`,
       );
     }
-    const member = resolved.members.find((m) => m.wireName === value.typeRef);
+    const member =
+      resolved.members.find((m) => m.wireName === value.typeRef) ??
+      memberNamedBy(resolved.members, fieldsFor?.memberNamesFor?.(value.typeRef));
     if (member === undefined) {
       throw readError('TYPE_MISMATCH', `'!${value.typeRef}' names no member of this variant`);
     }
-    const decoded = fromDataValue(member.binding, value, decodeAtom, fieldsFor);
+    const decoded = fromDataValue(
+      member.binding,
+      value,
+      decodeAtom,
+      member.wireName === value.typeRef
+        ? fieldsFor
+        : taggedPolicy(fieldsFor, member, value.typeRef),
+    );
     return (
-      resolved.fromMember === undefined ? decoded : resolved.fromMember(decoded, member.wireName)
+      resolved.fromMember === undefined ? decoded : resolved.fromMember(decoded, value.typeRef)
     ) as T;
   }
   if (resolved.kind === 'bridge') {
     return resolved.fromWire(fromDataValue(resolved.wire, value, decodeAtom, fieldsFor));
   }
   return fromCoreValue(resolved, value.coreValue, decodeAtom, fieldsFor);
+}
+
+/**
+ * `fieldsFor` with the policy of `member`'s binding replaced by the one the written tag `typeRef` carries, where the
+ * provider offers one: a member reached through a composed constructor is read under that constructor's own pins and
+ * defaults.
+ */
+function taggedPolicy(
+  fieldsFor: RecordFieldsProvider | undefined,
+  member: VariantMember,
+  typeRef: string,
+): RecordFieldsProvider | undefined {
+  if (fieldsFor?.policyOfTag === undefined) return fieldsFor;
+  const own = resolveRef(member.binding);
+  const scoped = (binding: RecordBinding<unknown>): RecordFieldPolicy | undefined =>
+    binding === own ? (fieldsFor.policyOfTag?.(typeRef) ?? fieldsFor(binding)) : fieldsFor(binding);
+  return Object.assign(scoped, {
+    ...(fieldsFor.memberNamesFor === undefined ? {} : { memberNamesFor: fieldsFor.memberNamesFor }),
+    policyOfTag: fieldsFor.policyOfTag,
+  });
+}
+
+/** The first of `names` that names a member of `members`, or `undefined`. */
+function memberNamedBy(
+  members: readonly VariantMember[],
+  names: readonly string[] | undefined,
+): VariantMember | undefined {
+  for (const name of names ?? []) {
+    const found = members.find((m) => m.wireName === name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /**

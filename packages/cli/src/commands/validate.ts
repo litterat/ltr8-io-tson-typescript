@@ -66,6 +66,8 @@ import type { Readable } from 'node:stream';
 import {
   diagnosticCodeForFetch,
   TsonInternalError,
+  TsonNameHygieneRefusedError,
+  TsonRefusedError,
   TsonSchemaFetchError,
   validate,
   type CompiledSchema,
@@ -270,6 +272,38 @@ async function loadLinkedSchema(
   }
 }
 
+/**
+ * The diagnostic a `--schema` that cannot be used for a reason other than its own text denotes, or `undefined` for
+ * one that is a fault (rethrown, exit 70). Each is reported against every requested file, as a failure to obtain the
+ * schema is:
+ *
+ * - a schema this run cannot obtain: its fetch code;
+ * - a schema this processor declined, past a limit ([TSON-SCHEMA] §11.5) or under its name policy (§8.2), which is a
+ *   refusal and exits 1 like any rejection, the author holding the fix;
+ * - a gap in this library, `NOT_IMPLEMENTED`, which no schema text caused: it exits 70 as a gap in a data file's
+ *   read does, rather than reading as a bug in the tool.
+ *
+ * A schema's own problems -- malformed, or invalid -- never get here: {@link loadLinkedSchema} reports them as a
+ * usage error, and a failure of any other kind is a fault, which stays one.
+ */
+function diagnosticOfUnobtainedSchema(error: unknown): Diagnostic | undefined {
+  if (error instanceof TsonSchemaFetchError) {
+    return { code: diagnosticCodeForFetch(error.reason), message: error.message };
+  }
+  if (error instanceof UsageError) return undefined;
+  const problem = classifyReadError(error);
+  if (problem.kind === 'not-implemented') {
+    return { code: 'NOT_IMPLEMENTED', message: problem.message };
+  }
+  if (
+    problem.kind === 'invalid' &&
+    (error instanceof TsonRefusedError || error instanceof TsonNameHygieneRefusedError)
+  ) {
+    return problem.diagnostic;
+  }
+  return undefined;
+}
+
 /** `-` for stdin (read once, whole process lifetime), otherwise a streamed file. Typed as `Readable`, not the narrower `NodeJS.ReadableStream` interface, because it is `Readable`'s own `[Symbol.asyncIterator]` that makes this structurally an `AsyncByteSource` for `validate()`'s async overload below. */
 function openSource(file: string): Readable {
   return file === '-' ? process.stdin : createReadStream(file);
@@ -436,13 +470,8 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
         options.policy,
       ));
     } catch (error) {
-      if (!(error instanceof TsonSchemaFetchError)) {
-        throw error;
-      }
-      const diagnostic: Diagnostic = {
-        code: diagnosticCodeForFetch(error.reason),
-        message: error.message,
-      };
+      const diagnostic = diagnosticOfUnobtainedSchema(error);
+      if (diagnostic === undefined) throw error;
       const files: ValidateFileResult[] = options.files.map((file) => ({
         file,
         outcome: outcomeOfDiagnostics([diagnostic]),

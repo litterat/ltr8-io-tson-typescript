@@ -51,7 +51,7 @@
  * another wire name the way `array`/`set` do.
  */
 import type { DataValue } from '../ast/value.js';
-import { TsonMissingBindingError, TsonReadError } from '../core/errors.js';
+import { TsonNotImplementedError, TsonReadError } from '../core/errors.js';
 import type { Diagnostic } from '../core/diagnostic.js';
 import {
   fromDataValue,
@@ -97,7 +97,7 @@ import {
   type RecordField,
 } from './meta/bodies.js';
 import type { Top } from './meta/typedef.js';
-import { inheritedBindingName } from './inheritedBinding.js';
+import { composedOver } from './meta/composedOver.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -372,6 +372,16 @@ function refuseMovedPins(def: Top | undefined, value: DataValue, type: string): 
   }
 }
 
+/** The parents `name` binds as, nearest first: its composed parent, that parent's own, and so on (§5.8). */
+function composedChain(name: string, lookup: DefinitionGetter): readonly string[] {
+  const chain: string[] = [];
+  for (let at = composedOver(name, lookup); at !== undefined && !chain.includes(at);) {
+    chain.push(at);
+    at = composedOver(at, lookup);
+  }
+  return chain;
+}
+
 /**
  * Builds a {@link DefinitionMetaReader} governed by `lookupConstructorDef` -- the same structure
  * namespace a caller already threads through `DefinitionResolverDeps.metaDefinitions`/
@@ -385,28 +395,34 @@ export function createDefinitionMetaReader(
   decodeAtom: AtomDecoder = metaAtomDecoder,
 ): DefinitionMetaReader {
   return (type, value) => {
-    const binding =
-      metaBindings.get(type) ??
-      metaBindings.get(
-        inheritedBindingName(
-          type,
-          lookupConstructorDef,
-          (n) => metaBindings.get(n) !== undefined,
-        ) ?? type,
-      );
+    // A constructor no binding names binds as the constructor it is composed over, where it adds no field (§5.8).
+    const bindingName = [type, ...composedChain(type, lookupConstructorDef)].find(
+      (name) => metaBindings.get(name) !== undefined,
+    );
+    const binding = metaBindings.get(bindingName ?? type);
     if (binding === undefined) {
-      throw new TsonMissingBindingError(
-        `no binding registered for constructor '!${type}' in schema/bindings.ts's metaBindings`,
+      // The table is this library's own, so a constructor it has no body for is a gap in the library and never the
+      // consumer's wiring: nothing a deployment registers could back it.
+      throw new TsonNotImplementedError(
+        `'!${type}' builds types, and this library models the body of a type built only by the bundled schemas' ` +
+          'constructors, or by one composed over one with no field added -- an instance of a constructor of types ' +
+          'no reader factory backs cannot be held as a type',
       );
     }
     // `binding` is never itself `'lazy'` -- every `metaBindings` entry is a plain record/unit
     // binding (`bindings.ts`'s own `metaBindings` table), so no `resolveRef` hop is needed to
     // compare identity against what `fromDataValue` resolves down to.
-    const fieldsFor: RecordFieldsProvider = (resolved) => {
+    const policyOf: RecordFieldsProvider = (resolved) => {
       if (resolved === binding) return policyFor(lookupConstructorDef(type));
       const nestedName = NESTED_BINDING_NAMES.get(resolved);
       return nestedName === undefined ? undefined : policyFor(lookupConstructorDef(nestedName));
     };
+    // A type written in place under a composed constructor, `{ of: !my_list { ... } }`, reads as its parent's body (§5.8).
+    const fieldsFor: RecordFieldsProvider = Object.assign(policyOf, {
+      memberNamesFor: (typeRef: string): readonly string[] =>
+        composedChain(typeRef, lookupConstructorDef),
+      policyOfTag: (typeRef: string) => policyFor(lookupConstructorDef(typeRef)),
+    });
     const constructor = lookupConstructorDef(type);
     refuseSeveralOptions(constructor, value, type);
     refuseMovedPins(constructor, value, type);

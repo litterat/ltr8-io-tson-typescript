@@ -17,7 +17,7 @@
  * **This module does not fetch, link, or register anything.** It takes each import's already-resolved entries
  * ({@link SchemaResolverDeps.resolveImport}) and the readers a body is read through
  * ({@link SchemaResolverDeps.readers}) as caller-supplied dependencies. A caller with no loader omits
- * `resolveImport`; this module then reports {@link TsonNotImplementedError} the moment a document writes
+ * `resolveImport`; this module then reports {@link TsonInternalError} -- a resolver wired without what it needs is a fault -- the moment a document writes
  * `!!import`.
  *
  * **The kernel resolves through the same lookup (§3.4).** Every construction head in `meta.tn` names an entry
@@ -871,7 +871,7 @@ function mergeImports(
     }
     alreadyImported.add(importUri);
     if (deps.resolveImport === undefined) {
-      throw new TsonNotImplementedError(
+      throw new TsonInternalError(
         `'!!import:"${importUri}"' needs a schema loader to resolve, and this resolver was built without one`,
       );
     }

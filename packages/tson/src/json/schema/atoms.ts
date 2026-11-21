@@ -426,7 +426,17 @@ export function fieldValueParser(
   displayName: string,
   body: Atom,
   enumForm: Normalization = 'NONE',
+  options: { readonly readsReferences?: boolean } = {},
 ): FieldValueParser {
+  if (body.kind === 'ref' && options.readsReferences === true) {
+    // A reference is the reference grammar's own text, which JSON writes as a string and a map keys by as a
+    // member name ([TSON-JSON] §5.6, §6.4); a JSON read is of data, so what a name reaches is judged (§4.2, §5.12).
+    const parser = createReferenceParser(displayName, body, true);
+    return {
+      form: atomFormOf(body),
+      parse: (content: string) => parser.read(tokenOf(content, true)),
+    };
+  }
   if (body.kind === 'enum') {
     const members = new Set(body.members);
     const isBooleanFamily =
