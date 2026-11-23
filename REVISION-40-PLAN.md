@@ -25,9 +25,9 @@ open, prefer the reference's shape.
 
 |                      | Revision 39                                     | Revision 40                                                      |
 | -------------------- | ----------------------------------------------- | ---------------------------------------------------------------- |
-| `JAVA_PIN`           | `c48b744707128531e82cfe87b0fd584a2e26bc8f`      | `014891681c9009ef0aa7ac3ac39ef5187f2d0efc` (proposal + PR #972)  |
-| `SUITE_PIN`          | `fb8757fb2e4ed947e0446a8de247145f990de905`      | `d30c9d7868d5023134fdbc89e5773569ab5e957f`                       |
-| Conformance subjects | 944 (Class 1 316, Class 2 628)                  | **1454** (Class 1 319; schema 530, link 222, validate 383)       |
+| `JAVA_PIN`           | `c48b744707128531e82cfe87b0fd584a2e26bc8f`      | `a48a8e6a7eb1238e3d6613e71f2d8f9b7ac175d9` (proposal branch)     |
+| `SUITE_PIN`          | `fb8757fb2e4ed947e0446a8de247145f990de905`      | `c9eb7a84fa3cb6ad1a51bba70b6d99c859e41f57`                       |
+| Conformance subjects | 944 (Class 1 316, Class 2 628)                  | **1458** (Class 1 319; schema 534, link 222, validate 383)       |
 | Spec vendored        | Parts 1–3, Rev 39 change log, `m/`, `fixtures/` | Parts 1–3, **Rev 40 change log**, `m/` (six), `fixtures/` (five) |
 | Bundled identities   | `tson.io/2026/39/m/*`                           | `tson.io/2026/40/m/*`                                            |
 | Package version      | 0.39.0                                          | 0.40.0                                                           |
@@ -532,6 +532,13 @@ the change log re-vendored. Two packages in parallel:
 
 **Gate:** the full CI list green; 1454/1454, unit 4480.
 
+Then the proposal tip `a48a8e6a` (PR #972 merged, corpus `c9eb7a84`, 1458 subjects): `7dfa0aa6`, a
+pin's own value may be written in a construction left open, a refinement of one and a completion,
+compared by value in any spelling, and another value is refused where it is written
+(`compiler/incompleteEntries.ts`'s `requirePinned`). It exposed a port bug the reference did not
+have: a closed `!meta.array { access_pattern: INDEX … }` was refused by the binder, which keeps no
+slot for a pin; the meta reader now drops a written pin at its own value before binding.
+
 ## To report upstream
 
 Collected from the stage reports and the reviews above. Each entry says the section, what the
@@ -579,13 +586,14 @@ swap` then `swap => <A,B> { x?: sw<B,A> }` passes where the direct spelling is r
 9. **Part 2 §11.5, the import closure counts a schema an extern reaches.** _Reference:_ counts
    nothing. _Port:_ counts it. _Why:_ §11.5 and §5.13 say the closure includes every dependency read
    with the imports.
-10. **Part 2 §5.2, §5.7, constructor-body pins compared by token text.** _Reference:_ compares the pin a
-    constructor body restates, and the pin a value is placed by, as values. _Port:_ `refuseMovedPins`
-    and `placedByPins` compare a pin by its token text, so `0xFF` and `255` are two pins there. A
-    record's restatement is compared as the reference compares it, at the link, by the inherited
-    field's type (`link/restatedFields.ts`'s `changedPin`), so `= 255` over `= 0xFF` is the identity
-    case; no corpus vector reaches the constructor-body spelling. _Why:_ the constructor-body
-    comparison is token text until it moves to the field type's own equality.
+10. **Part 2 §5.2, the pin a value is placed by compared by token text.** _Reference:_ compares the
+    pin a value is placed by as a value. _Port:_ `placedByPins` (`schema/namespaceReader.ts`) compares a
+    selector's pin by its token text, so `0xFF` and `255` are two pins there. A constructor body's
+    written pin, open or closed, is compared by value in any spelling (`schema/metaReader.ts`'s
+    `sameAsPin`, Java `7dfa0aa6`), and a record's restatement at the link by the inherited field's type
+    (`link/restatedFields.ts`'s `changedPin`). No corpus vector reaches the placed-by spelling. _Why:_
+    a selector's pin is an enum label or a token in every case the kernel declares, where text is
+    the value.
 11. **Part 2 §6, §5.12, an annotation value of an imported type.** _Reference:_ checkpoints the read in
     the document's namespace. _Port:_ reads it through the import's own compile and falls back to a
     checkpoint read when that refuses the value. _Why:_ the import's compiled reader is the declared

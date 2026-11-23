@@ -10,6 +10,7 @@
 import { TsonInternalError, TsonSchemaValidationError } from '../core/errors.js';
 import type { DataValue, RecordField } from '../ast/value.js';
 import type { RecordBody } from '../schema/meta/bodies.js';
+import { sameAsPin } from '../schema/metaReader.js';
 import type { IncompleteEntry, MetaValue } from '../schema/meta/typedef.js';
 
 /** Why `name`, naming `incomplete`, is refused where a type is named. */
@@ -68,20 +69,27 @@ export function record(
   };
 }
 
-/** Refuses a field of `fields` that `constructor` does not declare, or fixes: a pinned field is the constructor's. */
-export function requireWritable(
+/**
+ * Refuses a field of `fields` that `constructor` pins and `fields` writes at another value (§5.2): a construction
+ * may write a pin's own value, and no other. A construction left open is judged where it is declared, since nothing
+ * need complete it. A pin on a token is compared by value, in any spelling (`schema/metaReader.ts`'s
+ * `sameAsPin`), as a closed construction's is; a structured value is left to the reader.
+ */
+export function requirePinned(
   name: string,
   constructorName: string,
   constructor: RecordBody,
   fields: ReadonlyMap<string, DataValue>,
 ): void {
-  requireDeclared(name, constructorName, constructor, fields);
-  for (const field of fields.keys()) {
-    if (constructor.fields.entries.get(field)?.role === 'FIXED') {
-      throw new TsonSchemaValidationError(
-        `'${name}': '${field}' is fixed by '${constructorName}', and no construction writes it (§5.5)`,
-      );
-    }
+  for (const [field, value] of fields) {
+    const declared = constructor.fields.entries.get(field);
+    if (declared?.role !== 'FIXED' || declared.value === undefined) continue;
+    const written = value.coreValue;
+    if (written.kind !== 'token' || sameAsPin(declared.value, written)) continue;
+    throw new TsonSchemaValidationError(
+      `'${name}': '${field}' is fixed on '${constructorName}' and cannot be given another value: it is pinned ` +
+        `to ${declared.value.text}, and the construction writes ${written.text} (§5.2)`,
+    );
   }
 }
 
@@ -165,7 +173,8 @@ export function completed(
   payload: DataValue,
 ): DataValue {
   const fields = braced(payload) ?? positional(name, baseName, base, payload);
-  requireWritable(name, base.head, constructor, fields);
+  requireDeclared(name, base.head, constructor, fields);
+  requirePinned(name, base.head, constructor, fields);
   requireWrittenOnce(name, baseName, base, fields);
   const missing = base.absent.filter((field) => !fields.has(field));
   if (missing.length > 0) {

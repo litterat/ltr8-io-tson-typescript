@@ -74,7 +74,7 @@ the `node` condition, so a bundler cannot resolve it even by accident.
 
 ## Conformance
 
-1454 / 1454 vectors of the shared, language-agnostic
+1458 / 1458 vectors of the shared, language-agnostic
 [TSON conformance suite](https://github.com/litterat/ltr8-io-tson-test-suite).
 
 ## Documentation

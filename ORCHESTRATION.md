@@ -67,7 +67,7 @@ A revision run may drive its stages any of three ways:
 
 Whichever is used, the brief names the Java sources and the spec sections, states what the shared
 conformance suite should do at that point, and carries the current subject count. At the Revision 40
-corpus pin that is **1454 discovered subjects**: a stage that discovers fewer has broken the harness.
+corpus pin that is **1458 discovered subjects**: a stage that discovers fewer has broken the harness.
 
 ## Running a wave
 

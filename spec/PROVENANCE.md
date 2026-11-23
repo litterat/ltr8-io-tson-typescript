@@ -2,7 +2,7 @@
 
 Everything else in this directory is **vendored verbatim** from the reference implementation at
 https://github.com/litterat/ltr8-io-tson-java, pinned to commit
-`014891681c9009ef0aa7ac3ac39ef5187f2d0efc` (the same commit `scripts/fetch-references.sh` pins).
+`a48a8e6a7eb1238e3d6613e71f2d8f9b7ac175d9` (the same commit `scripts/fetch-references.sh` pins).
 
 | File | What it is |
 | --- | --- |

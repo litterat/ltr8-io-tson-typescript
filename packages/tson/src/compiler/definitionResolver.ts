@@ -1566,7 +1566,8 @@ function constructOpen(
   const payload = deps.rewrite.inPlace(bindings, DESUGARED.has(bindings));
   refuseWrittenParameters(name, constructorName, payload);
   const fields = bracedPayload(name, target, payload);
-  IncompleteEntries.requireWritable(name, constructorName, constructor, fields);
+  IncompleteEntries.requireDeclared(name, constructorName, constructor, fields);
+  IncompleteEntries.requirePinned(name, constructorName, constructor, fields);
   const absent = IncompleteEntries.required(constructor).filter((field) => !fields.has(field));
   if (absent.length === 0) {
     throw new TsonSchemaValidationError(
@@ -1644,7 +1645,8 @@ function refineIncomplete(
   const payload = deps.rewrite.inPlace(bindings, DESUGARED.has(bindings));
   refuseWrittenParameters(name, base.head, payload);
   const fields = bracedPayload(name, target, payload);
-  IncompleteEntries.requireWritable(name, base.head, constructor, fields);
+  IncompleteEntries.requireDeclared(name, base.head, constructor, fields);
+  IncompleteEntries.requirePinned(name, base.head, constructor, fields);
   IncompleteEntries.requireWrittenOnce(name, target, base, fields);
   const read = readEachField(deps, name, base.head, constructor, fields);
   return {

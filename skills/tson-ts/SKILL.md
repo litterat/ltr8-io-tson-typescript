@@ -8,7 +8,7 @@ description: Read, validate, write and bind TSON (`.tn`) documents with `@ltr8/t
 A TypeScript port of TSON (Typed Schema Object Notation) for **Node 24+ and modern browsers**, with
 **zero runtime dependencies**. It implements all three spec parts — Class 1 (the text data format),
 Class 2 (the schema layer), and Part 3 (the JSON encoding, behind its own `./json` subpath) — and
-passes the shared conformance suite in full (1454/1454 subjects).
+passes the shared conformance suite in full (1458/1458 subjects).
 
 Two packages, released in lockstep: `@ltr8/tson` (the library; subpath entry points, ESM + CJS +
 `.d.ts`) and `@ltr8/tson-cli` (the `tson` command). Source and issues:

@@ -59,9 +59,10 @@ import {
   type RecordFieldPolicy,
   type RecordFieldsProvider,
 } from '../bind/decode.js';
-import type { RecordBinding } from '../bind/binding.js';
+import type { Binding, RecordBinding } from '../bind/binding.js';
 import type { DefinitionGetter, DefinitionMetaReader } from '../compiler/resolverTypes.js';
 import { tryParseNumber } from '../base/numberGrammar.js';
+import { deepEqual } from '../value/equality.js';
 import { toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType, type BaseToken } from '../base/baseTypeResolver.js';
 import { readFullDate, readFullTime } from '../atom/temporal/rfc3339.js';
@@ -96,7 +97,7 @@ import {
   type RecordBody,
   type RecordField,
 } from './meta/bodies.js';
-import type { Top } from './meta/typedef.js';
+import type { Token, Top } from './meta/typedef.js';
 import { composedOver } from './meta/composedOver.js';
 
 // -------------------------------------------------------------------------------------------
@@ -248,6 +249,19 @@ function decodeBaseValue(wire: BaseToken): unknown {
   }
 }
 
+/**
+ * Whether `written` is the value `pin` states, in any spelling (§5.2): both read by the three-class reading of
+ * {@link decodeBaseValue}, so `0x1` is the pin `1` and `"INDEX"` the pin `INDEX`. A constructor's pinned fields are
+ * the kernel's facets, which that reading covers.
+ */
+export function sameAsPin(pin: Token, written: BaseToken): boolean {
+  const pinned: BaseToken = {
+    text: pin.text,
+    form: pin.form === 'UNQUOTED' ? 'unquoted' : 'single-line',
+  };
+  return deepEqual(decodeBaseValue(pinned), decodeBaseValue(written));
+}
+
 function readError(message: string): TsonReadError {
   const diagnostic: Diagnostic = { code: 'TYPE_MISMATCH', message };
   return new TsonReadError(diagnostic);
@@ -352,7 +366,8 @@ function refuseSeveralOptions(def: Top | undefined, value: DataValue, type: stri
 /**
  * A field the constructor pins (`voidable?: = false` on `meta.namespace`) may be restated at its pinned value and
  * at no other (§5.2, §5.7): a pin is the constructor's statement, which no construction or refinement moves. A pin
- * on a token is compared by its text; a structured pin is left to the binding, which keeps nothing for it.
+ * on a token is compared by value ({@link sameAsPin}); a structured pin is left to the binding, which keeps nothing
+ * for it.
  */
 function refuseMovedPins(def: Top | undefined, value: DataValue, type: string): void {
   const body = recordBodyOf(def);
@@ -362,7 +377,7 @@ function refuseMovedPins(def: Top | undefined, value: DataValue, type: string): 
     const declared = body.fields.entries.get(written.name);
     if (declared?.role !== 'FIXED' || declared.value === undefined) continue;
     const token = written.value.coreValue;
-    if (token.kind !== 'token' || token.text === declared.value.text) continue;
+    if (token.kind !== 'token' || sameAsPin(declared.value, token)) continue;
     throw new TsonReadError({
       code: 'TYPE_MISMATCH',
       message:
@@ -370,6 +385,31 @@ function refuseMovedPins(def: Top | undefined, value: DataValue, type: string): 
         'a pinned field is restated at its pinned value or left alone (§5.2, §5.7)',
     });
   }
+}
+
+/**
+ * `value` without the pinned fields it writes at their pinned value that `binding` keeps no slot for (§5.2): a
+ * construction may write a pin's own value, {@link refuseMovedPins} having refused any other, and the body holds
+ * the constructor's pin whether it is written or not (`access_pattern` on `meta.array`).
+ */
+function withoutWrittenPins(
+  def: Top | undefined,
+  value: DataValue,
+  binding: Binding<unknown>,
+): DataValue {
+  const body = recordBodyOf(def);
+  const core = value.coreValue;
+  if (body === undefined || core.kind !== 'record' || binding.kind !== 'record') return value;
+  const kept = core.fields.filter(
+    (written) =>
+      body.fields.entries.get(written.name)?.role !== 'FIXED' ||
+      binding.byWireName.has(written.name),
+  );
+  if (kept.length === core.fields.length) return value;
+  return {
+    ...value,
+    coreValue: kept.length === 0 ? { kind: 'empty-brace' } : { ...core, fields: kept },
+  };
 }
 
 /** The parents `name` binds as, nearest first: its composed parent, that parent's own, and so on (§5.8). */
@@ -426,6 +466,11 @@ export function createDefinitionMetaReader(
     const constructor = lookupConstructorDef(type);
     refuseSeveralOptions(constructor, value, type);
     refuseMovedPins(constructor, value, type);
-    return fromDataValue(binding, value, decodeAtom, fieldsFor) as Top;
+    return fromDataValue(
+      binding,
+      withoutWrittenPins(constructor, value, binding),
+      decodeAtom,
+      fieldsFor,
+    ) as Top;
   };
 }

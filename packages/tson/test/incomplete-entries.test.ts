@@ -76,3 +76,96 @@ describe('§5.5, §7.2 a data tag naming an incomplete entry', () => {
     );
   });
 });
+
+describe('§5.2 a fixed field in a construction left open, a refinement of one and a completion', () => {
+  const CONTRADICTED = /is fixed on 'meta\.array' and cannot be given another value/;
+
+  it('may write the pin’s own value, in any spelling', () => {
+    const linked = load(
+      [
+        'indexed => !meta.array ^ { access_pattern: INDEX }',
+        'quoted  => !meta.array ^ { access_pattern: "INDEX" }',
+        'one     => meta.array & { min_items?: = 1 }',
+        'hex     => !one ^ { min_items: 0x1 }',
+      ].join('\n'),
+      META,
+    );
+    for (const name of ['indexed', 'quoted', 'hex']) {
+      const entry = linked.entries.get(name);
+      if (entry?.kind !== 'incomplete') throw new Error(`expected '${name}' incomplete`);
+      expect(entry.absent).toEqual(['element_type']);
+    }
+  });
+
+  it('refuses another value where the construction is left open', () => {
+    expect(loadError('named => !meta.array ^ { access_pattern: NAMED }', META)).toMatch(
+      /'named': 'access_pattern' is fixed on 'meta\.array'/,
+    );
+    expect(
+      loadError(
+        'nonempty => !meta.array ^ { min_items: 1 }\nnamed => !nonempty ^ { access_pattern: NAMED }',
+        META,
+      ),
+    ).toMatch(CONTRADICTED);
+    expect(
+      loadError('one => meta.array & { min_items?: = 1 }\ntwo => !one ^ { min_items: 2 }', META),
+    ).toMatch(/'two': 'min_items' is fixed on 'one' and cannot be given another value/);
+  });
+
+  it('writes a pin once, and its completion is the plain construction', () => {
+    expect(
+      loadError(
+        'indexed => !meta.array ^ { access_pattern: INDEX }\nagain => !indexed ^ { access_pattern: INDEX }',
+        META,
+      ),
+    ).toMatch(/\[access_pattern\] (is|are) written by 'indexed' already/);
+    expect(
+      loadError(
+        'indexed => !meta.array ^ { access_pattern: INDEX }\n' +
+          'again => !indexed { access_pattern: INDEX  element_type: text }',
+        META,
+      ),
+    ).toMatch(/\[access_pattern\] (is|are) written by 'indexed' already/);
+    const linked = load(
+      [
+        'indexed => !meta.array ^ { access_pattern: INDEX }',
+        'braced  => !indexed { element_type: text }',
+        'applied => indexed<text>',
+        'written => !meta.array { access_pattern: INDEX  element_type: text }',
+        'bare    => !meta.array { element_type: text }',
+      ].join('\n'),
+      META,
+    );
+    for (const name of ['braced', 'applied', 'written']) {
+      expect(linked.entries.get(name), name).toEqual(linked.entries.get('bare'));
+    }
+  });
+
+  it('lets a completion write a pin its entry left unwritten, and no other value', () => {
+    const linked = load(
+      [
+        'nonempty => !meta.array ^ { min_items: 1 }',
+        'braced   => !nonempty { access_pattern: INDEX  element_type: text }',
+        'refined  => !nonempty ^ { access_pattern: INDEX }',
+        'applied  => refined<text>',
+        'bare     => !meta.array { element_type: text  min_items: 1 }',
+      ].join('\n'),
+      META,
+    );
+    expect(linked.entries.get('braced')).toEqual(linked.entries.get('bare'));
+    expect(linked.entries.get('applied')).toEqual(linked.entries.get('bare'));
+    expect(
+      loadError(
+        'nonempty => !meta.array ^ { min_items: 1 }\n' +
+          'named => !nonempty { access_pattern: NAMED  element_type: text }',
+        META,
+      ),
+    ).toMatch(/'access_pattern' is fixed/);
+  });
+
+  it('counts no pin among the required fields a construction left open must leave absent', () => {
+    expect(
+      loadError('done => !meta.array ^ { access_pattern: INDEX  element_type: text }', META),
+    ).toMatch(/nothing is left open/);
+  });
+});

@@ -57,7 +57,7 @@ npm run test:conformance
 
 **Your wave's brief says what the suite should do at your point in the run, and it governs.** The
 count is a moving number and the brief carries the current one — at the 2026 Revision 40 corpus pin
-it is **1454 discovered subjects**. Read it off the brief, never off memory. Whatever the expected
+it is **1458 discovered subjects**. Read it off the brief, never off memory. Whatever the expected
 passing count is, the DISCOVERED count must not drop: a run that discovers fewer subjects has broken
 the harness rather than fixed anything, and that is the finding, ahead of any individual vector.
 
