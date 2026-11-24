@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REF_DIR="$REPO_ROOT/.references"
 
 JAVA_REPO="https://github.com/litterat/ltr8-io-tson-java"
-JAVA_PIN="a48a8e6a7eb1238e3d6613e71f2d8f9b7ac175d9"
+JAVA_PIN="9d988a89d0aff78487d8e74be979f5b90fcf81e4"
 SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
 # 1458 subjects over tests/<class>/<layer>/<bucket>/, with RUNNER.md normative for runners. The
 # 2026 Revision 40 baseline: one directive (`!!import`) and a root tagged `!schema`, one namespace
