@@ -24,7 +24,7 @@ SUITE_REPO="https://github.com/litterat/ltr8-io-tson-test-suite"
 # 2026 Revision 40 baseline: one directive (`!!import`) and a root tagged `!schema`, one namespace
 # per schema, the merged kernel with nested schema maps, types written in place, parametric
 # records, incomplete entries, dependent fields, and the extern.
-SUITE_PIN="c9eb7a84fa3cb6ad1a51bba70b6d99c859e41f57"
+SUITE_PIN="87f4969c6ecc6f34d41b489c1da5c5c572072a2e"
 
 if [ "${1:-}" = "--force" ]; then
   echo "==> --force: removing $REF_DIR"
