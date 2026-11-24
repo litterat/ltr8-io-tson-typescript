@@ -1,22 +1,19 @@
 /**
- * The atom whose values are names (Part 2 §4.2, §5.12), `meta.reference_type`: a type's name where its
+ * The atom whose values are names (Part 2 §4.2, §5.12), `meta.ref`: a type's name where its
  * `of` is a constructor, and a value's qualified name otherwise. It is no part of Part 1's built-in
  * vocabulary (§5): what a name denotes is the linked closure's, so these parsers judge the spelling
  * alone and leave the referent to whoever holds the closure.
  */
-import type { Reference } from '../ast/reference.js';
 import {
   TsonAtomParseError,
   TsonAtomValidationError,
   TsonSchemaValidationError,
 } from '../core/errors.js';
 import type { IdentifierType } from '../schema/meta/atoms-text.js';
-import type { ReferenceBody } from '../schema/meta/bodies.js';
-import { referenceEntryOf } from '../schema/meta/referenceIndex.js';
-import { typeRefFromAst } from '../schema/referenceAtoms.js';
+import type { RefBody } from '../schema/meta/bodies.js';
 import type { AtomToken, AtomType } from './contract.js';
-import { parseReference, referenceText } from './referenceGrammar.js';
 import { createIdentifierParser } from './text/identifier.js';
+import { parseReference } from './referenceGrammar.js';
 
 /**
  * The grammar a name of a type is read by: the kernel's `type_name`, an `identifier`
@@ -35,7 +32,7 @@ export const TYPE_NAME_GRAMMAR: IdentifierType = {
 const QUALIFIED_NAME = 'a qualified name';
 
 /**
- * A `meta.reference_type` instance's value (§5.12): a qualified name, segments joined by `.`, each a
+ * A `meta.ref` instance's value (§5.12): a qualified name, segments joined by `.`, each a
  * [TSON-DATA] §7.7 identifier read as `type_name` reads it, none empty. So `orders.1x`, `.orders`
  * and `orders.` are no names. The value is the name as written; what it reaches is judged where
  * it resolves, when the schema holding it links.
@@ -70,9 +67,9 @@ export function createQualifiedNameParser(typeRef: string): AtomType<string> {
 }
 
 /**
- * The atom a `meta.reference_type` instance reads (§4.2, §5.12): a value is a name -- a type's where `of`
- * is a constructor, a value's qualified name where it is any other type -- or an application or sibling
- * reference the slot admits. Not part of Part 1's built-in vocabulary (§5): what a name denotes is the
+ * The atom a `meta.ref` instance reads (§4.2, §5.12): a value is a name -- a type's where `of`
+ * is a constructor, a value's qualified name where it is any other type. A reference is a name whatever
+ * the token's form (§2.4, §7.1): no argument list and no sibling mark is data syntax (§4.1). Not part of Part 1's built-in vocabulary (§5): what a name denotes is the
  * linked closure's, and the host form is the reference's canonical text.
  *
  * `judges` says whether a name resolves in the closure the reference was linked over, as a data
@@ -81,7 +78,7 @@ export function createQualifiedNameParser(typeRef: string): AtomType<string> {
  */
 export function createReferenceParser(
   typeRef: string,
-  reference: ReferenceBody,
+  reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
   // An unlinked reference reads as one over a constructor with no members, as a kind with none.
@@ -117,18 +114,12 @@ function readName(segment: AtomType<string>, text: string, typeRef: string): str
 }
 
 /**
- * A reference that names types, `of` a constructor (§4.2): a type's name or an application, read by the
- * reference grammar and judged a member -- the entry it denotes must be one of the reference's linked
- * members. An application is judged through the entry it denotes, resolved bottom-up level by level
- * against the applications the closure closed (`referenceEntryOf`): a schema loads only when every
- * application in it closes, so data never creates one. A sibling reference is a value where the reference
- * allows one (`allow_sibling`, true only at a record field's type) and is judged nothing here, since it
- * names a field of the record holding it and no type; where the facet is false it is refused by the
- * position rule (§5.2) as a constraint the value breaks, not a form it lacks.
+ * A reference that names types, `of` a constructor (§4.2): a type's name, quoted or not, judged a member --
+ * the entry it denotes must be one of the reference's linked members.
  */
 function createTypeNameParser(
   typeRef: string,
-  reference: ReferenceBody,
+  reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
   const segment = createIdentifierParser(typeRef, TYPE_NAME_GRAMMAR);
@@ -136,36 +127,16 @@ function createTypeNameParser(
   const shown = reference.index?.shown ?? members;
   return {
     read(token: AtomToken): string {
-      // A quoted token is never a reference (§7.4): it is read as the one name it spells.
-      const written: Reference | undefined =
-        token.form === 'unquoted' ? parseReference(token.text) : undefined;
-      if (written?.kind === 'sibling') {
-        if (reference.allowSibling) return referenceText(written);
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${referenceText(written)}' is a sibling reference, which names a field of the record holding it and no type -- ` +
-            `a position typed by a type reference admits none (§5.2)`,
-          "a type's name",
-        );
-      }
-      const name =
-        written === undefined || written.kind === 'name'
-          ? readName(segment, token.text, typeRef)
-          : undefined;
-      const canonical = name ?? (written === undefined ? token.text : referenceText(written));
+      // A reference is a name, whatever the token's form (§2.4, §7.1): a quoted token is the reference
+      // its text spells, and a text no segment grammar reads is no reference.
+      const canonical = readName(segment, token.text, typeRef);
       if (!judges) return canonical;
-      const asTypeRef = (written?.kind === 'application' ? typeRefFromAst(written) : undefined) ?? {
-        name: name ?? canonical,
-        arguments: [],
-        annotations: [],
-      };
-      const entry = referenceEntryOf(reference, asTypeRef);
+      const entry = reference.index === undefined ? undefined : canonical;
       const listing = shown.length === 0 ? 'none' : shown.join(', ');
       if (entry === undefined) {
         throw new TsonAtomValidationError(
           typeRef,
-          `'${canonical}' names no type this schema closes -- an application in data names the entry the schema closed ` +
-            `it to, and nothing in this closure applies it; one of ${listing}`,
+          `'${canonical}' names no type this schema closes -- no entry of this closure bears that name; one of ${listing}`,
           `one of (${shown.join(', ')})`,
         );
       }
@@ -184,39 +155,27 @@ function createTypeNameParser(
 }
 
 /**
- * A reference that names values, `of` a type that is no constructor (§4.2, §5.12): a qualified name, each
- * segment an identifier, read into the name it is. A value is named and never applied, so it takes no
- * argument list, and it names a value and never a field, so it holds no sibling reference whatever
- * `allow_sibling` says. Where the reference was linked over a whole closure the name is judged by what it
+ * A reference that names values, `of` a type that is no constructor (§4.2, §5.12): a qualified name, its text in
+ * NFC split at each `.`, the first segment an identifier and each further one a name of the family of what it
+ * enters, which only the walk that resolves it knows. A value is named and never applied, so it takes no
+ * argument list. Where the reference was linked over a whole closure the name is judged by what it
  * reaches there, as a value body's names are: a name reaching nothing, a type, or a value whose type is no
  * `of` is refused as a constraint the value breaks.
  */
 function createValueNameParser(
   typeRef: string,
-  reference: ReferenceBody,
+  reference: RefBody,
   judges: boolean,
 ): AtomType<string> {
-  const segment = createIdentifierParser(typeRef, TYPE_NAME_GRAMMAR);
   return {
     read(token: AtomToken): string {
-      const written: Reference | undefined =
-        token.form === 'unquoted' ? parseReference(token.text) : undefined;
-      if (written?.kind === 'sibling') {
-        throw new TsonAtomValidationError(
-          typeRef,
-          `'${referenceText(written)}' is a sibling reference, which names a field and no value -- ` +
-            'a position typed by a reference that names values holds none (§5.2)',
-          'a qualified name',
-        );
+      let name: string;
+      try {
+        name = parseReference(token.text);
+      } catch (error) {
+        if (!(error instanceof TsonAtomParseError)) throw error;
+        throw new TsonAtomParseError(typeRef, error.message, QUALIFIED_NAME);
       }
-      if (written?.kind === 'application') {
-        throw new TsonAtomParseError(
-          typeRef,
-          `'${referenceText(written)}' is no qualified name -- a value is named, never applied, so it takes no argument list`,
-          QUALIFIED_NAME,
-        );
-      }
-      const name = readName(segment, token.text, typeRef);
       const values = judges ? reference.index?.values : undefined;
       if (values === undefined) return name;
       try {

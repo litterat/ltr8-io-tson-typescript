@@ -26,14 +26,7 @@
  */
 import type { Annotations } from '../annotations/index.js';
 import { TsonWriteError } from '../core/errors.js';
-import type {
-  ApplicationReferenceNode,
-  AtomNode,
-  MapNode,
-  RecordNode,
-  TsonDocument,
-  Value,
-} from '../tree/nodes.js';
+import type { AtomNode, MapNode, RecordNode, TsonDocument, Value } from '../tree/nodes.js';
 import { writeDataValueTo } from './astWriter.js';
 import { formatDefaultAtom, formatKnownAtom, type AtomText } from './atomFraming.js';
 import type { Emitter, TextSink } from './emitter.js';
@@ -114,28 +107,11 @@ function writeValueTo(value: Value, out: Emitter): void {
     case 'atom':
       writeAtomTo(value, out);
       break;
-    case 'application-reference':
-      writeApplicationTo(value, out);
-      break;
-    case 'sibling-reference':
-      if (value.typeRef !== undefined) out.typeRef(value.typeRef);
-      out.reference({ kind: 'sibling', field: value.field });
-      break;
     case 'void':
       if (value.typeRef !== undefined) out.typeRef(value.typeRef);
       out.voidValue();
       break;
   }
-}
-
-/**
- * A schemaless application written back unquoted (§7.4). The node holds the canonical `text` it
- * reads as -- name, adjacent `<`, arguments one space apart, `>` -- which is exactly the spelling
- * written, so a tree read from one writes the reference it was read from.
- */
-function writeApplicationTo(node: ApplicationReferenceNode, out: Emitter): void {
-  if (node.typeRef !== undefined) out.typeRef(node.typeRef);
-  out.unquotedToken(node.text);
 }
 
 /**

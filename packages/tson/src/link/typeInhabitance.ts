@@ -24,17 +24,16 @@
  * **One simplification from the Java: the reported chain names entries directly, never through
  * the reference implementation's `EntryDisplayName`.** `link/referenceValidation.ts`'s own note
  * makes the identical simplification for the identical reason: this port reports every failure
- * against the entry (or, here, the chain link) it was found on, synthetic name and all, rather
- * than rendering a synthetic entry by the form or application that produced it.
+ * against the entry (or, here, the chain link) it was found on.
  */
 import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
-import { resolvesToConstructor } from './aliasChain.js';
+import { resolvesToConstructor, terminal } from './aliasChain.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
 import type { FieldGroup, RecordBody, RecordField, TupleElement } from '../schema/meta/bodies.js';
-import { namedFields, typeNameOf } from '../schema/meta/bodies.js';
-import type { Reference, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
+import { namedFields, typeExprText } from '../schema/meta/bodies.js';
+import type { Annotations, Top, TypeExpr } from '../schema/meta/typedef.js';
+import { applicationOf, isParametric } from '../schema/meta/typedef.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -44,6 +43,12 @@ export interface CheckInhabitanceOptions {
   readonly schemaId: string;
   /** Each entry's facts, for a diagnostic's position. */
   readonly facts?: FactsTable;
+  /**
+   * Each entry's key annotations, which record the application a declared one closes (§8.2). A declared
+   * application of an uninhabited parametric record is uninhabited for its head's reason and is not reported
+   * again.
+   */
+  readonly keyAnnotations?: ReadonlyMap<string, Annotations>;
   /**
    * Where a failing entry is reported, letting every other entry still be checked. Omitted means
    * fail-fast: the first {@link TsonSchemaValidationError} propagates.
@@ -73,7 +78,10 @@ export function checkEveryEntryIsInhabited(
   const { schemaId, receiver } = options;
   const inhabited = deriveInhabited(merged);
   for (const name of localNames) {
-    if (inhabited.has(name)) {
+    const head = appliedHead(name, merged, options.keyAnnotations);
+    // A parametric record is judged with its parameters assumed inhabited (§5.10.1), so an application of an
+    // uninhabited one is uninhabited for the head's reason, reported at the head.
+    if (inhabited.has(name) || (head !== undefined && !inhabited.has(head))) {
       continue;
     }
     const chain = cycleThrough(name, merged, inhabited);
@@ -93,6 +101,18 @@ export function checkEveryEntryIsInhabited(
       ...schemaPositionOf(options.facts, name),
     });
   }
+}
+
+/** The parametric record a declared application applies, past its head's alias hops (§8.3); `undefined` otherwise. */
+function appliedHead(
+  name: string,
+  namespace: ReadonlyMap<string, Top>,
+  keyAnnotations: ReadonlyMap<string, Annotations> | undefined,
+): string | undefined {
+  const application = applicationOf(keyAnnotations?.get(name));
+  if (application === undefined) return undefined;
+  const head = terminal(application.head.name, (n) => namespace.get(n));
+  return isParametric(namespace.get(head)) ? head : undefined;
 }
 
 // ── The fixed point ──────────────────────────────────────────────────────────────────────────
@@ -116,14 +136,11 @@ function deriveInhabited(namespace: ReadonlyMap<string, Top>): ReadonlySet<strin
 /**
  * Whether one definition is satisfied by the entries marked so far.
  *
- * **An open entry is judged too, with its parameters assumed inhabited.** A template is not a
- * type and no document ever has one, so the question could have been left to its closures -- but
- * then a template nobody applies would ship broken. Assuming the parameters inhabited makes the
- * verdict sound in the direction that matters: if the body cannot be satisfied even when every
- * argument can, then no application of it can be either. A parameter is not an entry, so {@link
- * refInhabited} already treats one as inhabited (it is not a key `namespace` holds), and an
- * application `tree<p0>` already depends on `tree` -- both fall out of looking the reference's
- * own name up.
+ * **A parametric record is walked as a record, its parameters assumed inhabited** (§5.10.1). An application it
+ * holds, over its parameters, is inhabited where its head is: regularity passes every parameter through unchanged,
+ * so the recursion the walk follows is the one every application of it repeats, and an argument that is a name is
+ * assumed inhabited too, which leaves only what no argument can change to be judged here. An incomplete entry is
+ * no type, and is not walked.
  */
 function isInhabited(
   def: Top,
@@ -131,13 +148,8 @@ function isInhabited(
   inhabited: ReadonlySet<string>,
 ): boolean {
   const body = def;
-  if (isTemplateBody(body)) {
-    // A held body is not walked: its element type and bounds are tokens that mean nothing until
-    // substitution supplies the arguments, so a template is inhabited here and the closure that
-    // does supply them is judged on its own -- it is an ordinary entry in this namespace by the
-    // time linking runs, materialisation having minted it. A template nobody applies is judged
-    // nowhere, which is the same answer §5.10 gives everywhere else for that case.
-    return true;
+  if (body.kind === 'incomplete') {
+    return true; // no type, which nothing is typed by
   }
   switch (body.kind) {
     case 'value_entry':
@@ -185,8 +197,11 @@ function isInhabited(
     // A reference that names types admits the names of its members, whatever the types they name admit, so it is
     // inhabited exactly when linking found a member. One that names values admits a name whose referent only
     // the linker judges.
-    case 'reference_type':
+    case 'ref':
       return body.index?.namesTypes === false || (body.index?.members.length ?? 0) > 0;
+    // Only inside a parametric record; one anywhere else is the linker's refusal.
+    case 'apply':
+      return refInhabited(body.head, namespace, inhabited);
     default:
       return true; // an atom's own satisfiability is its family's question, not this one
   }
@@ -322,15 +337,22 @@ function isEmptyAllowed(minItems: bigint | undefined): boolean {
 /**
  * A name this namespace does not hold counts as inhabited. The reference is unresolved, which
  * `referenceValidation.ts` has already reported against this very entry -- calling it uninhabited
- * too would report the same defect twice, in words that name a different problem.
+ * too would report the same defect twice, in words that name a different problem. A parameter is assumed
+ * inhabited (§5.10.1).
  */
 function refInhabited(
-  ref: Reference,
+  ref: TypeExpr,
   namespace: ReadonlyMap<string, Top>,
   inhabited: ReadonlySet<string>,
 ): boolean {
-  if (ref.kind === 'sibling') return true; // the type a dependent field is read as is each instance's (§5.2)
-  return !namespace.has(ref.name) || inhabited.has(ref.name);
+  // A type written in place is judged where it stands; the type a dependent field is read as is each
+  // instance's (§5.2). An abstract record in place has no direct instance, and nothing is IS-A a type in place, so
+  // it has no member either: no value is one of it (§4.2, §5.2).
+  if (ref.kind === 'inline') {
+    if (ref.of.kind === 'record' && ref.of.extension === 'ABSTRACT') return false;
+    return ref.of.kind === 'dependent' || isInhabited(ref.of, namespace, inhabited);
+  }
+  return ref.param === true || !namespace.has(ref.name) || inhabited.has(ref.name);
 }
 
 /**
@@ -341,8 +363,8 @@ function refInhabited(
  * atom as far as {@link isInhabited}'s own generic dispatch is concerned -- this is the
  * one position-specific exemption from it, not a fact `void`'s own entry carries.
  */
-function refIsVoid(ref: Reference, namespace: ReadonlyMap<string, Top>): boolean {
-  if (ref.kind === 'sibling') return false;
+function refIsVoid(ref: TypeExpr, namespace: ReadonlyMap<string, Top>): boolean {
+  if (ref.kind === 'inline' || ref.param === true) return false;
   return resolvesToConstructor(ref.name, (n) => namespace.get(n), 'void_type');
 }
 
@@ -399,7 +421,7 @@ function recordDependency(
       !isOptionalField(field) &&
       (refIsVoid(field.type, namespace) || !refInhabited(field.type, namespace, inhabited))
     ) {
-      return typeNameOf(field);
+      return slotDependency(field.type, namespace, inhabited);
     }
   }
   for (const group of record.groups) {
@@ -409,10 +431,25 @@ function recordDependency(
     }
     for (const member of group.members.flat()) {
       const field = record.fields.entries.get(member);
-      if (field !== undefined && !statable(field, namespace, inhabited)) return typeNameOf(field);
+      if (field !== undefined && !statable(field, namespace, inhabited))
+        return slotDependency(field.type, namespace, inhabited);
     }
   }
   return undefined;
+}
+
+/**
+ * The next link of the chain at a type slot: the name a reference holds, or -- for a type written in place, which is
+ * no link of its own -- what its body demands that nothing satisfies, so the chain runs through the name inside it.
+ * The text the slot is written as stands where the body names nothing.
+ */
+function slotDependency(
+  slot: TypeExpr,
+  namespace: ReadonlyMap<string, Top>,
+  inhabited: ReadonlySet<string>,
+): string {
+  if (slot.kind !== 'inline') return slot.name;
+  return firstUnsatisfiedDependency(slot.of, namespace, inhabited) ?? typeExprText(slot);
 }
 
 /** The first thing a definition demands that nothing satisfies -- the next link of the chain. */
@@ -425,7 +462,7 @@ function firstUnsatisfiedDependency(
     return undefined;
   }
   const body = def;
-  if (isTemplateBody(body)) {
+  if (body.kind === 'incomplete') {
     return undefined;
   }
   switch (body.kind) {
@@ -436,17 +473,21 @@ function firstUnsatisfiedDependency(
     case 'array':
       return refInhabited(body.elementType, namespace, inhabited)
         ? undefined
-        : body.elementType.name;
+        : slotDependency(body.elementType, namespace, inhabited);
     case 'map':
-      return refInhabited(body.valueType, namespace, inhabited) ? undefined : body.valueType.name;
+      return refInhabited(body.valueType, namespace, inhabited)
+        ? undefined
+        : slotDependency(body.valueType, namespace, inhabited);
     case 'tuple': {
       const bad = body.elements.find(
         (element) => !positionInhabited(element, namespace, inhabited),
       );
-      return bad?.elementType.name;
+      return bad === undefined ? undefined : slotDependency(bad.elementType, namespace, inhabited);
     }
     case 'alias':
       return refInhabited(body.target, namespace, inhabited) ? undefined : body.target.name;
+    case 'apply':
+      return refInhabited(body.head, namespace, inhabited) ? undefined : body.head.name;
     default:
       return undefined; // a choice fails on every variant at once, so no single link continues the chain
   }

@@ -2,7 +2,7 @@
  * WP4C — the annotation object and dispatch ([TSON-JSON] §3.2, §3.3, §6.1.5, §8, §8.3.1, §9.4;
  * [TSON-SCHEMA] §5.2, §5.4, §5.10, §7.2). Ported in spirit from the Java reference's
  * `JsonTaggedValueReadTest`, `JsonSealedFamilyReadTest`, `JsonChoiceReadTest`,
- * `JsonAliasTagReadTest`, `SealedFactoryEncodingParityTest`, `TemplateFamilyEncodingParityTest`
+ * `JsonAliasTagReadTest`, `SealedFactoryEncodingParityTest`, `ParametricFamilyEncodingParityTest`
  * and `CrossEncodingParityTest` — one schema per describe block, table-driven where the Java
  * carries an inline text block per case.
  *
@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '../src/core/diagnostic.js';
 import { compile, type CompiledSchema } from '../src/compiler/compile.js';
 import { validate as validateText } from '../src/facade/tree.js';
-import { compileJsonSchema } from '../src/json/schema/compile.js';
+import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { validateJson, type ValidateJsonResult } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
@@ -25,7 +25,7 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/json-dispatch.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet => abstract { pet_type: text =?  name: text  nickname?: text? }
   cat => pet & { pet_type: = cat  hunting_skill?: text ~ lazy }
@@ -47,7 +47,9 @@ const SCHEMA_SOURCE = `
 
   shape => ( int32 | text )
   mixed => ( { text => text } | boolean )
-  ambiguous => ( { text => text } | { text => int32 } )
+  text_map  => { text => text }
+  int_map   => { text => int32 }
+  ambiguous => ( text_map | int_map )
 
   registration => {
     id:   uuid
@@ -469,48 +471,54 @@ describe('cross-encoding parity: same schema, same verdict', () => {
   });
 });
 
-// ── A record-bodied template family base (§5.10; SealedFactoryEncodingParityTest,
-// TemplateFamilyEncodingParityTest's own corner) ────────────────────────────────────────────
+// ── An abstract parametric record's application as a family base (§5.10;
+// ParametricFamilyEncodingParityTest's own corner) ───────────────────────────────────────────
 
-describe('a record-bodied template family base', () => {
-  const TEMPLATE_SCHEMA = resolveUserSchema(`
-!!id:"https://example.test/json-dispatch-template.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+describe('an abstract parametric record’s application as a family base', () => {
+  const PARAMETRIC_SOURCE = `
+!!id:"https://example.test/json-dispatch-parametric.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
-  box => abstract <T> { kind: text =?  value: T }
-  int_box => box<int32> & { kind: = int_box }
+  box      => abstract <T> { kind: text =?  value: T }
+  box_text => box<text>
+  int_box  => box<text> & { kind: = int_box }
   text_box => box<text> & { kind: = text_box }
-  int_box_field => { held: int_box }
 }
-`);
-  const TEMPLATE_COMPILED = compileJsonSchema(TEMPLATE_SCHEMA);
+`;
+  let parametricCompiled: JsonCompiledSchema | undefined;
 
-  function acceptedTemplate(typeName: string, json: string): string {
-    const result = validateJson(json, { schema: TEMPLATE_COMPILED, root: typeName });
+  /** The schema compiled once on first use, so a schema that fails to load fails each test that reads it. */
+  function compiled(): JsonCompiledSchema {
+    parametricCompiled ??= compileJsonSchema(resolveUserSchema(PARAMETRIC_SOURCE));
+    return parametricCompiled;
+  }
+
+  function acceptedParametric(typeName: string, json: string): string {
+    const result = validateJson(json, { schema: compiled(), root: typeName });
     expect(result.diagnostics, JSON.stringify(result.diagnostics)).toEqual([]);
     if (result.value === undefined) throw new Error('accepted a read with no value');
     return jsonValueToText(result.value);
   }
 
-  // `kind` is marked `=?`, so `box` is a *member*-dispatched family base (§5.2, §6.1.5), not a
+  // `kind` is marked `=?`, so `box<text>` is a *member*-dispatched family base (§5.2, §6.1.5), not a
   // tag-dispatched one -- the discriminator alone places the value, and a tag only asserts.
 
-  it('a tag naming an instantiation dispatches to it, validated in full', () => {
-    expect(acceptedTemplate('box', '{"$type": "int_box", "kind": "int_box", "value": 1}')).toBe(
-      '{"kind":"int_box","value":1}',
-    );
+  it('a tag naming a member dispatches to it, validated in full', () => {
+    expect(
+      acceptedParametric('box_text', '{"$type": "int_box", "kind": "int_box", "value": "1"}'),
+    ).toBe('{"kind":"int_box","value":"1"}');
   });
 
   it('the discriminator alone dispatches, with no tag needed', () => {
-    expect(acceptedTemplate('box', '{"kind": "text_box", "value": "hi"}')).toBe(
+    expect(acceptedParametric('box_text', '{"kind": "text_box", "value": "hi"}')).toBe(
       '{"kind":"text_box","value":"hi"}',
     );
   });
 
-  it('a kind matching no instantiation is a validation error', () => {
-    const result = validateJson('{"kind": "nope", "value": 1}', {
-      schema: TEMPLATE_COMPILED,
-      root: 'box',
+  it('a kind matching no member is a validation error', () => {
+    const result = validateJson('{"kind": "nope", "value": "1"}', {
+      schema: compiled(),
+      root: 'box_text',
     });
     expect(result.diagnostics.length).toBe(1);
     expect(result.diagnostics[0]?.code).toBe('VALIDATION_ERROR');

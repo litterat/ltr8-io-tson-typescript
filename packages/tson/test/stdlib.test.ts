@@ -105,18 +105,25 @@ describe('the standard library carries its own key annotations (§6)', () => {
     expect(doc?.value).toBeDefined();
   });
 
-  it('marks every sugar-lifted entry @synthetic (§8.2)', () => {
+  it('marks no key @meta.synthetic: a form at a type slot stays where it is written (§4.2, §8.2)', () => {
     const synthetic = [...(kernel?.keyAnnotations ?? [])].filter(([, annotations]) =>
       annotations.some((a) => a.name === 'meta.synthetic'),
     );
-    expect(synthetic.length).toBeGreaterThan(0);
+    expect(synthetic).toEqual([]);
+  });
+
+  it('marks each declared completion @meta.completion at its key (§8.1)', () => {
+    const completion = kernel?.keyAnnotations
+      .get('boolean')
+      ?.find((a) => a.name === 'meta.completion');
+    expect(completion?.value).toEqual({ of: ['enum'] });
   });
 
   it("reads the kernel's own @doc as the text the author wrote, the kernel having no governing annotation reader (§6)", () => {
     // The annotation's type is declared in the very document being read, so there is no compiled
     // reader to read its value through yet: it is read by its base type, the text itself.
     const doc = kernel?.keyAnnotations.get('meta.top')?.find((a) => a.name === 'doc');
-    expect(doc?.value).toMatch(/^The structural root: every constructor IS-A `top`/u);
+    expect(doc?.value).toMatch(/^The root of the type system: every constructor IS-A `top`/u);
   });
 
   it("reads a library's @doc through the compiled reader of the schema declaring `doc`, an atom node (§6)", () => {
@@ -141,7 +148,7 @@ describe('policy.tn, the processor-policy vocabulary ([TSON-DATA] §8.2)', () =>
       expect.arrayContaining([
         'policy',
         'policy.restriction_level',
-        'policy.script_policy',
+        'policy.token_policy',
         'policy.identifier_policy',
       ]),
     );

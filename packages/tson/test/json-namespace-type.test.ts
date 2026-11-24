@@ -14,7 +14,7 @@ import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/c
 import { standardLibrary } from '../src/stdlib/index.js';
 
 const META_TEXT = `!!id:"https://example.test/meta-headers.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
 !schema {
   header_name => !unicode.identifier_type { continue_add: "-" }
   headers     => !meta.namespace { key_type: header_name  value_type: text }
@@ -64,7 +64,7 @@ describe('§4.1 a value of a namespace type is the map its facets describe', () 
     const governed = compileJsonSchema(
       withLayer().resolveSchema(`!!id:"https://example.test/defaults.tn"
 !!import:"https://example.test/meta-headers.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   defaults => !headers { accept => "text/plain"  user-agent => "probe" }
   greeting => text

@@ -52,8 +52,8 @@ export function mapTreeReader(
   schemaLocation: SchemaLocation,
   keysAreNames = false,
 ): TypeReader<Value> {
-  const keyParser = resolveType(body.keyType.name);
-  const valueParser = resolveType(body.valueType.name);
+  const keyParser = resolveType(body.keyType);
+  const valueParser = resolveType(body.valueType);
 
   function validateSize(size: number, ctx: ReadContext): void {
     const count = BigInt(size);

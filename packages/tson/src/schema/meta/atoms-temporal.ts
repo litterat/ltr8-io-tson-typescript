@@ -29,9 +29,9 @@ export interface LocalTime {
 
 /**
  * A time-of-day with a fixed UTC offset, mirroring `java.time.OffsetTime` — used by
- * {@link TimeType}'s bounds. Bounds compare on this shape's own ordering rule (own contract,
- * not enforced here): normalise to the instant on a shared day before comparing, so a bound
- * written in one offset is comparable with one written in another.
+ * {@link TimeType}'s bounds. A time's value is its time of day in UTC on [00:00:00, 24:00:00)
+ * (§5.5): the offset is a spelling, `11:00:00+01:00` ties with `10:00:00Z`, and `23:30:00-02:00`
+ * is `01:30:00Z`, so the order wraps at midnight (own contract, not enforced here).
  */
 export interface OffsetTime {
   readonly time: LocalTime;
@@ -40,9 +40,9 @@ export interface OffsetTime {
 
 /**
  * A calendar date and time-of-day with a fixed UTC offset, mirroring
- * `java.time.OffsetDateTime` — used by {@link DateTimeType}'s bounds. Bounds compare by
- * instant first (own contract, not enforced here), so two bounds written in different
- * offsets remain comparable.
+ * `java.time.OffsetDateTime` — used by {@link DateTimeType}'s bounds. Bounds compare by the
+ * instant on the UTC timeline alone (§5.5; own contract, not enforced here): two spellings of
+ * one instant tie.
  */
 export interface OffsetDateTime {
   readonly date: CalendarDate;
@@ -52,7 +52,8 @@ export interface OffsetDateTime {
 
 /**
  * `temporal.date_type` constructor (§5.4's `date` atom, RFC 3339 `full-date`).
- * Both bounds are inclusive — this family has no exclusive facet.
+ * Each end is a field group (§5.11): `( min | exclusive_min )?` and `( max | exclusive_max )?`
+ * (§5.5, §5.7), so at most one of each pair is present.
  *
  * Also an {@link Atom} variant: `date => !date_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with both bounds absent.
@@ -60,7 +61,9 @@ export interface OffsetDateTime {
 export interface DateType extends TypeBase {
   readonly kind: 'date_type';
   readonly min?: CalendarDate;
+  readonly exclusiveMin?: CalendarDate;
   readonly max?: CalendarDate;
+  readonly exclusiveMax?: CalendarDate;
 }
 
 /**
@@ -70,12 +73,12 @@ export interface DateType extends TypeBase {
  * the offset mandatory — a facet requiring it would be vacuous and one relaxing it would
  * widen the atom against its own pin, so the constructor declares none (§5.5).
  *
- * **`precision` bounds the fractional-second digits, judged on the written token** — `N`
+ * **`fraction_digits` bounds the fractional-second digits, judged on the written token** — `N`
  * admits at most `N` digits (`12:00:00.100` has three, whatever instant it denotes), as a
  * validation constraint, never a truncation instruction: the atom is exact and a value is
- * preserved as written. `precision: 0` admits no fractional part. Stated as an upper bound,
+ * preserved as written. `fraction_digits: 0` admits no fractional part. Stated as an upper bound,
  * the facet is an ordered bound under §5.7 and refines like every other one (§5.5).
- * `precision` is `bigint` because the kernel's own field is typed `non_negative_integer`.
+ * `fractionDigits` is `bigint` because the kernel's own field is typed `non_negative_integer`.
  *
  * Also an {@link Atom} variant: `time => !time_type {}` is a constructor-application
  * instance (§5.5) whose resolved body is this shape with every field absent.
@@ -83,13 +86,15 @@ export interface DateType extends TypeBase {
 export interface TimeType extends TypeBase {
   readonly kind: 'time_type';
   readonly min?: OffsetTime;
+  readonly exclusiveMin?: OffsetTime;
   readonly max?: OffsetTime;
-  readonly precision?: bigint;
+  readonly exclusiveMax?: OffsetTime;
+  readonly fractionDigits?: bigint;
 }
 
 /**
  * `temporal.datetime_type` constructor (§5.4's `datetime` atom, RFC 3339
- * `date-time`). Carries the same `precision` facet as {@link TimeType}, for the same reason,
+ * `date-time`). Carries the same `fraction_digits` facet as {@link TimeType}, for the same reason,
  * and the same absence of a timezone facet.
  *
  * Also an {@link Atom} variant: `datetime => !datetime_type {}` is a
@@ -99,8 +104,10 @@ export interface TimeType extends TypeBase {
 export interface DateTimeType extends TypeBase {
   readonly kind: 'datetime_type';
   readonly min?: OffsetDateTime;
+  readonly exclusiveMin?: OffsetDateTime;
   readonly max?: OffsetDateTime;
-  readonly precision?: bigint;
+  readonly exclusiveMax?: OffsetDateTime;
+  readonly fractionDigits?: bigint;
 }
 
 /**
@@ -118,7 +125,7 @@ export interface DateTimeType extends TypeBase {
  * `max`/`exclusiveMax` are mutually exclusive pairs, the same unenforced invariant
  * {@link IntegerType} (`./atoms-numeric.js`) carries.
  *
- * `precision` bounds the fractional-second digits exactly as {@link TimeType}'s does — a
+ * `fraction_digits` bounds the fractional-second digits exactly as {@link TimeType}'s does — a
  * whole number of 10⁻ᴺ seconds, `bigint` because the kernel types it `non_negative_integer`,
  * and it may not exceed nine, there being no tenth digit the value space carries.
  *
@@ -137,7 +144,7 @@ export interface DurationType extends TypeBase {
   readonly exclusiveMin?: bigint;
   readonly max?: bigint;
   readonly exclusiveMax?: bigint;
-  readonly precision?: bigint;
+  readonly fractionDigits?: bigint;
   readonly multipleOf?: bigint;
 }
 
@@ -151,7 +158,7 @@ export interface DurationType extends TypeBase {
  *
  * **Every numeric field holds the *value*, not the token** — the same `value`-escape-hatch
  * convention {@link DurationType}'s own doc states in full, `period`'s value space (signed
- * months) in place of `duration`'s (signed nanoseconds). No `precision` facet: a month count
+ * months) in place of `duration`'s (signed nanoseconds). No `fraction_digits` facet: a month count
  * has no fractional part to bound.
  *
  * No `spec` field, on {@link DurationType}'s own terms.

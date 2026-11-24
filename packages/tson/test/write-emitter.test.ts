@@ -189,34 +189,12 @@ describe('§2.2/§3.3 header directives', () => {
     );
   });
 
-  it('reference writes an application unquoted, canonical: one space between arguments, a value argument in its token form (§7.4)', () => {
-    const text = emit((out) => {
-      out.reference({
-        kind: 'application',
-        name: 'map',
-        arguments: [
-          { kind: 'reference', reference: { kind: 'name', name: 'text' } },
-          {
-            kind: 'reference',
-            reference: {
-              kind: 'application',
-              name: 'list',
-              arguments: [{ kind: 'value', text: '201', form: 'unquoted' }],
-            },
-          },
-          { kind: 'value', text: 'a "b"', form: 'single-line' },
-        ],
-      });
-    });
-    expect(text).toBe('map<text list<201> "a \\"b\\"">');
-  });
-
-  it('reference writes a sibling reference as its field and the mark (§7.4)', () => {
+  it('a reference in a value is written as the unquoted token its qualified name is (§4.1, §7.4)', () => {
     expect(
       emit((out) => {
-        out.reference({ kind: 'sibling', field: 'kind' });
+        out.unquotedToken('geo.address');
       }),
-    ).toBe('kind!');
+    ).toBe('geo.address');
   });
 
   it('a directive argument that is not a valid URI is refused rather than written unreadably', () => {

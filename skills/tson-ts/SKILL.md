@@ -8,7 +8,7 @@ description: Read, validate, write and bind TSON (`.tn`) documents with `@ltr8/t
 A TypeScript port of TSON (Typed Schema Object Notation) for **Node 24+ and modern browsers**, with
 **zero runtime dependencies**. It implements all three spec parts — Class 1 (the text data format),
 Class 2 (the schema layer), and Part 3 (the JSON encoding, behind its own `./json` subpath) — and
-passes the shared conformance suite in full (944/944 subjects).
+passes the shared conformance suite in full (1458/1458 subjects).
 
 Two packages, released in lockstep: `@ltr8/tson` (the library; subpath entry points, ESM + CJS +
 `.d.ts`) and `@ltr8/tson-cli` (the `tson` command). Source and issues:
@@ -16,9 +16,9 @@ Two packages, released in lockstep: `@ltr8/tson` (the library; subpath entry poi
 from is [ltr8-io-tson-java](https://github.com/litterat/ltr8-io-tson-java), and both are tested
 against [ltr8-io-tson-test-suite](https://github.com/litterat/ltr8-io-tson-test-suite).
 
-**Versioning is `0.<spec revision>.<patch>`.** `0.39.x` implements the **2026 Revision 39** spec
+**Versioning is `0.<spec revision>.<patch>`.** `0.40.x` implements the **2026 Revision 40** spec
 series. A new revision moves the minor, and the spec is a working draft with no compatibility
-guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/39/m/core.tn` is
+guarantee between revisions — so a schema `!!id` pinned at `https://tson.io/2026/40/m/core.tn` is
 revision-specific and must match the library's own revision. The CLI depends on the library at an
 exact pin, never a range.
 
@@ -118,7 +118,7 @@ import { validate } from '@ltr8/tson';
 import { standardLibrary } from '@ltr8/tson/stdlib';
 
 const SCHEMA = `!!id:"https://example.com/order.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   order => {
     order_id: int32
@@ -134,6 +134,8 @@ const SCHEMA = `!!id:"https://example.com/order.tn"
 
 const tson = standardLibrary(); // the six bundled schemas already registered
 const linked = tson.resolveSchema(SCHEMA); // registers it under its own !!id
+// or, when it imports or names through an extern a schema that is not registered yet,
+// `await tson.loadSchema(SCHEMA)` -- see "Fetching schemas"
 const schema = tson.compile(linked);
 
 const result = validate(bytes, { schema, root: 'order' });
@@ -148,7 +150,7 @@ the entry name the _root value_ reads against, and it is not inferred from the d
 
 `core.tn` imports `numeric.tn`, `temporal.tn` and `net.tn`, so a schema importing it sees `ipv4`,
 `ipv6`, `cidr4`, `cidr6`, `mac`, `hostname`, `host` and `media_type` too. A schema that wants only
-one library imports that one (`https://tson.io/2026/39/m/net.tn` for the network atoms).
+one library imports that one (`https://tson.io/2026/40/m/net.tn` for the network atoms).
 
 `standardLibrary()` is not a singleton — a registry is mutable state, and two callers sharing one
 would see each other's registrations. Build a fresh one per unit of work; re-resolving the same
@@ -158,6 +160,30 @@ schema text into the same instance is a caller error, not an idempotent no-op.
 supplying a standard library from elsewhere (a newer revision, a private mirror), which needs
 `bootstrapKernel`, because the kernel (`meta.tn`) is the document every other schema's closure
 holds and has nothing to resolve against: it is registered first, from its own source.
+
+## What Revision 40 changed for a schema or a document you write
+
+- **The data grammar has no argument list and no sibling form.** `{ t: set<text> }`,
+  `[ pair<box<text> int32> ]` and `kind!` in a data value are parse errors: `<` and `>` belong to
+  the schema grammar, and `!` is the type prefix alone. A reference in data is a qualified name,
+  one token, quoted exactly when a segment holds a character outside the token profile
+  (`!meta.array { element_type: "text" }`).
+- **A type slot holds a name or a type written in place.** `[T]`, `{K => V}`, `T?`, a record body
+  or an applied constructor (`set<text>`) at a field's type is that type in place; nothing is
+  minted or lifted, so a resolved schema has no synthetic entry, and a diagnostic locates a type
+  in place by its field path.
+- **Parametric records** are `<T> { … }`: a record with parameters, applied as `box<text>` and
+  never named bare. Nothing else takes parameters. A declared application (`text_box =>
+box<text>`) is the substituted record under that name.
+- **`^` follows `!name` and takes values; `&` is the one way to derive a record.** `name ^ { … }`
+  is a parse error naming `name & { … }`. `!C ^ { values }` over a constructor declares an
+  incomplete entry, completed by `!X { … }` or `X<A …>`; `enum` and `meta.set_type` are such.
+- **`kind!` stays in the schema grammar** as a dependent field's type (`payload: kind!`), at a
+  record field or a group member alone.
+- **`!meta.extern { schema: …  type: … }`** names one entry of another schema under a local name;
+  the foreign schema loads with `Tson.loadSchema`.
+- **`policy.script_policy` is `policy.token_policy`**, the library's `TokenPolicy`, and the
+  materialisation-depth limit is gone.
 
 ## JSON encoding
 
@@ -182,14 +208,17 @@ validateJson(jsonBytes, { schema, root: 'order' }).diagnostics; // collects
 **Resolution is synchronous; fetching is not, and that split is the whole design.**
 `resolveSchema` resolves only against what is already registered and never fetches. `preload`
 fetches, resolves, links and registers **in order**, so everything a schema names is in place by the
-time it resolves.
+time it resolves. `loadSchema(source)` is the front door for one schema document: it fetches what
+the document imports and the schemas its externs name, through the configured `SchemaSource`, then
+resolves, links and registers it. The document is in flight under its own `!!id`, so a reference
+reaching it is a cycle and never a fetch.
 
 ```ts
 import { createTson } from '@ltr8/tson';
 import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
-await tson.preload(['https://tson.io/2026/39/m/core.tn']); // with the kernel registered first
+await tson.preload(['https://tson.io/2026/40/m/core.tn']); // with the kernel registered first
 ```
 
 `preload` verifies a `?sha256=` pin whenever one is declared, and checks that the fetched
@@ -305,7 +334,11 @@ npx @ltr8/tson-cli strip person.tn                                           # t
 ```
 
 Six commands: `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`. `--schema` is a
-local path or `https://` URL and is **never** a data file's own `!!import`; it requires `--root`. With no `--schema`, a data
+local path or `https://` URL and is **never** a data file's own `!!import`; it requires `--root`.
+`validate` and `compile` load a schema with `loadSchema`: one importing or naming through an extern
+anything beyond the bundled library takes the other schema files on the command line
+(`compile a.tn b.tn`; a repeated `--schema`, the first binding the run), each served by its
+`!!id` and nothing fetched from anywhere else. With no `--schema`, a data
 document is read under its own `!!import`s against the bundled library alone, and a header naming
 anything else exits `69`. `--max-depth` and `--max-wait-depth` state §9.1's and §11.5's bounds.
 `validate`/`compile`/`hash` register the six bundled schemas, so they work offline.
@@ -356,7 +389,10 @@ writeBinding(personBinding, person); // '{ name: "Ada" age: 36 }'
 - A custom `!type` with no `{ schema, root }`: schemaless reads resolve built-ins only.
 - `createTson()` then a governed read: a fresh registry is **empty**; use `standardLibrary()`.
 - `resolveSchema` twice on one identity, or expecting it to fetch an `!!import`: build a fresh
-  instance, and `await tson.preload([...])` first.
+  instance, and `await tson.preload([...])` first, or `await tson.loadSchema(text)`.
+- `<`, `>` or `kind!` in a data value (`{ t: set<text> }`): parse errors since Revision 40; write
+  the application in the schema and the data as the type's value.
+- `name ^ { … }` to derive a record: `name & { … }`; `^` follows `!name`.
 - Treating `'missing'` and `'void'` alike: `void` was written (`_`); `missing` is a failed lookup.
 - Treating a name refusal as an "invalid document": report it separately.
 - Importing `@ltr8/tson/source` in browser code, or `standardLibrary` from `@ltr8/tson`.
@@ -383,9 +419,9 @@ is the only checklist; `references/` here documents the API as it stands.
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/39/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/39/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/39/tson-part3-json.md (`@ltr8/tson/json`)
+- Part 1 — Text Data Format: https://tson.io/raw/2026/40/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/40/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/40/tson-part3-json.md (`@ltr8/tson/json`)
 
 All are working revisions and change without compatibility guarantees until the spec freezes at
 version 1. Re-fetch and check the revision number at the top rather than trusting a cached copy.

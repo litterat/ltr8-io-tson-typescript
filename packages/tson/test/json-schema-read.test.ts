@@ -29,11 +29,11 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import type { MetaValue } from '../src/schema/meta/typedef.js';
 import { namespaceOf } from '../src/schema/meta/typedef.js';
 import { resolvedBundled, resolveUserSchema } from './compiler-schema-fixtures.js';
-import { entry, namespaceEntry } from './model-fixtures.js';
+import { entry, namespaceEntry, parametricRecord, record } from './model-fixtures.js';
 
 const SCHEMA = resolveUserSchema(`
 !!id:"https://example.test/json-schema-read.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   count      => int32
   exact      => number
@@ -795,14 +795,11 @@ describe('§8.2 name hygiene', () => {
   });
 });
 
-// ── Dispatch positions (WP4C, `json-dispatch.test.ts`) ──────────────────────────────────────
+// ── Dispatch positions (`json-dispatch.test.ts`) ────────────────────────────────────────────
 //
-// Record-family and choice positions no longer gap -- WP4C (`json/schema/dispatchTag.ts`,
-// `json/schema/dispatchMember.ts`, `json/schema/dispatchChoice.ts`) replaced the NOT_IMPLEMENTED
-// this describe block used to assert. The dispatch surface itself -- the annotation object, tag
-// and member dispatch, choice discrimination, cross-encoding parity -- is `json-dispatch.test.ts`'s
-// own concern; §8.5's scoped positions are the one dispatch-adjacent gap still open
-// (`json/schema/compile.ts`'s own top note).
+// Record-family and choice positions are `json/schema/dispatchTag.ts`'s, `dispatchMember.ts`'s and
+// `dispatchChoice.ts`'s, and the dispatch surface itself -- the annotation object, tag and member
+// dispatch, choice discrimination, cross-encoding parity -- is `json-dispatch.test.ts`'s concern.
 
 // ── Gaps: NOT_IMPLEMENTED is a compile-time-total, read-time-non-verdict placeholder ──────────
 //
@@ -810,21 +807,12 @@ describe('§8.2 name hygiene', () => {
 // AndNotAVerdict`/`#aSchemaWithUnreadableEntriesStillCompiles`. The Java pair reaches its gap
 // through `lookup => { text => int32 }`: its own `atoms()`-mode compile leaves a map's own
 // constructor unbuilt. That example does not port -- `json/schema/map.ts` reads maps in full in
-// this package's tree-mode compile, strictly more coverage than the Java module has (this file's
-// own top note, and `json/schema/atoms.ts`'s own top note on the one place the divergence runs
-// the other way). `json/schema/compile.ts`'s own top note names what compiles to
-// {@link notImplementedReader} here instead: a scoped position, a meta 'data' construct, an
-// unmaterialised generic application, and a genuinely unapplied non-record template.
-//
-// A scoped position and a meta 'data' construct are each reachable through this package's own
-// resolve/link pipeline (`dynamic` -- one of core.tn's three scoped instances -- and meta-kernel's
-// own `data` entry, respectively); an unmaterialised generic application and an unapplied
-// non-record template are not producible that way without hand-writing a schema this port's own
-// resolver would refuse before it ever reached compile (Part 2 §5.10: "bare references to a
-// parameterized type without `<>` are resolver errors"), so those two are exercised by hand-
-// building the `LinkedSchema` directly -- the same technique `templates.test.ts` already uses
-// for `compiler/compile.ts`'s own equivalent branches -- to reach `compileJsonSchema` at all.
-describe('gaps (§8.5, one corner of §5.10)', () => {
+// this package's tree-mode compile. `json/schema/compile.ts`'s own top note names what compiles to
+// {@link notImplementedReader} here instead: an entry holding a namespace value, and an application
+// no resolution closed. Neither reaches compile through this package's own resolve/link pipeline,
+// whose resolver closes every application and reads a namespace value as a value, so both are
+// exercised by hand-building the `LinkedSchema` directly to reach `compileJsonSchema` at all.
+describe('gaps (§4.1, one corner of §5.10)', () => {
   function handLinked(entries: Record<string, Top>): LinkedSchema {
     const map = new Map(Object.entries(entries));
     return {
@@ -864,16 +852,13 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(isVerdict(diagnostic.code)).toBe(false);
   });
 
-  it('an unmaterialised generic application is a gap and not a verdict', () => {
+  it('an application no resolution closed is a gap and not a verdict (§5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
         box: entry({
-          kind: 'alias',
-          target: {
-            name: 'pair',
-            arguments: [{ kind: 'value', value: { text: '1', form: 'UNQUOTED' } }],
-            annotations: [],
-          },
+          kind: 'apply',
+          head: { name: 'pair', annotations: [] },
+          arguments: [{ name: 'text', annotations: [] }],
         }),
       }),
     );
@@ -887,13 +872,10 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
     expect(isVerdict(diagnostic.code)).toBe(false);
   });
 
-  it('an open template family base with no type of its own is a gap and not a verdict', () => {
+  it('a parametric record, no type a value is read against, is a validation error and no gap (§3.3, §3.4, §5.10)', () => {
     const compiled = compileJsonSchema(
       handLinked({
-        box: entry({
-          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-          template: '[T]',
-        }),
+        box: entry(parametricRecord(['T'], record([]))),
       }),
     );
     const result = validateJson('[]', {
@@ -902,18 +884,15 @@ describe('gaps (§8.5, one corner of §5.10)', () => {
       identifierPolicy: DEFAULT_IDENTIFIER_POLICY,
     });
     const diagnostic = onlyDiagnostic(result);
-    expect(diagnostic.code).toBe('NOT_IMPLEMENTED');
-    expect(isVerdict(diagnostic.code)).toBe(false);
+    expect(diagnostic.code).toBe('TYPE_MISMATCH');
+    expect(isVerdict(diagnostic.code)).toBe(true);
   });
 
   it('a schema with unreadable entries still compiles: the gap is per entry, not per schema (aSchemaWithUnreadableEntriesStillCompiles)', () => {
     const compiled = compileJsonSchema(
       handLinked({
         colour: entry({ kind: 'enum', members: ['RED', 'GREEN'], nameType: 'identifier' }, ['top']),
-        unreadable: entry({
-          parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-          template: '[T]',
-        }),
+        unreadable: entry(parametricRecord(['T'], record([]))),
       }),
     );
     // The gap does not stop the schema's other entry from compiling, or from reading cleanly.

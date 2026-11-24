@@ -44,12 +44,11 @@ import {
 } from '../core/errors.js';
 import type { ImportedSchema, ImportResolver, Schema } from '../compiler/schemaResolver.js';
 import type { Normalization } from '../schema/meta/atoms-text.js';
-import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
+import type { Annotations, EntryFacts, Restatement, Top } from '../schema/meta/typedef.js';
+import { isParametric } from '../schema/meta/typedef.js';
 import { isNestedMap, syncedEntries } from '../schema/meta/schemaPaths.js';
 import { DEFAULT_IDENTIFIER_POLICY, type IdentifierPolicy } from '../unicode/policy.js';
 import { canonicalizeIdentity } from './identity.js';
-import { areOneSynthetic, unifiedFacts } from './importedSynthetics.js';
 import { computeSubtypes, unifySubtypes } from './subtypes.js';
 import { computeKindMembers } from './kindMembers.js';
 import { checkFieldNameTypes, type FieldNameType } from './fieldNames.js';
@@ -68,6 +67,11 @@ import { checkFieldGroups } from './fieldGroups.js';
 import { checkRecordExtension } from './recordExtension.js';
 import { checkKindsReferencesAndNamespaceTypes } from './namespaceTypes.js';
 import { checkValuesByName, ValuesByName } from './valuesByName.js';
+import { checkRestatementsOffTheChain } from './restatedFields.js';
+import { attachExterns, type ExternSchemaLoader } from './externLink.js';
+import { externHops } from './externHops.js';
+import { checkExternVariants } from './externChecks.js';
+import type { ExternTarget } from './externTarget.js';
 
 // ── Public surface ───────────────────────────────────────────────────────────────────────────
 
@@ -117,9 +121,22 @@ export interface LinkedSchema {
    * Each record among `entries` that states a `name_type`, with the identifier family its field
    * names are values of ([TSON-SCHEMA] §5.2) -- resolved where the record was declared, so an
    * importer reads an imported record's names as its own schema did. A record absent here has the
-   * kernel's `field_name`. Local and imported records alike.
+   * kernel's `meta.identifier`. Local and imported records alike.
    */
   readonly nameTypes: ReadonlyMap<string, FieldNameType>;
+  /**
+   * The fields each entry restates over a source its closed chain does not reach (§5.8, §5.9), as its schema's
+   * resolution settled them -- local and imported alike, present only for an entry with any. An importer that
+   * absorbs an application of an imported parametric record takes the record's restatements with it. Absent
+   * means none.
+   */
+  readonly restatements?: ReadonlyMap<string, readonly Restatement[]>;
+  /**
+   * Each extern among `entries` attached to the foreign entry it lands on (§5.13) -- local and imported alike, as
+   * each one's own link attached it. A fact of the link, never of the extern's value, which states only what was
+   * written. An extern its link refused is absent, and lands nowhere. Absent means none.
+   */
+  readonly externs?: ReadonlyMap<string, ExternTarget>;
 }
 
 /** Dependencies {@link linkSchema} needs beyond the {@link Schema} being linked. */
@@ -163,6 +180,11 @@ export interface LinkDeps {
    * needs.
    */
   readonly heldValues?: HeldValueJudge;
+  /**
+   * The linked schema of a canonical identity an extern names (§5.13), loaded with this schema's imports before it
+   * resolved. Omitted loads nothing, and every local extern is refused as not loaded.
+   */
+  readonly externSchema?: ExternSchemaLoader;
 }
 
 /** {@link LinkDeps.heldValues}: refusals and gaps are handed to `report` with the entry holding the value. */
@@ -201,7 +223,19 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const enumForms = new Map<string, Normalization>();
   const facts = new Map<string, EntryFacts>();
   const nameTypes = new Map<string, FieldNameType>();
-  let merged = mergeImports(schema.imports, resolveImport, origins, enumForms, facts, nameTypes);
+  const restatements = new Map<string, readonly Restatement[]>();
+  // Each extern of the namespace with the foreign entry it lands on: an import's as its own link attached it.
+  const externs = new Map<string, ExternTarget>();
+  let merged = mergeImports(
+    schema.imports,
+    resolveImport,
+    origins,
+    enumForms,
+    facts,
+    nameTypes,
+    restatements,
+    externs,
+  );
 
   const localNames = new Set<string>();
   const selfId = canonicalizeIdentity(schema.id);
@@ -233,16 +267,35 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     localNames.add(name);
     const recorded = schema.facts.get(name);
     if (recorded !== undefined) facts.set(name, recorded);
+    const restated = schema.restatements?.get(name);
+    if (restated !== undefined) restatements.set(name, restated);
   }
 
+  attachExterns(merged, localNames, deps.externSchema, externs, (name, error) => {
+    if (receiver === undefined) throw error;
+    receiver.report({
+      code: 'SCHEMA_ERROR',
+      message: error.message,
+      schemaId: schema.id,
+      schemaPointer: `/${name}`,
+      ...schemaPositionOf(schema.facts, name),
+    });
+  });
   // Each nested map holds the union of the members its closure declares (§2.2.3).
   merged = new Map(syncedEntries({ entries: merged, keyAnnotations: new Map() }).entries);
+  // Every judgement through an extern is made of the entry it lands on, by identity (§5.13).
+  const hops = externHops(
+    (name) => merged.get(name),
+    (name) => origins.get(name) ?? selfId,
+    externs,
+  );
   merged = computeSubtypes(merged, localNames);
   // A reference read in data names an entry of the final namespace, assembled below, and a name read under a
   // reference that names values reaches a value of it: both are lookups the index holds until the link ends.
   const closure: { current: ReadonlyMap<string, Top> } = { current: new Map() };
   const reached: { current?: ValuesByName } = {};
   merged = computeKindMembers(merged, {
+    hops,
     facts: (name) => facts.get(name),
     entries: {
       get: (name) => closure.current.get(name),
@@ -268,7 +321,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   const headOf = (name: string): string | undefined => facts.get(name)?.head;
   for (const name of localNames) {
     const definition = merged.get(name);
-    if (definition === undefined || isTemplateBody(definition) || definition.kind !== 'enum') {
+    if (definition?.kind !== 'enum') {
       continue;
     }
     const head = facts.get(name)?.head;
@@ -278,7 +331,12 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     const form = enumLabelForm(enumeration, entryOf, structureOf, headOf);
     if (form !== 'NONE') enumForms.set(name, form);
   }
-  merged = computeDisjointness(merged);
+  merged = computeDisjointness(merged, hops);
+  checkExternVariants(merged, localNames, hops, {
+    schemaId: schema.id,
+    facts,
+    ...(receiver === undefined ? {} : { receiver }),
+  });
 
   // Before the name checks: a member that is not a value of its enum's type is the more basic
   // verdict, and the per-name rules would otherwise report it as a restricted character.
@@ -318,6 +376,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     refusedEnums,
     enumProfiles,
     nameTypes,
+    inPlaceNameTypes: fieldNameTypes.inPlaceNameTypes,
     ...(receiver === undefined ? {} : { receiver }),
   });
 
@@ -328,28 +387,58 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
   });
 
   validateReferences(merged, {
+    hops,
     schemaId: schema.id,
     facts,
     enumForms,
+    keyAnnotations: schema.keyAnnotations,
     structureNamespace: merged,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkKindsReferencesAndNamespaceTypes(merged, localNames, {
+    hops,
     schemaId: schema.id,
     facts,
     structureNamespace: merged,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkValuesByName(merged, localNames, {
+    hops,
     schemaId: schema.id,
     facts,
     structureNamespace: merged,
     structureFacts: facts,
     ...(receiver === undefined ? {} : { receiver }),
   });
+  // §5.8's rule over the restatements the closed chain does not reach, each local closed entry's.
+  for (const [name, found] of schema.restatements ?? []) {
+    if (!localNames.has(name)) continue;
+    try {
+      // A parametric record's are judged for a changed pin alone, the rest waiting for its applications.
+      checkRestatementsOffTheChain(
+        name,
+        found,
+        merged,
+        hops,
+        isParametric(merged.get(name)),
+        enumForms,
+      );
+    } catch (error: unknown) {
+      if (!(error instanceof TsonSchemaValidationError)) throw error;
+      if (receiver === undefined) throw error;
+      receiver.report({
+        code: 'SCHEMA_ERROR',
+        message: error.message,
+        schemaId: schema.id,
+        schemaPointer: `/${name}`,
+        ...schemaPositionOf(facts, name),
+      });
+    }
+  }
   checkEveryEntryIsInhabited(merged, localNames, {
     schemaId: schema.id,
     facts,
+    keyAnnotations: schema.keyAnnotations,
     ...(receiver === undefined ? {} : { receiver }),
   });
   checkRecordExtension(merged, localNames, {
@@ -371,6 +460,7 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
 
   closure.current = merged;
   reached.current = new ValuesByName(merged, {
+    hops,
     schemaId: schema.id,
     facts,
     structureNamespace: merged,
@@ -387,6 +477,8 @@ export function linkSchema(schema: Schema, deps: LinkDeps = {}): LinkedSchema {
     origins,
     enumForms,
     nameTypes,
+    restatements,
+    externs,
   };
   if (deps.heldValues !== undefined && !state.refused) {
     deps.heldValues(linked, localNames, (entry, error) => {
@@ -424,6 +516,8 @@ function mergeImports(
   enumForms: Map<string, Normalization>,
   facts: Map<string, EntryFacts>,
   nameTypes: Map<string, FieldNameType>,
+  restatements: Map<string, readonly Restatement[]>,
+  externs: Map<string, ExternTarget>,
 ): Map<string, Top> {
   const merged = new Map<string, Top>();
   const alreadyImported = new Set<string>();
@@ -452,29 +546,6 @@ function mergeImports(
       }
       if (incumbent !== undefined) {
         const existing = merged.get(name);
-        const incumbentFacts = facts.get(name);
-        const arrivingFacts = imported.facts?.get(name);
-        if (
-          incumbent !== origin &&
-          existing !== undefined &&
-          areOneSynthetic(
-            name,
-            incumbentFacts,
-            existing,
-            incumbent,
-            arrivingFacts,
-            definition,
-            origin,
-          )
-        ) {
-          // One synthetic minted by two documents is one entry (§8.2): the first arrival is kept, and each
-          // route's view of its subtypes is credited.
-          merged.set(name, unifySubtypes(existing, definition));
-          if (incumbentFacts !== undefined && arrivingFacts !== undefined) {
-            facts.set(name, unifiedFacts(incumbentFacts, arrivingFacts));
-          }
-          continue;
-        }
         if (incumbent !== origin) {
           throw new TsonSchemaValidationError(
             `'${name}' is declared by two different schemas reached through !!import ` +
@@ -490,6 +561,10 @@ function mergeImports(
       origins.set(name, origin);
       const recorded = imported.facts?.get(name);
       if (recorded !== undefined) facts.set(name, recorded);
+      const restated = imported.restatements?.get(name);
+      if (restated !== undefined) restatements.set(name, restated);
+      const attached = imported.externs?.get(name);
+      if (attached !== undefined) externs.set(name, attached);
     }
   }
   return merged;

@@ -32,6 +32,8 @@ import {
 } from '../core/limits.js';
 import type { EventSource, TsonEvent } from '../stream/event.js';
 import type { ReadContext } from './contracts.js';
+import { skipAnnotations } from './tree/grammar.js';
+import { foreignScopeSuffix, type ForeignScope } from '../link/foreignScope.js';
 
 // ---------------------------------------------------------------------------------------------
 // RFC 6901 escaping -- `~` before `/`, matching `tree/accessors.ts`'s own (unexported) helper.
@@ -100,6 +102,26 @@ interface Cursor {
   recording: TsonEvent[] | undefined;
   /** §9.1's nesting bound for this read, checked by {@link ReadContext.field}/{@link ReadContext.index}. */
   readonly maxNestingDepth: number;
+  /** The foreign value the cursor is inside, innermost first; `undefined` in the document's own scope (§7.9). */
+  scope: Scope | undefined;
+}
+
+/**
+ * One foreign value's scope, entered at `start`: the schema pointer renders the steps after it, into the foreign
+ * schema, and a diagnostic raised inside names every boundary crossed.
+ */
+interface Scope {
+  readonly boundary: ForeignScope;
+  readonly parent: Scope | undefined;
+  readonly start: PathStep | undefined;
+}
+
+/** What a diagnostic raised inside `scope` adds to its message: every boundary crossed, innermost first. */
+function scopeSuffix(scope: Scope): string {
+  const enclosing: ForeignScope[] = [];
+  for (let outer = scope.parent; outer !== undefined; outer = outer.parent)
+    enclosing.push(outer.boundary);
+  return foreignScopeSuffix(scope.boundary, enclosing);
 }
 
 /**
@@ -119,6 +141,13 @@ const CURSOR = Symbol.for('io.ltr8.tson.readContext.cursor');
 /** A context carrying its cursor, which is every context {@link makeContext} builds. */
 interface CursorCarrier {
   [CURSOR]?: Cursor;
+}
+
+/** The key a context carries {@link readingAcross}'s implementation under, which only the context itself can do. */
+const CROSSING = Symbol.for('io.ltr8.tson.readContext.crossing');
+
+interface CrossingCarrier {
+  [CROSSING]?: <T>(boundary: ForeignScope, read: (inner: ReadContext) => Task<T>) => Task<T>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -145,9 +174,19 @@ function renderPath(tail: PathStep | undefined): string {
 }
 
 /** The schema pointer: the anchor's own pointer (verbatim, already `/`-prefixed by whoever built it), plus every `schemaToo` step. */
-function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | undefined): string {
+function renderSchemaPointer(
+  anchor: SchemaAnchor | undefined,
+  tail: PathStep | undefined,
+  scope?: Scope,
+): string {
   let out = anchor?.pointer ?? '';
+  // Inside a foreign value the pointer runs into the foreign schema, from the step the scope began at.
+  let started = scope?.start === undefined;
   for (const step of collectSteps(tail)) {
+    if (!started) {
+      started = step === scope?.start;
+      continue;
+    }
     if (step.schemaToo) out = appendStep(out, step);
   }
   return out;
@@ -233,7 +272,7 @@ function makeContext(
 
     schemaLocation(): SchemaLocation | undefined {
       if (schemaAnchor === undefined) return undefined;
-      const pointer = renderSchemaPointer(schemaAnchor, tail);
+      const pointer = renderSchemaPointer(schemaAnchor, tail, cursor.scope);
       return {
         schemaId: schemaAnchor.schemaId,
         ...(pointer === '' ? {} : { pointer }),
@@ -312,11 +351,13 @@ function makeContext(
     report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void {
       const path = renderPath(tail);
       const schemaPointer =
-        schemaAnchor === undefined ? undefined : renderSchemaPointer(schemaAnchor, tail);
+        schemaAnchor === undefined
+          ? undefined
+          : renderSchemaPointer(schemaAnchor, tail, cursor.scope);
       const position = currentPosition();
       const diagnostic: Diagnostic = {
         code,
-        message,
+        message: cursor.scope === undefined ? message : message + scopeSuffix(cursor.scope),
         path,
         ...(schemaAnchor === undefined ? {} : { schemaId: schemaAnchor.schemaId }),
         ...(schemaPointer === undefined || schemaPointer === '' ? {} : { schemaPointer }),
@@ -335,6 +376,18 @@ function makeContext(
   };
 
   (ctx as ReadContext & CursorCarrier)[CURSOR] = cursor;
+  (ctx as ReadContext & CrossingCarrier)[CROSSING] = function* <T>(
+    boundary: ForeignScope,
+    read: (inner: ReadContext) => Task<T>,
+  ): Task<T> {
+    const enclosing = cursor.scope;
+    cursor.scope = { boundary, parent: enclosing, start: tail };
+    try {
+      return yield* read(makeContext(cursor, tail, undefined, positionOverride));
+    } finally {
+      cursor.scope = enclosing;
+    }
+  };
   return ctx;
 }
 
@@ -356,6 +409,7 @@ export function createReadContext(
     rewound: [],
     recording: undefined,
     maxNestingDepth: maxNestingDepthOf(options),
+    scope: undefined,
   };
   return makeContext(cursor, undefined, undefined, undefined);
 }
@@ -403,4 +457,56 @@ export function* lookingAhead<T>(
       for (const event of pending) cursor.rewound.push(event);
     }
   }
+}
+
+/**
+ * Takes the `!type-ref` of the data-value at the cursor out of the stream, leaving its annotations where they are: a
+ * tag spent naming a position, which the reader below must not weigh again -- a choice listed as a variant, which a
+ * tag naming it selects and is read untagged inside (§5.4). The annotations are looked past and put back, and the
+ * type-ref behind them is the one event taken out of the queue; a no-op where the value carries none.
+ *
+ * Spent by a read, never inside a lookahead: a lookahead records what it reads to rewind it, and a type-ref taken out
+ * from under one would be missing from what it puts back.
+ */
+export function* spendTypeRef(ctx: ReadContext): Task<void> {
+  const cursor = (ctx as ReadContext & CursorCarrier)[CURSOR];
+  if (cursor === undefined) {
+    throw new TsonInternalError(
+      'spendTypeRef was called with a ReadContext this module did not create',
+    );
+  }
+  if (cursor.recording !== undefined) {
+    throw new TsonInternalError('a type-ref is spent by a read, never inside a lookahead');
+  }
+  const annotations = yield* lookingAhead(ctx, function* (ahead): Task<TsonEvent[]> {
+    yield* skipAnnotations(ahead);
+    return [...(cursor.recording ?? [])];
+  });
+  cursor.rewound.splice(0, annotations.length);
+  if ((yield* ctx.peek()).kind === 'type-ref') yield* ctx.next();
+  // Put back front-to-back, linearly, as {@link lookingAhead} does: an annotation run may be long.
+  const pending = cursor.rewound.splice(0, cursor.rewound.length);
+  for (const event of annotations) cursor.rewound.push(event);
+  for (const event of pending) cursor.rewound.push(event);
+}
+
+/**
+ * Reads a foreign value at `ctx`'s cursor ([TSON-SCHEMA] §7.9): `read` runs on a copy of `ctx` with no schema
+ * location established, so the foreign reader seeds its own and the schema pointer runs into the foreign schema from
+ * here, and every diagnostic raised inside names `boundary` and each one enclosing it. The cursor, receiver, limits
+ * and data path are the document's: a foreign value is part of the document that holds it.
+ */
+export function* readingAcross<T>(
+  ctx: ReadContext,
+  boundary: ForeignScope,
+  read: (inner: ReadContext) => Task<T>,
+): Task<T> {
+  const crossing = (ctx as ReadContext & CrossingCarrier)[CROSSING];
+  if (crossing === undefined) {
+    throw new TsonInternalError(
+      'readingAcross was called with a ReadContext this module did not create -- ' +
+        'reader/context.ts is the only implementation of the interface',
+    );
+  }
+  return yield* crossing(boundary, read);
 }

@@ -284,10 +284,9 @@ function* skipCoreValue(ctx: ReadContext): Task<void> {
       yield* ctx.next(); // array-end
       return;
     case 'token':
-    case 'reference':
     case 'void':
     case 'empty-brace':
-      return; // leaf (a reference is one value), already consumed
+      return; // leaf, already consumed
     default:
       throw new TsonInternalError(`unexpected event while skipping a core-value: '${e.kind}'`);
   }
@@ -400,8 +399,6 @@ function* readStructuralCoreValue(ctx: ReadContext, limit: number, depth: number
     }
     case 'token':
       return { kind: 'token', text: e.text, form: e.form };
-    case 'reference':
-      return { kind: 'reference', reference: e.reference };
     case 'void':
       return { kind: 'void' };
     case 'empty-brace':

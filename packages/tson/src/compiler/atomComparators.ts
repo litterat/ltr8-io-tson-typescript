@@ -70,12 +70,23 @@ function timeOfDayNanos(
   return (localSeconds - BigInt(offsetSeconds)) * 1_000_000_000n + BigInt(nanosecond);
 }
 
-/** Compares two times-of-day as instants on a shared (arbitrary, but identical) day — correct regardless of which offset either was written in. */
+/** Compares two times by their UTC time of day, wrapping at midnight — correct regardless of which offset either was written in (§5.5). */
 export function compareOffsetTime(a: OffsetTime, b: OffsetTime): number {
-  return compareBigint(
-    timeOfDayNanos(a.time.hour, a.time.minute, a.time.second, a.time.nanosecond, a.offsetSeconds),
-    timeOfDayNanos(b.time.hour, b.time.minute, b.time.second, b.time.nanosecond, b.offsetSeconds),
+  return compareBigint(utcTimeOfDayNanos(a), utcTimeOfDayNanos(b));
+}
+
+const NANOS_PER_DAY = 86_400_000_000_000n;
+
+/** A time's value is its time of day in UTC on [00:00:00, 24:00:00) (§5.5): the offset carries it across midnight, so `23:30:00-02:00` is `01:30:00Z`. */
+function utcTimeOfDayNanos(t: OffsetTime): bigint {
+  const nanos = timeOfDayNanos(
+    t.time.hour,
+    t.time.minute,
+    t.time.second,
+    t.time.nanosecond,
+    t.offsetSeconds,
   );
+  return ((nanos % NANOS_PER_DAY) + NANOS_PER_DAY) % NANOS_PER_DAY;
 }
 
 export function compareOffsetDateTime(a: OffsetDateTime, b: OffsetDateTime): number {

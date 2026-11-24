@@ -232,6 +232,15 @@ function profileContinue(profile: IdentifierProfile, codePoint: number): boolean
   );
 }
 
+/** Whether `codePoint` may stand anywhere in a name under `profile`: at its start, after it, or medially. */
+export function profileAdmits(profile: IdentifierProfile, codePoint: number): boolean {
+  return (
+    profileStart(profile, codePoint) ||
+    profileContinue(profile, codePoint) ||
+    has(profile.medial, codePoint)
+  );
+}
+
 function added(profile: IdentifierProfile, codePoint: number): boolean {
   return (
     has(profile.startAdd, codePoint) ||

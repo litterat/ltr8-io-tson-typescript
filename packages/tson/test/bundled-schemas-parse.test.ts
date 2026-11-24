@@ -28,7 +28,7 @@ function parseBundled(name: string): { total: number; root: number; imports: num
 
 describe('the bundled schemas parse (spec/m)', () => {
   it.each([
-    ['meta.tn', 87, 19, 0],
+    ['meta.tn', 83, 19, 0],
     ['numeric.tn', 24, 17, 1],
     ['temporal.tn', 11, 6, 1],
     ['net.tn', 24, 13, 1],

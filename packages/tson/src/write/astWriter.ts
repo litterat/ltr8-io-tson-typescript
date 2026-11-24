@@ -102,9 +102,6 @@ function writeCoreValueTo(value: CoreValue, out: Emitter): void {
     case 'array':
       writeArrayTo(value, out);
       break;
-    case 'reference':
-      out.reference(value.reference);
-      break;
     case 'void':
       out.voidValue();
       break;

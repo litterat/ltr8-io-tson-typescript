@@ -30,36 +30,34 @@
  * read time, below, is new work this module owns: the schema-side classification only says which
  * class each variant's declared type occupies, never what a document actually wrote.
  *
- * **The tagged route is alias-flattened, not subtype-flattened.** A `!type-ref` naming an alias of
- * a variant is admitted -- §8.3's "a reference is a hop, not a rewrite... the same type under
- * another name" holds for a variant reference exactly as it does everywhere else, and §5.4's own
- * "Resolution" paragraph already reads a variant by what it *resolves to* ("the resolver validates
- * that each variant resolves to a distinct type"), not by its written spelling -- so `variants`
- * (below) is flattened through `link/aliasChain.ts`'s own `admitting`, the same alias-flattening
- * `compiler/subsumption.ts` uses for record subsumption. A `!type-ref` naming a proper *subtype* of
- * a variant is not admitted, deliberately: §7.2 carves choice positions out of the subtype-inclusive
- * subsumption rule it states for "every other typed position" ("Choice-typed positions discriminate
- * by variant membership (§5.4) ... under their own membership relations"), and §8.4 gives the
- * structural reason -- a choice has no expected supertype for a tag to be admitted *into*, only a
- * closed variant list a name either names or does not; an author who wants a subtype reachable by
- * tag types the position by the record family instead. `json/schema/dispatchChoice.ts`'s own top
- * note has the fuller citation and reads the same way; the reference implementation's own
- * `DispatchChoiceReader` flattens both aliases and subtypes, so this is a deliberate divergence for
- * the subtype half only.
+ * **Which variant a tag selects (§5.4, §7.2)** is decided once per choice, as a table from every name
+ * a tag may carry to its variant (`link/choiceSelection.ts`): a variant's own name and every alias
+ * meaning the same type, then each type IS-A exactly one variant. The value, tag included, goes to
+ * that variant's reader, which weighs the tag as a position typed by the variant does
+ * (`compiler/subsumption.ts`) -- so an abstract variant itself is refused there, not here, and a
+ * subtype validates as itself. A tag IS-A two variants and naming neither selects none.
+ *
+ * **A choice listed as a variant is disjoint, and the tag is spent naming it** (§5.4): `!narrow 5`
+ * at `( boolean | narrow )` selects `narrow` and reads `5` there untagged, the inner choice placing
+ * it by its class.
  */
 import type { Task } from '../io/bytes.js';
 import type { SchemaLocation } from '../core/diagnostic.js';
 import type { ReadContext, TypeReader } from '../reader/contracts.js';
-import { lookingAhead } from '../reader/context.js';
+import { lookingAhead, spendTypeRef } from '../reader/context.js';
 import type { ChoiceBody } from '../schema/meta/bodies.js';
+import { typeExprText } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
 import type { Value } from '../tree/nodes.js';
 import { describeEvent, skipAnnotations, skipDataValue } from '../reader/tree/grammar.js';
 import { abandonedValue, type TreeTypeResolver } from '../reader/tree/support.js';
 import { resolveBaseType, type BaseValue } from '../base/baseTypeResolver.js';
 import { discriminationClassOf, type DiscriminationClass } from '../link/disjointness.js';
-import { admitting, terminal } from '../link/aliasChain.js';
+import { terminal } from '../link/aliasChain.js';
+import { choiceSelection } from '../link/choiceSelection.js';
 import { hasChoiceSelfTag } from './subsumption.js';
+import type { ExternHops } from '../link/externHops.js';
+import type { ExternVariantNames } from '../link/externAdmission.js';
 import type { TsonEvent } from '../stream/event.js';
 
 /** [TSON-DATA] §4's fixed base-type order, mapped onto §5.4's own classes -- the token half of {@link classifyEvent}. */
@@ -104,6 +102,15 @@ function classifyEvent(event: TsonEvent): DiscriminationClass | undefined {
   }
 }
 
+/**
+ * What a choice reader asks of the externs among its variants (§5.4, §5.13): the hops a variant is classified
+ * through, and the names an extern variant answers to (`link/externAdmission.ts`'s `externVariantNames`).
+ */
+export interface ChoiceExterns {
+  readonly hops: ExternHops;
+  readonly externVariants: (variant: string) => ExternVariantNames | undefined;
+}
+
 /** Builds a `choice` tree reader for one compiled schema entry. `resolveType` resolves every variant's own reader once, at construction. `disjoint` is the entry's own `ChoiceBody.disjoint` (§5.4), read through `choiceDisjoint`; `namespace` is the linked schema's merged entries, passed through only so a variant's discrimination class can be derived (`link/disjointness.ts`'s own `discriminationClassOf`) without a second copy of that logic. */
 export function choiceTreeReader(
   name: string,
@@ -113,26 +120,43 @@ export function choiceTreeReader(
   schemaLocation: SchemaLocation,
   disjoint: boolean,
   namespace: ReadonlyMap<string, Top>,
+  externs?: ChoiceExterns,
 ): TypeReader<Value> {
   const variants = body.variants.map((variant) => ({
-    name: variant.name,
-    parser: resolveType(variant.name),
+    name: typeExprText(variant),
+    expr: variant,
+    parser: resolveType(variant),
   }));
   const names = variants.map((variant) => variant.name).join(' | ');
 
-  // Alias-flattened tag lookup (this module's own top note): every written name whose reference
-  // chain terminates at a variant maps to that variant's own reader -- never a variant's subtype,
-  // which this map does not flatten in. A variant is flattened to *its own* terminal first
-  // (`terminal`) before `admitting` runs, so a variant that is itself an alias admits its
-  // target and every sibling alias too, not only its own written spelling -- the same one-hop-
-  // further flattening `json/schema/dispatchChoice.ts`'s own top note explains.
+  // The tag table (this module's own top note), each name to the variant it selects.
+  const selection = choiceSelection(
+    body.variants,
+    namespace,
+    externs === undefined
+      ? {}
+      : {
+          externNames: (variant) => {
+            const names = externs.externVariants(variant.name);
+            return names === undefined
+              ? undefined
+              : { target: names.named, subtype: names.subtypes };
+          },
+        },
+  );
   const byWrittenName = new Map<string, (typeof variants)[number]>();
-  for (const variant of variants) {
-    const target = terminal(variant.name, (n) => namespace.get(n));
-    for (const written of admitting([target], namespace)) {
-      if (!byWrittenName.has(written)) byWrittenName.set(written, variant);
-    }
+  for (const [written, selected] of selection.selects) {
+    const variant = variants.find((candidate) => candidate.expr === selected);
+    if (variant !== undefined) byWrittenName.set(written, variant);
   }
+  // The variants that are choices past their alias hops: a tag selecting one is spent naming it (§5.4).
+  const spendsTag = new Set(
+    variants.filter((variant) => {
+      if (variant.expr.kind === 'inline') return false;
+      const end = terminal(variant.expr.name, (n) => namespace.get(n));
+      return namespace.get(end)?.kind === 'choice';
+    }),
+  );
 
   // Untagged recovery's own `class -> variant` map -- built only when `disjoint` says the classes
   // are distinct, and rebuilt from the classes themselves rather than trusted blindly: a
@@ -143,7 +167,7 @@ export function choiceTreeReader(
   if (disjoint) {
     byClass = new Map();
     for (const variant of variants) {
-      const variantClass = discriminationClassOf(variant.name, namespace);
+      const variantClass = discriminationClassOf(variant.expr, namespace, externs?.hops);
       if (variantClass === undefined || byClass.has(variantClass)) {
         byClass = undefined;
         break;
@@ -210,6 +234,18 @@ export function choiceTreeReader(
 
       const typeRefName = lookahead.typeRefName;
       const variant = byWrittenName.get(typeRefName);
+      const among = selection.selectsNone.get(typeRefName);
+      if (variant === undefined && among !== undefined) {
+        choiceCtx.report(
+          'TYPE_MISMATCH',
+          `'!${typeRefName}' is a subtype of more than one variant of '${displayName}' -- ` +
+            `${among.join(', ')} -- and names none of them, so it selects none (§5.4)`,
+          `one of (${among.join(' | ')})`,
+          `!${typeRefName}`,
+        );
+        yield* skipDataValue(choiceCtx);
+        return abandonedValue();
+      }
       if (variant === undefined) {
         // §7.2's own two-step resolution rule: a name `namespace` declares nothing under is
         // `UNKNOWN_TYPE_REF` ("a built-in annotation name not defined by the active schema is an
@@ -221,7 +257,7 @@ export function choiceTreeReader(
         choiceCtx.report(
           resolves ? 'TYPE_MISMATCH' : 'UNKNOWN_TYPE_REF',
           resolves
-            ? `'!${typeRefName}' names no member of '${displayName}' (${names})`
+            ? `'!${typeRefName}' names no member of '${displayName}' (${names}), nor a type that IS-A exactly one`
             : `'!${typeRefName}' does not resolve in the governing schema's namespace (§7.2) -- ` +
                 `expected one of (${names})`,
           `one of (${names})`,
@@ -230,13 +266,15 @@ export function choiceTreeReader(
         yield* skipDataValue(choiceCtx);
         return abandonedValue();
       }
-      // The sealed self-tag continuation (`compiler/subsumption.ts`'s own top note): only
-      // ever offered by a variant whose own name is what `typeRefName` names here
-      // (`variants`/`byWrittenName` are alias-flattened but never subtype-flattened,
-      // this module's own top note), so this never fires for a tag naming a member or a subtype
-      // of the variant -- only for the variant's own name, the one spelling a choice over a
-      // sealed family otherwise leaves unwritable.
-      return hasChoiceSelfTag(variant.parser)
+      if (spendsTag.has(variant)) {
+        yield* spendTypeRef(choiceCtx);
+        return yield* variant.parser.read(choiceCtx);
+      }
+      // The sealed self-tag continuation (`compiler/subsumption.ts`'s own top note): offered only
+      // for a tag meaning the variant itself, the one spelling a choice over a sealed family
+      // otherwise leaves unwritable. A tag naming a member or a subtype is weighed by the
+      // variant's own reader, as a position typed by the variant weighs it.
+      return hasChoiceSelfTag(variant.parser) && selection.named.has(typeRefName)
         ? yield* variant.parser.readChoiceSelfTag(choiceCtx)
         : yield* variant.parser.read(choiceCtx);
     },

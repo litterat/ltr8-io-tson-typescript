@@ -48,12 +48,12 @@ const int32 = def({ kind: 'integer_type', size: { bits: 32, signed: true } } as 
 const record = def({ kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' });
 const arr = def({
   kind: 'array',
-  elementType: { name: 'text', arguments: [], annotations: [] },
+  elementType: { name: 'text', annotations: [] },
   voidable: false,
   ordered: true,
   uniqueItems: false,
 });
-const alias = def({ kind: 'alias', target: { name: 'text', arguments: [], annotations: [] } });
+const alias = def({ kind: 'alias', target: { name: 'text', annotations: [] } });
 
 describe('discriminationClassOf (§5.4)', () => {
   const namespace = new Map<string, Top>([
@@ -84,8 +84,8 @@ describe('discriminationClassOf (§5.4)', () => {
 
   it('returns undefined for a reference cycle rather than hanging', () => {
     const cyclic = new Map<string, Top>([
-      ['a', def({ kind: 'alias', target: { name: 'b', arguments: [], annotations: [] } })],
-      ['b', def({ kind: 'alias', target: { name: 'a', arguments: [], annotations: [] } })],
+      ['a', def({ kind: 'alias', target: { name: 'b', annotations: [] } })],
+      ['b', def({ kind: 'alias', target: { name: 'a', annotations: [] } })],
     ]);
     expect(discriminationClassOf('a', cyclic)).toBeUndefined();
   });
@@ -151,8 +151,8 @@ describe('discriminationClassOf (§5.4)', () => {
   function withKeyType(keyName: string): Top {
     return def({
       kind: 'map',
-      keyType: { name: keyName, arguments: [], annotations: [] },
-      valueType: { name: 'text', arguments: [], annotations: [] },
+      keyType: { name: keyName, annotations: [] },
+      valueType: { name: 'text', annotations: [] },
       voidable: false,
       ordered: false,
     });
@@ -226,7 +226,15 @@ describe('discriminationClassOf (§5.4)', () => {
       ['int32', int32],
     ]);
     expect(discriminationClassOf('name', ns)).toBe('STRING');
-    expect(isChoiceDisjoint([{ name: 'name' }, { name: 'int32' }], ns)).toBe(true);
+    expect(
+      isChoiceDisjoint(
+        [
+          { name: 'name', annotations: [] },
+          { name: 'int32', annotations: [] },
+        ],
+        ns,
+      ),
+    ).toBe(true);
   });
 
   it('a choice over an approximate float and text is not disjoint in text either -- the straddling kind needs a tag (§5.4, #17)', () => {
@@ -234,7 +242,15 @@ describe('discriminationClassOf (§5.4)', () => {
       ['unstableFloat', approximateFloat(true, true)],
       ['text', text],
     ]);
-    expect(isChoiceDisjoint([{ name: 'unstableFloat' }, { name: 'text' }], ns)).toBe(false);
+    expect(
+      isChoiceDisjoint(
+        [
+          { name: 'unstableFloat', annotations: [] },
+          { name: 'text', annotations: [] },
+        ],
+        ns,
+      ),
+    ).toBe(false);
   });
 
   it('a choice over a compound-keyed map and text is not disjoint -- the same class-stability rule (#17)', () => {
@@ -243,7 +259,15 @@ describe('discriminationClassOf (§5.4)', () => {
       ['byRecord', withKeyType('record')],
       ['text', text],
     ]);
-    expect(isChoiceDisjoint([{ name: 'byRecord' }, { name: 'text' }], ns)).toBe(false);
+    expect(
+      isChoiceDisjoint(
+        [
+          { name: 'byRecord', annotations: [] },
+          { name: 'text', annotations: [] },
+        ],
+        ns,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -253,7 +277,15 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
       ['text', text],
       ['int32', int32],
     ]);
-    expect(isChoiceDisjoint([{ name: 'text' }, { name: 'int32' }], namespace)).toBe(true);
+    expect(
+      isChoiceDisjoint(
+        [
+          { name: 'text', annotations: [] },
+          { name: 'int32', annotations: [] },
+        ],
+        namespace,
+      ),
+    ).toBe(true);
   });
 
   it('is false when two variants share one class -- even though their value sets never overlap', () => {
@@ -262,7 +294,15 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
       ['text', text],
       ['other_text', def({ kind: 'text_type', normalization: 'NONE' })],
     ]);
-    expect(isChoiceDisjoint([{ name: 'text' }, { name: 'other_text' }], namespace)).toBe(false);
+    expect(
+      isChoiceDisjoint(
+        [
+          { name: 'text', annotations: [] },
+          { name: 'other_text', annotations: [] },
+        ],
+        namespace,
+      ),
+    ).toBe(false);
   });
 
   it('is false when a variant has no class at all', () => {
@@ -270,15 +310,23 @@ describe('isChoiceDisjoint / computeDisjointness (§5.4)', () => {
       ['text', text],
       ['rational', def({ kind: 'rational_type' })],
     ]);
-    expect(isChoiceDisjoint([{ name: 'text' }, { name: 'rational' }], namespace)).toBe(false);
+    expect(
+      isChoiceDisjoint(
+        [
+          { name: 'text', annotations: [] },
+          { name: 'rational', annotations: [] },
+        ],
+        namespace,
+      ),
+    ).toBe(false);
   });
 
   it('computeDisjointness only touches choice-bodied entries, and keeps everything else by reference', () => {
     const choice = def({
       kind: 'choice',
       variants: [
-        { name: 'text', arguments: [], annotations: [] },
-        { name: 'int32', arguments: [], annotations: [] },
+        { name: 'text', annotations: [] },
+        { name: 'int32', annotations: [] },
       ],
     });
     const entries = new Map<string, Top>([
@@ -313,8 +361,8 @@ describe('checkDisjointAssertions (§5.4)', () => {
       {
         kind: 'choice',
         variants: [
-          { name: 'text', arguments: [], annotations: [] },
-          { name: 'other', arguments: [], annotations: [] },
+          { name: 'text', annotations: [] },
+          { name: 'other', annotations: [] },
         ],
       },
       { annotations: [{ name: 'meta.disjoint' }], disjoint: false },
@@ -376,8 +424,8 @@ describe('checkDisjointAssertions (§5.4)', () => {
       const choice = def({
         kind: 'choice',
         variants: [
-          { name: 'text', arguments: [], annotations: [] },
-          { name: 'other', arguments: [], annotations: [] },
+          { name: 'text', annotations: [] },
+          { name: 'other', annotations: [] },
         ],
       });
       const merged = new Map<string, Top>([['shapes', { ...choice, disjoint: false } as Top]]);

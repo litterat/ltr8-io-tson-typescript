@@ -8,12 +8,13 @@ import { compileJsonSchema } from '../src/json/schema/compile.js';
 import { validateJson } from '../src/json/facade.js';
 import { standardLibrary } from '../src/stdlib/index.js';
 import type { LinkedSchema } from '../src/link/link.js';
+import { TsonInternalError, TsonNotImplementedError } from '../src/core/errors.js';
 
 let counter = 0;
 
 /** A schema document around `body`, with a fresh `!!id`. */
 export function schemaSource(body: string, header = ''): Uint8Array {
-  const source = `!!id:"https://example.test/schema${String(counter++)}.tn"\n!!import:"https://tson.io/2026/39/m/core.tn"\n${header}\n!schema {\n${body}\n}\n`;
+  const source = `!!id:"https://example.test/schema${String(counter++)}.tn"\n!!import:"https://tson.io/2026/40/m/core.tn"\n${header}\n!schema {\n${body}\n}\n`;
   return new TextEncoder().encode(source);
 }
 
@@ -22,12 +23,19 @@ export function load(body: string, header = ''): LinkedSchema {
   return standardLibrary().resolveSchema(schemaSource(body, header));
 }
 
-/** The message of the error loading `body` raises, or undefined when it loads. */
+/**
+ * The message of the refusal loading `body` raises, or undefined when it loads.
+ *
+ * Only a verdict counts: a {@link TsonNotImplementedError} says the schema could not be judged and a
+ * {@link TsonInternalError} that this library is broken, so either is rethrown rather than returned, and a test
+ * expecting a refusal cannot pass on a gap.
+ */
 export function loadError(body: string, header = ''): string | undefined {
   try {
     load(body, header);
     return undefined;
   } catch (error) {
+    if (error instanceof TsonNotImplementedError || error instanceof TsonInternalError) throw error;
     const e = error as { message?: string; diagnostics?: readonly { message: string }[] };
     return [e.message ?? String(error), ...(e.diagnostics ?? []).map((d) => d.message)].join(' | ');
   }

@@ -38,9 +38,11 @@ import { isAtom } from '../compiler/atomChecks.js';
 import { terminal, terminalDefinition } from './aliasChain.js';
 import type { EnumBody } from '../schema/meta/bodies.js';
 import type { FloatType } from '../schema/meta/atoms-numeric.js';
-import type { Annotations, EntryFacts, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
+import type { Annotations, EntryFacts, Top, TypeExpr } from '../schema/meta/typedef.js';
+import { typeExprText } from '../schema/meta/bodies.js';
+import { mapInPlace } from '../schema/meta/typeInline.js';
 import { schemaPositionOf } from './facts.js';
+import type { ExternHops } from './externHops.js';
 import { choiceDisjoint } from '../schema/meta/typedef.js';
 import { DISJOINT_ANNOTATION } from '../schema/meta/kernel.js';
 
@@ -86,7 +88,7 @@ function isScalarContentKeyType(keyName: string, namespace: ReadonlyMap<string, 
   const def = namespace.get(terminalName);
   if (def === undefined) return false; // unresolved or cyclic: no class either
   const body = def;
-  if (isTemplateBody(body) || !isAtom(body)) return false;
+  if (!isAtom(body)) return false;
   return body.kind !== 'void_type';
 }
 
@@ -102,11 +104,8 @@ function isClassStableFloat(body: FloatType): boolean {
 
 function classify(def: Top, namespace: ReadonlyMap<string, Top>): DiscriminationClass | undefined {
   const body = def;
-  if (isTemplateBody(body)) {
-    return undefined; // a held TemplateBody: no class until an application closes it
-  }
-  if (body.kind === 'value_entry') {
-    return undefined; // a value is no type, and has no class
+  if (body.kind === 'value_entry' || body.kind === 'incomplete') {
+    return undefined; // a value is no type, and has no class; nor has an incomplete entry
   }
   switch (body.kind) {
     case 'integer_type':
@@ -119,7 +118,7 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
     // are string content in both encodings.
     case 'text_type':
     case 'identifier_type':
-    case 'reference_type':
+    case 'ref':
     case 'hostname_type':
     case 'host_type':
     case 'media_type_type':
@@ -162,29 +161,34 @@ function classify(def: Top, namespace: ReadonlyMap<string, Top>): Discrimination
 }
 
 /**
- * The class of `name`'s untagged wire values, or `undefined` when it has none. A alias chain
- * is followed to its terminal entry first (§8.3 makes an alias and its target one type,
- * `aliasChain.ts`'s shared walk); a cycle, having no terminal, has no class. An `undefined`
- * result makes the enclosing choice non-disjoint and blocks untagged recovery — the conservative
- * side, the tag stays required.
+ * The class of the untagged wire values of `type` -- a name, or a type written in place, classified by its body
+ * -- or `undefined` when it has none. An alias chain is followed to its terminal entry first (§8.3 makes an alias
+ * and its target one type); a cycle, having no terminal, has no class. An `undefined` result makes the
+ * enclosing choice non-disjoint and blocks untagged recovery — the conservative side, the tag stays required.
  */
 export function discriminationClassOf(
-  name: string,
+  type: string | TypeExpr,
   namespace: ReadonlyMap<string, Top>,
+  hops?: ExternHops,
 ): DiscriminationClass | undefined {
+  if (typeof type !== 'string' && type.kind === 'inline') return classify(type.of, namespace);
+  // An extern is classified at the entry it lands on, in the namespace holding it (§5.4, §5.13).
+  const landed = hops?.discrimination(typeof type === 'string' ? type : type.name);
+  if (landed !== undefined) return landed.class;
   const lookup = (n: string): Top | undefined => namespace.get(n);
-  const def = terminalDefinition(name, lookup);
+  const def = terminalDefinition(typeof type === 'string' ? type : type.name, lookup);
   return def === undefined ? undefined : classify(def, namespace);
 }
 
 /** `true` exactly when every variant has a class and no class repeats (§5.4). */
 export function isChoiceDisjoint(
-  variants: readonly { readonly name: string }[],
+  variants: readonly TypeExpr[],
   namespace: ReadonlyMap<string, Top>,
+  hops?: ExternHops,
 ): boolean {
   const seen = new Set<DiscriminationClass>();
   for (const variant of variants) {
-    const variantClass = discriminationClassOf(variant.name, namespace);
+    const variantClass = discriminationClassOf(variant, namespace, hops);
     if (variantClass === undefined || seen.has(variantClass)) {
       return false;
     }
@@ -198,13 +202,25 @@ export function isChoiceDisjoint(
  * namespace. Pure: entries with no `choice` body keep their identity, and `merged` itself is
  * returned unchanged when it holds no choice at all.
  */
-export function computeDisjointness(merged: ReadonlyMap<string, Top>): Map<string, Top> {
+export function computeDisjointness(
+  merged: ReadonlyMap<string, Top>,
+  hops?: ExternHops,
+): Map<string, Top> {
   const result = new Map(merged);
   for (const [name, def] of merged) {
-    const body = def;
-    if (!isTemplateBody(body) && body.kind === 'choice') {
-      result.set(name, { ...body, disjoint: isChoiceDisjoint(body.variants, merged) });
+    // A choice written in place derives its `disjoint` as a declared one does (§4.2, §5.4).
+    let body = mapInPlace(def, (inline) =>
+      inline.of.kind === 'choice'
+        ? {
+            ...inline,
+            of: { ...inline.of, disjoint: isChoiceDisjoint(inline.of.variants, merged, hops) },
+          }
+        : inline,
+    );
+    if (body.kind === 'choice') {
+      body = { ...body, disjoint: isChoiceDisjoint(body.variants, merged, hops) };
     }
+    if (body !== def) result.set(name, body);
   }
   return result;
 }
@@ -266,11 +282,11 @@ export function checkDisjointAssertions(
     const def = merged.get(name);
     if (def === undefined) continue;
     const body = def;
-    if (isTemplateBody(body) || body.kind !== 'choice') continue;
+    if (body.kind !== 'choice') continue;
     if (!assertsDisjoint(facts?.get(name), name, keyAnnotations)) continue;
     if (choiceDisjoint(def) === true) continue; // verified -- the assertion holds, and says so
 
-    const variants = body.variants.map((v) => v.name);
+    const variants = body.variants.map(typeExprText);
     const message =
       `'${name}' asserts @meta.disjoint, but its variants [${variants.join(', ')}] are not ` +
       'disjoint (§5.4) -- two of them occupy the same discrimination class (or one has no class ' +

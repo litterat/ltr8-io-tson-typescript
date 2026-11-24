@@ -79,16 +79,18 @@ value with a private constructor, a record whose wire names differ from its prop
 overload, no removal — so it is the one item that could land before the reference settles if the
 binding API's ergonomics start costing real users.
 
-## 2. Ten single-method interfaces are Java functional interfaces
+## 2. Eight single-method interfaces are Java functional interfaces
 
 `TypeReader.read` (`reader/contracts.ts:41`), `DiagnosticsReceiver.report`
-(`core/diagnostic.ts:218`), `SchemaSource.fetch` (`config.ts:87`),
+(`core/diagnostic.ts:386`), `SchemaSource.fetch` (`config.ts:121`),
 `ValueReaderFactory.create` (`reader/contracts.ts:192`),
-`ValueReaderFactoryRegistry.resolve` (`:205`), `ScalarParser.read` (`atom/forType.ts:62`),
+`ValueReaderFactoryRegistry.resolve` (`:205`), `ScalarParser.read` (`atom/forType.ts:67`),
 `ReadableByteStreamLike.getReader` (`io/streams.ts:42`),
-`ParameterTypesFailureReporter.report` (`compiler/parameterTypes.ts:575`),
-`MaterialisationFailureReporter.reportFailedApplication` (`compiler/templates.ts:152`),
-`MintedNames.claim` (`compiler/mintedNames.ts:28`).
+`DesugarFailureReporter.reportFailedDeclaration` (`compiler/desugar.ts:109`).
+
+The resolver's other callbacks (`MaterialisationFailureReporter`, `DeferredFailureReporter` in
+`compiler/parametricMaterialiser.ts`, `BoundFailureReporter` in `compiler/parameterTypes.ts`) are
+function types already, where the Java names an interface.
 
 In TypeScript each of these is a function type:
 
@@ -99,10 +101,10 @@ type DiagnosticsReceiver = (diagnostic: Diagnostic) => void;
 As interfaces, every caller constructs `{ report(d) { … } }` where a lambda would do, and none of
 them compose with partial application.
 
-**Two of the ten should not change even later.** `DiagnosticsReceiver` is extended by
+**Two of the eight should not change even later.** `DiagnosticsReceiver` is extended by
 `DiagnosticsCollector`, which adds a `diagnostics` array — as a function type that becomes a
 callable-with-a-property, which is worse than what it replaces. `ReadableByteStreamLike` is a
-structural stand-in for a real `ReadableStream` and has to keep that shape. The other eight are
+structural stand-in for a real `ReadableStream` and has to keep that shape. The other six are
 function types wearing an interface.
 
 **Trigger.** The reference's `reader/` package interfaces stop moving. Converting them is a
@@ -387,18 +389,6 @@ shared `Cursor`, exactly mirroring the text encoding's `PathStep`-adjacent field
 `src/json/**` cannot import the implementation it duplicates. The two `ReadContext`-shaped types
 are now closer in shape than the trigger below already argued they were.
 
-**One more narrowing this pair shares, and it is not idiom debt.** `json/schema/dispatchChoice.ts`'s
-`$type` at a choice position is flattened for alias (`link/aliasChain.ts`'s own `admitting`,
-over the declared variant list, each first walked to its own terminal so a variant that is itself
-an alias admits its target and every sibling alias too) but not for subtype, and
-`compiler/choiceReader.ts` reads identically — alias-flattened, not subtype-flattened — so this is
-the dispatch pair's own cross-encoding parity holding, not a JSON-only shortcut. This is the
-opposite of what this file records elsewhere: a deliberate _divergence_ from the reference's own
-`DispatchChoiceReader` (which flattens subtypes in too), not a place this port mirrors it, so the
-reasoning and its consequence for a sealed/abstract-with-no-discriminators variant's own name
-(`json/schema/route.ts`'s own `ChoiceSelfTagReadable`) live in `STATUS.md`'s "Known gaps" now,
-not here.
-
 **Trigger.** The reference's own: a shared `tson-encoding` module extracting "everything above
 the event level" once a second working stack exists to find the seam from
 (`.references/ltr8-io-tson-java/BACKLOG.md`, "Module structure" — "The encoding-neutral reader
@@ -476,6 +466,33 @@ than its text (a name's labels, a media type's parameters, an address's octets).
 then becomes the exported value type, with `write` taking it, and a caller that wants the text
 composes a `bridge()`.
 
+## 12. A canonical application and a type in place are compared by structure and keyed by string
+
+Revision 40 makes an application a value (`meta.apply`) and a type written in place a value of
+`meta.type_inline`, so §8.2's identity is record equality: head and arguments, or constructor and
+body, with annotations taking no part. The Java gets it from `record` equality and uses the value
+itself as a map key. A JavaScript `Map` compares an object key by identity, so this port keeps the
+comparison and adds a string beside it:
+
+- `compiler/canonicalApplication.ts`'s `key()` reduces a canonical application to
+  `JSON.stringify([head, ...arguments])`, a parameter told from a name by a `#` prefix, and every map
+  and set over applications is keyed on it (the applied-parent edge lookup, §5.10.1's recursion tie,
+  the declaration lookup).
+- `schema/meta/typeInline.ts`'s `sameTypeExpr` compares two types in place structurally, members of a
+  record by name in any order and a list's in order, leaving out the keys identity ignores; it keeps
+  no key, since no map is keyed on a type in place.
+- `compiler/parametricMaterialiser.ts`'s deferred-argument set and `compiler/restatements.ts`'s
+  restatement set are keyed on `JSON.stringify` of their own tuples.
+
+**Shape of the change.** A structural hash over the schema model's value shapes (a `hashOf`/`equals`
+pair per `Top` and `TypeExpr` variant), with the keyed maps becoming a `HashMap` over it. The string
+form is also the cheapest thing that survives a `bigint` or a `Map` in a restatement, which
+`JSON.stringify` needs a replacer for (`restatements.ts`'s `identity`).
+
+**Trigger.** The schema model's value shapes stop moving upstream. Until then a new field on
+`ApplyBody` or a body is a field to add to one `JSON.stringify` per site rather than to a hash
+combinator.
+
 ## Summary
 
 | #   | Item                                                  | Trigger                               | Size                      |
@@ -491,6 +508,7 @@ composes a `bridge()`.
 | 9   | `json/` mirrors the TSON-text read-plan shape         | A shared `tson-encoding`-style module | Large, whole `json/` tree |
 | 10  | Diagnostic code names and verdicts held to the Java's | The Java's code set settles           | Small, a few identifiers  |
 | 11  | Net atoms read to strings, not value classes          | A consumer needs the structured value | Small, three parsers      |
+| 12  | Applications and types in place keyed by string       | The schema model's shapes settle      | Small, four modules       |
 
-Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7, 9, 10 and 11 are the hold — and 7 is
+Items 4, 6 and 8 are independent of the reference. Items 1, 2, 3, 7, 9, 10, 11 and 12 are the hold — and 7 is
 where most of the "this library is its own thing now" actually lives.

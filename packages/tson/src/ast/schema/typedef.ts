@@ -1,6 +1,5 @@
-import type { DataValue } from '../value.js';
 import type { AtomRefinement, Instance, RecordEntry, RemovalSet } from './fields.js';
-import type { Reference, TypeExpr } from './typeref.js';
+import type { TypeExpr, TypeRef } from './typeref.js';
 
 /**
  * `type-def` (Part 2 §12.1) — the right-hand side of a declaration (§5.1). Every
@@ -8,21 +7,20 @@ import type { Reference, TypeExpr } from './typeref.js';
  * grammar-only AST); this union models the surface syntax the resolver would consume, one
  * member per top-level ABNF alternative:
  *
- * - {@link AtomRefinement} — `"!" type-name ws "^" ws record-def` (§5.5)
- * - {@link Instance} — `[type-params] "!" type-name ws core-value` (§5.5, constructor
- *   application; a parameter list makes it a template and leaves the payload untouched — an
- *   open entry's body is held rather than read against its constructor's vocabulary until
- *   materialisation substitutes, so a collection payload is as ordinary as a scalar one)
- * - {@link StructuralTypeDef} — `[type-params] structural-def` (§5.7–§5.9)
- * - {@link ReferenceTypeDef} — `[type-params] type-expr` (§8.3): a plain reference, or any
+ * - {@link AtomRefinement} — `"!" qualified-name ws "^" ws core-value` (§5.5, §5.7): a refinement of a type,
+ *   or over a constructor an incomplete entry (§5.5)
+ * - {@link Instance} — `[type-params] "!" qualified-name ws core-value` (§5.5, constructor
+ *   application; a parameter list is admitted before `!meta.record` alone, the explicit spelling of a
+ *   parametric record, §5.10)
+ * - {@link StructuralTypeDef} — `[definition-mark] [type-params] structural-def` (§5.2, §5.8, §5.9)
+ * - {@link TypeExprDef} — `[type-params] type-expr` (§8.3): a plain reference, an application, or any
  *   container form, since a declaration-level container reaches this union through `type-expr`
  *   like every other position
  * - {@link SchemaMapDef} — `"!schema" ws schema-map`: a schema map nested as an entry (§4.1)
- * - {@link RecordTemplateDef} — a record template as the desugar phase normalises it; no parser builds one
  *
  * Every member has an ABNF alternative behind it — none is synthesised at this layer. §5.3's
- * sized sugar (`[T; 1..2]`) is no exception: it parses as a {@link ReferenceTypeDef} wrapping
- * an `ArrayRef`, and rewriting it into the `Instance` its bindings denote is desugaring's job,
+ * sized sugar (`[T; 1..2]`) is no exception: it parses as a {@link TypeExprDef} wrapping
+ * an `ArrayExpr`, and rewriting it into the `Instance` its bindings denote is desugaring's job,
  * a later phase this AST does not perform.
  *
  * **There is no constructor marker.** §12.1's own grammar states it explicitly: "there is no
@@ -34,13 +32,7 @@ import type { Reference, TypeExpr } from './typeref.js';
  *
  * Discriminated on `kind` via each member's own `kind` field.
  */
-export type TypeDef =
-  | AtomRefinement
-  | Instance
-  | StructuralTypeDef
-  | ReferenceTypeDef
-  | SchemaMapDef
-  | RecordTemplateDef;
+export type TypeDef = AtomRefinement | Instance | StructuralTypeDef | TypeExprDef | SchemaMapDef;
 
 /**
  * `"!schema" ws schema-map` as a declaration's value (§12.1, §4.1): a schema map nested as an entry,
@@ -62,30 +54,10 @@ export interface SchemaMapDef {
 }
 
 /**
- * A record template as the desugar phase normalises it (§5.2, §5.10): the declaration's parameters
- * and the `!meta.record_template { ... }` payload its body denotes, each field labelled where the
- * parameters are in scope -- a bare parameter name in a field's type is its `type_param`, an unquoted
- * parameter token in its value its `value_param` -- and the parameters stated last, each provisionally a
- * type parameter.
- *
- * **The one variant no parser builds.** Both spellings of a record template reach it -- the sugar body
- * `<T> { x: T }` and the explicit `<T> !meta.record { ... }` -- and nothing an author writes does: a
- * written `!meta.record_template { ... }` is an {@link Instance}, which the resolver refuses as resolver
- * vocabulary (§8.1). So the type, not a flag, is what tells the desugarer's own output from a
- * construction an author wrote.
- *
- * Every slot but the labels and the parameter list is carried as written, so the resolver still answers
- * the author's spelling in the author's terms.
- */
-export interface RecordTemplateDef {
-  readonly kind: 'recordTemplateDef';
-  readonly typeParams: readonly string[];
-  readonly payload: DataValue;
-}
-
-/**
- * `[type-params] structural-def` (§12.1, §5.7–§5.9) — a refinement, composition or subtraction,
- * or a fresh record, optionally parameterized.
+ * `[definition-mark ws] [type-params] structural-def` (§12.1, §5.2, §5.8, §5.9) — a record definition: a fresh
+ * record, a composition or a subtraction, optionally parameterized. `mark` is §5.2's definition mark,
+ * `abstract` or `final`, which stands before a record definition alone (item 136): before `!`, a type expression
+ * or a declared application it is a parse error.
  *
  * Whether the entry this resolves to is a *constructor* is never a fact this shape carries: an
  * entry IS-A `top` (§4.2) by what it composes or refines, transitively — derived from the
@@ -94,52 +66,31 @@ export interface RecordTemplateDef {
  */
 export interface StructuralTypeDef {
   readonly kind: 'structuralTypeDef';
+  readonly mark?: 'abstract' | 'final';
   /** Parameter names from the declaration's own `<...>` (§5.10); empty for an unparameterized definition. */
   readonly typeParams: readonly string[];
   readonly body: StructuralDef;
 }
 
 /**
- * `[type-params] type-ref` (§12.1, §8.3) — a declaration whose body is a plain type reference:
- * `id => uuid`, a fully- or partially-bound generic application
- * (`text_keyed_map => <V> map<text, V>`), or inline sugar
- * (`contact_method => (email | phone | address)`).
+ * `[type-params] type-expr` (§12.1, §8.3) — a declaration whose body is a type expression: `id => uuid`, an
+ * application (`tags => set<text>`, `boxed => box<text>`), or sugar (`contact_method => (email | phone |
+ * address)`). A parameter list here is the resolver's to refuse: a parametric record's body is a record (§5.10).
  *
- * Resolves to a `REFERENCE`-kind entry, a construction, or an open template depending on what
- * `ref` turns out to name — a semantic-layer distinction (§5.6, §5.10) this grammar-only AST
- * does not make.
+ * Resolves to an alias, a construction, a completion or a declared application depending on what `ref` turns
+ * out to name — a semantic-layer distinction this grammar-only AST does not make.
  */
-export interface ReferenceTypeDef {
-  readonly kind: 'referenceTypeDef';
+export interface TypeExprDef {
+  readonly kind: 'typeExprDef';
   readonly typeParams: readonly string[];
   readonly ref: TypeExpr;
 }
 
 /**
- * `structural-def = refined-def / construction-def / record-def` (§12.1) — the three forms a
- * (possibly `~`-marked) {@link StructuralTypeDef} can wrap.
+ * `structural-def = construction-def / record-def` (§12.1) — the forms a {@link StructuralTypeDef} wraps.
+ * `^` follows `!name` alone (§5.7): a record is derived by `&`.
  */
-export type StructuralDef = RefinedDef | ConstructionDef | RecordDef;
-
-/**
- * `refined-def = type-ref ws "^" ws record-def` (§12.1, §5.7) —
- * record, map/array-head, or (with a preceding `~`) constructor refinement.
- *
- * `target` is restricted by grammar to a bare type-name, optionally with type-args — inline
- * structural forms (a choice, an inline array) cannot precede `^`, so `target` is always a
- * `SimpleRef` or a `GenericRef`, never an `ArrayRef`/`MapRef`/`TupleRef`/`ChoiceRef`. That
- * narrower fact is not encoded in `target`'s type (every `TypeRef` variant satisfies the
- * field); a parser building this type is responsible for never constructing it with anything
- * else.
- *
- * No removal clause is admitted on a refinement head (§5.7, §5.9) — there is deliberately no
- * field for one.
- */
-export interface RefinedDef {
-  readonly kind: 'refinedDef';
-  readonly target: Reference;
-  readonly body: RecordDef;
-}
+export type StructuralDef = ConstructionDef | RecordDef;
 
 /**
  * Supertype composition and/or subtraction (§12.1, §5.8, §5.9): one or more `&`-joined
@@ -147,25 +98,24 @@ export interface RefinedDef {
  *
  * `supertypes` always has at least one element — encoded here as a non-empty tuple type —
  * since a lone type-ref with neither a body nor a removal is not a `ConstructionDef` at all,
- * just a {@link ReferenceTypeDef} wrapping a plain `TypeRef` (§12.2's disambiguation: `name
+ * just a {@link TypeExprDef} wrapping a plain `TypeRef` (§12.2's disambiguation: `name
  * &`/`name -` enter this production, bare `name` does not).
  *
  * Each `supertypes` element is restricted by grammar to a `SimpleRef` or `GenericRef` (a
  * `supertype-ref`, never a paren/bracket/map form, §4.3/§5.8) — not encoded in the element
- * type, for the same reason as {@link RefinedDef.target}.
+ * type; a parser building this type is responsible for that restriction.
  */
 export interface ConstructionDef {
   readonly kind: 'constructionDef';
-  readonly supertypes: readonly [Reference, ...Reference[]];
+  readonly supertypes: readonly [TypeRef, ...TypeRef[]];
   readonly body?: RecordDef;
   readonly removal?: RemovalSet;
 }
 
 /**
  * `record-def = "{" ws [record-entry *(separator record-entry)] ws "}"` (§12.1, §5.2) — a
- * braced record body: fresh (no supertypes), a refinement's tightening body, a construction's
- * trailing body, or an atom refinement's constraint bindings (`AtomRefinement.bindings`,
- * `fields.ts`). An empty `{}` is the zero-field case — the shape of the kernel's `top`.
+ * braced record body: fresh (no supertypes), a composition's trailing body, or a record written in
+ * place at a type slot (`RecordExpr`). An empty `{}` is the zero-field case — the shape of the kernel's `top`.
  */
 export interface RecordDef {
   readonly kind: 'recordDef';

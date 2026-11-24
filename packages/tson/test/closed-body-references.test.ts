@@ -4,37 +4,39 @@ import { compile, validate } from '../src/compiler/compile.js';
 import type { LinkedSchema } from '../src/link/link.js';
 import { encodeUtf8 } from '../src/io/utf8.js';
 import { standardLibrary } from '../src/stdlib/index.js';
-import {
-  fieldTypeName,
-  kindOfEntry,
-  namespaceEntry,
-  recordEntry,
-  referenceEntry,
-} from './linked-entries.js';
+import { fieldTypeName, namespaceEntry } from './linked-entries.js';
 
 /**
- * The references a namespace type and a reference hold are rewritten as every other body's are
- * (§5.10, §8.2): materialisation closes an application in a namespace type's `key_type` and `value_type`, and
- * §8.2's synthetic merge renames a reference's `of` onto the entry it merged to.
+ * A type slot of a namespace type closes an application where it is written (§4.2, §5.10): `value_type`'s
+ * `{ of: !meta.apply { head: box  arguments: [text] } }` -- the explicit spelling, an argument list being schema
+ * grammar no data value spells ([TSON-DATA] §7.2.5) -- stays in place, the substituted record held in a
+ * `meta.type_inline` recording the application. A slot that holds a name alone -- a reference's `of` -- takes no
+ * application and no type written in place.
  */
 
-function link(declarations: string): LinkedSchema {
-  return standardLibrary().resolveSchema(`!!id:"https://example.test/closed-body-refs.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
+const SCHEMA_HEAD = `!!id:"https://example.test/closed-body-refs.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
 !schema {
   box => <T> { v: T }
-  ${declarations}
+`;
+
+function link(declarations: string): LinkedSchema {
+  return standardLibrary().resolveSchema(`${SCHEMA_HEAD}  ${declarations}
 }`);
 }
 
-describe('a body’s references close like every other body’s (§5.10, §8.2)', () => {
-  it('a namespace type’s value_type closes its application, so a value of it reads against the record', () => {
+describe('a type slot closes an application in place (§4.2, §5.10)', () => {
+  it('a namespace type’s value_type holds the closed application in place, so a value of it reads against the record', () => {
     const linked = link(`
-      api => !meta.namespace { key_type: meta.identifier  value_type: box<text> }
+      api => !meta.namespace { key_type: meta.identifier  value_type: { of: !meta.apply { head: box  arguments: [text] } } }
       use => { f: api }`);
-    const api = namespaceEntry(linked, 'api');
-    expect(api.valueType.arguments).toEqual([]);
-    expect(fieldTypeName(recordEntry(linked, api.valueType.name), 'v')).toBe('text');
+    const valueType = namespaceEntry(linked, 'api').valueType;
+    expect(valueType.kind).toBe('inline');
+    if (valueType.kind !== 'inline' || valueType.of.kind !== 'record') {
+      throw new Error('value_type is no record written in place');
+    }
+    expect(valueType.application?.head.name).toBe('box');
+    expect(fieldTypeName(valueType.of, 'v')).toBe('text');
     const compiled = compile(linked);
     expect(validate(compiled, 'use', encodeUtf8('{ f: { a => { v: "s" } } }')).diagnostics).toEqual(
       [],
@@ -43,19 +45,14 @@ describe('a body’s references close like every other body’s (§5.10, §8.2)'
       validate(compiled, 'use', encodeUtf8('{ f: { a => { v: [x] } } }')).diagnostics.length,
     ).toBeGreaterThan(0);
   });
+});
 
-  it('a reference follows the merge of the synthetic it names', () => {
-    const linked = link(`
-      r      => meta.ref<[box<text>]>
-      direct => { d: [box<text>] }`);
-    const reference = referenceEntry(linked, 'r');
-    expect(reference.of.name).toBe(fieldTypeName(recordEntry(linked, 'direct'), 'd'));
-    expect(kindOfEntry(linked, reference.of.name)).toBe('array');
+describe('a slot holding a name takes no application (§4.2)', () => {
+  it('a reference’s `of` naming an application is refused: the form is declared and named', () => {
+    expect(() => link('r => meta.ref<box<text>>')).toThrow();
   });
 
-  it('the same reference at a field’s type closes to a minted reference entry whose `of` names a live entry', () => {
-    const linked = link('rec => { f: meta.ref<[box<text>]> }');
-    const reference = referenceEntry(linked, fieldTypeName(recordEntry(linked, 'rec'), 'f'));
-    expect(kindOfEntry(linked, reference.of.name)).toBe('array');
+  it('a reference’s `of` holding a type written in place is refused', () => {
+    expect(() => link('r => meta.ref<[box<text>]>')).toThrow();
   });
 });

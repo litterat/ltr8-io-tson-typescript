@@ -1,6 +1,5 @@
 import type { Position } from '../core/position.js';
 import type { Task } from '../io/bytes.js';
-import type { CoreReference } from '../ast/reference.js';
 import type { TokenForm } from '../lexer/token.js';
 
 /**
@@ -13,8 +12,8 @@ import type { TokenForm } from '../lexer/token.js';
  * Every value position (document root, record field, map key/value, array element, an
  * annotation's own value) has the same self-delimiting shape in the stream: zero or more
  * {@link AnnotationStart}/{@link AnnotationEnd} pairs, an optional {@link TypeRef}, then exactly
- * one core-value — either a single leaf event ({@link TokenEvent}, {@link ReferenceEvent},
- * {@link VoidEvent}, {@link EmptyBraceEvent}) or a matched {@link RecordStart}/{@link RecordEnd},
+ * one core-value — either a single leaf event ({@link TokenEvent}, {@link VoidEvent},
+ * {@link EmptyBraceEvent}) or a matched {@link RecordStart}/{@link RecordEnd},
  * {@link MapStart}/{@link MapEnd}, or {@link ArrayStart}/{@link ArrayEnd} pair.
  *
  * Discriminated on `kind`; every member carries a `position`.
@@ -34,7 +33,6 @@ export type TsonEvent =
   | ArrayStart
   | ArrayEnd
   | TokenEvent
-  | ReferenceEvent
   | VoidEvent
   | EmptyBraceEvent;
 
@@ -167,22 +165,6 @@ export interface TokenEvent {
   readonly kind: 'token';
   readonly text: string;
   readonly form: TokenForm;
-  readonly position: Position;
-}
-
-/**
- * A `reference` core-value (§7.4) that is no bare name, assembled whole by the stream and delivered as
- * one value: a qualified name with an adjacent argument list, `geo.address<T>` or
- * `map<text list<int32>>`, or a sibling reference, `kind!`. A qualified name without arguments is a
- * {@link TokenEvent}, and a reader at a reference-typed position rolls either into one reference.
- *
- * One event, not a pair: an argument is a reference or a token and never a structure, so a reference
- * is small, and assembling it before it is emitted keeps every reader, skip and replay treating it
- * as the one value it is. `reference` carries each argument as the grammar classified it.
- */
-export interface ReferenceEvent {
-  readonly kind: 'reference';
-  readonly reference: CoreReference;
   readonly position: Position;
 }
 

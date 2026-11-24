@@ -99,32 +99,32 @@ describe('§5.4 !time -- time_type min/max, instant-normalised', () => {
   });
 });
 
-describe('§5.5 !time -- precision', () => {
+describe('§5.5 !time -- fraction_digits', () => {
   it('accepts a token at exactly the bound', () => {
-    const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
+    const parser = createTimeParser('time', { kind: 'time_type', fractionDigits: 3n });
     expect(parser.read(token('10:15:30.100Z')).nanosecond).toBe(100000000);
   });
 
   it('accepts a token under the bound', () => {
-    const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
+    const parser = createTimeParser('time', { kind: 'time_type', fractionDigits: 3n });
     expect(parser.read(token('10:15:30Z')).nanosecond).toBe(0);
   });
 
   it('admits a value spelled with more digits than the bound, when trailing zeros make it exact on the grid (§5.5)', () => {
-    const parser = createTimeParser('time', { kind: 'time_type', precision: 3n });
-    // Four written digits, but the same nanosecond count `.100` denotes -- precision constrains
+    const parser = createTimeParser('time', { kind: 'time_type', fractionDigits: 3n });
+    // Four written digits, but the same nanosecond count `.100` denotes -- fraction_digits constrains
     // the value, not the spelling, so this is admitted rather than refused for its digit count.
     expect(parser.read(token('10:15:30.1000Z')).nanosecond).toBe(100000000);
   });
 
   it('rejects a value that is not a whole number of 10^-N seconds, however few digits it is spelled with', () => {
-    const parser = createTimeParser('time', { kind: 'time_type', precision: 1n });
+    const parser = createTimeParser('time', { kind: 'time_type', fractionDigits: 1n });
     // 0.51s is not a whole number of tenths -- off the grid, whatever the spelling.
     expect(() => parser.read(token('10:15:30.51Z'))).toThrow(TsonAtomValidationError);
   });
 
-  it('precision: 0 admits no fractional part at all', () => {
-    const parser = createTimeParser('time', { kind: 'time_type', precision: 0n });
+  it('fraction_digits: 0 admits no fractional part at all', () => {
+    const parser = createTimeParser('time', { kind: 'time_type', fractionDigits: 0n });
     expect(parser.read(token('10:15:30Z')).nanosecond).toBe(0);
     expect(() => parser.read(token('10:15:30.1Z'))).toThrow(TsonAtomValidationError);
   });

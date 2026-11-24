@@ -1,36 +1,42 @@
-import type { TokenValue } from '../value.js';
+import type { DataValue } from '../value.js';
 import type { SizeSpec } from './fields.js';
+import type { RecordDef } from './typedef.js';
 
 /**
- * `type-expr = paren-type / bracket-type / map-type / type-ref` (Part 2 §12.1) -- a type expression
- * at any position one is legal: a declaration's own body, field types, type arguments, choice
- * variants, elements, composition/refinement targets. It is a {@link Reference} or one of the
- * four structural forms ({@link ChoiceExpr}, {@link ArrayExpr}, {@link TupleExpr}, {@link MapExpr}),
- * each of which holds further expressions.
+ * `type-expr = paren-type / bracket-type / brace-type / type-ref` (Part 2 §12.1) -- a type expression at any
+ * position one is legal: a declaration's own body, field types, type arguments, choice variants, elements. It is
+ * a {@link TypeRef} or one of the structural forms ({@link ChoiceExpr}, {@link ArrayExpr}, {@link TupleExpr},
+ * {@link MapExpr}, {@link RecordExpr}), each of which holds further expressions; desugaring adds
+ * {@link InlineConstruction}, the construction a form denotes written in place, which no parser builds.
  *
- * One tier, not two: every container form is legal at every type-expression position, with no
- * separate declaration-level production. Each of those, and every application, is a **syntactic**
- * node -- desugaring (a later phase, outside this AST) lifts a concrete one to a closed synthetic
- * entry and a parameter-bearing one to an open synthetic entry; this union represents exactly what
- * was written, never a pre-normalised or pre-desugared form.
+ * One tier: every container form is legal at every type-expression position. Each is a **syntactic** node --
+ * desugaring writes it in place as the construction it denotes (§5.3); nothing is lifted or named.
  *
  * Discriminated on `kind`.
  */
-export type TypeExpr = Reference | ArrayExpr | MapExpr | TupleExpr | ChoiceExpr;
+export type TypeExpr =
+  TypeRef | ArrayExpr | MapExpr | TupleExpr | ChoiceExpr | RecordExpr | InlineConstruction;
 
 /**
- * A reference as written: a {@link TypeRef}, naming a type by its qualified name and any arguments, or
- * a {@link SiblingRef}, naming the field of the same record whose value names the type
- * ([TSON-DATA] §7.4, Part 2 §12.1). The shape mirrors the resolved model's `Reference`
- * (`schema/meta`). A reference parses wherever a {@link TypeExpr} does, and wherever the grammar admits a
- * reference alone: a map's key, a refinement's source, a composition's operand. A sibling reference
- * stands only at a record field's type; the desugar phase refuses it everywhere else (§5.2).
+ * `field-type = type-expr ["?"] / dependent-type` (§12.1) -- what a record field's or a field group member's type
+ * holds: a type expression, or `kind!`, a {@link DependentType}, which the grammar admits there and nowhere else
+ * (§5.2).
  */
-export type Reference = TypeRef | SiblingRef;
+export type FieldTypeExpr = TypeExpr | DependentType;
+
+/**
+ * `dependent-type = unquoted-token "!"` (§12.1, §5.2) -- the field `on` of the same record instance, whose value
+ * names the type: `kind!`. It stands only at a record field's or a group member's type, which the AST's types
+ * hold: only {@link FieldTypeExpr} admits it.
+ */
+export interface DependentType {
+  readonly kind: 'dependentType';
+  readonly on: string;
+}
 
 /**
  * `qualified-name ["<" type-args ">"]` (§12.1) -- a reference to a type: a {@link NameRef} or an
- * {@link ApplicationRef}. The shape of the resolved model's `TypeRef`, the value of `meta.type_ref`.
+ * {@link ApplicationRef}.
  */
 export type TypeRef = NameRef | ApplicationRef;
 
@@ -41,60 +47,39 @@ export interface NameRef {
 }
 
 /**
- * `qualified-name "<" type-args ">"` (§12.1, §5.3) -- an application: `map<text, integer>`, or a
- * template application such as `vector<pixel, 1920>`. Whether `name` resolves to a constructor, a
- * non-constructor template, or is a resolver error is a later, semantic-layer question (§3.3.1,
- * §5.10) -- not decided here.
+ * `qualified-name "<" type-args ">"` (§12.1, §5.3, §5.10) -- an application, `map<text, integer>` or
+ * `pair<text uuid>`: sugar for the construction `meta.apply`. Whether `name` resolves to a constructor, an
+ * incomplete entry or a parametric record is a later, semantic-layer question, not decided here.
  *
- * **The arguments-present invariant.** {@link NameRef} (no arguments) and {@link ApplicationRef} (one or
- * more) encode the desugarer's central rule: *a reference carrying arguments denotes an open form --
- * a template application whose arguments materialisation later substitutes; a reference carrying none
- * is a bare name.* `type-args` requires at least one `type-arg` by §12.1's grammar, encoded here as a
- * non-empty tuple. `args` is never rewritten, reordered, or dropped by anything at this layer.
+ * `type-arg = type-expr` (§12.1): an argument is a type, never a literal. The grammar admits a structural form
+ * there and desugaring refuses one, an argument being a name or a parameter (§5.10). `type-args` requires at
+ * least one argument, encoded as a non-empty tuple.
  */
 export interface ApplicationRef {
   readonly kind: 'applicationRef';
   readonly name: string;
-  readonly args: readonly [TypeArg, ...TypeArg[]];
+  readonly args: readonly [TypeExpr, ...TypeExpr[]];
 }
 
 /**
- * `sibling-ref = unquoted-token "!"` (§12.1, [TSON-DATA] §7.4) -- the field `field` of the same
- * record instance, whose value names the type: `kind!`. It parses wherever a {@link Reference} does,
- * and stands only at a record field's type (§5.2).
+ * `record-def` at a type slot (§12.1's `brace-type = map-type / record-def`, §5.2): a record body written where
+ * it is used, `at: { lat: float64  lon: float64 }`. Desugaring writes it as its `!meta.record` construction in
+ * place.
  */
-export interface SiblingRef {
-  readonly kind: 'siblingRef';
-  readonly field: string;
+export interface RecordExpr {
+  readonly kind: 'recordExpr';
+  readonly body: RecordDef;
 }
 
 /**
- * `type-arg = type-expr / value-literal` (§12.1) — one argument inside a generic application's
- * `<...>`.
- *
- * **An unquoted, non-numeric argument token always parses as {@link TypeArgRef}, never
- * {@link TypeArgValue}.** §12.1 is explicit that the two are not disambiguated by grammar for
- * that case: whether such a token denotes a type or a value (an enum member, for instance) is
- * settled against the applied signature's parameter kinds (§5.10), not by the grammar. This
- * layer resolves only the grammar-level part of that rule — a quoted token, or one whose text
- * matches the `number` production, is unambiguously {@link TypeArgValue}; every other token,
- * including one that will later turn out to be an enum member or a value-parameter reference,
- * is parsed as {@link TypeArgRef}, deferring the real classification to the semantic layer that
- * has the applied signature to consult. This mirrors `type-name`'s own numeric exclusion, so a
- * genuinely numeric argument can never collide with a type-ref reading in the first place.
+ * A construction written in place at a type slot (§4.2, §5.3): the binding record a sugar form or an applied
+ * constructor denotes, `!meta.array { element_type: text }`, tagged with its constructor (`value.typeRef`). No
+ * parser builds one: desugaring writes it at a field's or group member's type, where resolution reads it through
+ * its constructor and holds it as the field's type in place.
  */
-export type TypeArg = TypeArgRef | TypeArgValue;
-
-/** A type-reference argument: `box<text>`, `pair<text, uuid>`. */
-export interface TypeArgRef {
-  readonly kind: 'ref';
-  readonly ref: TypeExpr;
-}
-
-/** A scalar-literal argument: `vector<pixel, 1920>`'s `1920`. */
-export interface TypeArgValue {
-  readonly kind: 'value';
-  readonly value: TokenValue;
+export interface InlineConstruction {
+  readonly kind: 'inlineConstruction';
+  readonly value: DataValue;
 }
 
 /**
@@ -124,8 +109,8 @@ export interface ElementType {
  *
  * `size` absent means unconstrained. Nesting is the recursion in {@link ElementType}, which
  * holds a plain `TypeExpr`: `[[T; 2]; 3]` is this node twice over, needing no second node
- * family. This is a syntactic node — desugaring lifts it to a closed or open synthetic
- * `!array { ... }` entry; nothing here pre-normalises it.
+ * family. This is a syntactic node — desugaring writes it as its `!meta.array { ... }`
+ * construction where it stands; nothing here pre-normalises it.
  */
 export interface ArrayExpr {
   readonly kind: 'arrayExpr';
@@ -139,11 +124,9 @@ export interface ArrayExpr {
  * {@link ArrayExpr} mirrors `[a b]`. Syntactic, like every sugar form — desugars to
  * `!map { key_type: ... value_type: ... }` at resolution, not here.
  *
- * The key is a {@link Reference} (`map-key = type-ref`, a qualified name optionally with type
- * arguments) and never a bracket, paren or map form: keeping it to a reference is what holds the
- * record/map brace dispatch (§12.2) to its stated lookahead budget, and a composite key type earns a
- * named declaration and the explicit `!meta.map { key_type: ... }` form instead. A sibling reference
- * parses as it does at every reference position and the desugar phase refuses it here (§5.2).
+ * The key is a {@link TypeRef} (`map-key = type-ref`, §12.1) and never a bracket, paren or brace form: keeping it
+ * to a reference is what holds the record/map brace dispatch (§12.2) to its stated lookahead budget, and a
+ * composite key type earns a named declaration instead.
  *
  * The value is an {@link ElementType}: `{K => V?}` marks the value voidable exactly as `[T?]`
  * marks an array element (§5.3), under which an entry's value may be the void sentinel and the
@@ -152,7 +135,7 @@ export interface ArrayExpr {
  */
 export interface MapExpr {
   readonly kind: 'mapExpr';
-  readonly keyType: Reference;
+  readonly keyType: TypeRef;
   readonly valueType: ElementType;
   readonly size?: SizeSpec;
 }

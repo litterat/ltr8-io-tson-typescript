@@ -82,7 +82,7 @@ describe('schema map (§2.1, §12.1)', () => {
     const doc = parse(`!schema { a => uuid  b => text  a => text }`);
     expect([...doc.body.declarations.keys()]).toEqual(['a', 'b']);
     expect(doc.body.declarations.get('a')?.typeDef).toEqual({
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams: [],
       ref: { kind: 'nameRef', name: 'text' },
     });
@@ -114,22 +114,22 @@ describe('schema map (§2.1, §12.1)', () => {
 describe('type-def: plain reference (§8.3)', () => {
   it('a bare type-name is a ReferenceTypeDef with an empty typeParams', () => {
     expect(typeDefOf('uuid')).toEqual({
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams: [],
       ref: { kind: 'nameRef', name: 'uuid' },
     });
   });
 
-  it('a generic application is a ReferenceTypeDef wrapping a GenericRef', () => {
+  it('an application is a type expression whose arguments are type expressions (§5.10)', () => {
     expect(typeDefOf('map<text, integer>')).toEqual({
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams: [],
       ref: {
         kind: 'applicationRef',
         name: 'map',
         args: [
-          { kind: 'ref', ref: { kind: 'nameRef', name: 'text' } },
-          { kind: 'ref', ref: { kind: 'nameRef', name: 'integer' } },
+          { kind: 'nameRef', name: 'text' },
+          { kind: 'nameRef', name: 'integer' },
         ],
       },
     });
@@ -137,8 +137,8 @@ describe('type-def: plain reference (§8.3)', () => {
 
   it('inline choice sugar reaches type-def through type-ref', () => {
     const def = typeDefOf('(email | phone)');
-    expect(def.kind).toBe('referenceTypeDef');
-    if (def.kind !== 'referenceTypeDef') throw new Error('unreachable');
+    expect(def.kind).toBe('typeExprDef');
+    if (def.kind !== 'typeExprDef') throw new Error('unreachable');
     expect(def.ref).toEqual({
       kind: 'choiceExpr',
       variants: [
@@ -150,7 +150,7 @@ describe('type-def: plain reference (§8.3)', () => {
 
   it('a type-def-level declaration may carry its own type parameters', () => {
     const def = typeDefOf('<V> map<text, V>');
-    if (def.kind !== 'referenceTypeDef') throw new Error('unreachable');
+    if (def.kind !== 'typeExprDef') throw new Error('unreachable');
     expect(def.typeParams).toEqual(['V']);
   });
 
@@ -227,7 +227,7 @@ describe('type-def: atom refinement and instance (§5.5)', () => {
     });
   });
 
-  it('instance with typeParams is a template with the same payload shape -- a collection payload is ordinary', () => {
+  it('instance with typeParams parses to the same payload shape -- a collection payload is ordinary', () => {
     // The payload is read with the *data* grammar (§2.3-§2.9): 'variants: [T error]' is a
     // record field holding an array of two bare tokens, exactly as ordinary as a scalar payload.
     const def = typeDefOf('<T> !choice { variants: [T error] }');
@@ -324,27 +324,10 @@ describe('type-def: structural forms (§5.7-§5.9)', () => {
     expect(thrownBy(`!schema { x => ~{ y: uuid } }`)).toBeInstanceOf(TsonParseError);
   });
 
-  it('refinement ("^") targets a bare type-name and takes a record-def body', () => {
-    expect(typeDefOf('customer ^ { vip: boolean }')).toEqual({
-      kind: 'structuralTypeDef',
-      typeParams: [],
-      body: {
-        kind: 'refinedDef',
-        target: { kind: 'nameRef', name: 'customer' },
-        body: {
-          kind: 'recordDef',
-          entries: [
-            {
-              kind: 'fieldDef',
-              annotations: [],
-              name: 'vip',
-              optional: false,
-              type: { typeRef: { kind: 'nameRef', name: 'boolean' }, voidable: false },
-            },
-          ],
-        },
-      },
-    });
+  it('"^" after a bare name is a parse error naming the composition: a record is derived by "&" (§5.7, §5.8)', () => {
+    const error = thrownBy(`!schema { x => customer ^ { vip: boolean } }`);
+    expect(error).toBeInstanceOf(TsonParseError);
+    expect((error as TsonParseError).message).toContain("'customer & { ... }'");
   });
 
   it('"~" before a refinement head is likewise a parse error (§4.2, §12.1)', () => {
@@ -713,7 +696,7 @@ describe('choice types (§5.4)', () => {
 describe('bracket forms: array and tuple (§5.3)', () => {
   it('one element with no size is an unconstrained array', () => {
     expect(typeDefOf('[text]')).toEqual({
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams: [],
       ref: {
         kind: 'arrayExpr',
@@ -724,35 +707,60 @@ describe('bracket forms: array and tuple (§5.3)', () => {
 
   it('"N" is an exact size spec', () => {
     const def = typeDefOf('[text; 3]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'exact', bound: '3' });
   });
 
   it('"N..M" is a ranged size spec', () => {
     const def = typeDefOf('[text; 1..2]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'ranged', lower: '1', upper: '2' });
   });
 
   it('"N.." is a min size spec', () => {
     const def = typeDefOf('[text; 1..]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'min', lower: '1' });
   });
 
   it('"..M" is a max size spec', () => {
     const def = typeDefOf('[text; ..2]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.size).toEqual({ kind: 'max', upper: '2' });
   });
 
+  it('§5.3, §12.1: a size bound is decimal-natural, so 0 and 1_000 are bounds', () => {
+    for (const bound of ['0', '7', '1_000']) {
+      const def = typeDefOf(`[text; ${bound}..]`);
+      if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
+        throw new Error('expected an array ref');
+      expect(def.ref.size).toEqual({ kind: 'min', lower: bound });
+    }
+  });
+
+  it.each([
+    ['a based integer', '[text; 0x10]'],
+    ['a leading zero', '[text; 010]'],
+    ['a sign', '[text; +1]'],
+    ['a fraction', '[text; 1.0]'],
+    ['an exponent', '[text; 1e2]'],
+    ['a name', '[text; N]'],
+    ['a based upper bound', '[text; 1..0b11]'],
+    ['a based bound on a map', '{text => text; ..0o7}'],
+  ])('§5.3, §12.1: %s is no size bound, refused where the parser reads it', (_what, form) => {
+    const thrown = thrownBy(`!schema { x => ${form} }`);
+    expect(thrown).toBeInstanceOf(TsonParseError);
+    expect((thrown as TsonParseError).message).toMatch(/is no size bound: .* decimal natural/u);
+    expect((thrown as TsonParseError).position).toBeDefined();
+  });
+
   it('two or more elements is a tuple, each position carrying its own "?"', () => {
     const def = typeDefOf('[text, integer?]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'tupleExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'tupleExpr')
       throw new Error('expected a tuple ref');
     expect(def.ref.elementTypes).toEqual([
       { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
@@ -762,7 +770,7 @@ describe('bracket forms: array and tuple (§5.3)', () => {
 
   it('nesting: [[T; 2]; 3] is the recursion in element-type, needing no second production', () => {
     const def = typeDefOf('[[text; 2]; 3]');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'arrayExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'arrayExpr')
       throw new Error('expected an array ref');
     expect(def.ref.elementType.typeRef).toEqual({
       kind: 'arrayExpr',
@@ -775,7 +783,7 @@ describe('bracket forms: array and tuple (§5.3)', () => {
 describe('map sugar (§5.3)', () => {
   it('parses {key => value}, legal at any type-ref position', () => {
     expect(typeDefOf('{text => integer}')).toEqual({
-      kind: 'referenceTypeDef',
+      kind: 'typeExprDef',
       typeParams: [],
       ref: {
         kind: 'mapExpr',
@@ -787,18 +795,18 @@ describe('map sugar (§5.3)', () => {
 
   it('admits a generic key', () => {
     const def = typeDefOf('{enum_key<status> => integer}');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'mapExpr')
       throw new Error('expected a map ref');
     expect(def.ref.keyType).toEqual({
       kind: 'applicationRef',
       name: 'enum_key',
-      args: [{ kind: 'ref', ref: { kind: 'nameRef', name: 'status' } }],
+      args: [{ kind: 'nameRef', name: 'status' }],
     });
   });
 
   it('admits a size spec after ";"', () => {
     const def = typeDefOf('{text => integer; 1..10}');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapExpr')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'mapExpr')
       throw new Error('expected a map ref');
     expect(def.ref.size).toEqual({ kind: 'ranged', lower: '1', upper: '10' });
   });
@@ -809,7 +817,7 @@ describe('map sugar (§5.3)', () => {
 
   it('admits "?" on the value side, marking the entry value OPTIONAL (§5.3)', () => {
     const def = typeDefOf('{text => integer?}');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'mapExpr') {
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'mapExpr') {
       throw new Error('unreachable');
     }
     expect(def.ref.valueType.voidable).toBe(true);
@@ -825,47 +833,32 @@ describe('map sugar (§5.3)', () => {
 });
 
 describe('type arguments (§12.1, §5.10)', () => {
-  it('a quoted token is unambiguously a value', () => {
-    const def = typeDefOf('keyed<"literal">');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
-      throw new Error('expected a generic ref');
-    expect(def.ref.args[0]).toEqual({
-      kind: 'value',
-      value: { kind: 'token', text: 'literal', form: 'single-line' },
-    });
+  it('a quoted token is no type argument: an argument is a type, never a literal (§5.10)', () => {
+    expect(thrownBy(`!schema { x => keyed<"literal"> }`)).toBeInstanceOf(TsonParseError);
   });
 
-  it('a numeric unquoted token is a value', () => {
-    const def = typeDefOf('vector<pixel, 1920>');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
-      throw new Error('expected a generic ref');
-    expect(def.ref.args[1]).toEqual({
-      kind: 'value',
-      value: { kind: 'token', text: '1920', form: 'unquoted' },
-    });
+  it('a numeric unquoted token is no type argument either', () => {
+    expect(thrownBy(`!schema { x => vector<pixel, 1920> }`)).toBeInstanceOf(TsonParseError);
   });
 
-  it('a non-numeric unquoted token always parses as a type-ref, never a value (deferred to the semantic layer)', () => {
+  it('a non-numeric unquoted token is a name', () => {
     const def = typeDefOf('flagged<status, N>');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'applicationRef')
       throw new Error('expected a generic ref');
-    expect(def.ref.args[1]).toEqual({ kind: 'ref', ref: { kind: 'nameRef', name: 'N' } });
+    expect(def.ref.args[1]).toEqual({ kind: 'nameRef', name: 'N' });
   });
 
   it('rejects the void sentinel as a type argument', () => {
     expect(thrownBy(`!schema { x => box<_> }`)).toBeInstanceOf(TsonParseError);
   });
 
-  it('a choice, bracket, or map form is admitted as a type argument (wrapped as a ref)', () => {
+  it('a choice, bracket, or map form parses as a type argument, judged where the application resolves', () => {
     const def = typeDefOf('box<[text]>');
-    if (def.kind !== 'referenceTypeDef' || def.ref.kind !== 'applicationRef')
+    if (def.kind !== 'typeExprDef' || def.ref.kind !== 'applicationRef')
       throw new Error('expected a generic ref');
     expect(def.ref.args[0]).toEqual({
-      kind: 'ref',
-      ref: {
-        kind: 'arrayExpr',
-        elementType: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
-      },
+      kind: 'arrayExpr',
+      elementType: { typeRef: { kind: 'nameRef', name: 'text' }, voidable: false },
     });
   });
 });
@@ -961,34 +954,34 @@ describe('a comma may follow the last element of every list in this grammar (§2
 
 describe("the spec's own worked example (§1.6)", () => {
   it('parses end to end', () => {
-    // `priority`'s own line in the spec is `!integer ^ { min: 1  max: 5 }` -- an atom
-    // refinement with bare-value bindings, which this parser cannot yet build (see the
-    // "does not yet parse a real atom refinement's bare-value bindings" test and this session's
-    // report: `AtomRefinement.bindings`'s frozen `RecordDef` type cannot represent it). Every
-    // other line is exactly as written in §1.6: `priority?: priority ~ 3`, `status?: status ~ OPEN`,
-    // `due?: date`, `tags?: [text]`, `history?: […]`, and `flagged`'s own `priority?: priority ~
-    // N`, a parametric default taking the name mark its literal spelling takes (§5.7).
     const doc = parse(`
 !!id:"https://example.com/task.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 @doc:"Task-tracking example schema."
 !schema {
-  priority => integer
-  status   => !enum [OPEN ACTIVE DONE]
-  flagged  => <T, N> { entry: T  priority?: priority ~ N }
+  priority   => !integer ^ { min: 1  max: 5 }
+  title_text => !text ^ { min_length: 1 }
+  status     => !enum [OPEN ACTIVE DONE]
+  flagged    => <T> { entry: T  priority?: priority }
   task => {
     id:        uuid
-    title:     non_empty_text
+    title:     title_text
     priority?: priority ~ 3
     status?:   status ~ OPEN
     due?:      date
     tags?:     [text]
-    history?:  [flagged<status, 2>]
+    history?:  [flagged<status>]
   }
 }
 `);
     expect(doc.id).toBe('https://example.com/task.tn');
-    expect([...doc.body.declarations.keys()]).toEqual(['priority', 'status', 'flagged', 'task']);
+    expect([...doc.body.declarations.keys()]).toEqual([
+      'priority',
+      'title_text',
+      'status',
+      'flagged',
+      'task',
+    ]);
     const task = doc.body.declarations.get('task');
     if (task?.typeDef.kind !== 'structuralTypeDef' || task.typeDef.body.kind !== 'recordDef') {
       throw new Error('expected task to be a fresh record');
@@ -1009,10 +1002,7 @@ describe("the spec's own worked example (§1.6)", () => {
             typeRef: {
               kind: 'applicationRef',
               name: 'flagged',
-              args: [
-                { kind: 'ref', ref: { kind: 'nameRef', name: 'status' } },
-                { kind: 'value', value: { kind: 'token', text: '2', form: 'unquoted' } },
-              ],
+              args: [{ kind: 'nameRef', name: 'status' }],
             },
           },
         },

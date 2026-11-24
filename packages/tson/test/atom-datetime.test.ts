@@ -72,24 +72,24 @@ describe('§5.4 !datetime -- datetime_type min/max, instant-normalised across da
   });
 });
 
-describe('§5.5 !datetime -- precision', () => {
+describe('§5.5 !datetime -- fraction_digits', () => {
   it('accepts a token at exactly the bound', () => {
-    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 3n });
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', fractionDigits: 3n });
     expect(parser.read(token('2025-03-13T10:15:30.100Z')).time.nanosecond).toBe(100000000);
   });
 
   it('admits a value spelled with more digits than the bound, when trailing zeros make it exact on the grid (§5.5)', () => {
-    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 3n });
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', fractionDigits: 3n });
     expect(parser.read(token('2025-03-13T10:15:30.1000Z')).time.nanosecond).toBe(100000000);
   });
 
   it('rejects a value that is not a whole number of 10^-N seconds, however few digits it is spelled with', () => {
-    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 1n });
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', fractionDigits: 1n });
     expect(() => parser.read(token('2025-03-13T10:15:30.51Z'))).toThrow(TsonAtomValidationError);
   });
 
-  it('precision: 0 admits no fractional part at all', () => {
-    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', precision: 0n });
+  it('fraction_digits: 0 admits no fractional part at all', () => {
+    const parser = createDateTimeParser('datetime', { kind: 'datetime_type', fractionDigits: 0n });
     expect(parser.read(token('2025-03-13T10:15:30Z')).time.nanosecond).toBe(0);
     expect(() => parser.read(token('2025-03-13T10:15:30.1Z'))).toThrow(TsonAtomValidationError);
   });

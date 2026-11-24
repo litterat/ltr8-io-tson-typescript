@@ -8,7 +8,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const HEAD = `
 !!id:"https://example.test/field-names.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 `;
 
 function schema(body: string) {
@@ -128,7 +128,7 @@ describe('a stated name type is an identifier family that can judge names (§5.2
     expect(linked.entries.has('both')).toBe(true);
   });
 
-  it('a composition over an applied template takes the template’s name type (§5.8)', () => {
+  it('a composition over an applied parametric record takes the parametric record’s name type (§5.8)', () => {
     const linked = schema(`
       json_name => !unicode.identifier_type { start_add: "@$" }
       json_record => !meta.record { name_type: json_name  extension: ABSTRACT  fields: {} }

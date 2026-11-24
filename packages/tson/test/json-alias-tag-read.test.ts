@@ -6,10 +6,11 @@
  * than two that happen to agree, so what `!s_of` does in TSON text `"$type": "s_of"` does here.
  *
  * Every position that matches a written name against a set is covered: a plain record, an abstract
- * base, a sealed base's deeper tag, and -- alias-flattened on the same terms, though not through
- * §7.2's own general subsumption rule -- a choice's variants (§5.4's own "Resolution" paragraph
- * already reads a variant by what it *resolves to*; see this file's own choice-position cases,
- * below, and `json/schema/dispatchChoice.ts`'s top note for the full citation). In every case the
+ * base, a sealed base's deeper tag, and -- alias-flattened on the same terms, though through
+ * §5.4's selection and not §7.2's general subsumption rule -- a choice's variants (§5.4's own
+ * "Resolution" paragraph already reads a variant by what it *resolves to*; see this file's own
+ * choice-position cases, below, and `json/schema/dispatchChoice.ts`'s top note for the full
+ * citation). In every case the
  * alias is admitted rather than rewritten to its target, so the reader that runs is the one named
  * for the entry the author wrote.
  */
@@ -23,7 +24,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/alias-tag.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   base   => { tag: text }
   sub    => base & { extra: text }
@@ -98,11 +99,10 @@ it('a sealed position places the value by its discriminator, then checks any tag
  * states the general principle a variant reference shares with every other one: "a reference is a
  * hop, not a rewrite... the same type under another name". So `n_of` (an alias of `note`, a
  * variant of `either`) names the variant it points to, the same identity question every other
- * position in this file answers the same way. This port's text-encoding choice reader
- * (`compiler/choiceReader.ts`) reads the same way -- alias-flattened, not subtype-flattened -- so
- * this is not a JSON-only reading, and `dispatchChoice.ts`'s own top note has the fuller rationale,
- * including where this diverges from the reference (subtype admission, not exercised by this
- * fixture).
+ * position in this file answers the same way. The text encoding's choice reader
+ * (`compiler/choiceReader.ts`) reads an alias the same way, so this is not a JSON-only reading, and
+ * `dispatchChoice.ts`'s own top note has the fuller rationale, subtype admission included
+ * (`json-choice-subtype-tag.test.ts`).
  */
 it('§5.4/§8.3: an alias of a variant is admitted at a choice position, matching the variant it names', () => {
   expect(accepted('either', '{"$type":"n_of","body":"x"}')).toBe('{"body":"x"}');

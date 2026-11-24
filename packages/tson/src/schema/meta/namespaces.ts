@@ -5,8 +5,7 @@
  * qualified name enters a namespace value and nothing else (§5.12).
  */
 import type { MapBody, NamespaceBody } from './bodies.js';
-import type { Top } from './typedef.js';
-import { isTemplateBody } from './typedef.js';
+import type { Top, TypeExpr } from './typedef.js';
 import { metaName } from './kernel.js';
 
 /** The kernel's constructor whose instances are namespace types. */
@@ -17,13 +16,13 @@ export const NAMESPACE_FACETS: readonly string[] = ['key_type', 'value_type', 'o
 
 /** Whether `value` is a namespace type: an instance of `meta.namespace`, whose values are maps keyed by names. */
 export function isNamespaceType(value: Top | undefined): value is NamespaceBody {
-  return value !== undefined && !isTemplateBody(value) && value.kind === 'namespace';
+  return value?.kind === 'namespace';
 }
 
 /** What reading a namespace value needs of its type (§4.1): the family its keys are names of, the type of its values, and whether key order is part of a value. */
 export interface NamespaceMap {
   readonly keyType: string;
-  readonly valueType: string;
+  readonly valueType: TypeExpr;
   readonly ordered: boolean;
 }
 
@@ -31,7 +30,7 @@ export interface NamespaceMap {
 export function namespaceMapOf(namespace: NamespaceBody): NamespaceMap {
   return {
     keyType: namespace.keyType.name,
-    valueType: namespace.valueType.name,
+    valueType: namespace.valueType,
     ordered: namespace.ordered,
   };
 }

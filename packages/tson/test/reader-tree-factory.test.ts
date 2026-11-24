@@ -24,7 +24,7 @@ describe('recordReaderFactory', () => {
       fields: fieldMapOf([
         {
           name: 'name',
-          type: { name: 'text', arguments: [], annotations: [] },
+          type: { name: 'text', annotations: [] },
           optional: false,
           voidable: false,
           role: 'FREE',

@@ -86,10 +86,10 @@ echo "==> hash and compile produce output"
 [ -n "$("$TSON" compile ./demo/person.tn)" ] || fail "compile printed nothing"
 
 echo "==> strip: exit codes and the reading form"
-printf '!!id:"https://example.test/t-1.tn"\n!!import:"https://tson.io/2026/39/m/core.tn?sha256=00"\n!schema {\n  @doc:"A thing."\n  thing => int32\n}\n' > ./thing.tn
+printf '!!id:"https://example.test/t-1.tn"\n!!import:"https://tson.io/2026/40/m/core.tn?sha256=00"\n!schema {\n  @doc:"A thing."\n  thing => int32\n}\n' > ./thing.tn
 stripped="$("$TSON" strip ./thing.tn)" || fail "strip of a well-formed schema did not exit 0"
-[ "$stripped" = "$(printf '!!import:"39/core"\n!schema {\nthing => int32\n}')" ] || fail "strip printed an unexpected reading form: $stripped"
-printf '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n' > ./broken.tn
+[ "$stripped" = "$(printf '!!import:"40/core"\n!schema {\nthing => int32\n}')" ] || fail "strip printed an unexpected reading form: $stripped"
+printf '!!import:"https://tson.io/2026/40/m/core.tn"\n!schema { thing => }\n' > ./broken.tn
 set +e
 "$TSON" strip ./broken.tn >/dev/null 2>&1
 strip_malformed=$?

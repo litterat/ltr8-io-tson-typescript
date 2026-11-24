@@ -60,7 +60,6 @@ function heldIn(value: MetaValue, path: readonly string[], found: Held[]): void 
       for (const [key, entry] of value.value.entries) heldIn(entry, [...path, key], found);
       return;
     case 'token':
-    case 'reference':
     case 'void':
     case 'schema_map':
       return;

@@ -266,12 +266,20 @@ function timeInstantSeconds(
   return hour * 3600 + minute * 60 + second - offsetSeconds;
 }
 
+/** A time's value is its time of day in UTC on [00:00:00, 24:00:00) (§5.5), so the offset carries it
+ * across midnight: `23:30:00-02:00` is `01:30:00Z`. Never plain subtraction of the shifted seconds,
+ * which would not wrap. */
+function utcSecondOfDay(t: ComparableTime): number {
+  const shifted = timeInstantSeconds(t.hour, t.minute, t.second, t.offsetSeconds);
+  return ((shifted % 86400) + 86400) % 86400;
+}
+
 /** `-1`/`0`/`1` comparing two times-of-day by instant (offset-normalised), nanosecond as the
  * final tie-break -- {@link ComparableTime}'s own TSDoc note on why this isn't plain
  * field-by-field comparison: two different offsets can still name the same instant. */
 export function compareTime(a: ComparableTime, b: ComparableTime): number {
-  const ai = timeInstantSeconds(a.hour, a.minute, a.second, a.offsetSeconds);
-  const bi = timeInstantSeconds(b.hour, b.minute, b.second, b.offsetSeconds);
+  const ai = utcSecondOfDay(a);
+  const bi = utcSecondOfDay(b);
   if (ai !== bi) return ai - bi;
   return a.nanosecond - b.nanosecond;
 }

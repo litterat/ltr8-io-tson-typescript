@@ -9,7 +9,7 @@
  * - **OPEN with subtypes** — untagged, the value is the record itself and goes to its own concrete
  *   reader ({@link untagged}); a tag restating the record goes there too, and one naming a subtype
  *   goes to that subtype.
- * - **ABSTRACT** (closed, or a family-base template) — no direct instances, so the tag is REQUIRED
+ * - **ABSTRACT** — no direct instances, so the tag is REQUIRED
  *   and the base itself is not admissible: the failure lands before the object's shape is
  *   consulted, the same refusal TSON text gives a missing `!type-ref` at the same position
  *   (`compiler/subsumption.ts`'s own `guardSubsumption`, whose diagnostics this module matches —
@@ -29,7 +29,7 @@
  */
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
-import { isOpen, isTemplateBody, type Top } from '../../schema/meta/typedef.js';
+import { isParametric, type Top } from '../../schema/meta/typedef.js';
 import { admitting, selfNames } from '../../link/aliasChain.js';
 import type { JsonReadContext } from '../readContext.js';
 import { skipNextValue, skipValue } from './eventSkip.js';
@@ -55,7 +55,7 @@ export interface DispatchTagOptions {
 
 /** Whether a value can be `entry` directly: not an open entry (§5.10), and not an ABSTRACT record. */
 function isInstantiable(entry: Top | undefined): boolean {
-  if (entry === undefined || isTemplateBody(entry) || isOpen(entry)) return false;
+  if (entry === undefined || isParametric(entry)) return false;
   return entry.kind !== 'record' || entry.extension !== 'ABSTRACT';
 }
 
@@ -69,8 +69,7 @@ export function buildTagDispatcher(options: DispatchTagOptions): JsonTypeReader 
   const own = selfNames(name, entries);
   const admittedSubtypes = admitting(subtypes, entries);
   // What a refusal names as satisfying the position: the subtypes with instances of their own. An
-  // abstract record and a record template (a family base, §5.10) are no answer -- naming either
-  // would only refuse in turn.
+  // abstract record is no answer -- naming one would only refuse in turn.
   const subtypeList = subtypes
     .filter((subtype) => isInstantiable(entries.get(subtype)))
     .join(' | ');

@@ -1410,17 +1410,18 @@ describe('complex_type', () => {
 // ── duration_type / period_type ─────────────────────────────────────────────────────────────
 
 describe('duration_type', () => {
-  it('bounds narrow inward, and precision narrows to a coarser grid only (§5.5, §5.7)', () => {
-    const source: DurationType = { kind: 'duration_type', min: 0n, max: 100n, precision: 3n };
+  it('bounds narrow inward, and fraction_digits narrows to a coarser grid only (§5.5, §5.7)', () => {
+    const source: DurationType = { kind: 'duration_type', min: 0n, max: 100n, fractionDigits: 3n };
     expect(
-      checkAtomNarrows(source, { kind: 'duration_type', min: 10n, max: 50n, precision: 1n }),
+      checkAtomNarrows(source, { kind: 'duration_type', min: 10n, max: 50n, fractionDigits: 1n }),
     ).toEqual([]);
     expect(
-      checkAtomNarrows(source, { kind: 'duration_type', min: -10n, max: 100n, precision: 3n })
+      checkAtomNarrows(source, { kind: 'duration_type', min: -10n, max: 100n, fractionDigits: 3n })
         .length,
     ).toBeGreaterThan(0);
     expect(
-      checkAtomNarrows(source, { kind: 'duration_type', min: 0n, max: 100n, precision: 9n }).length,
+      checkAtomNarrows(source, { kind: 'duration_type', min: 0n, max: 100n, fractionDigits: 9n })
+        .length,
     ).toBeGreaterThan(0);
   });
 
@@ -1432,16 +1433,18 @@ describe('duration_type', () => {
     ).toBeGreaterThan(0);
   });
 
-  it('coherence: min above max is incoherent, and precision may not exceed 9', () => {
+  it('coherence: min above max is incoherent, and fraction_digits may not exceed 9', () => {
     expect(checkAtomCoherence({ kind: 'duration_type', min: 10n, max: 3n }).length).toBeGreaterThan(
       0,
     );
-    expect(checkAtomCoherence({ kind: 'duration_type', precision: 10n }).length).toBeGreaterThan(0);
+    expect(
+      checkAtomCoherence({ kind: 'duration_type', fractionDigits: 10n }).length,
+    ).toBeGreaterThan(0);
   });
 });
 
 describe('period_type', () => {
-  it('bounds narrow inward, no precision facet', () => {
+  it('bounds narrow inward, no fraction_digits facet', () => {
     const source: PeriodType = { kind: 'period_type', min: 0n, max: 24n };
     expect(checkAtomNarrows(source, { kind: 'period_type', min: 6n, max: 12n })).toEqual([]);
     expect(
@@ -1489,14 +1492,15 @@ describe('isAtom', () => {
     expect(isAtom({ kind: 'record', fields: fieldMapOf([]), groups: [], extension: 'OPEN' })).toBe(
       false,
     );
-    expect(isAtom({ kind: 'alias', target: { name: 'x', arguments: [], annotations: [] } })).toBe(
-      false,
-    );
-    // A held template body: no `kind` tag at all (schema/meta's own contract).
+    expect(isAtom({ kind: 'alias', target: { name: 'x', annotations: [] } })).toBe(false);
+    // A parametric record is a record, never an atom (§5.10).
     expect(
       isAtom({
-        parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-        template: '!record { fields: [] }',
+        kind: 'record',
+        parameters: [{ name: 'T' }],
+        fields: fieldMapOf([]),
+        groups: [],
+        extension: 'OPEN',
       }),
     ).toBe(false);
   });

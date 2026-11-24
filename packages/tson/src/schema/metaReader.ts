@@ -51,7 +51,7 @@
  * another wire name the way `array`/`set` do.
  */
 import type { DataValue } from '../ast/value.js';
-import { TsonMissingBindingError, TsonReadError } from '../core/errors.js';
+import { TsonNotImplementedError, TsonReadError } from '../core/errors.js';
 import type { Diagnostic } from '../core/diagnostic.js';
 import {
   fromDataValue,
@@ -59,36 +59,46 @@ import {
   type RecordFieldPolicy,
   type RecordFieldsProvider,
 } from '../bind/decode.js';
-import type { RecordBinding } from '../bind/binding.js';
+import type { Binding, RecordBinding } from '../bind/binding.js';
 import type { DefinitionGetter, DefinitionMetaReader } from '../compiler/resolverTypes.js';
 import { tryParseNumber } from '../base/numberGrammar.js';
+import { deepEqual } from '../value/equality.js';
 import { toExactInteger } from '../base/numberNarrowing.js';
 import { resolveBaseType, type BaseToken } from '../base/baseTypeResolver.js';
 import { readFullDate, readFullTime } from '../atom/temporal/rfc3339.js';
 import { referenceOfWire } from './referenceAtoms.js';
 import {
+  arrayBodyBinding,
+  applyBodyBinding,
+  choiceBodyBinding,
+  dependentBodyBinding,
+  enumBodyBinding,
   fieldGroupBinding,
   integerSizeBinding,
+  mapBodyBinding,
   metaBindings,
+  namespaceBodyBinding,
+  paramBinding,
+  recordBodyBinding,
   recordFieldBinding,
-  recordTemplateFieldBinding,
-  templateParamBinding,
+  refBodyBinding,
   tokenFormToWire,
+  tupleBodyBinding,
   tupleElementBinding,
   typeChainBinding,
 } from './bindings.js';
 import { NUMERIC_MAP, kernelName, metaName } from './meta/kernel.js';
 import {
   fieldOmission,
+  groupViolations,
   isGroupMember,
   namedFields,
   type NamedField,
   type RecordBody,
   type RecordField,
 } from './meta/bodies.js';
-import type { Top } from './meta/typedef.js';
-import { isTemplateBody } from './meta/typedef.js';
-import { inheritedBindingName } from './inheritedBinding.js';
+import type { Token, Top } from './meta/typedef.js';
+import { composedOver } from './meta/composedOver.js';
 
 // -------------------------------------------------------------------------------------------
 // The atom decoder for the closed meta-kernel/meta vocabulary
@@ -123,19 +133,10 @@ export const metaAtomDecoder: AtomDecoder = (binding, wire) => {
     case 'text':
       return wire.text;
 
-    // `meta.type_ref`, a position that names a type, and `meta.field_type_ref`, a record field's type
-    // (§4.2, [TSON-DATA] §7.4): the wire token is the reference's canonical text, and a sibling
-    // reference stands only at the second.
+    // `meta.type_ref` and every `meta.ref`, a position that names something (§4.2, §5.12): the wire token is
+    // the qualified name, whatever its form.
     case 'type_ref':
-    case 'reference': {
-      const reference = referenceOfWire(wire.text, wire.form);
-      if (reference.kind === 'sibling' && binding.wireType === 'type_ref') {
-        throw readError(
-          `a sibling reference ('${reference.field}!') stands only at a record field's type ([TSON-SCHEMA] §5.2), not here`,
-        );
-      }
-      return reference;
-    }
+      return referenceOfWire(wire.text, wire.form);
 
     case 'boolean':
       if (wire.text === 'true') return true;
@@ -248,6 +249,19 @@ function decodeBaseValue(wire: BaseToken): unknown {
   }
 }
 
+/**
+ * Whether `written` is the value `pin` states, in any spelling (§5.2): both read by the three-class reading of
+ * {@link decodeBaseValue}, so `0x1` is the pin `1` and `"INDEX"` the pin `INDEX`. A constructor's pinned fields are
+ * the kernel's facets, which that reading covers.
+ */
+export function sameAsPin(pin: Token, written: BaseToken): boolean {
+  const pinned: BaseToken = {
+    text: pin.text,
+    form: pin.form === 'UNQUOTED' ? 'unquoted' : 'single-line',
+  };
+  return deepEqual(decodeBaseValue(pinned), decodeBaseValue(written));
+}
+
 function readError(message: string): TsonReadError {
   const diagnostic: Diagnostic = { code: 'TYPE_MISMATCH', message };
   return new TsonReadError(diagnostic);
@@ -259,8 +273,7 @@ function readError(message: string): TsonReadError {
 
 /** `def`'s own `RecordBody`, or `undefined` when `def` is unknown or not record-shaped. */
 function recordBodyOf(value: Top | undefined): RecordBody | undefined {
-  if (value === undefined || isTemplateBody(value)) return undefined;
-  return value.kind === 'record' ? value : undefined;
+  return value?.kind === 'record' ? value : undefined;
 }
 
 function singleRequiredField(fields: readonly NamedField[]): string | undefined {
@@ -306,17 +319,108 @@ const NESTED_BINDING_NAMES: ReadonlyMap<RecordBinding<unknown>, string> = new Ma
   string
 >([
   [recordFieldBinding, metaName('record_field')],
-  [recordTemplateFieldBinding, metaName('record_template_field')],
   [tupleElementBinding, metaName('tuple_element')],
   [fieldGroupBinding, metaName('field_group')],
   [integerSizeBinding, kernelName(NUMERIC_MAP, 'integer_size')],
   [typeChainBinding, metaName('type_chain')],
-  [templateParamBinding, metaName('template_param')],
+  [paramBinding, metaName('param')],
+  // The bodies a type written in place holds, `{ of: !meta.array { ... } }`, each read with its constructor's
+  // defaults.
+  [recordBodyBinding, metaName('record')],
+  [arrayBodyBinding, metaName('array')],
+  [mapBodyBinding, metaName('map')],
+  [namespaceBodyBinding, metaName('namespace')],
+  [tupleBodyBinding, metaName('tuple')],
+  [choiceBodyBinding, metaName('choice')],
+  [enumBodyBinding, metaName('enum_type')],
+  [refBodyBinding, metaName('ref')],
+  [applyBodyBinding, metaName('apply')],
+  [dependentBodyBinding, metaName('dependent')],
 ]);
 
 // -------------------------------------------------------------------------------------------
 // The reader itself
 // -------------------------------------------------------------------------------------------
+
+/**
+ * A constructor's own field groups bind what its body may write (§5.11): `integer_type`'s
+ * `( min | exclusive_min )?` admits at most one option, so a body writing both is no instance of the
+ * constructor. Only a second chosen option is refused here -- a group's other refusals (a missing member, an
+ * unchosen required group) are judged where the body is completed against the constructor's defaults.
+ */
+function refuseSeveralOptions(def: Top | undefined, value: DataValue, type: string): void {
+  const body = recordBodyOf(def);
+  const core = value.coreValue;
+  if (body === undefined || core.kind !== 'record') return;
+  const written = new Set(core.fields.map((f) => f.name));
+  for (const group of body.groups) {
+    for (const violation of groupViolations(group, (member) => written.has(member))) {
+      if (violation.kind !== 'SEVERAL_CHOSEN') continue;
+      const named = violation.options.map((i) => (group.members[i] ?? []).join(', '));
+      const message = `'${type}' admits one option of a field group (§5.11), and the body writes ${named.join(' and ')}`;
+      throw new TsonReadError({ code: 'FIELD_GROUP', message });
+    }
+  }
+}
+
+/**
+ * A field the constructor pins (`voidable?: = false` on `meta.namespace`) may be restated at its pinned value and
+ * at no other (§5.2, §5.7): a pin is the constructor's statement, which no construction or refinement moves. A pin
+ * on a token is compared by value ({@link sameAsPin}); a structured pin is left to the binding, which keeps nothing
+ * for it.
+ */
+function refuseMovedPins(def: Top | undefined, value: DataValue, type: string): void {
+  const body = recordBodyOf(def);
+  const core = value.coreValue;
+  if (body === undefined || core.kind !== 'record') return;
+  for (const written of core.fields) {
+    const declared = body.fields.entries.get(written.name);
+    if (declared?.role !== 'FIXED' || declared.value === undefined) continue;
+    const token = written.value.coreValue;
+    if (token.kind !== 'token' || sameAsPin(declared.value, token)) continue;
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message:
+        `'${written.name}' is fixed at ${declared.value.text} by '${type}', and the body writes ${token.text} -- ` +
+        'a pinned field is restated at its pinned value or left alone (§5.2, §5.7)',
+    });
+  }
+}
+
+/**
+ * `value` without the pinned fields it writes at their pinned value that `binding` keeps no slot for (§5.2): a
+ * construction may write a pin's own value, {@link refuseMovedPins} having refused any other, and the body holds
+ * the constructor's pin whether it is written or not (`access_pattern` on `meta.array`).
+ */
+function withoutWrittenPins(
+  def: Top | undefined,
+  value: DataValue,
+  binding: Binding<unknown>,
+): DataValue {
+  const body = recordBodyOf(def);
+  const core = value.coreValue;
+  if (body === undefined || core.kind !== 'record' || binding.kind !== 'record') return value;
+  const kept = core.fields.filter(
+    (written) =>
+      body.fields.entries.get(written.name)?.role !== 'FIXED' ||
+      binding.byWireName.has(written.name),
+  );
+  if (kept.length === core.fields.length) return value;
+  return {
+    ...value,
+    coreValue: kept.length === 0 ? { kind: 'empty-brace' } : { ...core, fields: kept },
+  };
+}
+
+/** The parents `name` binds as, nearest first: its composed parent, that parent's own, and so on (§5.8). */
+function composedChain(name: string, lookup: DefinitionGetter): readonly string[] {
+  const chain: string[] = [];
+  for (let at = composedOver(name, lookup); at !== undefined && !chain.includes(at);) {
+    chain.push(at);
+    at = composedOver(at, lookup);
+  }
+  return chain;
+}
 
 /**
  * Builds a {@link DefinitionMetaReader} governed by `lookupConstructorDef` -- the same structure
@@ -331,28 +435,42 @@ export function createDefinitionMetaReader(
   decodeAtom: AtomDecoder = metaAtomDecoder,
 ): DefinitionMetaReader {
   return (type, value) => {
-    const binding =
-      metaBindings.get(type) ??
-      metaBindings.get(
-        inheritedBindingName(
-          type,
-          lookupConstructorDef,
-          (n) => metaBindings.get(n) !== undefined,
-        ) ?? type,
-      );
+    // A constructor no binding names binds as the constructor it is composed over, where it adds no field (§5.8).
+    const bindingName = [type, ...composedChain(type, lookupConstructorDef)].find(
+      (name) => metaBindings.get(name) !== undefined,
+    );
+    const binding = metaBindings.get(bindingName ?? type);
     if (binding === undefined) {
-      throw new TsonMissingBindingError(
-        `no binding registered for constructor '!${type}' in schema/bindings.ts's metaBindings`,
+      // The table is this library's own, so a constructor it has no body for is a gap in the library and never the
+      // consumer's wiring: nothing a deployment registers could back it.
+      throw new TsonNotImplementedError(
+        `'!${type}' builds types, and this library models the body of a type built only by the bundled schemas' ` +
+          'constructors, or by one composed over one with no field added -- an instance of a constructor of types ' +
+          'no reader factory backs cannot be held as a type',
       );
     }
     // `binding` is never itself `'lazy'` -- every `metaBindings` entry is a plain record/unit
     // binding (`bindings.ts`'s own `metaBindings` table), so no `resolveRef` hop is needed to
     // compare identity against what `fromDataValue` resolves down to.
-    const fieldsFor: RecordFieldsProvider = (resolved) => {
+    const policyOf: RecordFieldsProvider = (resolved) => {
       if (resolved === binding) return policyFor(lookupConstructorDef(type));
       const nestedName = NESTED_BINDING_NAMES.get(resolved);
       return nestedName === undefined ? undefined : policyFor(lookupConstructorDef(nestedName));
     };
-    return fromDataValue(binding, value, decodeAtom, fieldsFor) as Top;
+    // A type written in place under a composed constructor, `{ of: !my_list { ... } }`, reads as its parent's body (§5.8).
+    const fieldsFor: RecordFieldsProvider = Object.assign(policyOf, {
+      memberNamesFor: (typeRef: string): readonly string[] =>
+        composedChain(typeRef, lookupConstructorDef),
+      policyOfTag: (typeRef: string) => policyFor(lookupConstructorDef(typeRef)),
+    });
+    const constructor = lookupConstructorDef(type);
+    refuseSeveralOptions(constructor, value, type);
+    refuseMovedPins(constructor, value, type);
+    return fromDataValue(
+      binding,
+      withoutWrittenPins(constructor, value, binding),
+      decodeAtom,
+      fieldsFor,
+    ) as Top;
   };
 }

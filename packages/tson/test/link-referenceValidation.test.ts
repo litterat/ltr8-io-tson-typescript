@@ -4,20 +4,28 @@ import { validateReferences } from '../src/link/referenceValidation.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
-import { TYPE_KIND } from '../src/schema/meta/bodies.js';
-import type { MetaValue, Token, Top, TypeRef } from '../src/schema/meta/typedef.js';
-import { isTemplateBody, namespaceOf } from '../src/schema/meta/typedef.js';
-import { entry, fieldMapOf, namespaceEntry, recordTemplate } from './model-fixtures.js';
+import type { MetaValue, Token, Top, TypeExpr, TypeRef } from '../src/schema/meta/typedef.js';
+import { namespaceOf } from '../src/schema/meta/typedef.js';
+import { entry, fieldMapOf, namespaceEntry, parametricRecord } from './model-fixtures.js';
 
-function ref(name: string, args: TypeRef['arguments'] = []): TypeRef {
-  return { name, arguments: args, annotations: [] };
+function ref(name: string): TypeRef {
+  return { name, annotations: [] };
+}
+
+/** `head<arguments…>` written in place at a type slot (§5.10). */
+function apply(head: string, ...args: readonly string[]): TypeExpr {
+  return {
+    kind: 'inline',
+    head: 'meta.apply',
+    of: { kind: 'apply', head: ref(head), arguments: args.map(ref) },
+  };
 }
 
 function token(text: string, form: Token['form'] = 'UNQUOTED'): Token {
   return { text, form };
 }
 
-function field(name: string, type: TypeRef, role: RecordField['role'], value?: Token): NamedField {
+function field(name: string, type: TypeExpr, role: RecordField['role'], value?: Token): NamedField {
   const optional = role === 'DEFAULT';
   return {
     name,
@@ -38,13 +46,10 @@ function def(
     readonly subtypes?: readonly string[];
   } = {},
 ): Top {
-  // A non-empty `parameters` makes a record a record template (§5.10): the record it is, with
-  // its parameters, each a type parameter.
+  // A non-empty `parameters` makes a record a parametric record (§5.10).
   const parameters = options.parameters ?? [];
   const value: Top =
-    parameters.length === 0 || isTemplateBody(body) || body.kind !== 'record'
-      ? body
-      : recordTemplate(parameters, body);
+    parameters.length === 0 || body.kind !== 'record' ? body : parametricRecord(parameters, body);
   return entry(value, options.supertypes ?? [], options.subtypes ?? []);
 }
 
@@ -146,14 +151,29 @@ describe('validateReferences: unresolved references (§3.3.1, §3.3.2)', () => {
     expect(diagnostics.diagnostics.every((d) => d.code === 'SCHEMA_ERROR')).toBe(true);
   });
 
-  it('rejects a reference to an entry applying a namespace type, a value and not a type (§4.1)', () => {
+  it('refuses an alias of an entry applying a namespace type: an alias target is a meta.type_ref (§4.1, §8.3)', () => {
     const merged = new Map<string, Top>([
       ['myapi', apiValue()],
       ['user', def({ kind: 'alias', target: ref('myapi') })],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(/a value and not a type/u);
+    }).toThrow(/'user' names 'myapi', which is a value and not a type/u);
+  });
+
+  it('judges an alias by the entry its hops reach, so an alias of such an alias is refused too (§8.3)', () => {
+    const merged = new Map<string, Top>([
+      ['myapi', apiValue()],
+      ['user', def({ kind: 'alias', target: ref('myapi') })],
+      ['again', def({ kind: 'alias', target: ref('user') })],
+    ]);
+    const diagnostics = collector();
+    validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
+    expect(diagnostics.diagnostics.map((d) => d.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/'again' names 'user', which reaches a value and not a type/u),
+      ]),
+    );
   });
 
   it('allows a reference to the enclosing declaration`s own type parameter', () => {
@@ -225,7 +245,15 @@ describe('validateReferences: a namespace value is a value, never a type (§4.1)
   it('reports the refusal through a receiver as a schema error', () => {
     const merged = new Map<string, Top>([
       ['myapi', apiValue()],
-      ['user', def({ kind: 'alias', target: ref('myapi') })],
+      [
+        'holder',
+        def({
+          kind: 'record',
+          fields: fieldMapOf([field('api', ref('myapi'), 'FREE')]),
+          groups: [],
+          extension: 'OPEN',
+        }),
+      ],
     ]);
     const diagnostics = collector();
     validateReferences(merged, { schemaId: 'https://x/s.tn', receiver: diagnostics });
@@ -235,7 +263,7 @@ describe('validateReferences: a namespace value is a value, never a type (§4.1)
 });
 
 describe('validateReferences: arity (§5.10)', () => {
-  const template = def(
+  const box = def(
     {
       kind: 'record',
       fields: fieldMapOf([
@@ -254,44 +282,42 @@ describe('validateReferences: arity (§5.10)', () => {
     { parameters: ['T'] },
   );
 
+  /** `user`, a record whose one field `f` is typed `type`. */
+  function user(type: TypeExpr): Top {
+    return def({
+      kind: 'record',
+      fields: fieldMapOf([field('f', type, 'FREE')]),
+      groups: [],
+      extension: 'OPEN',
+    });
+  }
+
   it('rejects an application supplying too many arguments', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      ['box', template],
-      [
-        'user',
-        def({
-          kind: 'alias',
-          target: ref('box', [
-            { kind: 'ref', ref: ref('text') },
-            { kind: 'ref', ref: ref('text') },
-          ]),
-        }),
-      ],
+      ['box', box],
+      ['user', user(apply('box', 'text', 'text'))],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).toThrow(/takes 1 type argument/u);
   });
 
-  it('admits a bare reference to a record template, a family base and itself a type (§5.10)', () => {
+  it('admits an application supplying one argument per parameter', () => {
     const merged = new Map<string, Top>([
-      ['box', template],
-      ['user', def({ kind: 'alias', target: ref('box') })],
+      ['text', text],
+      ['box', box],
+      ['user', user(apply('box', 'text'))],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).not.toThrow();
   });
 
-  it('rejects a bare reference to a held template with no arguments at all (§5.10)', () => {
-    const held: Top = {
-      parameters: [{ name: 'T', type: { name: TYPE_KIND, arguments: [], annotations: [] } }],
-      template: '!array { element_type: T }',
-    };
+  it('rejects a parametric record named bare at a type slot: it is no type until applied (§5.10)', () => {
     const merged = new Map<string, Top>([
-      ['wrapped', held],
-      ['user', def({ kind: 'alias', target: ref('wrapped') })],
+      ['box', box],
+      ['user', user(ref('box'))],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
@@ -301,30 +327,21 @@ describe('validateReferences: arity (§5.10)', () => {
   it('rejects arguments applied to a name that declares no type parameters', () => {
     const merged = new Map<string, Top>([
       ['text', text],
-      ['user', def({ kind: 'alias', target: ref('text', [{ kind: 'ref', ref: ref('text') }]) })],
+      ['user', user(apply('text', 'text'))],
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
     }).toThrow(/declares no type parameters/u);
   });
 
-  it('rejects a type parameter itself carrying an argument list (no head abstraction, §5.10)', () => {
+  it('rejects a type parameter itself applied to arguments (no head abstraction, §5.10)', () => {
     const merged = new Map<string, Top>([
       [
         'box',
         def(
           {
             kind: 'record',
-            fields: fieldMapOf([
-              {
-                name: 'v',
-                type: ref('T', [{ kind: 'ref', ref: ref('text') }]),
-                optional: false,
-                voidable: false,
-                role: 'FREE',
-                annotations: [],
-              },
-            ]),
+            fields: fieldMapOf([field('v', apply('T', 'text'), 'FREE')]),
             groups: [],
             extension: 'OPEN',
           },
@@ -335,7 +352,7 @@ describe('validateReferences: arity (§5.10)', () => {
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).toThrow(/no head abstraction/u);
+    }).toThrow(/type parameter applied to arguments/u);
   });
 });
 
@@ -660,7 +677,7 @@ describe('validateReferences: field values (§5.2)', () => {
     }).not.toThrow();
   });
 
-  it('skips a field whose own type names one of the enclosing template’s parameters', () => {
+  it('skips a field whose own type names one of the enclosing parametric record’s parameters', () => {
     const merged = new Map<string, Top>([
       [
         'box',
@@ -680,7 +697,7 @@ describe('validateReferences: field values (§5.2)', () => {
     }).not.toThrow();
   });
 
-  it('skips a field whose declared type is itself still open (a template, not yet applied)', () => {
+  it('rejects a default on a field typed by an application written in place: a value stands on a reference alone there (§5.2)', () => {
     const merged = new Map<string, Top>([
       [
         'box',
@@ -698,9 +715,7 @@ describe('validateReferences: field values (§5.2)', () => {
         'widget',
         def({
           kind: 'record',
-          fields: fieldMapOf([
-            field('b', ref('box', [{ kind: 'ref', ref: ref('text') }]), 'DEFAULT', token('x')),
-          ]),
+          fields: fieldMapOf([field('b', apply('box', 'text'), 'DEFAULT', token('x'))]),
           groups: [],
           extension: 'OPEN',
         }),
@@ -709,7 +724,7 @@ describe('validateReferences: field values (§5.2)', () => {
     ]);
     expect(() => {
       validateReferences(merged, { schemaId: 'https://x/s.tn' });
-    }).not.toThrow();
+    }).toThrow(/not a scalar type/u);
   });
 
   it("rejects a default on a field declared 'void' (unit's own non-scalar instance)", () => {

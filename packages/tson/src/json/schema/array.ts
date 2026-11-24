@@ -9,6 +9,7 @@
  * both `array` and `set` (a refinement of `array`, never a shape of its own), and `ordered`/
  * `uniqueItems` are what tell them apart.
  */
+import { nameOf } from '../../schema/meta/typedef.js';
 import type { SchemaLocation } from '../../core/diagnostic.js';
 import type { Task } from '../../io/bytes.js';
 import type { ArrayBody } from '../../schema/meta/bodies.js';
@@ -37,7 +38,7 @@ export function buildArrayReader(
   const unique = body.uniqueItems;
   const minItems = body.minItems;
   const maxItems = body.maxItems;
-  const elementReader = ctx.resolve(body.elementType.name);
+  const elementReader = ctx.resolve(body.elementType);
   // A set's atom elements are keyed by their parsed identity, not their spelling -- two
   // instants, or `1`/`1.0`, are one element. A compound element compares by the node its own
   // reader already produced (`identityOfNode`), and needs no wrapping. `ctx.rawAtomReader` hands
@@ -45,17 +46,18 @@ export function buildArrayReader(
   // `ctx.resolve`'s `treeAtomReader`-wrapped reader cannot serve here: it produces a `JsonValue`
   // node, not the decoded host value `identityOfHost` needs to tell `"2026-…+01:00"` from
   // `"2026-…Z"`, or `"1/2"` from `"2/4"`).
-  const rawElementReader = unique ? ctx.rawAtomReader(body.elementType.name) : undefined;
+  const elementName = nameOf(body.elementType);
+  const rawElementReader =
+    unique && elementName !== undefined ? ctx.rawAtomReader(elementName) : undefined;
   const keyedReader: JsonTypeReader =
     rawElementReader !== undefined ? treeAtomKeyedReader(rawElementReader) : elementReader;
   // A unique array of an identifier family is a naming scope ([TSON-SCHEMA] §11.4): its elements
   // are names ([TSON-DATA] §8.2), and two that read alike are refused at the second.
   const elementsAreNames =
     unique &&
+    elementName !== undefined &&
     (() => {
-      const element = terminalDefinition(body.elementType.name, (n) =>
-        ctx.linkedSchema.entries.get(n),
-      );
+      const element = terminalDefinition(elementName, (n) => ctx.linkedSchema.entries.get(n));
       return element !== undefined && 'kind' in element && element.kind === 'identifier_type';
     })();
 

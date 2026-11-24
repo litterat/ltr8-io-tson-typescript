@@ -6,15 +6,14 @@
  * `LinkedSchema.nameTypes`.
  *
  * **Where it resolves.** A `name_type` an author wrote resolves in the schema's own namespace
- * first, then the governing meta's, as an enum's does (§7.4): `field_name => !identifier_type {
- * start_add: "@" }` declared locally is what `name_type: field_name` names. The absent default is
- * the kernel's `field_name`, resolved in the governing meta first, so a schema's own `field_name`
- * does not retype every record that states nothing. Two name types are one by the entry they
+ * first, then the governing meta's, as an enum's does (§7.4): `field_name =>
+ * !unicode.identifier_type { start_add: "@" }` declared locally is what `name_type: field_name` names. The absent default is
+ * `meta.identifier` (§5.2), resolved in the governing meta first, so a schema's own entry of that
+ * spelling does not retype every record that states nothing. Two name types are one by the entry they
  * resolve to (§8.3), never by spelling.
  *
- * **What may stand there** is a member of `identifier_kind` (§4.2): an entry built with
- * `identifier_type` -- an instance, a refinement of one, a closed application of a template over
- * the constructor, or an alias of any of them -- which is to say one whose value, at the end of its
+ * **What may stand there** is a member of `meta.identifier_ref` (§4.2): an entry built with
+ * `identifier_type` -- an instance, a refinement of one, or an alias of either -- which is to say one whose value, at the end of its
  * alias chain, is an `identifier_type` body. And its `normalization` must imply NFC
  * ({@link nameTypeFormRefusal}).
  */
@@ -22,13 +21,10 @@ import type { IdentifierBase, IdentifierType } from '../schema/meta/atoms-text.j
 import type { RecordBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
 import { metaName } from '../schema/meta/kernel.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 import { terminal, type EntryLookup } from './aliasChain.js';
+import { identifierProfileOf, profileAdmits } from '../unicode/identifier-profile.js';
 
-/** The kernel's `field_name` (§5.2), the name type a record that states none has. */
-export const FIELD_NAME = metaName('field_name');
-
-/** The kernel's `identifier` (§7.7), the entry `field_name` resolves to. */
+/** The kernel's `identifier` (§7.7): an enum's default name type, and the name type a record stating none has (§5.2). */
 const IDENTIFIER = metaName('identifier');
 
 /** A resolved name type: the terminal entry's name, its value, and the namespace its own names resolve in. */
@@ -51,7 +47,7 @@ export function recordNameType(
   local: EntryLookup,
   structure: EntryLookup | undefined,
 ): ResolvedNameType | undefined {
-  const written = body.nameType ?? FIELD_NAME;
+  const written = body.nameType ?? IDENTIFIER;
   const order: readonly (EntryLookup | undefined)[] =
     body.nameType === undefined ? [structure, local] : [local, structure];
   for (const [index, namespace] of order.entries()) {
@@ -65,16 +61,15 @@ export function recordNameType(
   return undefined;
 }
 
-/** Whether `type` is an identifier family: a member of `identifier_kind` (§4.2), built with `identifier_type`. */
+/** Whether `type` is an identifier family: a member of `meta.identifier_ref` (§4.2), built with `identifier_type`. */
 export function isIdentifierFamily(
   type: ResolvedNameType,
 ): type is ResolvedNameType & { readonly definition: IdentifierType } {
-  return !isTemplateBody(type.definition) && type.definition.kind === 'identifier_type';
+  return type.definition.kind === 'identifier_type';
 }
 
 /**
- * Whether `type` is the kernel's `identifier` -- an enum's default, and through `field_name` a
- * record's -- whose values a refusal calls identifiers, where it names any other type, the author's
+ * Whether `type` is the kernel's `identifier` -- an enum's default and a record's (§5.2) -- whose values a refusal calls identifiers, where it names any other type, the author's
  * own.
  */
 export function isKernelIdentifier(
@@ -134,3 +129,18 @@ function isAscii(text: string): boolean {
 function asciiBase(base: IdentifierBase): boolean {
   return base === 'ASCII' || base === 'NONE';
 }
+
+/**
+ * Why `type` cannot name the keys a qualified name's segment selects, or `undefined` when it can ([TSON-SCHEMA]
+ * §4.2, §5.2, §5.12): a qualified name splits at `.` before any family is consulted, so a name holding one could not
+ * be reached by a reference. Asked of a namespace's `key_type` and a record's `name_type`.
+ */
+export function nameTypeDotRefusal(type: IdentifierType): string | undefined {
+  return profileAdmits(identifierProfileOf(type), FULL_STOP)
+    ? "its profile admits '.' (U+002E), which joins the segments of a qualified name, so a name holding " +
+        'one could not be reached by a reference ([TSON-SCHEMA] §5.12)'
+    : undefined;
+}
+
+/** U+002E, the separator of a qualified name's segments. */
+const FULL_STOP = 0x2e;

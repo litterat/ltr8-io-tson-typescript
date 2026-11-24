@@ -19,7 +19,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/identifier-families-read.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   identifier => !unicode.identifier_type { continue_add: "-" }
   header_name => !unicode.identifier_type { start: NONE  continue: NONE

@@ -48,8 +48,9 @@ import {
   DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
   type IdentifierPolicy,
-  type ScriptPolicy,
+  type TokenPolicy,
 } from '../unicode/policy.js';
+import { foreignScopeSuffix, type ForeignScope } from '../link/foreignScope.js';
 import type { JsonEvent, JsonEventSource } from './stream.js';
 
 /**
@@ -82,7 +83,7 @@ interface Cursor {
   readonly events: JsonEventSource;
   readonly receiver: DiagnosticsReceiver;
   readonly identifierPolicy: IdentifierPolicy;
-  readonly tokenPolicy: ScriptPolicy;
+  readonly tokenPolicy: TokenPolicy;
   position: Position | undefined;
   reported: number;
   /**
@@ -97,6 +98,30 @@ interface Cursor {
   readonly rewound: JsonEvent[];
   /** Where `next()` records what it consumes while a {@link lookingAhead} pass is running, else `undefined`. */
   recording: JsonEvent[] | undefined;
+  /**
+   * The foreign value the cursor is inside, innermost first; `undefined` in the document's own scope ([TSON-SCHEMA]
+   * §7.9). On the cursor rather than on each context: a foreign value is read by one call that returns before
+   * anything outside it reads on ({@link readingAcross}).
+   */
+  scope: Scope | undefined;
+}
+
+/**
+ * One foreign value's scope, entered at `start`: the schema pointer renders the steps after it, into the foreign
+ * schema, and a diagnostic raised inside names every boundary crossed.
+ */
+interface Scope {
+  readonly boundary: ForeignScope;
+  readonly parent: Scope | undefined;
+  readonly start: PathStep | undefined;
+}
+
+/** What a diagnostic raised inside `scope` adds to its message: every boundary crossed, innermost first. */
+function scopeSuffix(scope: Scope): string {
+  const enclosing: ForeignScope[] = [];
+  for (let outer = scope.parent; outer !== undefined; outer = outer.parent)
+    enclosing.push(outer.boundary);
+  return foreignScopeSuffix(scope.boundary, enclosing);
 }
 
 /** A context over one {@link JsonEventSource}, scoped by {@link field}/{@link index} as a read descends. */
@@ -153,7 +178,7 @@ export interface JsonReadContext {
    * reaches map keys and string values"). Defaults to {@link DEFAULT_TOKEN_POLICY}, which checks
    * nothing.
    */
-  tokenPolicy(): ScriptPolicy;
+  tokenPolicy(): TokenPolicy;
   /** Hands one problem to this read's receiver, located at this context's pointer and position. */
   report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void;
   /** How many problems this read has reported so far, counting every context derived from it. */
@@ -178,10 +203,22 @@ function renderPath(tail: PathStep | undefined): string {
   return out;
 }
 
-/** The schema pointer: the anchor's own pointer, plus every `schemaToo` step since it was set. */
-function renderSchemaPointer(anchor: SchemaAnchor | undefined, tail: PathStep | undefined): string {
+/**
+ * The schema pointer: the anchor's own pointer, plus every `schemaToo` step since it was set -- inside a foreign
+ * value, from the step the scope began at, the pointer running into the foreign schema.
+ */
+function renderSchemaPointer(
+  anchor: SchemaAnchor | undefined,
+  tail: PathStep | undefined,
+  scope?: Scope,
+): string {
   let out = anchor?.pointer ?? '';
+  let started = scope?.start === undefined;
   for (const step of collectSteps(tail)) {
+    if (!started) {
+      started = step === scope?.start;
+      continue;
+    }
     if (step.schemaToo) {
       out = appendStep(out, step.declared === undefined ? step : { ...step, name: step.declared });
     }
@@ -239,7 +276,7 @@ function makeContext(
     },
     schemaLocation(): SchemaLocation | undefined {
       if (schemaAnchor === undefined) return undefined;
-      const pointer = renderSchemaPointer(schemaAnchor, tail);
+      const pointer = renderSchemaPointer(schemaAnchor, tail, cursor.scope);
       return {
         schemaId: schemaAnchor.schemaId,
         ...(pointer === '' ? {} : { pointer }),
@@ -280,17 +317,19 @@ function makeContext(
     identifierPolicy(): IdentifierPolicy {
       return cursor.identifierPolicy;
     },
-    tokenPolicy(): ScriptPolicy {
+    tokenPolicy(): TokenPolicy {
       return cursor.tokenPolicy;
     },
     report(code: DiagnosticCode, message: string, expected?: string, actual?: string): void {
       const path = renderPath(tail);
       const schemaPointer =
-        schemaAnchor === undefined ? undefined : renderSchemaPointer(schemaAnchor, tail);
+        schemaAnchor === undefined
+          ? undefined
+          : renderSchemaPointer(schemaAnchor, tail, cursor.scope);
       cursor.reported += 1;
       const diagnostic: Diagnostic = {
         code,
-        message,
+        message: cursor.scope === undefined ? message : message + scopeSuffix(cursor.scope),
         path,
         ...(schemaAnchor === undefined ? {} : { schemaId: schemaAnchor.schemaId }),
         ...(schemaPointer === undefined || schemaPointer === '' ? {} : { schemaPointer }),
@@ -306,6 +345,28 @@ function makeContext(
     },
   };
   (ctx as JsonReadContext & { [CURSOR]?: Cursor })[CURSOR] = cursor;
+  (ctx as JsonReadContext & CrossingCarrier)[CROSSING] = function* <T>(
+    boundary: ForeignScope,
+    dropsTag: boolean,
+    read: (inner: JsonReadContext) => Task<T>,
+  ): Task<T> {
+    const enclosing = cursor.scope;
+    cursor.scope = { boundary, parent: enclosing, start: tail };
+    try {
+      const inside = makeContext(cursor, tail, undefined);
+      if (dropsTag) {
+        // The object's own members follow its `$type`, so the reader is handed the object as it would be written
+        // untagged: its opening put back in front of them.
+        const opening = yield* inside.next();
+        yield* inside.next();
+        yield* inside.next();
+        cursor.rewound.unshift(opening);
+      }
+      return yield* read(inside);
+    } finally {
+      cursor.scope = enclosing;
+    }
+  };
   return ctx;
 }
 
@@ -318,7 +379,7 @@ export function createJsonReadContext(
   events: JsonEventSource,
   receiver: DiagnosticsReceiver,
   identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
-  tokenPolicy: ScriptPolicy = DEFAULT_TOKEN_POLICY,
+  tokenPolicy: TokenPolicy = DEFAULT_TOKEN_POLICY,
 ): JsonReadContext {
   return makeContext(
     {
@@ -330,6 +391,7 @@ export function createJsonReadContext(
       reported: 0,
       rewound: [],
       recording: undefined,
+      scope: undefined,
     },
     undefined,
     undefined,
@@ -347,6 +409,42 @@ const CURSOR = Symbol.for('io.ltr8.tson.json.readContext.cursor');
 
 interface CursorCarrier {
   [CURSOR]?: Cursor;
+}
+
+/** The key a context carries {@link readingAcross}'s implementation under, which only the context itself can do. */
+const CROSSING = Symbol.for('io.ltr8.tson.json.readContext.crossing');
+
+interface CrossingCarrier {
+  [CROSSING]?: <T>(
+    boundary: ForeignScope,
+    dropsTag: boolean,
+    read: (inner: JsonReadContext) => Task<T>,
+  ) => Task<T>;
+}
+
+/**
+ * Reads a foreign value at `ctx`'s cursor ([TSON-SCHEMA] §7.9, [TSON-JSON] §8.6): `read` runs on a copy of `ctx`
+ * with no schema location established, so the foreign reader seeds its own and the schema pointer runs into the
+ * foreign schema from here, and every diagnostic raised inside names `boundary` and each one enclosing it. The
+ * cursor, receiver, policies and data path are the document's: a foreign value is part of the document that holds it.
+ *
+ * `dropsTag` says the object at the cursor leads with the boundary's `$type`, which is the enclosing scope's and is
+ * consumed here, so `read` meets the rest of the object as an untagged value.
+ */
+export function* readingAcross<T>(
+  ctx: JsonReadContext,
+  boundary: ForeignScope,
+  dropsTag: boolean,
+  read: (inner: JsonReadContext) => Task<T>,
+): Task<T> {
+  const crossing = (ctx as JsonReadContext & CrossingCarrier)[CROSSING];
+  if (crossing === undefined) {
+    throw new TsonInternalError(
+      'readingAcross was called with a JsonReadContext this module did not create -- ' +
+        'json/readContext.ts is the only implementation of the interface',
+    );
+  }
+  return yield* crossing(boundary, dropsTag, read);
 }
 
 /**

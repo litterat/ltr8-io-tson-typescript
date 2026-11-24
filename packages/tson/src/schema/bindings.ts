@@ -25,12 +25,9 @@
  * which is what {@link topBinding} (a {@link VariantBinding}) matches on. Every record-shaped
  * binding below therefore synthesises `kind` in its own `construct`, not as a numbered slot.
  *
- * **The one declaration-order cycle** is {@link TypeRef} <-> {@link TypeArgument}
- * (`type_ref.arguments: [type_argument]`, `type_argument`'s `Ref` member wrapping a `type_ref`
- * right back -- `box<box<text>>`, an ordinary nested application). {@link typeRefBinding} closes
- * it with a single `lazy()` around the one edge that has to wait: `typeArgumentBinding` is
- * declared after it, so `typeRefBinding`'s own `arguments` field defers to it lazily; every other
- * edge in this graph resolves eagerly, top to bottom.
+ * **The one declaration-order cycle** is a type slot and the bodies it may hold in place: `meta.type_expr`
+ * holds a `meta.type_inline`, whose `of` is any type body, each of which may hold type slots. The slot's binding
+ * reaches {@link topBinding} through a `lazy()`; every other edge resolves eagerly, top to bottom.
  */
 
 import {
@@ -78,17 +75,24 @@ import type {
   Alias,
   Annotation,
   Annotations,
+  ApplyBody,
+  DependentBody,
+  Extern,
   Namespace,
-  Reference,
+  Param,
   Token,
   TokenForm,
+  Type,
   TypeBase,
   TypeChain,
+  TypeExpr,
+  TypeInline,
   TypeRef,
   Top,
 } from './meta/typedef.js';
-import { EMPTY_CHAIN, isEmptyChain, isTemplateBody, typeChain, withChain } from './meta/typedef.js';
-import { fieldMap, recordTemplateFieldMap } from './meta/bodies.js';
+import { EMPTY_CHAIN, isEmptyChain, typeChain, withChain } from './meta/typedef.js';
+import { fieldMap } from './meta/bodies.js';
+import { withParametersMarked } from './meta/typeInline.js';
 import { constructorOf as constructorPath } from './meta/typedef.js';
 import {
   NET_MAP,
@@ -110,11 +114,7 @@ import type {
   RecordBody,
   RecordExtensionType,
   RecordField,
-  RecordTemplateBody,
-  RecordTemplateField,
-  ReferenceBody,
-  TemplateBody,
-  TemplateParam,
+  RefBody,
   TupleBody,
   TupleElement,
   ArrayBody,
@@ -231,9 +231,12 @@ function typed<T extends TypeBase>(inner: RecordBinding<T>): RecordBinding<T> {
     construct: (slots) => {
       const [chain, ...rest] = slots as [TypeChain | undefined, ...unknown[]];
       const body = inner.construct(rest);
-      return chain === undefined
-        ? body
-        : (withChain(body as unknown as Top, chain) as unknown as T);
+      if (chain === undefined) return body;
+      const chained = withChain(body as unknown as Top, chain);
+      // A parametric record's parents' arguments are its parameters where it declares them (§5.10).
+      return (chained.kind === 'record' && chained.parameters !== undefined
+        ? withParametersMarked(chained)
+        : chained) as unknown as T;
     },
   });
 }
@@ -251,9 +254,8 @@ function typed<T extends TypeBase>(inner: RecordBinding<T>): RecordBinding<T> {
 const textBinding: Binding<string> = atom<string>('text');
 
 /**
- * A bare, unquoted lexeme used as a name -- the kernel's `field_name`/`type_name`/`param_name`,
- * every one of which is a `REFERENCE`-kind alias to `identifier` in the resolved output
- * (`SchemaMetaNameBinder.ALIASES` maps all three to `"identifier"` for exactly this reason). The
+ * A bare, unquoted lexeme used as a name -- the kernel's `type_name`/`param_name`, each an alias
+ * of `identifier` in the resolved output, and a field's name. The
  * host value is the token's own text; `form` is not carried here (§7.4/§7.7's identifier grammar
  * -- `XID_Start` initial, `XID_Continue ∪ { - }` thereafter, in NFC -- is a strict subset of the
  * unquoted-token profile, so a well-formed identifier is never written quoted, and this
@@ -261,7 +263,7 @@ const textBinding: Binding<string> = atom<string>('text');
  * for the position that keeps `form` too.
  *
  * **Does not itself enforce the identifier grammar.** This binding reads/writes the raw token
- * text for the wire shape `type_name`/`field_name`/`param_name`/`enum_set` share; validating that
+ * text for the wire shape `type_name`/`param_name`/`enum_set` and a field's name share; validating that
  * text against §7.7's `XID_Start`/`XID_Continue` profile is the job of a dedicated `identifier`
  * atom parser (mirroring the Java reference's `IdentifierParser`, `atom/contract.ts`'s `AtomType`
  * shape) once one exists in this port -- see this module's own report for exactly where that
@@ -372,7 +374,7 @@ function decimalFromWire(w: unknown): Decimal {
 }
 
 /**
- * `discriminators` is `[field_name; 1..]` (§5.2, §8.1): a family is member-dispatched exactly where
+ * `discriminators` is `[text; 1..]` (§5.2, §8.1): a family is member-dispatched exactly where
  * the list is present, so an empty list would be a second spelling of tag dispatch. It is refused
  * where it is read, so a present list is never empty for any consumer.
  */
@@ -706,29 +708,19 @@ function annotationsToWire(annotations: Annotations): WireAnnotations {
 }
 
 // -------------------------------------------------------------------------------------------
-// References -- a type reference and a record field's type (§4.2, [TSON-DATA] §7.4)
+// References and type slots (§4.2)
 // -------------------------------------------------------------------------------------------
 
 /**
- * `meta.type_ref`, the position that names a type: a bare qualified name is one token, an application
- * the structured reference value `pair<uuid B>` ([TSON-DATA] §7.4). The leaf is an atom whose decoder
- * parses the reference and whose encoder writes it back unquoted (`referenceAtoms.ts`); `TypeRef` is the
- * host form, an application held as its parsed name and arguments, recursively.
+ * `meta.type_ref` and every `meta.ref`, the position that names something: one token, a qualified name. The leaf
+ * is an atom whose decoder reads the name and whose encoder writes it back (`referenceAtoms.ts`).
  */
 const typeRefBinding: Binding<TypeRef> = atom<TypeRef>('type_ref');
 
 /**
- * `meta.field_type_ref`, a record field's type: a type reference or a sibling reference, `kind!`. Typed
- * apart from {@link typeRefBinding} because the sibling stands only here (§5.2).
- */
-const referenceBinding: Binding<Reference> = atom<Reference>('reference');
-
-/**
- * {@link typeRefBinding} wrapped so a reader/writer at a `type_ref`-typed position recovers the wire
- * annotations written on the reference *value itself* (§3.1) into {@link TypeRef.annotations} -- an
- * annotation an author writes directly in front of a field's type reference attaches to that type
- * value, not to the enclosing `record_field`. Every field slot below that holds a `TypeRef` binds through
- * this wrapper, never through the bare {@link typeRefBinding} directly.
+ * {@link typeRefBinding} wrapped so a reader/writer at a reference position recovers the wire annotations written
+ * on the reference *value itself* (§3.1) into {@link TypeRef.annotations}. Every field slot below that holds a
+ * `TypeRef` binds through this wrapper.
  */
 const typeRefAnnotatedBinding: AnnotatedBinding<TypeRef> = annotated<TypeRef>({
   value: typeRefBinding,
@@ -740,31 +732,54 @@ const typeRefAnnotatedBinding: AnnotatedBinding<TypeRef> = annotated<TypeRef>({
   annotationsOf: (host) => annotationsToWire(host.annotations),
 });
 
-/** {@link referenceBinding} wrapped as {@link typeRefAnnotatedBinding} wraps a type reference. */
-const referenceAnnotatedBinding: AnnotatedBinding<Reference> = annotated<Reference>({
-  value: referenceBinding,
-  construct: (value, annotations) => ({
-    ...(value as Reference),
-    annotations: annotationsFromWire(annotations),
-  }),
-  unwrap: (host) => host,
-  annotationsOf: (host) => annotationsToWire(host.annotations),
+/**
+ * The kernel's `meta.type_inline => { of: meta.type }` (§4.2): a type written in place, its body read under the
+ * constructor its `of` is tagged with, which becomes the inline type's `head`.
+ */
+const typeInlineBinding: RecordBinding<TypeInline> = record<TypeInline>({
+  fields: [
+    {
+      index: 0,
+      wireName: 'of',
+      key: 'of',
+      required: true,
+      unbound: false,
+      binding: lazy((): Binding<Top> => topBinding),
+      isPresent: () => true,
+      get: (host: unknown) => headed((host as TypeInline).of, (host as TypeInline).head),
+    } satisfies FieldSlot<Top>,
+  ],
+  construct: (slots) => {
+    const [of] = slots as [Type & Headed];
+    const head = of[APPLIED] ?? constructorPath(of);
+    return { kind: 'inline', head, of: unheaded(of) };
+  },
 });
 
 /**
- * The kernel's `meta.type_chain => { parents?: [type_ref]  supertypes?: [type_ref]  subtypes?:
- * [type_ref] }` (§4.1). Each list is written only where it holds something; `supertypes` and
- * `subtypes` are sets, read back in the canonical sorted spelling.
+ * The kernel's `meta.type_expr => @meta.disjoint ( meta.type_ref | meta.type_inline )` (§4.2): what a type slot
+ * holds, a name or a type written in place, told apart by form -- a token is a name and a braced record the
+ * wrapper -- and written untagged.
+ */
+const typeExprBinding: VariantBinding<TypeExpr> = variant(
+  { [metaName('type_ref')]: typeRefAnnotatedBinding, [metaName('type_inline')]: typeInlineBinding },
+  undefined,
+  { untagged: true },
+);
+Object.assign(typeExprBinding, {
+  memberFor: (value: unknown) =>
+    typeExprBinding.members[(value as TypeExpr).kind === 'inline' ? 1 : 0],
+});
+
+/**
+ * The kernel's `meta.type_chain => { parents?: [meta.type_expr]  supertypes?: set<meta.type_ref>  subtypes?:
+ * set<meta.type_ref> }` (§4.1). Each list is written only where it holds something; `supertypes` and `subtypes`
+ * are sets, read back in the canonical sorted spelling.
  */
 const typeChainBinding: RecordBinding<TypeChain> = record<TypeChain>({
   fields: [
     {
-      ...field<TypeChain, 'parents'>(
-        0,
-        'parents',
-        'parents',
-        arrayOf<TypeRef>(typeRefAnnotatedBinding),
-      ),
+      ...field<TypeChain, 'parents'>(0, 'parents', 'parents', arrayOf<TypeExpr>(typeExprBinding)),
       required: false,
       isPresent: (host: unknown) => (host as TypeChain).parents.length > 0,
     },
@@ -791,7 +806,7 @@ const typeChainBinding: RecordBinding<TypeChain> = record<TypeChain>({
   ],
   construct: (slots) => {
     const [parents, supertypes, subtypes] = slots as [
-      readonly TypeRef[] | undefined,
+      readonly TypeExpr[] | undefined,
       readonly string[] | undefined,
       readonly string[] | undefined,
     ];
@@ -841,7 +856,7 @@ const integerSizeBinding: RecordBinding<IntegerSize> = record<IntegerSize>({
  */
 const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   fields: [
-    field<RecordField, 'type'>(0, 'type', 'type', referenceAnnotatedBinding),
+    field<RecordField, 'type'>(0, 'type', 'type', typeExprBinding),
     field<RecordField, 'optional'>(1, 'optional', 'optional', booleanBinding),
     field<RecordField, 'voidable'>(2, 'voidable', 'voidable', booleanBinding),
     field<RecordField, 'role'>(3, 'role', 'role', fieldRoleBinding),
@@ -850,7 +865,7 @@ const recordFieldBinding: RecordBinding<RecordField> = record<RecordField>({
   ],
   construct: (slots) => {
     const [type, optionalFlag, voidable, role, value, annotations] = slots as [
-      Reference,
+      TypeExpr,
       boolean,
       boolean,
       FieldRole,
@@ -885,72 +900,7 @@ const fieldMapBinding: MapBinding<Namespace<RecordField>> = map<
 });
 
 /**
- * The kernel's `record_template_field` (§5.10, §8.1). One of `type`/`type_param` and at most one of
- * `value`/`value_param`: the kernel's two field groups. A field's name is its key in the template's
- * `fields`, as on a record.
- */
-const recordTemplateFieldBinding: RecordBinding<RecordTemplateField> = record<RecordTemplateField>({
-  fields: [
-    optional<RecordTemplateField, 'type'>(0, 'type', 'type', referenceAnnotatedBinding),
-    optional<RecordTemplateField, 'typeParam'>(1, 'type_param', 'typeParam', identifierBinding),
-    field<RecordTemplateField, 'optional'>(2, 'optional', 'optional', booleanBinding),
-    field<RecordTemplateField, 'voidable'>(3, 'voidable', 'voidable', booleanBinding),
-    field<RecordTemplateField, 'role'>(4, 'role', 'role', fieldRoleBinding),
-    optional<RecordTemplateField, 'value'>(5, 'value', 'value', tokenBinding),
-    optional<RecordTemplateField, 'valueParam'>(6, 'value_param', 'valueParam', identifierBinding),
-    field<RecordTemplateField, 'annotations'>(7, 'annotations', 'annotations', annotationsBinding),
-  ],
-  construct: (slots) => {
-    const [type, typeParam, optionalFlag, voidable, role, value, valueParam, annotations] =
-      slots as [
-        Reference | undefined,
-        string | undefined,
-        boolean,
-        boolean,
-        FieldRole,
-        Token | undefined,
-        string | undefined,
-        Annotations,
-      ];
-    if ((type === undefined) === (typeParam === undefined)) {
-      throw new TsonReadError({
-        code: 'TYPE_MISMATCH',
-        message: "a record template field states exactly one of 'type' and 'type_param'",
-      });
-    }
-    if (value !== undefined && valueParam !== undefined) {
-      throw new TsonReadError({
-        code: 'TYPE_MISMATCH',
-        message: "a record template field states at most one of 'value' and 'value_param'",
-      });
-    }
-    return {
-      ...opt('type', type),
-      ...opt('typeParam', typeParam),
-      optional: optionalFlag,
-      voidable,
-      role,
-      ...opt('value', value),
-      ...opt('valueParam', valueParam),
-      annotations,
-    };
-  },
-});
-
-/** The kernel's `record_template_field_map`: a template's fields as the map from each declared name to its facts, in declaration order. */
-const recordTemplateFieldMapBinding: MapBinding<Namespace<RecordTemplateField>> = map<
-  Namespace<RecordTemplateField>,
-  string,
-  RecordTemplateField
->({
-  key: declaredNameBinding,
-  value: recordTemplateFieldBinding,
-  construct: (entries) => recordTemplateFieldMap(entries),
-  read: (host) => host.entries,
-});
-
-/**
- * `field_group.members` is `[[field_name; 1..]; 1..]` and `optional_members` is `[field_name; 1..]`
+ * `field_group.members` is `[[text; 1..]; 1..]` and `optional_members` is `[text; 1..]`
  * (§5.11, §8.1): a group has an option, an option has a member, and an absent `optional_members`
  * is the one spelling of "no member marked". An empty list at any of the three is refused where it
  * is read, so a group that is present is never degenerate for any consumer.
@@ -1008,109 +958,77 @@ const fieldGroupBinding: RecordBinding<FieldGroup> = record<FieldGroup>({
 
 const tupleElementBinding: RecordBinding<TupleElement> = record<TupleElement>({
   fields: [
-    field<TupleElement, 'elementType'>(0, 'element_type', 'elementType', typeRefAnnotatedBinding),
+    field<TupleElement, 'elementType'>(0, 'element_type', 'elementType', typeExprBinding),
     field<TupleElement, 'voidable'>(1, 'voidable', 'voidable', booleanBinding),
   ],
   construct: (slots) => {
-    const [elementType, voidable] = slots as [TypeRef, boolean];
+    const [elementType, voidable] = slots as [TypeExpr, boolean];
     return { elementType, voidable };
   },
 });
 
+/** The kernel's `meta.param => { name: meta.param_name  bound?: meta.type_ref }` (§5.10). */
+const paramBinding: RecordBinding<Param> = record<Param>({
+  fields: [
+    field<Param, 'name'>(0, 'name', 'name', identifierBinding),
+    optional<Param, 'bound'>(1, 'bound', 'bound', typeRefAnnotatedBinding),
+  ],
+  construct: (slots) => {
+    const [name, bound] = slots as [string, TypeRef | undefined];
+    return { name, ...opt('bound', bound) };
+  },
+});
+
+/**
+ * The kernel's `meta.record` (§5.2, §8.1). `parameters`, where present, make it a parametric record (§5.10): a
+ * name among its field types that one of them declares is read as that parameter.
+ */
 const recordBodyBinding: RecordBinding<RecordBody> = typed(
   record<RecordBody>({
     fields: [
-      field<RecordBody, 'fields'>(0, 'fields', 'fields', fieldMapBinding),
-      field<RecordBody, 'groups'>(1, 'groups', 'groups', arrayOf<FieldGroup>(fieldGroupBinding)),
-      field<RecordBody, 'extension'>(2, 'extension', 'extension', recordExtensionTypeBinding),
+      optional<RecordBody, 'parameters'>(
+        0,
+        'parameters',
+        'parameters',
+        arrayOf<Param>(paramBinding),
+      ),
+      field<RecordBody, 'fields'>(1, 'fields', 'fields', fieldMapBinding),
+      field<RecordBody, 'groups'>(2, 'groups', 'groups', arrayOf<FieldGroup>(fieldGroupBinding)),
+      field<RecordBody, 'extension'>(3, 'extension', 'extension', recordExtensionTypeBinding),
       optional<RecordBody, 'discriminators'>(
-        3,
+        4,
         'discriminators',
         'discriminators',
         arrayOf<string>(declaredNameBinding),
       ),
-      optional<RecordBody, 'nameType'>(4, 'name_type', 'nameType', identifierBinding),
+      optional<RecordBody, 'nameType'>(5, 'name_type', 'nameType', identifierBinding),
     ],
     construct: (slots) => {
-      const [fields, groups, extension, discriminators, nameType] = slots as [
+      const [parameters, fields, groups, extension, discriminators, nameType] = slots as [
+        readonly Param[] | undefined,
         Namespace<RecordField>,
         readonly FieldGroup[],
         RecordExtensionType,
         readonly string[] | undefined,
         string | undefined,
       ];
-      return {
+      if (parameters?.length === 0) {
+        throw new TsonReadError({
+          code: 'TYPE_MISMATCH',
+          message:
+            "a parametric record declares at least one parameter ('parameters' min_items: 1); a record with none states none (§5.10)",
+        });
+      }
+      const body: RecordBody = {
         kind: 'record',
         fields,
         groups,
         extension,
         ...opt('discriminators', nonEmptyDiscriminators(discriminators)),
         ...opt('nameType', nameType),
+        ...opt('parameters', parameters),
       };
-    },
-  }),
-);
-
-/**
- * The kernel's `meta.record_template` (§5.10, §8.1): a record body over `parameters`, written last, whose
- * fields are {@link RecordTemplateField}s. A template declares at least one parameter, which is refused
- * where it is read -- a record with none is a closed record.
- */
-const recordTemplateBodyBinding: RecordBinding<RecordTemplateBody> = typed(
-  record<RecordTemplateBody>({
-    fields: [
-      field<RecordTemplateBody, 'fields'>(0, 'fields', 'fields', recordTemplateFieldMapBinding),
-      field<RecordTemplateBody, 'groups'>(
-        1,
-        'groups',
-        'groups',
-        arrayOf<FieldGroup>(fieldGroupBinding),
-      ),
-      field<RecordTemplateBody, 'extension'>(
-        2,
-        'extension',
-        'extension',
-        recordExtensionTypeBinding,
-      ),
-      optional<RecordTemplateBody, 'discriminators'>(
-        3,
-        'discriminators',
-        'discriminators',
-        arrayOf<string>(declaredNameBinding),
-      ),
-      optional<RecordTemplateBody, 'nameType'>(4, 'name_type', 'nameType', identifierBinding),
-      field<RecordTemplateBody, 'parameters'>(
-        5,
-        'parameters',
-        'parameters',
-        arrayOf<TemplateParam>(lazy((): Binding<TemplateParam> => templateParamBinding)),
-      ),
-    ],
-    construct: (slots) => {
-      const [fields, groups, extension, discriminators, nameType, parameters] = slots as [
-        Namespace<RecordTemplateField>,
-        readonly FieldGroup[],
-        RecordExtensionType,
-        readonly string[] | undefined,
-        string | undefined,
-        readonly TemplateParam[],
-      ];
-      if (parameters.length === 0) {
-        throw new TsonReadError({
-          code: 'TYPE_MISMATCH',
-          message:
-            "a record template declares at least one parameter ('parameters' min_items: 1); a record with none is a closed record (§5.10)",
-        });
-      }
-      return {
-        kind: 'record_template',
-        fields,
-        groups,
-        extension,
-        ...opt('discriminators', nonEmptyDiscriminators(discriminators)),
-        ...opt('nameType', nameType),
-        parameters,
-      };
+      return parameters === undefined ? body : withParametersMarked(body);
     },
   }),
 );
@@ -1124,34 +1042,19 @@ interface Headed {
   readonly [APPLIED]?: string;
 }
 
-/**
- * An {@link ArrayBody} slot `set_type` fixes (`voidable: false`, `ordered: false`, `unique_items:
- * true`): unwritten under a `set_type` head at the pinned value, written under `array`.
- */
-function underSetType(slot: FieldSlot<boolean>, pinned: boolean): FieldSlot<boolean> {
-  return {
-    ...slot,
-    isPresent: (host: unknown) =>
-      !((host as Headed)[APPLIED] === metaName('set_type') && slot.get(host) === pinned),
-  };
-}
-
 const arrayBodyBinding: RecordBinding<ArrayBody> = typed(
   record<ArrayBody>({
     fields: [
-      field<ArrayBody, 'elementType'>(0, 'element_type', 'elementType', typeRefAnnotatedBinding),
-      underSetType(field<ArrayBody, 'voidable'>(1, 'voidable', 'voidable', booleanBinding), false),
-      underSetType(field<ArrayBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding), false),
-      underSetType(
-        field<ArrayBody, 'uniqueItems'>(3, 'unique_items', 'uniqueItems', booleanBinding),
-        true,
-      ),
+      field<ArrayBody, 'elementType'>(0, 'element_type', 'elementType', typeExprBinding),
+      field<ArrayBody, 'voidable'>(1, 'voidable', 'voidable', booleanBinding),
+      field<ArrayBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding),
+      field<ArrayBody, 'uniqueItems'>(3, 'unique_items', 'uniqueItems', booleanBinding),
       optional<ArrayBody, 'minItems'>(4, 'min_items', 'minItems', countBinding),
       optional<ArrayBody, 'maxItems'>(5, 'max_items', 'maxItems', countBinding),
     ],
     construct: (slots) => {
       const [elementType, voidable, ordered, uniqueItems, minItems, maxItems] = slots as [
-        TypeRef,
+        TypeExpr,
         boolean,
         boolean,
         boolean,
@@ -1175,7 +1078,7 @@ const mapBodyBinding: RecordBinding<MapBody> = typed(
   record<MapBody>({
     fields: [
       field<MapBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
-      field<MapBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
+      field<MapBody, 'valueType'>(1, 'value_type', 'valueType', typeExprBinding),
       field<MapBody, 'voidable'>(2, 'voidable', 'voidable', booleanBinding),
       field<MapBody, 'ordered'>(3, 'ordered', 'ordered', booleanBinding),
       optional<MapBody, 'minItems'>(4, 'min_items', 'minItems', countBinding),
@@ -1184,7 +1087,7 @@ const mapBodyBinding: RecordBinding<MapBody> = typed(
     construct: (slots) => {
       const [keyType, valueType, voidable, ordered, minItems, maxItems] = slots as [
         TypeRef,
-        TypeRef,
+        TypeExpr,
         boolean,
         boolean,
         bigint | undefined,
@@ -1204,6 +1107,21 @@ const mapBodyBinding: RecordBinding<MapBody> = typed(
 );
 
 /**
+ * `meta.namespace`'s `voidable`, pinned false (`voidable?: = false`): a body may restate the pin, which the
+ * schema's reader holds it to, and the host keeps nothing for it, so it is never written (§5.5, §8.1).
+ */
+const namespaceVoidableSlot: FieldSlot<boolean> = {
+  index: 2,
+  wireName: 'voidable',
+  key: 'voidable',
+  required: false,
+  unbound: false,
+  binding: booleanBinding,
+  isPresent: () => false,
+  get: () => false,
+};
+
+/**
  * The kernel's `meta.namespace` (§4.1, §8.1): a refinement of `meta.map` whose `key_type` is an
  * identifier family, `voidable` is pinned false and `access_pattern`/`size_type` are fixed, so none of
  * those three is written. An instance, `schema => !meta.namespace { key_type: meta.type_name  value_type:
@@ -1213,15 +1131,17 @@ const namespaceBodyBinding: RecordBinding<NamespaceBody> = typed(
   record<NamespaceBody>({
     fields: [
       field<NamespaceBody, 'keyType'>(0, 'key_type', 'keyType', typeRefAnnotatedBinding),
-      field<NamespaceBody, 'valueType'>(1, 'value_type', 'valueType', typeRefAnnotatedBinding),
-      field<NamespaceBody, 'ordered'>(2, 'ordered', 'ordered', booleanBinding),
-      optional<NamespaceBody, 'minItems'>(3, 'min_items', 'minItems', countBinding),
-      optional<NamespaceBody, 'maxItems'>(4, 'max_items', 'maxItems', countBinding),
+      field<NamespaceBody, 'valueType'>(1, 'value_type', 'valueType', typeExprBinding),
+      namespaceVoidableSlot,
+      field<NamespaceBody, 'ordered'>(3, 'ordered', 'ordered', booleanBinding),
+      optional<NamespaceBody, 'minItems'>(4, 'min_items', 'minItems', countBinding),
+      optional<NamespaceBody, 'maxItems'>(5, 'max_items', 'maxItems', countBinding),
     ],
     construct: (slots) => {
-      const [keyType, valueType, ordered, minItems, maxItems] = slots as [
+      const [keyType, valueType, , ordered, minItems, maxItems] = slots as [
         TypeRef,
-        TypeRef,
+        TypeExpr,
+        boolean | undefined,
         boolean,
         bigint | undefined,
         bigint | undefined,
@@ -1269,37 +1189,22 @@ const tupleBodyBinding: RecordBinding<TupleBody> = typed(
 const choiceBodyBinding: RecordBinding<ChoiceBody> = typed(
   record<ChoiceBody>({
     fields: [
-      field<ChoiceBody, 'variants'>(
-        0,
-        'variants',
-        'variants',
-        arrayOf<TypeRef>(typeRefAnnotatedBinding),
-      ),
+      field<ChoiceBody, 'variants'>(0, 'variants', 'variants', arrayOf<TypeExpr>(typeExprBinding)),
       optional<ChoiceBody, 'disjoint'>(1, 'disjoint', 'disjoint', booleanBinding),
     ],
     construct: (slots) => {
-      const [variants, disjoint] = slots as [readonly TypeRef[], boolean | undefined];
+      const [variants, disjoint] = slots as [readonly TypeExpr[], boolean | undefined];
       return { kind: 'choice', variants, ...opt('disjoint', disjoint) };
     },
   }),
 );
 
-// `enum` pins its `name_type` to `meta.identifier`, so resolved output omits it under that constructor and
-// writes it under every other, `enum_type` included (§8.1). Which constructor heads the body is the
-// entry's own fact, carried on the body under {@link APPLIED}.
-const nameTypeSlot = {
-  ...field<EnumBody, 'nameType'>(0, 'name_type', 'nameType', identifierBinding),
-  isPresent: (host: unknown): boolean =>
-    !((host as Headed)[APPLIED] === 'enum' && (host as EnumBody).nameType === 'meta.identifier'),
-};
-
 const enumBodyBinding: RecordBinding<EnumBody> = typed(
   record<EnumBody>({
     fields: [
-      // `name_type` names the identifier family the members are names of; `enum` pins it, so a
-      // wire record under that constructor may omit it and the governing meta supplies it.
-      nameTypeSlot,
-      // `enum_set` is `!set_type { element_type: text  min_items: 1 }` (§7.4): members are held as
+      // `name_type` names the identifier family the members are names of.
+      field<EnumBody, 'nameType'>(0, 'name_type', 'nameType', identifierBinding),
+      // `enum_set` is `!meta.set_type { element_type: text  min_items: 1 }` (§7.4): members are held as
       // text whatever the name type is, and judged by it at link.
       field<EnumBody, 'members'>(1, 'members', 'members', arrayOf<string>(textBinding)),
     ],
@@ -1311,29 +1216,70 @@ const enumBodyBinding: RecordBinding<EnumBody> = typed(
 );
 
 // -------------------------------------------------------------------------------------------
-// meta.reference_type -- the one atom whose values are names (§4.2, §5.12)
+// meta.ref, meta.apply, meta.dependent, meta.extern
 // -------------------------------------------------------------------------------------------
 
 /**
- * The kernel's `meta.reference_type => atom & { of: type_ref  allow_sibling?: boolean ~ true }`: `of`
- * names a type or a constructor, held as the reference written; `allow_sibling` is a permission, true
- * by default and so unwritten at `true`. The linker's derived index is no field.
+ * The kernel's `meta.ref => meta.atom & { of: meta.type_ref }` (§4.2, §5.12): the one atom whose values are names.
+ * The linker's derived index is no field.
  */
-const referenceBodyBinding: RecordBinding<ReferenceBody> = typed(
-  record<ReferenceBody>({
-    fields: [
-      field<ReferenceBody, 'of'>(0, 'of', 'of', typeRefAnnotatedBinding),
-      unwrittenAt(
-        field<ReferenceBody, 'allowSibling'>(1, 'allow_sibling', 'allowSibling', booleanBinding),
-        true,
-      ),
-    ],
+const refBodyBinding: RecordBinding<RefBody> = typed(
+  record<RefBody>({
+    fields: [field<RefBody, 'of'>(0, 'of', 'of', typeRefAnnotatedBinding)],
     construct: (slots) => {
-      const [of, allowSibling] = slots as [TypeRef, boolean];
-      return { kind: 'reference_type', of, allowSibling };
+      const [of] = slots as [TypeRef];
+      return { kind: 'ref', of };
     },
   }),
 );
+
+/** The kernel's `meta.apply => final meta.type & { head: meta.type_ref  arguments: [meta.type_ref; 1..] }` (§5.10). */
+const applyBodyBinding: RecordBinding<ApplyBody> = typed(
+  record<ApplyBody>({
+    fields: [
+      field<ApplyBody, 'head'>(0, 'head', 'head', typeRefAnnotatedBinding),
+      field<ApplyBody, 'arguments'>(
+        1,
+        'arguments',
+        'arguments',
+        arrayOf<TypeRef>(typeRefAnnotatedBinding),
+      ),
+    ],
+    construct: (slots) => {
+      const [head, argumentsWritten] = slots as [TypeRef, readonly TypeRef[]];
+      if (argumentsWritten.length === 0) {
+        throw new TsonReadError({
+          code: 'TYPE_MISMATCH',
+          message: `an application has at least one argument ('arguments' min_items: 1): '${head.name}' (§5.10)`,
+        });
+      }
+      return { kind: 'apply', head, arguments: argumentsWritten };
+    },
+  }),
+);
+
+/** The kernel's `meta.dependent => final meta.sum & { on: text }` (§5.2). */
+const dependentBodyBinding: RecordBinding<DependentBody> = typed(
+  record<DependentBody>({
+    fields: [field<DependentBody, 'on'>(0, 'on', 'on', textBinding)],
+    construct: (slots) => {
+      const [on] = slots as [string];
+      return { kind: 'dependent', on };
+    },
+  }),
+);
+
+/** The kernel's `meta.extern => meta.top & { schema: iri_reference  type: text }` (§5.13): a hop, no chain. */
+const externBinding: RecordBinding<Extern> = record<Extern>({
+  fields: [
+    field<Extern, 'schema'>(0, 'schema', 'schema', textBinding),
+    field<Extern, 'type'>(1, 'type', 'type', textBinding),
+  ],
+  construct: (slots) => {
+    const [schema, type] = slots as [string, string];
+    return { kind: 'extern', schema, type };
+  },
+});
 
 // -------------------------------------------------------------------------------------------
 // atoms-numeric.ts
@@ -1831,11 +1777,24 @@ const dateTypeBinding: RecordBinding<DateType> = typed(
   record<DateType>({
     fields: [
       optional<DateType, 'min'>(0, 'min', 'min', calendarDateBinding),
-      optional<DateType, 'max'>(1, 'max', 'max', calendarDateBinding),
+      optional<DateType, 'exclusiveMin'>(1, 'exclusive_min', 'exclusiveMin', calendarDateBinding),
+      optional<DateType, 'max'>(2, 'max', 'max', calendarDateBinding),
+      optional<DateType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', calendarDateBinding),
     ],
     construct: (slots) => {
-      const [min, max] = slots as [CalendarDate | undefined, CalendarDate | undefined];
-      return { kind: 'date_type', ...opt('min', min), ...opt('max', max) };
+      const [min, exclusiveMin, max, exclusiveMax] = slots as [
+        CalendarDate | undefined,
+        CalendarDate | undefined,
+        CalendarDate | undefined,
+        CalendarDate | undefined,
+      ];
+      return {
+        kind: 'date_type',
+        ...opt('min', min),
+        ...opt('exclusiveMin', exclusiveMin),
+        ...opt('max', max),
+        ...opt('exclusiveMax', exclusiveMax),
+      };
     },
   }),
 );
@@ -1844,11 +1803,15 @@ const timeTypeBinding: RecordBinding<TimeType> = typed(
   record<TimeType>({
     fields: [
       optional<TimeType, 'min'>(0, 'min', 'min', offsetTimeBinding),
-      optional<TimeType, 'max'>(1, 'max', 'max', offsetTimeBinding),
-      optional<TimeType, 'precision'>(2, 'precision', 'precision', countBinding),
+      optional<TimeType, 'exclusiveMin'>(1, 'exclusive_min', 'exclusiveMin', offsetTimeBinding),
+      optional<TimeType, 'max'>(2, 'max', 'max', offsetTimeBinding),
+      optional<TimeType, 'exclusiveMax'>(3, 'exclusive_max', 'exclusiveMax', offsetTimeBinding),
+      optional<TimeType, 'fractionDigits'>(4, 'fraction_digits', 'fractionDigits', countBinding),
     ],
     construct: (slots) => {
-      const [min, max, precision] = slots as [
+      const [min, exclusiveMin, max, exclusiveMax, fractionDigits] = slots as [
+        OffsetTime | undefined,
+        OffsetTime | undefined,
         OffsetTime | undefined,
         OffsetTime | undefined,
         bigint | undefined,
@@ -1856,8 +1819,10 @@ const timeTypeBinding: RecordBinding<TimeType> = typed(
       return {
         kind: 'time_type',
         ...opt('min', min),
+        ...opt('exclusiveMin', exclusiveMin),
         ...opt('max', max),
-        ...opt('precision', precision),
+        ...opt('exclusiveMax', exclusiveMax),
+        ...opt('fractionDigits', fractionDigits),
       };
     },
   }),
@@ -1867,11 +1832,30 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = typed(
   record<DateTimeType>({
     fields: [
       optional<DateTimeType, 'min'>(0, 'min', 'min', offsetDateTimeBinding),
-      optional<DateTimeType, 'max'>(1, 'max', 'max', offsetDateTimeBinding),
-      optional<DateTimeType, 'precision'>(2, 'precision', 'precision', countBinding),
+      optional<DateTimeType, 'exclusiveMin'>(
+        1,
+        'exclusive_min',
+        'exclusiveMin',
+        offsetDateTimeBinding,
+      ),
+      optional<DateTimeType, 'max'>(2, 'max', 'max', offsetDateTimeBinding),
+      optional<DateTimeType, 'exclusiveMax'>(
+        3,
+        'exclusive_max',
+        'exclusiveMax',
+        offsetDateTimeBinding,
+      ),
+      optional<DateTimeType, 'fractionDigits'>(
+        4,
+        'fraction_digits',
+        'fractionDigits',
+        countBinding,
+      ),
     ],
     construct: (slots) => {
-      const [min, max, precision] = slots as [
+      const [min, exclusiveMin, max, exclusiveMax, fractionDigits] = slots as [
+        OffsetDateTime | undefined,
+        OffsetDateTime | undefined,
         OffsetDateTime | undefined,
         OffsetDateTime | undefined,
         bigint | undefined,
@@ -1879,8 +1863,10 @@ const dateTimeTypeBinding: RecordBinding<DateTimeType> = typed(
       return {
         kind: 'datetime_type',
         ...opt('min', min),
+        ...opt('exclusiveMin', exclusiveMin),
         ...opt('max', max),
-        ...opt('precision', precision),
+        ...opt('exclusiveMax', exclusiveMax),
+        ...opt('fractionDigits', fractionDigits),
       };
     },
   }),
@@ -1924,11 +1910,16 @@ const durationTypeBinding: RecordBinding<DurationType> = typed(
         'exclusiveMax',
         durationBoundBinding,
       ),
-      optional<DurationType, 'precision'>(4, 'precision', 'precision', countBinding),
+      optional<DurationType, 'fractionDigits'>(
+        4,
+        'fraction_digits',
+        'fractionDigits',
+        countBinding,
+      ),
       optional<DurationType, 'multipleOf'>(5, 'multiple_of', 'multipleOf', durationBoundBinding),
     ],
     construct: (slots) => {
-      const [min, exclusiveMin, max, exclusiveMax, precision, multipleOf] = slots as [
+      const [min, exclusiveMin, max, exclusiveMax, fractionDigits, multipleOf] = slots as [
         bigint | undefined,
         bigint | undefined,
         bigint | undefined,
@@ -1942,7 +1933,7 @@ const durationTypeBinding: RecordBinding<DurationType> = typed(
         ...opt('exclusiveMin', exclusiveMin),
         ...opt('max', max),
         ...opt('exclusiveMax', exclusiveMax),
-        ...opt('precision', precision),
+        ...opt('fractionDigits', fractionDigits),
         ...opt('multipleOf', multipleOf),
       };
     },
@@ -2185,85 +2176,32 @@ const mediaTypeTypeBinding: RecordBinding<MediaTypeType> = typed(
 // -------------------------------------------------------------------------------------------
 
 /**
- * The kernel's `template_param => { name: param_name  type: type_ref  bound?: type_ref }` (§5.10,
- * §8.1): one parameter of an open entry with the type an argument for it is read as.
- */
-const templateParamBinding: RecordBinding<TemplateParam> = record<TemplateParam>({
-  fields: [
-    field<TemplateParam, 'name'>(0, 'name', 'name', identifierBinding),
-    field<TemplateParam, 'type'>(1, 'type', 'type', typeRefAnnotatedBinding),
-    optional<TemplateParam, 'bound'>(2, 'bound', 'bound', typeRefAnnotatedBinding),
-  ],
-  construct: (slots) => {
-    const [name, type, bound] = slots as [string, TypeRef, TypeRef | undefined];
-    return { name, type, ...opt('bound', bound) };
-  },
-});
-
-/**
- * The kernel's `template => top & { parameters: [template_param]  template: text }` (§5.10) -- the
- * value of an open entry over any constructor but `record`. `spec/m/meta-resolved.tn` writes `set`
- * as `!template { parameters: [{ name: T  type: meta.type_ref }]  template: "!meta.set_type { element_type:
- * T }" }`.
+ * An entry's value, and the body a type written in place holds (§4.1, §4.2, §8.1) -- the wire's own `!type-ref`
+ * before the value picks the member (§3.1). A body is written under the constructor its entry's facts name, never
+ * one guessed from its shape; a body with no recorded head is written under its base constructor.
  *
- * `template` is held as TEXT and this binding treats it as text: the parse belongs to
- * `compiler/heldBody.ts`, and identity compares the parsed form, so whitespace inside the string
- * is free (§5.10, §8.2) and is not this binding's to normalise.
- */
-const templateBodyBinding: RecordBinding<TemplateBody> = record<TemplateBody>({
-  fields: [
-    field<TemplateBody, 'parameters'>(
-      0,
-      'parameters',
-      'parameters',
-      arrayOf<TemplateParam>(templateParamBinding),
-    ),
-    field<TemplateBody, 'template'>(1, 'template', 'template', textBinding),
-  ],
-  construct: (slots) => {
-    const [parameters, template] = slots as [readonly TemplateParam[], string];
-    return { parameters, template };
-  },
-});
-
-/**
- * An entry's value, `schema => namespace & { key_type: = type_name  value_type: = top }` (§4.1,
- * §8.1) -- the wire's own `!type-ref` before the value picks the member (§3.1), confirmed directly
- * against `spec/m/*-resolved.tn`: `enum_set` reads `!set_type { element_type: text  min_items: 1
- * }`, not `!array { ... }`, even though `set_type` shares {@link ArrayBody}'s shape rather than
- * declaring one of its own -- the wire names below resolve to {@link arrayBodyBinding}. `value`
- * and `void` are instances of {@link valueTypeBinding} and {@link voidTypeBinding}, constructors
- * with empty vocabularies. `enum` and `enum_type` both resolve to {@link enumBodyBinding}; a body
- * is written under the constructor its entry's facts name (§8.1), never one guessed from its
- * shape.
+ * A value of a namespace type or of a record type a schema declares has no member here: its tag is that schema's
+ * type, which this table cannot name in advance.
  *
- * A namespace value of a meta layer's own vocabulary has no member here: its tag is the meta
- * layer's constructor, which this table cannot name in advance. `Top` still names it, so the
- * const below is typed `VariantBinding<Top>` explicitly -- a narrower union in
- * {@link BindingBase}'s covariant phantom position is a subtype of the wider one, so the explicit
- * annotation upcasts safely with no assertion of its own.
- *
- * The held `TemplateBody` is the one member the `kind` discriminant cannot reach, because the
- * kernel's `template` declares no tag field for the host value to carry. It is dispatched by its
- * own `test` instead, which `memberFor` falls back to when the tag lookup misses -- the shape
- * `bind/combinators.ts`'s `variant` documents for exactly this case.
+ * Read as a type written in place, the member's wire name is the inline type's `head`: `fromMember` hands it back
+ * on the value, under {@link APPLIED}, for {@link typeInlineBinding} to take.
  */
 const topBinding: VariantBinding<Top> = variant(
   {
     [metaName('record')]: recordBodyBinding,
-    [metaName('record_template')]: recordTemplateBodyBinding,
     [metaName('array')]: arrayBodyBinding,
-    [metaName('set_type')]: arrayBodyBinding,
     [metaName('map')]: mapBodyBinding,
     [metaName('namespace')]: namespaceBodyBinding,
     [metaName('tuple')]: tupleBodyBinding,
     [metaName('choice')]: choiceBodyBinding,
-    enum: enumBodyBinding,
     [metaName('enum_type')]: enumBodyBinding,
-    [metaName('reference_type')]: referenceBodyBinding,
+    [metaName('ref')]: refBodyBinding,
+    [metaName('apply')]: applyBodyBinding,
+    [metaName('dependent')]: dependentBodyBinding,
     [metaName('void_type')]: voidTypeBinding,
     [metaName('declared_type')]: declaredTypeBinding,
     [metaName('alias')]: aliasBinding,
+    [metaName('extern')]: externBinding,
     [kernelName(NUMERIC_MAP, 'integer_type')]: integerTypeBinding,
     [kernelName(NUMERIC_MAP, 'float_type')]: floatTypeBinding,
     [kernelName(NUMERIC_MAP, 'decimal_type')]: decimalTypeBinding,
@@ -2290,35 +2228,24 @@ const topBinding: VariantBinding<Top> = variant(
     [kernelName(TEMPORAL_MAP, 'datetime_type')]: dateTimeTypeBinding,
     [kernelName(TEMPORAL_MAP, 'duration_type')]: durationTypeBinding,
     [kernelName(TEMPORAL_MAP, 'period_type')]: periodTypeBinding,
-    [metaName('template')]: templateBodyBinding,
   },
-  // Discriminated on the host value's own `kind`. Without a discriminant (and with no per-member
-  // test) `memberFor` can only ever return undefined, which bind/binding.ts defines as a write
-  // error — so an entry's value, the one polymorphic slot in the whole resolved-schema model,
-  // could be read but never written.
-  //
-  // Every host kind has a member of the same name. `set`, `set_type` and `enum_type` are extra
-  // wire names for the array and enum bodies, reached by reading through byWireName; `memberFor`
-  // below picks the constructor a body is written under.
+  // Discriminated on the host value's own `kind`, every host kind having a member of its constructor's name.
   'kind',
+  { fromMember: (value, wireName) => headed(value as Top, wireName) },
 );
 
-// The constructor a body is written under (§8.1: "a binding record headed by the applied
-// constructor") is a fact about the entry, not about the body: `set_type` restates `array`'s
-// fields and adds none, and `enum` and `enum_type` share one body shape, so no inspection of the
-// body can recover which was applied. It is recorded beside the entry, in its facts' `head`.
-// {@link headed} therefore hands the variant the body tagged with that name under {@link APPLIED},
-// and `memberFor` honours the tag where the named member writes the body's own shape. A body
-// with no recorded head is written under its base constructor: `array` for an array, `enum_type`
-// for an enum.
+// The constructor a body is written under (§8.1) is a fact about the entry, not about the body. {@link headed}
+// hands the variant the body tagged with that name under {@link APPLIED}, and `memberFor` honours the tag where
+// the named member writes the body's own shape. A body with no recorded head is written under its base
+// constructor.
 const memberByWireName = new Map(topBinding.members.map((member) => [member.wireName, member]));
 Object.assign(topBinding, {
   memberFor: (value: unknown) => {
     if (typeof value !== 'object' || value === null) return undefined;
     const held = value as Top & Headed;
-    // The held body has no `kind`; its member answers to its own test.
-    if (isTemplateBody(held)) return memberByWireName.get(metaName('template'));
-    if (!('kind' in held) || held.kind === 'value_entry') return undefined;
+    if (!('kind' in held) || held.kind === 'value_entry' || held.kind === 'incomplete') {
+      return undefined;
+    }
     const applied = held[APPLIED];
     const natural = memberByWireName.get(constructorPath(held));
     if (natural === undefined) return undefined;
@@ -2331,6 +2258,14 @@ Object.assign(topBinding, {
 /** A value, tagged with the constructor its entry's facts name (`head`), for {@link topBinding} to write under. */
 function headed(body: Top, head: string | undefined): Top {
   return head === undefined ? body : Object.assign({}, body, { [APPLIED]: head });
+}
+
+/** `body` without the constructor {@link headed} tagged it with. */
+function unheaded<T extends Top>(body: T & Headed): T {
+  if (body[APPLIED] === undefined) return body;
+  const { [APPLIED]: _head, ...rest } = body;
+  void _head;
+  return rest as unknown as T;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -2364,26 +2299,26 @@ export {
   annotationsBinding,
   typeRefBinding,
   typeRefAnnotatedBinding,
-  referenceBinding,
-  referenceAnnotatedBinding,
+  typeExprBinding,
+  typeInlineBinding,
   aliasBinding,
+  externBinding,
   declaredTypeBinding,
   integerSizeBinding,
   recordFieldBinding,
-  recordTemplateFieldBinding,
-  recordTemplateFieldMapBinding,
   fieldGroupBinding,
-  templateParamBinding,
+  paramBinding,
   tupleElementBinding,
   recordBodyBinding,
-  recordTemplateBodyBinding,
   arrayBodyBinding,
   mapBodyBinding,
   namespaceBodyBinding,
   tupleBodyBinding,
   choiceBodyBinding,
   enumBodyBinding,
-  referenceBodyBinding,
+  refBodyBinding,
+  applyBodyBinding,
+  dependentBodyBinding,
   integerTypeBinding,
   floatTypeBinding,
   decimalTypeBinding,
@@ -2423,22 +2358,20 @@ export {
  * the wire names {@link topBinding} matches on, plus the kernel's supporting records. A later work
  * package building the real `BindingRegistry`/reader wiring (definition resolution, linking) is
  * free to `chain()` this behind or in front of its own tables; this is deliberately not the full
- * `SchemaMetaNameBinder`-equivalent alias set (`field_name`/`type_name`/`param_name` -> `identifier`,
- * and the like), since those three are entry *names*, not value shapes -- {@link
- * topBinding} dispatches on the applied-constructor tag a body's own wire form carries (`record`,
- * `array`, `reference`, ...), and a `field_name`-named entry's own body reads through the
- * `reference` tag like any other alias's, whether or not a use site elsewhere names `field_name`
- * itself (§8.3: a use site keeps the author's own name and is never rewritten past it).
+ * `SchemaMetaNameBinder`-equivalent alias set (`type_name`/`param_name` -> `identifier`, and the
+ * like), since those are entry *names*, not value shapes -- {@link topBinding} dispatches on the
+ * applied-constructor tag a body's own wire form carries (`record`, `array`, `alias`, ...), and an
+ * alias's own body reads through the `alias` tag like any other's, whether or not a use site elsewhere
+ * names it (§8.3: a use site keeps the author's own name and is never rewritten past it).
  */
 export const metaBindings: BindingRegistry = registry({
   ...Object.fromEntries(topBinding.members.map((member) => [member.wireName, member.binding])),
   [metaName('type_chain')]: typeChainBinding,
   [kernelName(NUMERIC_MAP, 'integer_size')]: integerSizeBinding,
   [metaName('record_field')]: recordFieldBinding,
-  [metaName('record_template_field')]: recordTemplateFieldBinding,
   [metaName('field_group')]: fieldGroupBinding,
-  [metaName('template_param')]: templateParamBinding,
+  [metaName('param')]: paramBinding,
   [metaName('tuple_element')]: tupleElementBinding,
   [metaName('type_ref')]: typeRefAnnotatedBinding,
-  [metaName('field_type_ref')]: referenceAnnotatedBinding,
+  [metaName('type_inline')]: typeInlineBinding,
 });

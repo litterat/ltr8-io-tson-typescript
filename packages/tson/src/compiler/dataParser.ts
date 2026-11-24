@@ -41,7 +41,6 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
-  ReferenceValue,
   TokenValue,
 } from '../ast/value.js';
 
@@ -265,8 +264,6 @@ function* reduceCoreEvent(
   switch (event.kind) {
     case 'token':
       return { kind: 'token', text: event.text, form: event.form } satisfies TokenValue;
-    case 'reference':
-      return { kind: 'reference', reference: event.reference } satisfies ReferenceValue;
     case 'void':
       return { kind: 'void' } satisfies VoidValue;
     case 'empty-brace':

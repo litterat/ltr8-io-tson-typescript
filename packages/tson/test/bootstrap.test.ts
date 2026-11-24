@@ -8,13 +8,9 @@ import { encodeUtf8 } from '../src/io/utf8.js';
 import type { EnumBody } from '../src/schema/meta/bodies.js';
 import type { IdentifierType, IriType } from '../src/schema/meta/atoms-text.js';
 import type { Alias, Top } from '../src/schema/meta/typedef.js';
-import {
-  entryKind,
-  isConstructor,
-  supertypesOf,
-  withoutChain,
-} from '../src/schema/meta/typedef.js';
+import { isConstructor, supertypesOf, withoutChain } from '../src/schema/meta/typedef.js';
 import { isNestedMap } from '../src/schema/meta/schemaPaths.js';
+import { entryClass } from './model-fixtures.js';
 
 /**
  * The real, bundled kernel source (`spec/m/meta.tn`, vendored verbatim; CLAUDE.md: the bundled schemas
@@ -45,7 +41,7 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
   it('resolves the six machinery maps as schema maps nested as entries of the root (§4.1)', () => {
     for (const map of ['numeric', 'unicode', 'net', 'atom', 'meta', 'binary']) {
       expect(isNestedMap(entryOf(schema, map)), `'${map}' is a nested map`).toBe(true);
-      expect(entryKind(entryOf(schema, map))).toBe('VALUE');
+      expect(entryClass(entryOf(schema, map))).toBe('VALUE');
     }
   });
 
@@ -63,16 +59,15 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
     }
   });
 
-  it('mints the synthetics its container sugar lifts at the root, whatever map their use site is in (§5.3)', () => {
+  it('mints no entry for its container sugar: a form at a type slot stays where it is written (§4.2, §5.3)', () => {
     const minted = [...schema.entries.keys()].filter((name) => /_[0-9a-f]{8}$/.test(name));
-    expect(minted.length).toBeGreaterThan(0);
-    expect(minted.every((name) => !name.includes('.'))).toBe(true);
+    expect(minted).toEqual([]);
   });
 
   it('resolves the three base kinds through type, each abstract and itself kind PRODUCT (§4.1)', () => {
     for (const name of ['meta.atom', 'meta.product', 'meta.sum']) {
       const entry = entryOf(schema, name);
-      expect(entryKind(entry)).toBe('PRODUCT');
+      expect(entryClass(entry)).toBe('PRODUCT');
       expect(supertypesOf(entry)).toEqual(['meta.top', 'meta.type']);
       expect((entry as { readonly extension?: string }).extension).toBe('ABSTRACT');
     }
@@ -86,7 +81,7 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
 
   it('resolves top itself with an empty chain and an empty, abstract record body', () => {
     const top = entryOf(schema, 'meta.top');
-    expect(entryKind(top)).toBe('PRODUCT');
+    expect(entryClass(top)).toBe('PRODUCT');
     expect(supertypesOf(top)).toEqual([]);
     expect(withoutChain(top)).toMatchObject({ kind: 'record', groups: [], extension: 'ABSTRACT' });
   });
@@ -99,14 +94,14 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
 
   it('resolves void as a bare, empty instance of the void_type constructor (§5.5)', () => {
     const entry = entryOf(schema, 'void');
-    expect(entryKind(entry)).toBe('ATOM');
+    expect(entryClass(entry)).toBe('ATOM');
     expect(schema.facts.get('void')?.head).toBe('meta.void_type');
     expect(withoutChain(entry)).toEqual({ kind: 'void_type' });
   });
 
   it('resolves void_type as a constructor composing with atom, with no vocabulary (§4.2)', () => {
     const constructor = entryOf(schema, 'meta.void_type');
-    expect(entryKind(constructor)).toBe('ATOM');
+    expect(entryClass(constructor)).toBe('ATOM');
     expect(isConstructor(constructor)).toBe(true);
     expect(supertypesOf(constructor)).toEqual(['meta.atom', 'meta.top', 'meta.type']);
   });
@@ -118,7 +113,7 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
 
   it('resolves identifier as the identifier_type instance { continue_add: "-" }, the profile of [TSON-DATA] §7.7 (§5.5)', () => {
     const entry = entryOf(schema, 'meta.identifier');
-    expect(entryKind(entry)).toBe('ATOM');
+    expect(entryClass(entry)).toBe('ATOM');
     expect(schema.facts.get('meta.identifier')?.head).toBe('unicode.identifier_type');
     expect(withoutChain(entry)).toEqual({
       kind: 'identifier_type',
@@ -130,10 +125,10 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
     } satisfies IdentifierType);
   });
 
-  it('resolves boolean as !enum [true false], the root enum constructor applied (§5.5)', () => {
+  it('resolves boolean as !enum [true false]: the completion of the incomplete entry enum, built by meta.enum_type (§5.5)', () => {
     const boolean = entryOf(schema, 'boolean');
-    expect(entryKind(boolean)).toBe('ATOM');
-    expect(schema.facts.get('boolean')?.head).toBe('enum');
+    expect(entryClass(boolean)).toBe('ATOM');
+    expect(schema.facts.get('boolean')?.head).toBe('meta.enum_type');
     expect(withoutChain(boolean)).toEqual({
       kind: 'enum',
       nameType: 'meta.identifier',
@@ -143,14 +138,14 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
 
   it('resolves integer as an unconstrained instance of numeric.integer_type', () => {
     const integer = entryOf(schema, 'integer');
-    expect(entryKind(integer)).toBe('ATOM');
+    expect(entryClass(integer)).toBe('ATOM');
     expect(schema.facts.get('integer')?.head).toBe('numeric.integer_type');
     expect(withoutChain(integer)).toEqual({ kind: 'integer_type' });
   });
 
   it('resolves iri as an instance of net.iri_type that withdraws relative references, spec composed in from RFC 3987 (§5.5)', () => {
     const iri = entryOf(schema, 'iri');
-    expect(entryKind(iri)).toBe('ATOM');
+    expect(entryClass(iri)).toBe('ATOM');
     expect(schema.facts.get('iri')?.head).toBe('net.iri_type');
     expect(withoutChain(iri)).toEqual({
       kind: 'iri_type',
@@ -169,14 +164,17 @@ describe('bootstrapKernel, against the real bundled meta.tn (§3.4)', () => {
 
   it('leaves an alias exactly as written: meta.type_name stays a hop to meta.identifier, never a rewrite (§8.3)', () => {
     const typeName = entryOf(schema, 'meta.type_name') as Alias;
-    expect(entryKind(typeName)).toBe('ALIAS');
-    expect(typeName.target).toEqual({ name: 'meta.identifier', arguments: [], annotations: [] });
+    expect(entryClass(typeName)).toBe('ALIAS');
+    expect(typeName.target).toEqual({ name: 'meta.identifier', annotations: [] });
   });
 
-  it('holds the open entry `set` as a template over its parameter, its body the applied constructor as written (§5.10)', () => {
-    const set = entryOf(schema, 'set');
-    expect(entryKind(set)).toBe('TEMPLATE');
-    expect((set as { template?: string }).template).toBe('!meta.set_type { element_type: T }');
+  it('holds `set` as an alias of the incomplete entry `meta.set_type`, which leaves `element_type` absent (§5.5, §9)', () => {
+    const set = entryOf(schema, 'set') as Alias;
+    expect(entryClass(set)).toBe('ALIAS');
+    expect(set.target.name).toBe('meta.set_type');
+    const setType = entryOf(schema, 'meta.set_type');
+    expect(setType.kind === 'incomplete' && setType.head).toBe('meta.array');
+    expect(setType.kind === 'incomplete' && setType.absent).toEqual(['element_type']);
   });
 
   it('refuses a source naming an import: the kernel imports nothing (§3.4)', () => {

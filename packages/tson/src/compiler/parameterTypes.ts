@@ -1,936 +1,418 @@
 /**
- * §5.10's parameters, typed by use: each parameter of an open entry gets the type an argument for it
- * is read as (`template_param.type`), derived from the positions it stands in, and its kind follows
- * — a parameter is a `TYPE` parameter exactly when that type is `type_kind`.
+ * [TSON-SCHEMA] §5.10's parameters: where each may stand, and the bound each is written with.
  *
- * **The slot's declared type is what says which.** A held body is the constructor application as
- * written, so the body alone cannot tell a parameter naming a type from one standing for an enum
- * member — both are bare tokens. What separates them is the constructor's own vocabulary:
- * `array.element_type` is typed `type_kind`, `array.min_items` `non_negative_integer`,
- * `enum.members` a set of `text`. §4.2 makes that reading general rather than a table of kernel
- * names — a slot that names the type of a value is typed `type_kind`, and one where an application
- * may stand `type_ref` — so an extension meta-schema's own constructors classify by the same walk
- * with nothing added here.
+ * **A parameter is a type.** It stands only at a field's type, at a slot of a type written in place there that holds
+ * a type or a name, or as an argument of an application at any of those or in a parent. A parameter anywhere else is
+ * refused at the declaration, naming the slot ({@link at}): a field's default or fixed value ({@link atValue}), a size
+ * bound, a field name, a group member, a field's `optional`, `voidable` or `role`, the record's `extension`,
+ * `name_type` or `discriminators`. A parametric record built from a record body holds a parameter only where it may
+ * stand; the explicit spelling, `<T> !meta.record { … }`, is walked against `record`'s own vocabulary before it is
+ * bound ({@link checkSlots}).
  *
- * **Four sources of a use type**, and the last is why this is not one pass over one declaration:
+ * **A bound is written.** A declaration writes one after the parameter's name (`<T: text>`), which names a type;
+ * otherwise the parameter is unbounded, and nothing about a parameter is inferred from its uses. A bound naming a
+ * constructor admits no argument, a type argument naming a type and no type being IS-A a constructor (§4.1); an
+ * incomplete entry is no type (§5.5). Each is refused at the declaration.
  *
- * - a slot typed `type_kind` or `type_ref` gives `type_kind`;
- * - a slot whose type resolves to an {@link Atom} gives that declared type;
- * - a **routed default or fixed value** — a parameter at `record_field.value` — gives the field's
- *   own declared type, read from the sibling `type` slot, and not `record_field.value`'s own type
- *   `value`, which says nothing. Where that field is typed by a parameter, the use type names the
- *   parameter (`<T, N> { w?: T ~ N }` gives `N` the type `T`);
- * - a parameter riding another template's argument list, where meta-kernel's own `type_argument` doc
- *   says a parameter of *either* kind travels on the reference channel. That occurrence says
- *   nothing on its own: the type comes from the callee's parameter at that position, so it is
- *   recorded as a dependency and settled by a fixed point over the whole open-entry set.
- *
- * Anything else — a parameter standing where a record, a collection or a choice is declared, as in
- * `<T> !enum { members: T }` — is refused here. §5.10 confines value parameters to scalars and type
- * parameters to references, so a parameter standing for a whole `enum_set` is neither, and refusing
- * it at the declaration is what turns "every application of this fails" into "this template is
- * wrong".
- *
- * **A written type narrows what the positions give** (`<T: text, N: int8>`), read by the kind they
- * give: on a value parameter it replaces `type`; on a type parameter it is the `bound`. This module
- * records both. What checks them — that a written type IS-A the derived one, that several uses
- * agree, that a bound is not wider than the one it inherits, and the call-site check — is the
- * resolver's, over the parameters recorded here.
- *
- * **An imported template is taken as recorded**, not walked again: its schema resolved it, and its
- * recorded parameters carry what its author wrote, which its held body does not.
- *
- * **A parameter the fixed point leaves ungrounded is a type parameter, and that is forced** — being
- * a value parameter *means* standing in a scalar slot, and a slot is what grounds a parameter.
+ * **A parameter passed on keeps its callee's bound.** One passed as an argument to a bounded parameter of another
+ * parametric record is itself written with a bound that IS-A that one, so `rebox => <T> { b: boxed<T> }` over
+ * `boxed => <T: text> { v: T }` is refused at `rebox`. Each declaration is judged once against the bounds its
+ * callees wrote, so no order among parametric records is needed. A constructor's slot judges the argument that
+ * arrives when the record is applied, so a parameter at one (`meta.map<K text>`, `[T]`) needs no bound.
  */
 import { TsonSchemaValidationError } from '../core/errors.js';
-import type { ArrayValue, CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
-import {
-  TYPE_KIND,
-  namedFields,
-  type RecordBody,
-  type TemplateParam,
-} from '../schema/meta/bodies.js';
-import type { Top, TypeRef } from '../schema/meta/typedef.js';
-import {
-  isConstructor,
-  isOpen,
-  isTemplateBody,
-  parametersOf,
-  supertypesOf,
-  withoutChain,
-} from '../schema/meta/typedef.js';
+import type { CoreValue, DataValue, MapValue, RecordValue } from '../ast/value.js';
+import type { MapBody, RecordBody, RecordField } from '../schema/meta/bodies.js';
+import type { IncompleteEntry, Param, Top, TypeExpr, TypeRef } from '../schema/meta/typedef.js';
+import { dependentOn, isParametric, parametersOf, supertypesOf } from '../schema/meta/typedef.js';
 import { metaName } from '../schema/meta/kernel.js';
-import { createHeldBody, heldOf, type HeldBody } from './heldBody.js';
-import type { ApplicationReference, ReferenceArgument } from '../ast/reference.js';
+import { applicationsOf } from '../schema/meta/typeInline.js';
+import { terminal } from '../link/aliasChain.js';
+import { noType } from './incompleteEntries.js';
+import * as Ancestry from './ancestry.js';
+import { isAThroughHops, NO_HOPS, type ExternHops } from '../link/externHops.js';
 import type { DefinitionGetter } from './resolverTypes.js';
-import { RECORD as RECORD_HEAD, TYPE, VALUE, field, applicationIn } from './wireForm.js';
+import { OF, TYPE, VALUE } from './wireForm.js';
 
-/** What a parameter's type makes it (§5.10). */
-export type Kind = 'TYPE' | 'VALUE';
-
-/** The kernel's application form, which stands where an application may (§4.2, §9). */
-const TYPE_REF_NAME = 'type_ref';
-
-/** A record field's type slot, where an application or a sibling reference may stand (§5.2, §9). */
-const FIELD_TYPE_REF_NAME = metaName('field_type_ref');
-
-/** The kernel's kind of the types, which types every slot that names the type of a value (§4.2). */
-const TYPE_KIND_NAME = TYPE_KIND;
-
-/** Whether a slot declared `name` names a type: a `type_kind` slot, or one where an application may stand (`type_ref`). */
-function isTypeSlot(name: string): boolean {
-  return name === TYPE_KIND_NAME || name === TYPE_REF_NAME || name === FIELD_TYPE_REF_NAME;
-}
-
-/** The unbounded type parameter's type: `type_kind`, the kind of every type (§5.10). */
-export const TYPE_REF: TypeRef = { name: TYPE_KIND_NAME, arguments: [], annotations: [] };
-
-/** The constructor a labelled record template applies (§5.10). */
-const RECORD_TEMPLATE_HEAD = metaName('record_template');
-
-/** The kernel record whose `value` slot routes a default or fixed value into its sibling's type. */
+/** The kernel record whose `type` and `value` slots a parametric record's field binds. */
 const RECORD_FIELD = metaName('record_field');
 
-/** The kind a parameter's recorded type makes it. */
-export function kindOf(type: TypeRef): Kind {
-  return isTypeSlot(type.name) && type.arguments.length === 0 ? 'TYPE' : 'VALUE';
-}
+/** The constructor a parametric record applies. */
+const RECORD = metaName('record');
 
-/**
- * Whether `template`'s value parameters are the governing meta's types, read and checked in the
- * structure namespace (§5.10): a template whose body applies a meta constructor other than `record`
- * — `vec => <N> !array { element_type: text  min_items: N }` — binds its values into the meta's
- * own structure, so `N` is the meta's `non_negative_integer` whatever the schema declares under that
- * name, and a written narrowing names a type there too. A record template's fields are typed by the
- * schema, so its parameters read in the schema's namespace. A template whose body applies another
- * template takes that template's form. A type parameter's bound is the schema's either way.
- */
-export function readsInStructure(
-  template: Top,
-  entries: (name: string) => Top | undefined,
-): boolean {
-  let current: Top = template;
-  for (let hop = 0; hop < 64; hop += 1) {
-    const head = heldOf(current)?.application.typeRef;
-    if (head === undefined || head === RECORD_HEAD) return false;
-    const applied = entries(head);
-    if (applied === undefined || !isTemplateBody(applied)) return true;
-    current = applied;
-  }
-  return false;
-}
+/** The one slot of a parametric record a parameter may stand in as a whole token: a field's type. */
+const FIELD_TYPE = `${RECORD_FIELD}.${TYPE}`;
 
-/** The type a slot's declared name resolves to: `!reference` chains followed — the slot type a written value faces. */
-function resolveSlot(name: string, meta: DefinitionGetter): Top | undefined {
-  let definition: Top | undefined = meta(name);
-  let hops = 0;
-  while (definition !== undefined && 'target' in definition && hops < 32) {
-    definition = meta(definition.target.name);
-    hops += 1;
-  }
-  return definition;
-}
+/** The kernel's type a type slot holds: a name or a type written in place, `{ of: … }`. */
+const TYPE_EXPR = metaName('type_expr');
 
-/** Every kernel/core body shape §5.10 treats as scalar; a product, sum, reference, held body or `Data` extension body never is. */
-const ATOM_KINDS: ReadonlySet<string> = new Set([
-  'value_type',
-  'void_type',
-  'enum',
-  'integer_type',
-  'float_type',
-  'decimal_type',
-  'rational_type',
-  'complex_type',
-  'date_type',
-  'time_type',
-  'datetime_type',
-  'duration_type',
-  'period_type',
-  'text_type',
-  'identifier_type',
-  'bytes_type',
-  'regex_type',
-  'uri_type',
-  'iri_type',
-  'email_type',
-  'uuid_type',
-  'ipv4_type',
-  'ipv6_type',
-  'cidr4_type',
-  'cidr6_type',
-  'mac_type',
-  'hostname_type',
-  'host_type',
-  'media_type_type',
-  'kind_type',
-  'ref_type',
-]);
+/** A field's value, which is never a parameter. */
+const FIELD_VALUE = `${RECORD_FIELD}.${VALUE}`;
 
-function isAtomBody(top: Top): boolean {
-  return 'kind' in top && typeof top.kind === 'string' && ATOM_KINDS.has(top.kind);
-}
-
-function isRecordBody(top: Top): top is RecordBody {
-  return !isTemplateBody(top) && top.kind === 'record';
-}
-
-/**
- * The type a namespace type's values are read as -- its pinned `value_type` (§4.1): `field_map`'s
- * `record_field`. A namespace value is written as the map it describes, so a slot typed by one is
- * walked as a map whose values have this type.
- */
-function namespaceValueType(type: Top | undefined): TypeRef | undefined {
-  if (type === undefined || !isRecordBody(type) || !supertypesOf(type).includes('namespace')) {
-    return undefined;
-  }
-  const value = type.fields.entries.get('value_type')?.value;
-  return value === undefined ? undefined : { name: value.text, arguments: [], annotations: [] };
-}
-
-// ── One declaration's occurrences ───────────────────────────────────────────────────────────
-
-/** One parameter riding another template's argument list, whose type that template's parameter fixes. */
-interface Deferred {
-  readonly parameter: string;
-  readonly head: string;
-  readonly index: number;
-}
-
-/**
- * One position's type, the bound it carries where it is a type position, and the namespace its
- * names resolve in first: a slot's declared type is the applied constructor's, and a field's
- * declared type is the schema's.
- */
-interface Use {
-  readonly type: TypeRef;
-  readonly bound?: TypeRef;
-  readonly local: boolean;
-}
-
-/** What one declaration's occurrences have made of its parameters so far. */
-interface Occurrences {
-  readonly parameters: readonly string[];
-  readonly written: ReadonlyMap<string, TypeRef>;
-  /** Whether the template reads its value parameters in the structure namespace ({@link readsInStructure}). */
-  readonly structural: boolean;
-  readonly uses: Map<string, Use[]>;
-  readonly deferred: Deferred[];
-  readonly settled: Set<Deferred>;
-}
-
-function createOccurrences(
-  parameters: readonly string[],
-  written: ReadonlyMap<string, TypeRef>,
-  structural: boolean,
-): Occurrences {
-  return {
-    parameters,
-    written,
-    structural,
-    uses: new Map(),
-    deferred: [],
-    settled: new Set(),
-  };
-}
-
-function declares(occurrences: Occurrences, name: string): boolean {
-  return occurrences.parameters.includes(name);
-}
-
-function observe(occurrences: Occurrences, parameter: string, use: Use): void {
-  const uses = occurrences.uses.get(parameter);
-  if (uses === undefined) {
-    occurrences.uses.set(parameter, [use]);
-  } else {
-    uses.push(use);
-  }
-}
-
-// ── The environment a parameter is judged in ─────────────────────────────────────────────────
-
-/** The two namespaces a type name resolves in: the schema's own and the governing meta's. */
-interface Namespaces {
-  readonly local: (name: string) => Top | undefined;
-  readonly meta: DefinitionGetter;
-}
-
-/** A type-ref as the schema spells it — `text`, `box<int32, 3>` — for a message. */
-export function spell(ref: TypeRef): string {
-  if (ref.arguments.length === 0) return ref.name;
-  const rendered = ref.arguments.map((argument) =>
-    argument.kind === 'ref' ? spell(argument.ref) : argument.value.text,
-  );
-  return `${ref.name}<${rendered.join(', ')}>`;
-}
-
-function sameType(a: TypeRef, b: TypeRef): boolean {
-  return spell(a) === spell(b);
-}
-
-function lookup(use: Use, namespaces: Namespaces): Top | undefined {
-  const [first, second] = use.local
-    ? [namespaces.local, namespaces.meta]
-    : [namespaces.meta, namespaces.local];
-  return first(use.type.name) ?? second(use.type.name);
-}
-
-/**
- * Whether `a`'s type IS-A `b`'s: equal, `b` among the supertypes `a` records, or the same name for
- * two entries with the same body — a core type and the kernel original it copies.
- */
-function isA(a: Use, b: Use, namespaces: Namespaces): boolean {
-  if (sameType(a.type, b.type)) return true;
-  if (a.type.arguments.length > 0 || b.type.arguments.length > 0) return false;
-  const definition = lookup(a, namespaces);
-  if (definition === undefined) return false;
-  if (supertypesOf(definition).includes(b.type.name)) return true;
-  const other = lookup(b, namespaces);
-  return (
-    other !== undefined &&
-    a.type.name === b.type.name &&
-    JSON.stringify(withoutChain(definition), replacer) ===
-      JSON.stringify(withoutChain(other), replacer)
-  );
-}
-
-/** `bigint`s are not JSON; the body comparison above only needs them to compare equal when equal. */
-function replacer(_key: string, value: unknown): unknown {
-  return typeof value === 'bigint' ? `${value.toString()}n` : value;
-}
-
-/** The use every other use is a supertype of, or a resolver error where no such use exists. */
-function narrowest(
-  parameter: string,
-  verb: string,
-  uses: readonly Use[],
-  namespaces: Namespaces,
-): Use {
-  for (const candidate of uses) {
-    if (uses.every((other) => isA(candidate, other, namespaces))) return candidate;
-  }
-  const named = [...new Set(uses.map((use) => spell(use.type)))];
-  throw new TsonSchemaValidationError(
-    `parameter '${parameter}' is ${verb} ${named.join(' and ')} by the positions it stands in, and ` +
-      'none of them IS-A the others, so no argument can satisfy them all -- §5.10 gives a ' +
-      'parameter one type, derived from where it is used',
+/** The one refusal: `parameter` standing at `slot`, which names no type ([TSON-SCHEMA] §5.10). */
+export function at(parameter: string, slot: string): TsonSchemaValidationError {
+  return new TsonSchemaValidationError(
+    `parameter '${parameter}' stands at ${slot} -- a parameter is a type, and stands only at a field's ` +
+      'type or as an argument of an application there or in a parent (§5.10)',
   );
 }
 
 /**
- * A written bound names a type, so its name -- an application's head, where it is one -- resolves in the
- * schema's namespace and names no constructor: a type argument names a type, which IS-A no constructor
- * (§4.1), so a bound naming one would admit no argument (§5.10). A reference is not a bound: `of` is the type
- * of the named entry's value, and a bound is the type the argument itself IS-A.
+ * {@link at} for a field's default or fixed value: a field's value is never a parameter, whatever the field's type.
+ * A value that differs per application is written where the application is declared.
  */
-function requireType(bound: TypeRef, namespaces: Namespaces): void {
-  const named = namespaces.local(bound.name);
+export function atValue(parameter: string, field: string): TsonSchemaValidationError {
+  return new TsonSchemaValidationError(
+    `parameter '${parameter}' stands at the value of field '${field}' (${FIELD_VALUE}) -- a ` +
+      "parameter is a type, and stands only at a field's type or as an argument of an application there or " +
+      "in a parent, so a field's value is never one (§5.10). State the value where the application is " +
+      `declared: 'name => head<argument> & { ${field}?: = value }'`,
+  );
+}
+
+const TOP = metaName('top');
+
+/** Where a declaration whose parameters are refused is reported. */
+export type BoundFailureReporter = (entryName: string, error: TsonSchemaValidationError) => void;
+
+/**
+ * Checks each of `local`'s parametric records in `entries` -- the whole namespace, imports included, since a local
+ * parametric record may pass a parameter to an imported one -- and returns the names refused. `meta` is where a
+ * bound's name is read when the schema does not hold it; `hops` follows a bound naming an extern to the entry it
+ * lands on (§5.13).
+ */
+export function check(
+  entries: ReadonlyMap<string, Top>,
+  local: ReadonlySet<string>,
+  meta: DefinitionGetter,
+  report: BoundFailureReporter,
+  hops: ExternHops = NO_HOPS,
+): Set<string> {
+  const refused = new Set<string>();
+  const lookup: DefinitionGetter = (name) => entries.get(name);
+  const judged: string[] = [];
+  for (const [name, definition] of entries) {
+    if (!local.has(name) || !isParametric(definition)) continue;
+    try {
+      for (const parameter of parametersOf(definition)) {
+        if (parameter.bound !== undefined) requireType(parameter.bound, lookup);
+      }
+      judged.push(name);
+    } catch (error: unknown) {
+      if (!(error instanceof TsonSchemaValidationError)) throw error;
+      refused.add(name);
+      report(name, error);
+    }
+  }
+  for (const name of judged) {
+    const definition = entries.get(name);
+    if (definition === undefined) continue;
+    const mine = new Map(parametersOf(definition).map((parameter) => [parameter.name, parameter]));
+    try {
+      for (const application of applicationsOf(definition)) {
+        // An alias of a parametric record is applied as the record is, its bounds included (§8.3, §5.10).
+        const head = Ancestry.parametricHead(application.head.name, lookup);
+        const callee = entries.get(head);
+        const theirs = isParametric(callee) && !refused.has(head) ? parametersOf(callee) : [];
+        application.arguments.forEach((argument, index) => {
+          const passed = mine.get(argument.name);
+          const bounded = theirs[index];
+          if (passed === undefined || bounded?.bound === undefined) return;
+          requireBound(
+            passed,
+            head,
+            bounded.name,
+            bounded.bound,
+            local.has(head),
+            lookup,
+            meta,
+            hops,
+          );
+        });
+      }
+    } catch (error: unknown) {
+      if (!(error instanceof TsonSchemaValidationError)) throw error;
+      refused.add(name);
+      report(name, error);
+    }
+  }
+  return refused;
+}
+
+/**
+ * A written bound names a type: it resolves in the schema's namespace and names no constructor and no incomplete
+ * entry. A bound is a name, `meta.param.bound` being `meta.type_ref` (§4.2).
+ */
+function requireType(bound: TypeRef, lookup: DefinitionGetter): void {
+  const name = bound.name;
+  const named = lookup(name);
   if (named === undefined) {
     throw new TsonSchemaValidationError(
-      `the bound '${spell(bound)}': '${bound.name}' names no type in this schema or its imports (§5.10)`,
+      `the bound '${name}': '${name}' names no type in this schema or its imports (§5.10)`,
     );
   }
-  if (isConstructor(named, bound.name)) {
+  if (name === TOP || supertypesOf(named).includes(TOP)) {
     throw new TsonSchemaValidationError(
-      `the bound '${spell(bound)}' names '${bound.name}', and '${bound.name}' is a constructor, not a type ` +
-        '(§4.1); a bound names a type, which every argument must IS-A (§5.10)',
+      `the bound '${name}' names '${name}', and '${name}' is a constructor, not a type (§4.1); a bound names a ` +
+        'type, which every argument must IS-A (§5.10)',
+    );
+  }
+  const end = lookup(terminal(name, lookup));
+  if (end?.kind === 'incomplete') {
+    throw new TsonSchemaValidationError(
+      `the bound '${name}' names '${name}', ${noType(name, end)}; a bound names a type, which every argument ` +
+        'must IS-A, and no type IS-A an incomplete entry (§5.10)',
+    );
+  }
+}
+
+/** `mine`, passed to `callee`'s `theirs` bounded by `bound`: written with a bound that IS-A it. */
+function requireBound(
+  mine: Param,
+  callee: string,
+  theirs: string,
+  bound: TypeRef,
+  calleeLocal: boolean,
+  lookup: DefinitionGetter,
+  meta: DefinitionGetter,
+  hops: ExternHops,
+): void {
+  const required = `'${callee}', which declares '${theirs}: ${bound.name}'`;
+  if (mine.bound === undefined) {
+    throw new TsonSchemaValidationError(
+      `parameter '${mine.name}' is passed to ${required}, and is written with no bound -- a parameter passed to ` +
+        `a bounded parameter is written with a bound that IS-A it, '<${mine.name}: ${bound.name}>' (§5.10)`,
+    );
+  }
+  const own = mine.bound;
+  if (!isA(own, true, bound, calleeLocal, lookup, meta, hops)) {
+    throw new TsonSchemaValidationError(
+      `parameter '${mine.name}' is declared '${mine.name}: ${own.name}' and passed to ${required}, and ` +
+        `${own.name} is not a type that IS-A ${bound.name} (§5.10)`,
     );
   }
 }
 
 /**
- * One parameter: the kind its uses agree on, the narrowest of their types or bounds, then what the
- * declaration wrote, which must narrow that further. With no use at all it is a type parameter,
- * bounded by what was written if anything was.
+ * Whether bound `a` IS-A bound `b`: one name, one terminal past alias hops (§8.3), or `b` among the supertypes `a`'s
+ * terminal records. Each is looked up first where its own parametric record resolves: a local one's in the schema,
+ * an imported one's among the imports.
  */
-function parameterOf(
-  occurrences: Occurrences,
-  parameter: string,
-  namespaces: Namespaces,
-): TemplateParam {
-  const all = occurrences.uses.get(parameter) ?? [];
-  const declared = occurrences.written.get(parameter);
-  const kinds = new Set(all.map((use) => kindOf(use.type)));
-  if (kinds.size > 1) {
-    throw new TsonSchemaValidationError(
-      `parameter '${parameter}' stands in both a type position and a value position, so no ` +
-        'argument can satisfy both -- §5.10 gives a parameter one kind, inferred from where it is used',
-    );
-  }
-  if (all.length === 0 || kinds.has('TYPE')) {
-    const bounds = all
-      .filter((use) => use.bound !== undefined)
-      .flatMap((use): Use[] =>
-        use.bound === undefined ? [] : [{ type: use.bound, local: use.local }],
-      );
-    const inherited =
-      bounds.length === 0 ? undefined : narrowest(parameter, 'bounded by', bounds, namespaces);
-    if (declared !== undefined) {
-      requireType(declared, namespaces);
-      if (inherited !== undefined && !isA({ type: declared, local: true }, inherited, namespaces)) {
-        throw new TsonSchemaValidationError(
-          `parameter '${parameter}' is declared '${parameter}: ${spell(declared)}', and a template ` +
-            `it is passed to needs a type that IS-A ${spell(inherited.type)}, which ` +
-            `${spell(declared)} is not -- a written bound narrows what the uses require, and ` +
-            'never widens it',
-        );
-      }
-      return { name: parameter, type: TYPE_REF, bound: declared };
-    }
-    return {
-      name: parameter,
-      type: TYPE_REF,
-      ...(inherited === undefined ? {} : { bound: inherited.type }),
-    };
-  }
-  const derived = narrowest(parameter, 'read as', all, namespaces);
-  if (declared !== undefined) {
-    if (occurrences.structural && namespaces.meta(declared.name) === undefined) {
-      throw new TsonSchemaValidationError(
-        `parameter '${parameter}' is declared '${parameter}: ${spell(declared)}', and this template ` +
-          "applies a constructor of the governing meta, so its value parameters are the meta's " +
-          `types and a written type names one there -- '${declared.name}' is not in the structure ` +
-          'namespace (§5.10)',
-      );
-    }
-    const mine: Use = { type: declared, local: !occurrences.structural };
-    if (!isA(mine, derived, namespaces)) {
-      throw new TsonSchemaValidationError(
-        `parameter '${parameter}' is declared '${parameter}: ${spell(declared)}', and the positions ` +
-          `it stands in read it as ${spell(derived.type)}, which ${spell(declared)} does not IS-A -- ` +
-          'a written type narrows what the positions give, and never replaces it',
-      );
-    }
-    return { name: parameter, type: declared };
-  }
-  return { name: parameter, type: derived.type };
-}
-
-/** One parameter as far as the fixed point has got, or `undefined` while nothing grounds it. */
-function currentOf(
-  occurrences: Occurrences,
-  parameter: string,
-  namespaces: Namespaces,
-): TemplateParam | undefined {
-  if (!occurrences.uses.has(parameter) && !occurrences.written.has(parameter)) return undefined;
-  try {
-    return parameterOf(occurrences, parameter, namespaces);
-  } catch (e: unknown) {
-    if (e instanceof TsonSchemaValidationError) return undefined; // reported against this declaration when it settles
-    throw e;
-  }
+function isA(
+  a: TypeRef,
+  aLocal: boolean,
+  b: TypeRef,
+  bLocal: boolean,
+  lookup: DefinitionGetter,
+  meta: DefinitionGetter,
+  hops: ExternHops,
+): boolean {
+  if (a.name === b.name) return true;
+  const find =
+    (preferLocal: boolean): DefinitionGetter =>
+    (name) =>
+      preferLocal ? (lookup(name) ?? meta(name)) : (meta(name) ?? lookup(name));
+  const aTerminal = terminal(a.name, find(aLocal));
+  const bTerminal = terminal(b.name, find(bLocal));
+  if (aTerminal === bTerminal) return true;
+  const definition = find(aLocal)(aTerminal);
+  if (definition === undefined) return false;
+  const supertypes = supertypesOf(definition);
+  return (
+    supertypes.includes(bTerminal) ||
+    supertypes.includes(b.name) ||
+    isAThroughHops(a.name, b.name, find(aLocal), hops)
+  );
 }
 
 // ── The walk ─────────────────────────────────────────────────────────────────────────────────
 
-interface WalkContext {
-  readonly occurrences: Occurrences;
-  readonly meta: DefinitionGetter;
-  /** Whether the body walked is a record template's, whose parameters stand in three places only (§5.10). */
-  readonly recordTemplate?: boolean;
-}
-
-/** The one slot a parameter token stands in, in a record template, apart from a routed value. */
-const FIELD_TYPE_SLOT = `${RECORD_FIELD}.${TYPE}`;
-
-/** The kernel record a record template's field is (§5.10), whose slots label a parameter standing for a whole type or value. */
-const TEMPLATE_FIELD = metaName('record_template_field');
-
-/** The kernel record that states a parameter: its name, its type and its bound are the parameter itself, not a use of it (§5.10). */
-const TEMPLATE_PARAM = metaName('template_param');
-
-/** The slots a parameter may stand at in a record template: a field's type (as an argument), its labelled whole type or value, or its value. */
-const TEMPLATE_PARAMETER_SLOTS: ReadonlySet<string> = new Set([
-  FIELD_TYPE_SLOT,
-  `${TEMPLATE_FIELD}.${TYPE}`,
-  `${TEMPLATE_FIELD}.type_param`,
-  `${TEMPLATE_FIELD}.value_param`,
-  `${TEMPLATE_FIELD}.${VALUE}`,
-]);
-
-/** One held body walked against the vocabulary of the constructor it applies. */
-function walkBody(held: HeldBody, ctx: WalkContext): void {
-  const head = held.application.typeRef;
-  if (head === undefined) return;
-  const vocabulary = resolveSlot(head, ctx.meta);
-  if (vocabulary !== undefined && isRecordBody(vocabulary)) {
-    walkPayload(held.application.coreValue, head, vocabulary, {
-      ...ctx,
-      recordTemplate: head === RECORD_HEAD || head === RECORD_TEMPLATE_HEAD,
-    });
-  }
-}
-
 /**
- * §5.10's slot rule over a record template's payload as written, before `record`'s reader is
- * asked to bind it: in a `!record` body a parameter stands only at a field's type, a field's
- * default or fixed value, or an argument of an application, and anywhere else is a resolver error
- * naming the slot -- so a parameter in a scalar slot is refused for where it stands rather than for
- * the token it is. Throws `TsonSchemaValidationError`.
+ * The walk's own refusals, thrown, over a parametric record's explicit payload not yet bound, `<T> !meta.record { …
+ * }`: its parameters are confined to its field types before `record`'s reader is asked to bind them, so a parameter
+ * at a value or a scalar slot is refused for where it stands (§5.10) rather than for the token it is. The payload is
+ * walked as the `record` construction the author wrote, so each slot is named as `record` and `record_field` name
+ * it.
+ *
+ * **A type written in place is walked into**, its `{ of: !C { … } }` body against `C`'s vocabulary. A parameter at a
+ * slot there that holds a type or a name -- `type: { of: !meta.array { element_type: T } }` -- stands as it does at a
+ * field's type. A parameter at a slot that holds no type is refused for where it stands, inside the wrapper as
+ * outside it. An incomplete entry's completion is walked against the constructor the entry builds.
  */
 export function checkSlots(
   parameters: readonly string[],
   payload: DataValue,
   meta: DefinitionGetter,
 ): void {
-  walkBody(createHeldBody(payload, parameters), {
-    occurrences: createOccurrences(parameters, new Map(), false),
-    meta,
-  });
+  const vocabulary = resolve(RECORD, meta);
+  if (vocabulary?.kind === 'record')
+    walk(parameters, meta, false).payload(payload.coreValue, RECORD, vocabulary);
+}
+
+/** A field's own type, or `undefined` for a dependent field, whose type its sibling names. */
+function ownType(field: RecordField): TypeExpr | undefined {
+  return dependentOn(field.type) === undefined ? field.type : undefined;
 }
 
 /**
- * A constructor's payload: a record of bindings, or §5.6's positional form — a record with exactly
- * one unmarked field takes that field's value alone, which is how `!enum [a b M]` binds `members`.
+ * A name's resolved body, alias chains followed -- the slot type a written value faces. A namespace type faces it as
+ * the map its value is.
  */
-function walkPayload(
-  payload: CoreValue,
-  constructor: string,
-  vocabulary: RecordBody,
-  ctx: WalkContext,
-): void {
-  if (payload.kind === 'record') {
-    walkRecord(payload, constructor, vocabulary, ctx);
-    return;
+function resolve(name: string, meta: DefinitionGetter): Top | undefined {
+  let definition = meta(name);
+  for (let hops = 0; definition?.kind === 'alias' && hops < 32; hops++) {
+    definition = meta(definition.target.name);
   }
-  const unmarked = namedFields(vocabulary).filter((f) => !f.optional);
-  const only = unmarked[0];
-  if (unmarked.length === 1 && only !== undefined) {
-    if (only.type.kind !== 'sibling')
-      walkValue(payload, only.type, `${constructor}.${only.name}`, ctx);
+  if (definition?.kind === 'namespace') {
+    const asMap: MapBody = {
+      kind: 'map',
+      keyType: definition.keyType,
+      valueType: definition.valueType,
+      voidable: false,
+      ordered: definition.ordered,
+    };
+    return asMap;
   }
+  return definition;
 }
 
-/** Each written slot walked against the field the constructor declares for it. */
-function walkRecord(
-  wire: RecordValue,
-  constructor: string,
-  vocabulary: RecordBody,
-  ctx: WalkContext,
-): void {
-  for (const written of wire.fields) {
-    const value = written.value.coreValue;
-    if (
-      constructor === RECORD_FIELD &&
-      written.name === VALUE &&
-      value.kind === 'token' &&
-      value.form === 'unquoted' &&
-      declares(ctx.occurrences, value.text)
-    ) {
-      walkRouted(value.text, wire, ctx);
-      continue;
-    }
-    const slotField = vocabulary.fields.entries.get(written.name);
-    if (slotField !== undefined && slotField.type.kind !== 'sibling') {
-      walkValue(value, slotField.type, `${constructor}.${written.name}`, ctx);
-    }
-  }
+interface Walk {
+  payload(payload: CoreValue, constructor: string, vocabulary: RecordBody): void;
+  completion(payload: CoreValue, incomplete: IncompleteEntry, vocabulary: RecordBody): void;
 }
 
-/**
- * A routed default or fixed value: the parameter is read as the field's own declared type, which the
- * author wrote and which resolves in the schema's own namespace — or, where that type is itself one
- * of this template's parameters, as whatever that parameter's argument names.
- */
-function walkRouted(parameter: string, fieldRecord: RecordValue, ctx: WalkContext): void {
-  const declared = field(fieldRecord, TYPE);
-  let type: TypeRef | undefined;
-  if (declared?.kind === 'token') {
-    type = { name: declared.text, arguments: [], annotations: [] };
-  } else if (declared !== undefined) {
-    type = applicationIn(declared);
-  }
-  if (type === undefined) return; // no type to route into: record_field's own reader refuses the field
-  observe(ctx.occurrences, parameter, { type, local: true });
-}
+function walk(parameters: readonly string[], meta: DefinitionGetter, inPlace: boolean): Walk {
+  const declares = (name: string): boolean => parameters.includes(name);
 
-/** One written value at `slot` (`constructor.field`), against the type the slot declares. */
-function walkValue(written: CoreValue, declared: TypeRef, slot: string, ctx: WalkContext): void {
-  const type = resolveSlot(declared.name, ctx.meta);
-  if (
-    written.kind === 'token' &&
-    written.form === 'unquoted' &&
-    declares(ctx.occurrences, written.text)
-  ) {
-    walkToken(written.text, declared, type, slot, ctx);
-    return;
-  }
-  switch (written.kind) {
-    case 'array':
-      walkElements(written, type, slot, ctx);
-      return;
-    case 'map': {
-      if (type !== undefined && 'keyType' in type) {
-        walkEntries(written, type, slot, ctx);
-        return;
-      }
-      const valueType = namespaceValueType(type);
-      if (valueType !== undefined) {
-        for (const entry of written.entries) {
-          walkValue(entry.value.coreValue, valueType, slot, ctx);
-        }
-      }
+  /**
+   * A constructor's payload: a record of bindings, or §5.6's positional form -- a record with exactly one unmarked
+   * field takes that field's value alone.
+   */
+  function payload(written: CoreValue, constructor: string, vocabulary: RecordBody): void {
+    if (written.kind === 'record') {
+      record(written, constructor, vocabulary);
       return;
     }
-    case 'reference':
-      if (written.reference.kind === 'application') walkApplication(written.reference, ctx);
-      return;
-    case 'record':
-      if (!isTypeSlot(declared.name) && type !== undefined && isRecordBody(type)) {
-        walkRecord(written, declared.name, type, ctx);
+    const unmarked = [...vocabulary.fields.entries].filter(([, field]) => !field.optional);
+    const only = unmarked.length === 1 ? unmarked[0] : undefined;
+    if (only === undefined) return;
+    const type = ownType(only[1]);
+    if (type !== undefined) value(written, type, `${constructor}.${only[0]}`);
+  }
+
+  /** Each written slot walked against the field the constructor declares for it; a field's `value` is never one. */
+  function record(wire: RecordValue, constructor: string, vocabulary: RecordBody): void {
+    for (const written of wire.fields) {
+      const core = written.value.coreValue;
+      if (
+        constructor === RECORD_FIELD &&
+        written.name === VALUE &&
+        core.kind === 'token' &&
+        declares(core.text)
+      ) {
+        throw at(core.text, FIELD_VALUE);
       }
-      return;
-    default:
-      return;
-  }
-}
-
-/**
- * A map slot: the key against `key_type`, the value against `value_type`. Both halves, because a
- * parameter reaches either — core's `extern_type => <S, T> !scoped { scope: [EXTERN] schemas: { S =>
- * [T] } }` puts one in each.
- */
-function walkEntries(
-  map: MapValue,
-  declared: { keyType: TypeRef; valueType: TypeRef },
-  slot: string,
-  ctx: WalkContext,
-): void {
-  for (const entry of map.entries) {
-    walkValue(entry.key.coreValue, declared.keyType, `a key of ${slot}`, ctx);
-    walkValue(entry.value.coreValue, declared.valueType, slot, ctx);
-  }
-}
-
-/** A parameter standing at a slot: the slot's declared type is the whole of the verdict. */
-function walkToken(
-  parameter: string,
-  declared: TypeRef,
-  type: Top | undefined,
-  slot: string,
-  ctx: WalkContext,
-): void {
-  const typeSlot = isTypeSlot(declared.name);
-  if (!typeSlot && (type === undefined || !isAtomBody(type))) {
-    throw new TsonSchemaValidationError(
-      `parameter '${parameter}' stands where '${declared.name}' is declared, which is neither a type ` +
-        'reference nor a scalar -- §5.10 binds a value parameter to scalars only and a type ' +
-        'parameter to references, so nothing could be applied here',
-    );
-  }
-  if (
-    ctx.recordTemplate === true &&
-    !TEMPLATE_PARAMETER_SLOTS.has(slot) &&
-    !slot.startsWith(`${TEMPLATE_PARAM}.`)
-  ) {
-    throw new TsonSchemaValidationError(
-      `parameter '${parameter}' stands at ${slot} -- a record template's parameters stand only in a ` +
-        "field's type, a field's default or fixed value, or an argument of an application, so that " +
-        'every application of it shares one shape (§5.10)',
-    );
-  }
-  observe(ctx.occurrences, parameter, { type: typeSlot ? TYPE_REF : declared, local: false });
-}
-
-function walkElements(
-  array: ArrayValue,
-  type: Top | undefined,
-  slot: string,
-  ctx: WalkContext,
-): void {
-  if (type !== undefined && 'elementType' in type) {
-    for (const element of array.elements) {
-      walkValue(element.coreValue, type.elementType, slot, ctx);
+      const declared = vocabulary.fields.entries.get(written.name);
+      const type = declared === undefined ? undefined : ownType(declared);
+      if (type !== undefined) value(core, type, `${constructor}.${written.name}`);
     }
-    return;
   }
-  if (type !== undefined && 'elements' in type) {
-    const positions = type.elements;
-    array.elements.forEach((element, i) => {
-      const position = positions[Math.min(i, positions.length - 1)];
-      if (position !== undefined) {
-        walkValue(element.coreValue, position.elementType, slot, ctx);
+
+  /** One written value at `slot`, against the type the slot declares. */
+  function value(written: CoreValue, declared: TypeExpr, slot: string): void {
+    const declaredName = declared.kind === 'inline' ? undefined : declared.name;
+    const type = declared.kind === 'inline' ? declared.of : resolve(declared.name, meta);
+    if (written.kind === 'token' && declares(written.text)) {
+      if (inPlace && (type?.kind === 'ref' || declaredName === TYPE_EXPR)) return;
+      // A field written positionally, `item => T`, is its record_field's one unmarked slot, its type.
+      token(written.text, declaredName === RECORD_FIELD ? FIELD_TYPE : slot);
+      return;
+    }
+    if (written.kind === 'record' && declaredName === TYPE_EXPR) {
+      wrapped(written);
+      return;
+    }
+    if (written.kind === 'array') {
+      elements(written.elements, type, slot);
+      return;
+    }
+    if (written.kind === 'map' && type?.kind === 'map') {
+      entries(written, type, slot);
+      return;
+    }
+    if (written.kind === 'record' && type?.kind === 'record' && declaredName !== undefined) {
+      record(written, declaredName, type);
+    }
+  }
+
+  /**
+   * A type written in place, `{ of: !C { … } }`, walked as the construction of `C` it holds, or of the constructor an
+   * incomplete `C` completes. Every head declared in the schema is ready before this walk, so a `C` that is neither
+   * names no constructor, and the construction's own read refuses it whatever its slots hold.
+   */
+  function wrapped(wrapper: RecordValue): void {
+    for (const field of wrapper.fields) {
+      if (field.name !== OF) continue; // a field the wrapper does not declare, which its own reader reports
+      const construction = field.value;
+      const constructor = construction.typeRef;
+      const inside = walk(parameters, meta, true);
+      const head = constructor === undefined ? undefined : resolve(constructor, meta);
+      if (constructor !== undefined && head?.kind === 'record') {
+        inside.payload(construction.coreValue, constructor, head);
+      } else if (head?.kind === 'incomplete') {
+        const vocabulary = resolve(head.head, meta);
+        if (vocabulary?.kind === 'record')
+          inside.completion(construction.coreValue, head, vocabulary);
       }
+    }
+  }
+
+  /**
+   * A completion of an incomplete entry, `!nonempty { element_type: T }`: the construction of the entry's constructor,
+   * so its slots are that constructor's (§5.5). A payload that is no braced record is the value of the one field the
+   * entry leaves absent, §5.6's positional form as a completion reads it.
+   */
+  function completion(
+    written: CoreValue,
+    incomplete: IncompleteEntry,
+    vocabulary: RecordBody,
+  ): void {
+    const constructor = incomplete.head;
+    if (written.kind === 'record') {
+      record(written, constructor, vocabulary);
+      return;
+    }
+    const [absent, ...rest] = incomplete.absent;
+    if (absent === undefined || rest.length > 0) return;
+    const declared = vocabulary.fields.entries.get(absent);
+    const type = declared === undefined ? undefined : ownType(declared);
+    if (type !== undefined) value(written, type, `${constructor}.${absent}`);
+  }
+
+  /** A map slot: the key against `key_type`, the value against `value_type`. */
+  function entries(map: MapValue, declared: MapBody, slot: string): void {
+    for (const entry of map.entries) {
+      value(entry.key.coreValue, declared.keyType, `a key of ${slot}`);
+      value(entry.value.coreValue, declared.valueType, slot);
+    }
+  }
+
+  /** A parameter standing at a slot: admitted only at a field's type, and refused naming the slot anywhere else. */
+  function token(parameter: string, slot: string): void {
+    if (slot !== FIELD_TYPE) throw at(parameter, slot);
+  }
+
+  function elements(written: readonly DataValue[], type: Top | undefined, slot: string): void {
+    if (type?.kind === 'array') {
+      for (const element of written) value(element.coreValue, type.elementType, slot);
+      return;
+    }
+    if (type?.kind !== 'tuple' || type.elements.length === 0) return;
+    written.forEach((element, index) => {
+      const position = type.elements[Math.min(index, type.elements.length - 1)];
+      if (position !== undefined) value(element.coreValue, position.elementType, slot);
     });
   }
-  // not a collection slot -- a shape error the constructor's own reader reports
-}
 
-/**
- * A slot typed `type_ref` holding an application rather than a bare name. The head is a type name;
- * each argument that names a parameter of this declaration is *deferred*, since meta-kernel's
- * `type_argument` puts a parameter of either kind on the reference channel.
- *
- * Read through `wireForm.ts`'s own {@link field}/`NAME`/`ARGUMENTS`, not by matching those wire
- * names here — what an application looks like on the wire is one module's answer, and a walk that
- * re-derives it is a second opinion waiting to disagree.
- */
-function walkApplication(application: ApplicationReference, ctx: WalkContext): void {
-  application.arguments.forEach((argument, index) => {
-    walkArgument(argument, application.name, index, ctx);
-  });
-}
-
-/** One argument of an application: a bare parameter name defers to the head's own parameter, a nested application is walked, a literal says nothing. */
-function walkArgument(
-  argument: ReferenceArgument,
-  head: string,
-  index: number,
-  ctx: WalkContext,
-): void {
-  if (argument.kind !== 'reference') {
-    return; // a literal argument says nothing about this declaration's parameters
-  }
-  const reference = argument.reference;
-  if (reference.kind === 'application') {
-    walkApplication(reference, ctx); // a nested application: `box<inner<T>>`
-    return;
-  }
-  if (declares(ctx.occurrences, reference.name)) {
-    ctx.occurrences.deferred.push({ parameter: reference.name, head, index });
-  }
-}
-
-// ── Public surface ───────────────────────────────────────────────────────────────────────────
-
-/** Where a declaration whose parameters will not type is reported, entry by entry. */
-export interface ParameterTypesFailureReporter {
-  report(entryName: string, error: TsonSchemaValidationError): void;
-}
-
-/**
- * Every local open entry's parameters, by entry name then parameter name.
- *
- * `entries` is the **whole namespace**, imports included, because a local template may route a
- * parameter into an imported one and take its type from there. `local` is the subset this schema
- * produced: those are walked, and the only names a failure is reported against, since an imported
- * entry resolved in its own schema. `written` is what each local declaration's parameter list wrote.
- */
-export function inferAll(
-  entries: ReadonlyMap<string, Top>,
-  local: ReadonlySet<string>,
-  written: ReadonlyMap<string, ReadonlyMap<string, TypeRef>>,
-  meta: DefinitionGetter,
-  reporter: ParameterTypesFailureReporter,
-): ReadonlyMap<string, ReadonlyMap<string, TemplateParam>> {
-  const observed = new Map<string, Occurrences>();
-  const recorded = new Map<string, ReadonlyMap<string, TemplateParam>>();
-  const get = (name: string): Top | undefined => entries.get(name);
-  for (const [name, definition] of entries) {
-    if (!isOpen(definition)) continue;
-    if (!local.has(name)) {
-      recorded.set(name, new Map(parametersOf(definition).map((p) => [p.name, p])));
-      continue;
-    }
-    const body = heldOf(definition);
-    if (body === undefined) continue;
-    const writtenTypes = written.get(name) ?? new Map<string, TypeRef>();
-    const occurrences = createOccurrences(
-      body.parameterNames,
-      writtenTypes,
-      readsInStructure(definition, get),
-    );
-    try {
-      requireEarlierParameters(body.parameterNames, writtenTypes);
-      walkBody(body, { occurrences, meta });
-    } catch (e: unknown) {
-      if (!(e instanceof TsonSchemaValidationError)) throw e;
-      reporter.report(name, e);
-      continue;
-    }
-    observed.set(name, occurrences);
-  }
-  return settle(observed, recorded, entries, reporter, { local: get, meta });
-}
-
-/**
- * §5.10: a parameter's written `type` that names a parameter names one declared **before** it, so
- * every argument an earlier parameter binds is known when a later one is read.
- */
-function requireEarlierParameters(
-  parameterNames: readonly string[],
-  written: ReadonlyMap<string, TypeRef>,
-): void {
-  parameterNames.forEach((parameter, index) => {
-    const type = written.get(parameter);
-    if (type === undefined) return;
-    const named = parameterNames.indexOf(type.name);
-    if (named >= index) {
-      throw new TsonSchemaValidationError(
-        `parameter '${parameter}' is declared '${parameter}: ${spell(type)}', and '${type.name}' ` +
-          (named === index ? 'is the parameter itself' : 'is declared after it') +
-          " -- a parameter's type names an earlier parameter only (§5.10)",
-      );
-    }
-  });
-}
-
-/** The same answer as kinds, for the materialiser, which asks only which channel an argument travels on. */
-export function kinds(
-  parameters: ReadonlyMap<string, ReadonlyMap<string, TemplateParam>>,
-): ReadonlyMap<string, ReadonlyMap<string, Kind>> {
-  const result = new Map<string, ReadonlyMap<string, Kind>>();
-  for (const [entry, params] of parameters) {
-    result.set(entry, new Map([...params].map(([name, param]) => [name, kindOf(param.type)])));
-  }
-  return result;
-}
-
-/**
- * One template's kinds from its own body alone, for a caller with no batch pass behind it.
- *
- * {@link inferAll} runs once every declaration has resolved, which is after resolution has already
- * closed some applications on demand — a composition supertype and a refinement source have to
- * absorb the closed entry's fields and cannot wait for the batch. Those closings ask for this
- * instead: the template in hand has resolved, so its own occurrences classify, and only a parameter
- * needing the cross-template fixed point is left undetermined. A body that will not classify yields
- * nothing here and is reported by the batch pass, which is the one that knows which declarations
- * this schema wrote.
- */
-export function inferOne(template: Top, meta: DefinitionGetter): ReadonlyMap<string, Kind> {
-  const held = heldOf(template);
-  if (held === undefined) return new Map();
-  const occurrences = createOccurrences(held.parameterNames, new Map(), false);
-  try {
-    walkBody(held, { occurrences, meta });
-  } catch (e: unknown) {
-    if (e instanceof TsonSchemaValidationError) return new Map();
-    throw e;
-  }
-  const result = new Map<string, Kind>();
-  for (const parameter of occurrences.parameters) {
-    const uses = occurrences.uses.get(parameter) ?? [];
-    if (uses.length === 0) continue;
-    const seen = new Set(uses.map((use) => kindOf(use.type)));
-    if (seen.size !== 1) return new Map();
-    const [only] = seen;
-    if (only !== undefined) result.set(parameter, only);
-  }
-  return result;
-}
-
-/**
- * One template's parameters, typed from their own uses alone, for a call-site check made before
- * the batch pass has stamped them (§5.10). A parameter whose type only the cross-template fixed
- * point could ground, or whose uses disagree, is typed as an unbounded type parameter -- which
- * judges nothing, so a verdict here is never one the batch pass would retract. What a declaration
- * wrote beyond the uses (`<N: int8>`) narrows further and is judged when the batch pass settles.
- */
-export function inferOneParameters(
-  template: Top,
-  meta: DefinitionGetter,
-  local: (name: string) => Top | undefined,
-): readonly TemplateParam[] | undefined {
-  const held = heldOf(template);
-  if (held === undefined) return undefined;
-  const structural = readsInStructure(template, local);
-  const occurrences = createOccurrences(held.parameterNames, new Map(), structural);
-  try {
-    walkBody(held, { occurrences, meta });
-  } catch (e: unknown) {
-    if (e instanceof TsonSchemaValidationError) return undefined;
-    throw e;
-  }
-  const namespaces: Namespaces = { local, meta };
-  return held.parameterNames.map(
-    (name) => currentOf(occurrences, name, namespaces) ?? { name, type: TYPE_REF },
-  );
-}
-
-/**
- * The parameters of `template` that stand in a **type position** somewhere in its own body --
- * `T` in `{ a: T }` -- and so take a type, never a literal (§5.10). A parameter reaching a
- * position only through another template's argument list, or standing nowhere the walk can see,
- * is not named here: its kind is not settled by this template alone.
- */
-export function typePositionParameters(
-  template: Top,
-  meta: DefinitionGetter,
-  local: (name: string) => Top | undefined,
-): ReadonlySet<string> {
-  const held = heldOf(template);
-  if (held === undefined) return new Set();
-  const occurrences = createOccurrences(
-    held.parameterNames,
-    new Map(),
-    readsInStructure(template, local),
-  );
-  try {
-    walkBody(held, { occurrences, meta });
-  } catch (e: unknown) {
-    if (e instanceof TsonSchemaValidationError) return new Set();
-    throw e;
-  }
-  const named = new Set<string>();
-  for (const [parameter, uses] of occurrences.uses) {
-    if (uses.length > 0 && uses.every((use) => kindOf(use.type) === 'TYPE')) named.add(parameter);
-  }
-  return named;
-}
-
-// ── The fixed point ──────────────────────────────────────────────────────────────────────────
-
-/**
- * Deferred occurrences resolved against the types already known, until nothing moves. A parameter
- * riding `box<T>`'s argument list takes `box`'s own parameter at that position — its type, and its
- * bound — and `box` may itself be waiting on this one; §5.10 anticipates the cycle, and this pass
- * leaves such a parameter ungrounded, which is an unbounded type parameter.
- */
-function settle(
-  observed: Map<string, Occurrences>,
-  recorded: ReadonlyMap<string, ReadonlyMap<string, TemplateParam>>,
-  entries: ReadonlyMap<string, Top>,
-  reporter: ParameterTypesFailureReporter,
-  namespaces: Namespaces,
-): ReadonlyMap<string, ReadonlyMap<string, TemplateParam>> {
-  let moved = true;
-  while (moved) {
-    moved = false;
-    for (const occurrences of observed.values()) {
-      for (const deferred of occurrences.deferred) {
-        if (occurrences.settled.has(deferred)) continue;
-        const callee = entries.get(deferred.head);
-        if (callee === undefined || !isOpen(callee)) continue;
-        const calleeParameter = parametersOf(callee)[deferred.index];
-        if (calleeParameter === undefined) {
-          occurrences.settled.add(deferred);
-          continue; // an arity error, which the materialiser reports where it is applied
-        }
-        const calleeRecorded = recorded.get(deferred.head);
-        const calleeObserved = observed.get(deferred.head);
-        const known =
-          calleeRecorded !== undefined
-            ? calleeRecorded.get(calleeParameter.name)
-            : calleeObserved !== undefined
-              ? currentOf(calleeObserved, calleeParameter.name, namespaces)
-              : undefined;
-        if (known === undefined) continue;
-        occurrences.settled.add(deferred);
-        // A value type is read where the callee reads it: the meta's for a constructor template.
-        const schemaSide =
-          kindOf(known.type) === 'TYPE'
-            ? !recorded.has(deferred.head)
-            : !readsInStructure(callee, (n) => entries.get(n));
-        observe(occurrences, deferred.parameter, {
-          type: known.type,
-          ...(known.bound === undefined ? {} : { bound: known.bound }),
-          local: schemaSide,
-        });
-        moved = true;
-      }
-    }
-  }
-  const result = new Map<string, ReadonlyMap<string, TemplateParam>>();
-  for (const [name, occurrences] of observed) {
-    try {
-      result.set(
-        name,
-        new Map(occurrences.parameters.map((p) => [p, parameterOf(occurrences, p, namespaces)])),
-      );
-    } catch (e: unknown) {
-      if (!(e instanceof TsonSchemaValidationError)) throw e;
-      reporter.report(name, e);
-    }
-  }
-  return result;
+  return { payload, completion };
 }

@@ -35,7 +35,7 @@ const camel = (name: string): string =>
 describe('§9.1 / §11.5: the limits table is policy.limits', () => {
   it('carries every member of policy.tn, in its order, at its default', () => {
     const declared = declaredLimits();
-    expect(declared).toHaveLength(17);
+    expect(declared).toHaveLength(16);
     expect(Object.entries(DEFAULT_LIMITS)).toEqual(declared.map(([n, v]) => [camel(n), v]));
   });
 

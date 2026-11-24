@@ -10,7 +10,7 @@ import type { Top } from '../src/schema/meta/typedef.js';
 import type { AtomBinding } from '../src/bind/binding.js';
 import type { TokenValue } from '../src/ast/value.js';
 
-const CORE_ID = 'https://tson.io/2026/39/m/core.tn';
+const CORE_ID = 'https://tson.io/2026/40/m/core.tn';
 
 // A `value`-typed schema facet is read under the atom the slot stands for, once that atom is in
 // scope (§7.4). `date_type`/`time_type`/`datetime_type` are the three families the kernel types
@@ -107,8 +107,8 @@ describe('createDefinitionMetaReader -- the constructors of the kernel and the b
     });
   });
 
-  it('an enum pins its name type to meta.identifier, and a meta.enum_type states its own (§7.4)', () => {
-    expect(body('enum', '[A B]')).toEqual({
+  it('a meta.enum_type states its own name type, which `enum` pins to meta.identifier (§5.5, §7.4)', () => {
+    expect(body('meta.enum_type', '{ name_type: meta.identifier  members: [A B] }')).toEqual({
       kind: 'enum',
       nameType: 'meta.identifier',
       members: ['A', 'B'],
@@ -129,10 +129,6 @@ describe('createDefinitionMetaReader -- the constructors of the kernel and the b
       ordered: false,
       voidable: false,
     });
-    expect(body('meta.set_type', '{ element_type: text }')).toMatchObject({
-      ordered: false,
-      uniqueItems: true,
-    });
   });
 
   it('a field group reads its options, its optional members, and defaults optional to false (§5.11)', () => {
@@ -146,16 +142,14 @@ describe('createDefinitionMetaReader -- the constructors of the kernel and the b
     });
   });
 
-  it('a template reads its typed parameters, a bound only on a type parameter', () => {
-    const held = body(
-      'meta.template',
-      '{ parameters: [ { name: T  type: meta.type_ref  bound: text } { name: N  type: numeric.count } ]  template: "!meta.array { element_type: T }" }',
+  it('a parametric record reads its parameters, a bound only where one is written (§5.10)', () => {
+    const parametric = body(
+      'meta.record',
+      '{ parameters: [ { name: T  bound: text } { name: U } ]  fields: { v => { type: T }  w => { type: U } } }',
     );
-    expect(held).toMatchObject({
-      parameters: [
-        { name: 'T', type: { name: 'meta.type_ref' }, bound: { name: 'text' } },
-        { name: 'N', type: { name: 'numeric.count' } },
-      ],
+    expect(parametric).toMatchObject({
+      kind: 'record',
+      parameters: [{ name: 'T', bound: { name: 'text' } }, { name: 'U' }],
     });
   });
 });

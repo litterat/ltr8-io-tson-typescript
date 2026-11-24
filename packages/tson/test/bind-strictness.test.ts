@@ -20,7 +20,7 @@ function atomBinding<T>(wireType: string): Binding<T> {
 const INT: Binding<number> = atomBinding('int32');
 
 function typeRef(name: string): TypeRef {
-  return { name, arguments: [], annotations: [] };
+  return { name, annotations: [] };
 }
 
 function recordField(

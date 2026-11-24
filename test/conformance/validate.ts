@@ -14,6 +14,10 @@ import {
   isVerdict,
 } from '../../packages/tson/src/core/diagnostic.js';
 
+import { parseDocument as parseDataDocument } from '../../packages/tson/src/compiler/dataParser.js';
+import { TsonParseError } from '../../packages/tson/src/core/errors.js';
+import { fromBytes, runSync } from '../../packages/tson/src/io/bytes.js';
+
 import { loadImports, newClass2Tson } from './class2Tson.js';
 import type { Category, ValidateSidecar } from './sidecar.js';
 import type { Class2Layer, Vector } from './vectors.js';
@@ -124,6 +128,20 @@ export async function checkValidateVector(
       const category = sidecar.category;
       if (category === undefined) {
         throw new Error(`${vector.name}: an 'error' outcome vector must declare a category`);
+      }
+      if (category === 'parser') {
+        // A Class 2 read reports a base-syntax failure under no category of its own, so the data grammar's
+        // verdict is taken where it is made: the document fails the Class 1 parse ([TSON-DATA] §8.1), as the
+        // Java reference's `Class2ConformanceSuiteTest.checkValidateVector` takes it.
+        try {
+          runSync(parseDataDocument(fromBytes(subject)));
+        } catch (error) {
+          if (error instanceof TsonParseError) return;
+          throw error;
+        }
+        throw new Error(
+          `${vector.name}: a parser-category vector must fail the data parse, and it parsed`,
+        );
       }
       const matched = result.diagnostics.some(
         (d) =>

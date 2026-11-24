@@ -26,7 +26,6 @@
  *
  * Not reentrant across concurrent writes to the same sink -- single-use, like `Lexer`.
  */
-import type { CoreReference, Reference, ReferenceArgument } from '../ast/reference.js';
 import { TsonAtomParseError, TsonAtomValidationError, TsonWriteError } from '../core/errors.js';
 import { createUriParser } from '../atom/network/uri.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
@@ -132,17 +131,6 @@ export interface Emitter {
    * @throws TsonWriteError on a second type-ref for one value.
    */
   typeRef(name: string): void;
-
-  // ── References (§7.4) ──────────────────────────────────────────────────────────────────────
-  /**
-   * Writes `reference` unquoted: an application as its qualified name, an adjacent `<`, each
-   * argument separated by one space, and `>` -- the canonical text, `map<text list<int32>>` -- with
-   * a value argument keeping its token form (a quoted one escaped as a quoted token is); a sibling
-   * reference as its field's name and the mark, `kind!`. Whatever follows is whitespace or the end
-   * of the document, as §7.5 requires after the mark: this writer separates every element, a map's
-   * arrow and a scope's closing delimiter by a space, and ends an annotation's value with one.
-   */
-  reference(reference: CoreReference): void;
 
   // ── Leaf tokens ─────────────────────────────────────────────────────────────────────────────
   /** `_`, the void sentinel (§2.9) -- the format's one spelling of absence (§4.4, §7.3). */
@@ -298,23 +286,6 @@ function validateDirectiveUri(name: string, uri: string): void {
   }
 }
 
-/** The text of `reference` as written unquoted (§7.4): see {@link Emitter.reference}. */
-function referenceSpelling(reference: Reference): string {
-  switch (reference.kind) {
-    case 'name':
-      return reference.name;
-    case 'sibling':
-      return `${reference.field}!`;
-    case 'application':
-      return `${reference.name}<${reference.arguments.map(argumentSpelling).join(' ')}>`;
-  }
-}
-
-function argumentSpelling(argument: ReferenceArgument): string {
-  if (argument.kind === 'reference') return referenceSpelling(argument.reference);
-  return argument.form === 'unquoted' ? argument.text : `"${escapeSingleLine(argument.text)}"`;
-}
-
 /** Builds a fresh {@link Emitter} writing into `sink`. */
 export function createEmitter(sink: TextSink): Emitter {
   const scopeElementCounts: number[] = [];
@@ -412,10 +383,6 @@ export function createEmitter(sink: TextSink): Emitter {
     },
     importRef: (uri: string) => {
       directive('import', uri);
-    },
-    reference: (reference: CoreReference) => {
-      startCoreValue();
-      emit(referenceSpelling(reference));
     },
     typeRef: (name: string) => {
       if (typeRefPending) {

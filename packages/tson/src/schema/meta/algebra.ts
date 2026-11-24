@@ -4,25 +4,22 @@
  * host-value shapes this package's constraint fields are typed with: {@link Rational} and
  * {@link Decimal}.
  */
-import type { TypeBase } from './typedef.js';
+import type { DependentBody, TypeBase } from './typedef.js';
 import type {
   ArrayBody,
   ChoiceBody,
   MapBody,
   NamespaceBody,
   RecordBody,
-  RecordTemplateBody,
   TupleBody,
 } from './bodies.js';
 
 /**
- * The kernel's `meta.product` base kind (§4.1) — every PRODUCT-kind {@link Top} variant: `record`,
- * `record_template`, `array` (and `set_type`, its refinement, which resolves to an {@link ArrayBody}
- * shape), `map`, `namespace` and `tuple`, the kernel's own structural-type family. A namespace type is
- * a refinement of `map`, and a record template is its own constructor, a family base.
+ * The kernel's `meta.product` base kind (§4.1) — every PRODUCT-kind {@link Top} variant: `record` (a parametric
+ * record among them, §5.10), `array` (a completion of the incomplete entry `meta.set_type` included, §5.5),
+ * `map`, `namespace` and `tuple`, the kernel's own structural-type family. A namespace type composes `map`.
  */
-export type Product =
-  RecordBody | RecordTemplateBody | ArrayBody | MapBody | NamespaceBody | TupleBody;
+export type Product = RecordBody | ArrayBody | MapBody | NamespaceBody | TupleBody;
 
 /**
  * The kernel's `meta.sum` base kind (§4.1) — every SUM-kind {@link Top} variant: {@link ChoiceBody}
@@ -30,7 +27,7 @@ export type Product =
  * its variants, and {@link DeclaredType} (`declared_type => sum & {}`, §7.8), the open one that draws its
  * variants from the closure.
  */
-export type Sum = ChoiceBody | DeclaredType;
+export type Sum = ChoiceBody | DeclaredType | DependentBody;
 
 /**
  * the kernel's `meta.product_size_type` enum (§4.1, §8.1) — fixed per product constructor

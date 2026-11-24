@@ -36,7 +36,7 @@ import {
 import { TsonInternalError, TsonLexError, TsonParseError, TsonReadError } from '../core/errors.js';
 import type { NestingLimitOptions } from '../core/limits.js';
 import { fromBytes, fromString, runOver, runSync, type ByteInput, type Task } from '../io/bytes.js';
-import type { IdentifierPolicy, ScriptPolicy } from '../unicode/policy.js';
+import type { IdentifierPolicy, TokenPolicy } from '../unicode/policy.js';
 import { declinesInBandBinding } from './inBandBinding.js';
 import { createJsonReadContext } from './readContext.js';
 import type { JsonCompiledSchema, JsonTypeReader } from './schema/compile.js';
@@ -63,7 +63,7 @@ export interface ReadJsonOptions extends NestingLimitOptions {
    * (`json/schema/tokenHygiene.ts`). Defaults to `unicode/policy.ts`'s own
    * `DEFAULT_TOKEN_POLICY`, which checks nothing.
    */
-  readonly tokenPolicy?: ScriptPolicy;
+  readonly tokenPolicy?: TokenPolicy;
 }
 
 function rootReaderOf(options: ReadJsonOptions): JsonTypeReader {

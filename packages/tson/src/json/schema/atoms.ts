@@ -27,11 +27,11 @@
  * this encoding adds is [TSON-DATA] §8.2's name hygiene over the *value* ({@link
  * valueNameRefuses}): a value of an identifier family is a name wherever it stands.
  *
- * **A kind is a string naming a member** ([TSON-JSON] §5.6, [TSON-SCHEMA] §4.2): its content is
- * read as the kernel's `type_name` reads it and judged a member of the kind's linked `members`
- * (`atom/reference.ts`'s `createReferenceParser`), so `kind<uuid_type>` takes `"stock_id"` and refuses
- * a uuid, which is a value of a member and no type name. It is an atom like any other here, never
- * a discrimination case over its members. `hostname`, `host` and `media_type` are string content
+ * **A reference over a constructor is a string naming a member** ([TSON-JSON] §5.6, [TSON-SCHEMA]
+ * §4.2): its content is read as a qualified name and judged a member of the reference's linked
+ * `members` (`atom/reference.ts`'s `createReferenceParser`), so `meta.ref<net.uuid_type>` takes
+ * `"stock_id"` and refuses a uuid, which is a value of a member and no type name. It is an atom like
+ * any other here, never a discrimination case over its members. `hostname`, `host` and `media_type` are string content
  * read by the network parsers `atomParserFor` routes them to, as every other string family is.
  *
  * **§5.2's enum rule is applied uniformly, `boolean` included**: `boolean` is the kernel's own
@@ -318,10 +318,11 @@ export function withAnnotationObject(
 /** What an atom position's reader needs beyond its body: facts of the closure the schema linked over. */
 export interface AtomReaderOptions {
   /**
-   * Whether a kind's value is judged a member of the kind ([TSON-JSON] §5.6, [TSON-SCHEMA] §4.2):
-   * `kind<uuid_type>` takes `"stock_id"` where the governing schema's closure builds `stock_id`
-   * with `uuid_type`, and refuses `"sku"`, a text type, as no member. True wherever the names a
-   * document writes resolve in the closure the kind's `members` were listed over -- everywhere but
+   * Whether a value at a reference over a constructor is judged a member of it ([TSON-JSON] §5.6,
+   * [TSON-SCHEMA] §4.2): `meta.ref<net.uuid_type>` takes `"stock_id"` where the governing schema's
+   * closure builds `stock_id` with `uuid_type`, and refuses `"sku"`, a text type, as no member. True
+   * wherever the names a document writes resolve in the closure the reference's `members` were
+   * listed over -- everywhere but
    * a schema the meta-kernel governs and the bootstrap, whose documents name the types of the
    * schema they describe, which that schema's own link judges (`atom/reference.ts`).
    */
@@ -342,7 +343,7 @@ export function atomReader(
 ): AtomReader {
   const form = atomFormOf(body);
   const parser: ScalarParser | undefined =
-    body.kind === 'reference_type'
+    body.kind === 'ref'
       ? createReferenceParser(displayName, body, options.judgesKindMembers ?? false)
       : atomParserFor(displayName, body);
   const profile = body.kind === 'identifier_type' ? identifierProfileOf(body) : undefined;
@@ -354,7 +355,7 @@ export function atomReader(
       if (parser === undefined) {
         throw new Error(`'${displayName}' is an atom body with no parser -- this is a library bug`);
       }
-      return parser.read(tokenOf(content, body.kind === 'reference_type'));
+      return parser.read(tokenOf(content, body.kind === 'ref'));
     },
     profile === undefined
       ? undefined
@@ -425,7 +426,17 @@ export function fieldValueParser(
   displayName: string,
   body: Atom,
   enumForm: Normalization = 'NONE',
+  options: { readonly readsReferences?: boolean } = {},
 ): FieldValueParser {
+  if (body.kind === 'ref' && options.readsReferences === true) {
+    // A reference is the reference grammar's own text, which JSON writes as a string and a map keys by as a
+    // member name ([TSON-JSON] §5.6, §6.4); a JSON read is of data, so what a name reaches is judged (§4.2, §5.12).
+    const parser = createReferenceParser(displayName, body, true);
+    return {
+      form: atomFormOf(body),
+      parse: (content: string) => parser.read(tokenOf(content, true)),
+    };
+  }
   if (body.kind === 'enum') {
     const members = new Set(body.members);
     const isBooleanFamily =

@@ -91,11 +91,11 @@ export {
   perSegment,
   permitting,
   processorPolicy,
-  scriptPolicy,
+  tokenPolicyAt,
   withRestrictionLevel,
   withSkeletonDistinctness,
 } from './unicode/policy.js';
-export type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/policy.js';
+export type { IdentifierPolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
 export type { RestrictionLevel } from './unicode/restriction-level.js';
 export { scriptNamed, scriptName } from './unicode/uts39.js';
 export type { ScriptId } from './unicode/uts39.js';

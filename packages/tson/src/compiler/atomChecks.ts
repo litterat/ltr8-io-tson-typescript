@@ -24,7 +24,6 @@
  * between them admit a value ({@link networkCoherence}).
  */
 import type { Atom, Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 import {
   describeSize,
   sizeAdmits,
@@ -55,7 +54,7 @@ import type {
   Ipv6Type,
   MediaTypeType,
 } from '../schema/meta/atoms-network.js';
-import type { EnumBody, ReferenceBody } from '../schema/meta/bodies.js';
+import type { EnumBody, RefBody } from '../schema/meta/bodies.js';
 import type { Decimal, Rational } from '../schema/meta/algebra.js';
 import type {
   EmailType,
@@ -63,6 +62,7 @@ import type {
   IriType,
   Normalization,
   UriType,
+  UuidType,
 } from '../schema/meta/atoms-text.js';
 import { parseNetworkBlock, whyNoValue } from '../atom/network/cidrParsing.js';
 import { parseIpv4Octets } from '../atom/network/ipv4.js';
@@ -948,55 +948,102 @@ function bytesCoherence(t: BytesType): string[] {
 
 function dateNarrows(source: DateType, refined: DateType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min', source.min, refined.min, compareCalendarDate);
-  checkAtMost(out, 'max', source.max, refined.max, compareCalendarDate);
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareCalendarDate,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareCalendarDate,
+  );
   return out;
 }
 
 function dateCoherence(t: DateType): string[] {
   const out: string[] = [];
-  checkOrdered(out, 'min', t.min, 'max', t.max, compareCalendarDate);
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareCalendarDate,
+  );
   return out;
 }
 
 function timeNarrows(source: TimeType, refined: TimeType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min', source.min, refined.min, compareOffsetTime);
-  checkAtMost(out, 'max', source.max, refined.max, compareOffsetTime);
-  // `precision` is an upper bound on the value's own fractional-second grid (§5.5: "a
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareOffsetTime,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetTime,
+  );
+  // `fraction_digits` is an upper bound on the value's own fractional-second grid (§5.5: "a
   // constraint on the value, not on a spelling"), so it refines the way every other upper bound
   // does: a refinement may lower it (a coarser grid), never raise it.
-  checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
+  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareBigint);
   return out;
 }
 
 function timeCoherence(t: TimeType): string[] {
   const out: string[] = [];
-  checkOrdered(out, 'min', t.min, 'max', t.max, compareOffsetTime);
-  checkWithin(out, 'precision', t.precision, 0n, 9n);
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetTime,
+  );
+  checkWithin(out, 'fraction_digits', t.fractionDigits, 0n, 9n);
   return out;
 }
 
 function dateTimeNarrows(source: DateTimeType, refined: DateTimeType): string[] {
   const out: string[] = [];
-  checkAtLeast(out, 'min', source.min, refined.min, compareOffsetDateTime);
-  checkAtMost(out, 'max', source.max, refined.max, compareOffsetDateTime);
-  // As for `time`: an upper bound on the value's own grid refines downward only (§5.5).
-  checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
+  checkLower(
+    out,
+    bound(source.min, source.exclusiveMin, 'min', 'exclusive_min'),
+    bound(refined.min, refined.exclusiveMin, 'min', 'exclusive_min'),
+    compareOffsetDateTime,
+  );
+  checkUpper(
+    out,
+    bound(source.max, source.exclusiveMax, 'max', 'exclusive_max'),
+    bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetDateTime,
+  );
+  // `fraction_digits` is an upper bound on the value's own fractional-second grid (§5.5: "a
+  // constraint on the value, not on a spelling"), so it refines the way every other upper bound
+  // does: a refinement may lower it (a coarser grid), never raise it.
+  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareBigint);
   return out;
 }
 
 function dateTimeCoherence(t: DateTimeType): string[] {
   const out: string[] = [];
-  checkOrdered(out, 'min', t.min, 'max', t.max, compareOffsetDateTime);
-  checkWithin(out, 'precision', t.precision, 0n, 9n);
+  checkRange(
+    out,
+    bound(t.min, t.exclusiveMin, 'min', 'exclusive_min'),
+    bound(t.max, t.exclusiveMax, 'max', 'exclusive_max'),
+    compareOffsetDateTime,
+  );
+  checkWithin(out, 'fraction_digits', t.fractionDigits, 0n, 9n);
   return out;
 }
 
 // ── duration_type / period_type ─────────────────────────────────────────────────────────────
 
 /**
- * `duration`'s bounds, step and `precision` are all bigint (nanoseconds, §5.5), so this reuses
+ * `duration`'s bounds, step and `fraction_digits` are all bigint (nanoseconds, §5.5), so this reuses
  * {@link compareBigint} and {@link integerSignum} directly rather than a family-specific
  * comparator -- the same value space {@link IntegerType}'s own facets share, only the unit
  * differs.
@@ -1015,7 +1062,7 @@ function durationNarrows(source: DurationType, refined: DurationType): string[] 
     bound(refined.max, refined.exclusiveMax, 'max', 'exclusive_max'),
     compareBigint,
   );
-  checkAtMost(out, 'precision', source.precision, refined.precision, compareBigint);
+  checkAtMost(out, 'fraction_digits', source.fractionDigits, refined.fractionDigits, compareBigint);
   if (
     source.multipleOf !== undefined &&
     refined.multipleOf !== undefined &&
@@ -1037,11 +1084,11 @@ function durationCoherence(t: DurationType): string[] {
     compareBigint,
   );
   checkPositiveStep(out, 'multiple_of', t.multipleOf, integerSignum);
-  checkWithin(out, 'precision', t.precision, 0n, 9n);
+  checkWithin(out, 'fraction_digits', t.fractionDigits, 0n, 9n);
   return out;
 }
 
-/** `period`'s bounds and step are bigint months (§5.5); no `precision` facet -- a month count has no fractional part. */
+/** `period`'s bounds and step are bigint months (§5.5); no `fraction_digits` facet -- a month count has no fractional part. */
 function periodNarrows(source: PeriodType, refined: PeriodType): string[] {
   const out: string[] = [];
   checkLower(
@@ -1264,6 +1311,25 @@ function enumCoherence(t: EnumBody): string[] {
 }
 
 /**
+ * `version` names RFC 9562's version field, a UUID layout rather than a bound (§5.5, §5.7): the versions are
+ * disjoint sets, not progressively smaller ones, so a refinement changing one claims an IS-A that does not hold --
+ * no v7 UUID is a v4 UUID. Setting it where the source left it unset narrows, every versioned UUID being a UUID, so
+ * it is settable once.
+ */
+function uuidNarrows(source: UuidType, refined: UuidType): string[] {
+  const out: string[] = [];
+  checkSettableOnce(
+    out,
+    'version',
+    source.version,
+    refined.version,
+    (a, b) => a === b,
+    'the versions are disjoint layouts, not narrower sets',
+  );
+  return out;
+}
+
+/**
  * An enum's value set is written out in full, so narrowing is plain subset containment (`members`
  * may drop members but never introduce one the source does not admit). `name_type` is fixed where
  * the enum is constructed (§5.7): a refinement narrows the members and never the name type, so
@@ -1282,14 +1348,14 @@ function enumNarrows(source: EnumBody, refined: EnumBody): string[] {
 }
 
 /**
- * `meta.reference_type`'s `allow_sibling` is a permission a refinement may withdraw and never grant back
- * (§4.2). Whether the refined `of` narrows the source's -- is the source's or IS-A it -- is an IS-A question
- * about two names, which only the namespace they resolve in answers; the linker asks it (§5.7).
+ * `meta.ref`'s one facet is `of`. Whether the refined `of` narrows the source's -- is the source's or IS-A it --
+ * is an IS-A question about two names, which only the namespace they resolve in answers; the linker asks it
+ * (§5.7), so nothing is judged here.
  */
-function referenceNarrows(source: ReferenceBody, refined: ReferenceBody): string[] {
-  const out: string[] = [];
-  checkOnlyWithdraws(out, 'allow_sibling', source.allowSibling, refined.allowSibling);
-  return out;
+function referenceNarrows(source: RefBody, refined: RefBody): string[] {
+  void source;
+  void refined;
+  return [];
 }
 
 /** `hostname_type`'s `allow_idn` may be withdrawn and never granted back (§5.7). */
@@ -1428,8 +1494,8 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'ipv6_type'
         ? ipv6Narrows(source, refined)
         : mismatch('an ipv6', refined);
-    case 'reference_type':
-      return refined.kind === 'reference_type'
+    case 'ref':
+      return refined.kind === 'ref'
         ? referenceNarrows(source, refined)
         : mismatch('a reference', refined);
     case 'hostname_type':
@@ -1440,11 +1506,13 @@ export function checkAtomNarrows(source: Atom, refined: Atom): readonly string[]
       return refined.kind === 'media_type_type'
         ? mediaTypeNarrows(source, refined)
         : mismatch('a media_type', refined);
-    // No orderable facet and no selector at all: `value_type` and `void_type` (empty
-    // vocabularies), `uuid_type`, `mac_type` and `host_type` (spec-pinned, no facet of their own
-    // to compare).
-    case 'void_type':
     case 'uuid_type':
+      return refined.kind === 'uuid_type'
+        ? uuidNarrows(source, refined)
+        : mismatch('a uuid', refined);
+    // No orderable facet and no selector at all: `void_type` (an empty vocabulary), `mac_type` and
+    // `host_type` (spec-pinned, no facet of their own to compare).
+    case 'void_type':
     case 'mac_type':
     case 'host_type':
       return [];
@@ -1482,7 +1550,7 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'ipv4_type',
   'ipv6_type',
   'complex_type',
-  'reference_type',
+  'ref',
   'hostname_type',
   'host_type',
   'media_type_type',
@@ -1492,7 +1560,7 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
  * Whether a resolved body is an `Atom` — the one question `definitionResolver.ts`'s own
  * `checkNarrows`/`checkCoherent` need before consulting {@link checkAtomNarrows}/
  * {@link checkAtomCoherence}, since every other `Top` shape (a container, a sum, a reference, the
- * open `Data` extension point, a held template body) has no constraint facets to narrow or
+ * open `Data` extension point) has no constraint facets to narrow or
  * contradict.
  */
 export function isAtom(body: Top): body is Atom {
@@ -1565,7 +1633,7 @@ export function checkAtomCoherence(atom: Atom): readonly string[] {
     case 'uuid_type':
     case 'complex_type':
     case 'mac_type':
-    case 'reference_type':
+    case 'ref':
     case 'hostname_type':
     case 'host_type':
       return [];
@@ -1600,7 +1668,6 @@ function mediaTypeCoherence(atom: MediaTypeType): string[] {
  */
 export function checkBodyCoherence(body: Top): readonly string[] {
   if (isAtom(body)) return checkAtomCoherence(body);
-  if (isTemplateBody(body)) return [];
   if (body.kind === 'array' || body.kind === 'map' || body.kind === 'namespace') {
     const out: string[] = [];
     checkOrdered(out, 'min_items', body.minItems, 'max_items', body.maxItems, compareBigint);

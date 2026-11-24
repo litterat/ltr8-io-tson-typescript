@@ -125,7 +125,6 @@ describe('policyText: the whole of policy.limits', () => {
         'max schema entries:         65536',
         'max alias chain:            64',
         'max supertype chain:        64',
-        'max materialisation depth:  64',
         'max wait depth:             64',
       ].join('\n'),
     );
@@ -143,7 +142,7 @@ describe('policyText: the whole of policy.limits', () => {
 
   it('a report states a limit past int32, each a policy.limit int64, and it reads back as written', () => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/40/m/policy.tn');
     if (linked === undefined) throw new Error('policy.tn is not registered');
     const rendered = renderPolicy(policyFor([]), 'tson')
       .replace(/max_depth: *64/u, 'max_depth: 3000000000')
@@ -192,7 +191,6 @@ describe('policy report shape', () => {
       max_schema_entries: 65536,
       max_alias_chain: 64,
       max_supertype_chain: 64,
-      max_materialisation_depth: 64,
       max_wait_depth: 64,
     });
     expect(json).not.toHaveProperty('limits_policy');
@@ -234,7 +232,7 @@ describe('policy report shape', () => {
     ],
   ])('a rendered report is a policy.processor under policy.tn: %s', (_name, flags) => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/40/m/policy.tn');
     if (linked === undefined)
       throw new Error('policy.tn is not registered in the standard library');
     const compiled = tson.compile(linked);
@@ -263,7 +261,7 @@ describe('policy report shape', () => {
 
   it('policy.tn does reject a report missing `limits` (the check above is not vacuous)', () => {
     const tson = stdlibTson();
-    const linked = tson.schemas.get('tson.io/2026/39/m/policy.tn');
+    const linked = tson.schemas.get('tson.io/2026/40/m/policy.tn');
     if (linked === undefined) throw new Error('policy.tn is not registered');
     const full = renderPolicy(policyFor([]), 'tson');
     // `limits` is the last member of the written record: cut it, close the record.

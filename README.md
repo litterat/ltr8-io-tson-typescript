@@ -3,7 +3,7 @@
 A TypeScript implementation of **TSON** (Typed Schema Object Notation), for Node 24+ and modern
 browsers, with **zero runtime dependencies**.
 
-> **Status: all three spec parts implemented, including the Part 3 JSON encoding; 944/944 shared
+> **Status: all three spec parts implemented, including the Part 3 JSON encoding; 1458/1458 shared
 > conformance subjects passing at the pinned suite commit, Class 1 and Class 2.** See
 > [STATUS.md](STATUS.md) for the full checklist. Not yet published to npm, though the packaging is
 > ready: `publint` and `arethetypeswrong` run in CI on every commit, and a browser-bundle smoke test
@@ -26,7 +26,7 @@ Claude Code loads it automatically in a clone of this repository, through the
 ## Versioning
 
 `0.<spec revision>.<patch>` — the minor version tracks the TSON spec revision this implementation is
-built against, so `0.39.x` implements the **2026 Revision 39** series. A new spec revision moves the
+built against, so `0.40.x` implements the **2026 Revision 40** series. A new spec revision moves the
 minor; fixes within one move the patch. The major stays `0` until the spec freezes at version 1,
 which is also when documents change extension from `.tn` to `.tn1` (§7.1) and every content-addressed
 identity is re-pinned.
@@ -177,12 +177,16 @@ import { httpSchemaSource } from '@ltr8/tson/source';
 
 const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
 tson.register(linkSchema(bootstrapKernel(kernelBytes)));
-await tson.preload(['https://tson.io/2026/39/m/core.tn']);
+await tson.preload(['https://tson.io/2026/40/m/core.tn']);
 ```
 
 Schema resolution (`resolveSchema`) is synchronous and resolves only against what is already
 registered; fetching (`preload`) is async and must run first, in dependency order, for exactly that
 reason — a schema fetch is real I/O and cannot honestly be synchronous in JS the way it can in Java.
+`loadSchema(source)` is the front door that does both for one schema document: it puts the
+document in flight under its own `!!id`, fetches what it imports and the schemas its externs name
+(`!meta.extern`, [TSON-SCHEMA] §5.13) through the configured `SchemaSource`, then resolves, links
+and registers it — a reference reaching the document itself is a cycle, never a fetch.
 
 `httpSchemaSource` (deny-by-default host allow-list, no redirects, a streamed size cap, a timeout)
 and `fileSchemaSource` (containment checked after `realpath`) live behind the separate, Node-only
@@ -297,7 +301,10 @@ cat person-data.json | npx @ltr8/tson-cli validate --schema person.tn --root per
 
 Six commands: `validate`, `compile`, `policy`, `hash`, `strip`, `init-example`. `validate`/`compile`/`hash`
 register `@ltr8/tson/stdlib`'s six embedded bundled schemas (`meta.tn`, `numeric.tn`, `temporal.tn`, `net.tn`, `core.tn` and `policy.tn`),
-so they work offline with no `SchemaSource` configured. `--format json`/`--format tson` report an
+so they work offline with no `SchemaSource` configured. `validate --schema` and `compile` load a
+schema with `loadSchema`; a schema that imports or names through an extern anything beyond the
+bundled library is given those schema files on the command line too (`compile a.tn b.tn`, or a
+repeated `--schema`), each served by its `!!id` — never fetched from anywhere else. `--format json`/`--format tson` report an
 `outcome` of `ACCEPTED`, `REJECTED` or `UNDETERMINED` — a document is rejected by an invalidity or by
 a refusal under this run's own policy and limits, and a document whose schema could not be obtained
 is `UNDETERMINED`, since nothing here read it.
@@ -337,9 +344,9 @@ binding (`$import` at the root), the §3.5 HTTP header fields, or a schema-direc
 
 ## Specification
 
-- Part 1 — Text Data Format: https://tson.io/raw/2026/39/tson-part1-data.md
-- Part 2 — Type System and Schema: https://tson.io/raw/2026/39/tson-part2-schema.md
-- Part 3 — JSON Encoding: https://tson.io/raw/2026/39/tson-part3-json.md
+- Part 1 — Text Data Format: https://tson.io/raw/2026/40/tson-part1-data.md
+- Part 2 — Type System and Schema: https://tson.io/raw/2026/40/tson-part2-schema.md
+- Part 3 — JSON Encoding: https://tson.io/raw/2026/40/tson-part3-json.md
 
 The spec is a working revision and changes without compatibility guarantees until it freezes as
 version 1.
@@ -353,7 +360,7 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test                        # unit
-npm run test:conformance        # 944 shared subjects, at the pinned suite commit
+npm run test:conformance        # 1458 shared subjects, at the pinned suite commit
 npm run build                   # tsup, ESM + CJS + dts, both packages
 ```
 

@@ -10,10 +10,10 @@ implementation at https://github.com/litterat/ltr8-io-tson-java, built against t
 (2026 revision):
 
 - Part 1 — lexer, structural grammar, base type resolution, built-in type vocabulary:
-  https://tson.io/raw/2026/39/tson-part1-data.md
+  https://tson.io/raw/2026/40/tson-part1-data.md
 - Part 2 — schema grammar, type system, resolution, linking, compilation:
-  https://tson.io/raw/2026/39/tson-part2-schema.md
-- Part 3 — the JSON encoding: https://tson.io/raw/2026/39/tson-part3-json.md
+  https://tson.io/raw/2026/40/tson-part2-schema.md
+- Part 3 — the JSON encoding: https://tson.io/raw/2026/40/tson-part3-json.md
 
 The spec is a _working revision_ that changes between revisions without compatibility guarantees.
 When in doubt, **re-fetch the current URL** and check the revision number at the top rather than
@@ -26,16 +26,16 @@ port is written against:
   port target cannot move underneath the work. Its `spec/` holds the spec snapshots, the six
   live bundled schemas `spec/m/{meta,numeric,temporal,net,core,policy}.tn` (`meta.tn` is the kernel)
   and the `*-resolved.tn` resolver-output fixtures of the first five, under `spec/fixtures/`.
-- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 944
-  subjects over `tests/<class>/<layer>/<bucket>/`: Class 1 (`lexer`, `parser`, `reader`, `resolver`,
-  `vocabulary` and `identity`) and Class 2 (`schema`, `link`, `validate`). **Pinned**, like the Java: a corpus that tracked
+- `.references/ltr8-io-tson-test-suite` — the shared, language-agnostic conformance corpus, 1458
+  subjects over `tests/<class>/<layer>/<bucket>/`: Class 1 (319: `lexer`, `parser`, `reader`,
+  `resolver`, `vocabulary` and `identity`) and Class 2 (1139: `schema`, `link`, `validate`). **Pinned**, like the Java: a corpus that tracked
   `main` turned this repo's CI red on an upstream commit with no change here.
 
 Both are required before the conformance project will run. A SessionStart hook fetches them
 automatically in cloud sessions; run the script yourself locally.
 
 `spec/` holds the same spec snapshots, the change log, and bundled schemas — Parts 1 through 3 plus
-`tson-rev39-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
+`tson-rev40-changelog.md` — **vendored verbatim** from that pinned commit and committed here.
 `.references/` is gitignored and absent from a bare clone, but the six bundled schemas are loaded
 at runtime and every `§` citation in the source refers to the spec text, so both have to be readable
 without network access. They are copies: do not edit them, and move the pin and re-copy together.
@@ -182,19 +182,17 @@ in conversation rather than silently picking.
 
 - Resolved-output writing names the applied constructor from a fact recorded beside the entry, not
   from the body. §8.1 says a closed entry's value is "a binding record headed by the applied
-  constructor", and `spec/fixtures/*-resolved.tn` writes `enum_set`'s body as `!meta.set_type {
-element_type: text  min_items: 1 }`. `meta.set_type` restates `meta.array`'s fields and adds none,
-  and `enum` and `meta.enum_type` share one body shape, so the head cannot be recovered from the
-  body: the resolver records it in the entry's facts (`link/facts.ts`, `head`), and the writer
+  constructor", and `spec/fixtures/*-resolved.tn` writes `!numeric.integer_type { … }` and
+  `!meta.record { … }` as heads. A constructor composed over another restates its parent's fields
+  and may add none, so the head cannot always be recovered from the body: the
+  resolver records it in the entry's facts (`link/facts.ts`, `head`), and the writer
   (`schema/bindings.ts`, `topBinding`) writes the body under that name, never a guess from the
-  body's shape. A body with no recorded head is written under its base constructor (`meta.array`,
-  `meta.enum_type`). A field the head pins (`meta.set_type`'s `ordered`, `enum`'s `name_type`, a
-  FIXED `spec`) is left out at its pinned value. The kernel has no `type_definition`, so this is
-  the one place the applied head survives outside the `@application` key annotation. The Java still
-  writes `!meta.array { … }` here, restating `voidable`, `ordered` and `unique_items` at their
-  defaults, and its fixture test cannot see either difference, since it binds the fixture into the
-  value model and compares bodies where both forms arrive as one `ArrayBody`. This port compares
-  written form. Worth reporting upstream as a §8.1 conformance gap in the Java.
+  body's shape. A body with no recorded head is written under its base constructor. A completion
+  of an incomplete entry is written under its base constructor (`!meta.array { … }`,
+  `!meta.enum_type { … }`) with the derived `@meta.completion:{ of: [...] }` on its key, and an
+  incomplete entry itself is written in no resolved form. A field the head pins is left out at its
+  pinned value. A type written in place is written `{ of: !C { … } }`, its head carried on the
+  in-place wrapper rather than in a fact. This port compares written form.
 
 - **Name hygiene is policy, not validity** (§8.2, and §11.4 for the schema-layer scopes). The three
   UTS #39 mechanisms — skeleton distinctness, `Identifier_Status`, restriction level — are
@@ -306,7 +304,13 @@ The rules the runner must keep:
   read (`utf-16`, `utf-32`; `invalid-utf8` is not one, it must reach the lexer), a `class2/` vector
   under a Class 1 processor (not this port), anything under `proposed/`, and a `refused` vector
   naming a UTS #39 data version this build does not carry. Anything else is a failure.
-- **Normalise a resolver-minted name's trailing `_[0-9a-f]{8}` before comparing** (Class 2),
-  wherever it appears — as an entry's own key, inside a body, or in a list of names a sidecar
-  states. §8.2 keys identity on structure, so the spelling is not normative and comparing it tests
-  our own hash.
+- **Compare every name as written.** No entry is minted (Part 2 §8.2; a type at a slot stays where
+  it is written), so nothing carries an implementation-chosen suffix. An expected resolved form
+  lists complete entries only, and each key's `@meta.application` and `@meta.completion` are
+  compared.
+- **A `parser`-category validate vector is judged by the subject failing a Class 1 parse**, since a
+  Class 2 read reports base syntax under no category (an argument list or `kind!` in a data value).
+- **An extern's schema is served as an import's is, and a reference reaching the subject's own
+  `!!id` is a cycle, never served** (`fixtures/cycle-*.tn`). The harness loads a schema document
+  through `Tson.loadSchema`, which puts it in flight under its own identity before fetching what
+  it names.

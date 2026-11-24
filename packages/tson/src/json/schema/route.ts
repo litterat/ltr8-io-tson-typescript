@@ -19,6 +19,10 @@
  * real reader, with no separate deferred-reader class needed for this module's own purposes.
  */
 import type { Task } from '../../io/bytes.js';
+import { terminalDefinition } from '../../link/aliasChain.js';
+import { landingDefinition, landingIn } from '../../link/externTarget.js';
+import type { LinkedSchema } from '../../link/link.js';
+import type { Top } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
 import { type Lead, readWrapped } from './tagMembers.js';
 import type { JsonTypeReader } from './types.js';
@@ -31,6 +35,14 @@ import type { JsonTypeReader } from './types.js';
  */
 export interface ExactReader extends JsonTypeReader {
   readExact(ctx: JsonReadContext, wrapped: JsonTypeReader, opened?: boolean): Task<unknown>;
+  /**
+   * Whether this reader reads a wrapper whose `$type` a dispatcher matched, rather than being
+   * handed its `$value` ({@link routeTo}). False where absent, which is every reader but a
+   * boundary: a foreign value's wrapper carries the enclosing scope's `$type` and the foreign
+   * schema's `$value` ([TSON-JSON] §8.6), so a wrapper read anywhere else would read the value in
+   * the wrong scope.
+   */
+  readonly takesWrapper?: boolean;
 }
 
 /** Whether `reader` implements {@link ExactReader} — every dispatcher in this directory does, and so does `json/schema/record.ts`'s own plain record reader; an atom, array, tuple or map reader does not, so a `$type`/wrapper reaching one of those can only be read as a wrapper (`json/schema/route.ts`'s own `routeTo`). */
@@ -66,15 +78,29 @@ export interface Route {
   read(ctx: JsonReadContext, lead: Lead, opened?: boolean): Task<unknown>;
 }
 
-/** Builds the route to `resolve(name)`: the wrapper form reads its `$value` at the entry reader; the inline form reads exactly `name`'s own type, through {@link ExactReader.readExact} where the resolved reader offers one and through the wrapper reading otherwise (a type that never reads a bare object as its own value can only be a wrapper). */
-export function routeTo(resolve: () => JsonTypeReader): Route {
+/**
+ * Whether a value of the entry `name` is a map -- a map, or a namespace type, whose value is the map it
+ * describes -- past its alias chain and any extern, at the entry it lands on ([TSON-SCHEMA] §5.13): the members of
+ * a wrapper's `$value` there are keys, never annotation members ([TSON-JSON] §3.2, §3.3, §8.6).
+ */
+export function isKeyedType(name: string, linked: LinkedSchema): boolean {
+  const landing = landingIn(linked, name);
+  const definition: Top | undefined =
+    landing === undefined
+      ? terminalDefinition(name, (n) => linked.entries.get(n))
+      : landingDefinition(landing);
+  return definition?.kind === 'map' || definition?.kind === 'namespace';
+}
+
+/** Builds the route to `resolve(name)`, `keyed` saying whether `name` is map-typed ({@link isKeyedType}): the wrapper form reads its `$value` at the entry reader; the inline form reads exactly `name`'s own type, through {@link ExactReader.readExact} where the resolved reader offers one and through the wrapper reading otherwise (a type that never reads a bare object as its own value can only be a wrapper). */
+export function routeTo(resolve: () => JsonTypeReader, keyed = false): Route {
   return {
     *read(ctx: JsonReadContext, lead: Lead, opened = false): Task<unknown> {
       const entry = resolve();
-      if (lead.wrapper || !hasReadExact(entry)) {
-        return yield* readWrapped(ctx, entry);
+      if (hasReadExact(entry) && (!lead.wrapper || entry.takesWrapper === true)) {
+        return yield* entry.readExact(ctx, entry, opened);
       }
-      return yield* entry.readExact(ctx, entry, opened);
+      return yield* readWrapped(ctx, entry, keyed);
     },
   };
 }

@@ -66,6 +66,8 @@ import type { Readable } from 'node:stream';
 import {
   diagnosticCodeForFetch,
   TsonInternalError,
+  TsonNameHygieneRefusedError,
+  TsonRefusedError,
   TsonSchemaFetchError,
   validate,
   type CompiledSchema,
@@ -83,6 +85,7 @@ import {
   type PolicyOptions,
   type ProcessorPolicy,
 } from '../policyOptions.js';
+import { suppliedSource, type SchemaFile } from '../schemaSupply.js';
 import { stdlibTson } from '../stdlib.js';
 
 /** Which encoding an input is read as. */
@@ -90,6 +93,12 @@ export type InputKind = 'json' | 'tson';
 
 export interface ValidateOptions {
   readonly schemaLocation?: string;
+  /**
+   * Further schema documents (each a local path or an `http(s)://` URL, like `schemaLocation`) the
+   * run serves by their `!!id` to whatever `schemaLocation` imports or names through an extern
+   * ([TSON-SCHEMA] §5.13, §7.8). Nothing else is ever fetched. Meaningful only with `schemaLocation`.
+   */
+  readonly dependencies?: readonly string[];
   readonly root?: string;
   /** Forces every input's encoding, overriding the by-extension/`-`-is-TSON default (this module's own top note). `undefined` applies that default. */
   readonly input?: InputKind;
@@ -213,8 +222,10 @@ async function readCappedBody(
 }
 
 /**
- * Loads, resolves and links `location` against the bundled standard library, under `policy`'s own
- * `identifierPolicy` ([TSON-SCHEMA] §11.4) -- the one step both encodings share; {@link
+ * Loads `location` with `Tson.loadSchema`: resolves and links it against the bundled standard
+ * library and the `dependencies` files, which serve what it imports and what its externs name
+ * ([TSON-SCHEMA] §5.13, §7.8) by their `!!id`, under `policy`'s own `identifierPolicy`
+ * ([TSON-SCHEMA] §11.4) -- the one step both encodings share; {@link
  * runValidate} compiles the result to whichever of {@link CompiledSchema}/{@link
  * JsonCompiledSchema} the run's own inputs actually need.
  *
@@ -227,22 +238,29 @@ async function readCappedBody(
  */
 async function loadLinkedSchema(
   location: string,
+  dependencies: readonly string[],
   policy: PolicyOptions,
 ): Promise<{ readonly tson: Tson; readonly linked: LinkedSchema }> {
-  const tson = stdlibTson(configOf(policy));
-  let bytes: Uint8Array;
-  try {
-    bytes = await loadSchemaBytes(location);
-  } catch (error) {
-    if (error instanceof TsonSchemaFetchError) {
-      throw error;
+  const read = async (where: string): Promise<Uint8Array> => {
+    try {
+      return await loadSchemaBytes(where);
+    } catch (error) {
+      if (error instanceof TsonSchemaFetchError) {
+        throw error;
+      }
+      throw new UsageError(
+        `cannot read schema '${where}': ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    throw new UsageError(
-      `cannot read schema '${location}': ${error instanceof Error ? error.message : String(error)}`,
-    );
+  };
+  const bytes = await read(location);
+  const supplied: SchemaFile[] = [{ path: location, bytes }];
+  for (const dependency of dependencies) {
+    supplied.push({ path: dependency, bytes: await read(dependency) });
   }
+  const tson = stdlibTson(configOf(policy), suppliedSource(supplied));
   try {
-    return { tson, linked: tson.resolveSchema(bytes) };
+    return { tson, linked: await tson.loadSchema(bytes) };
   } catch (error) {
     if (error instanceof TsonSchemaFetchError) {
       throw error;
@@ -252,6 +270,38 @@ async function loadLinkedSchema(
     }
     throw error;
   }
+}
+
+/**
+ * The diagnostic a `--schema` that cannot be used for a reason other than its own text denotes, or `undefined` for
+ * one that is a fault (rethrown, exit 70). Each is reported against every requested file, as a failure to obtain the
+ * schema is:
+ *
+ * - a schema this run cannot obtain: its fetch code;
+ * - a schema this processor declined, past a limit ([TSON-SCHEMA] §11.5) or under its name policy (§8.2), which is a
+ *   refusal and exits 1 like any rejection, the author holding the fix;
+ * - a gap in this library, `NOT_IMPLEMENTED`, which no schema text caused: it exits 70 as a gap in a data file's
+ *   read does, rather than reading as a bug in the tool.
+ *
+ * A schema's own problems -- malformed, or invalid -- never get here: {@link loadLinkedSchema} reports them as a
+ * usage error, and a failure of any other kind is a fault, which stays one.
+ */
+function diagnosticOfUnobtainedSchema(error: unknown): Diagnostic | undefined {
+  if (error instanceof TsonSchemaFetchError) {
+    return { code: diagnosticCodeForFetch(error.reason), message: error.message };
+  }
+  if (error instanceof UsageError) return undefined;
+  const problem = classifyReadError(error);
+  if (problem.kind === 'not-implemented') {
+    return { code: 'NOT_IMPLEMENTED', message: problem.message };
+  }
+  if (
+    problem.kind === 'invalid' &&
+    (error instanceof TsonRefusedError || error instanceof TsonNameHygieneRefusedError)
+  ) {
+    return problem.diagnostic;
+  }
+  return undefined;
 }
 
 /** `-` for stdin (read once, whole process lifetime), otherwise a streamed file. Typed as `Readable`, not the narrower `NodeJS.ReadableStream` interface, because it is `Readable`'s own `[Symbol.asyncIterator]` that makes this structurally an `AsyncByteSource` for `validate()`'s async overload below. */
@@ -414,15 +464,14 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
     let tson: Tson;
     let linked: LinkedSchema;
     try {
-      ({ tson, linked } = await loadLinkedSchema(schemaLocation, options.policy));
+      ({ tson, linked } = await loadLinkedSchema(
+        schemaLocation,
+        options.dependencies ?? [],
+        options.policy,
+      ));
     } catch (error) {
-      if (!(error instanceof TsonSchemaFetchError)) {
-        throw error;
-      }
-      const diagnostic: Diagnostic = {
-        code: diagnosticCodeForFetch(error.reason),
-        message: error.message,
-      };
+      const diagnostic = diagnosticOfUnobtainedSchema(error);
+      if (diagnostic === undefined) throw error;
       const files: ValidateFileResult[] = options.files.map((file) => ({
         file,
         outcome: outcomeOfDiagnostics([diagnostic]),
@@ -438,7 +487,9 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRun
     context = {
       root,
       ...(needsText ? { text: tson.compile(linked) } : {}),
-      ...(needsJson ? { json: compileJsonSchema(linked) } : {}),
+      ...(needsJson
+        ? { json: compileJsonSchema(linked, { foreignSchema: (id) => tson.schemas.get(id) }) }
+        : {}),
     };
   }
 

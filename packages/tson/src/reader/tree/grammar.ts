@@ -89,10 +89,9 @@ export function* skipCoreValue(ctx: ReadContext): Task<void> {
       return;
     }
     case 'token':
-    case 'reference':
     case 'void':
     case 'empty-brace':
-      // leaf (a reference is one value), already consumed
+      // leaf, already consumed
       return;
     default:
       throw new Error(`unexpected event while skipping a core-value: ${e.kind}`);
@@ -128,8 +127,6 @@ export function describeEvent(e: TsonEvent): string {
       return "the void sentinel '_'";
     case 'token':
       return `token '${e.text}'`;
-    case 'reference':
-      return e.reference.kind === 'sibling' ? 'a sibling reference' : 'a reference';
     default:
       return e.kind;
   }

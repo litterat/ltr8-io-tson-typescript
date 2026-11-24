@@ -27,7 +27,7 @@ function reader(
 ): TypeReader<Value> {
   const body: ArrayBody = {
     kind: 'array',
-    elementType: { name: 'int32', arguments: [], annotations: [] },
+    elementType: { name: 'int32', annotations: [] },
     voidable: options.voidable ?? false,
     ordered: true,
     uniqueItems: options.uniqueItems ?? false,

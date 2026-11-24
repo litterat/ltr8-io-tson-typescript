@@ -8,24 +8,25 @@ import {
 import { fromString, runSync } from '../src/io/bytes.js';
 import { position, type Position } from '../src/core/position.js';
 import { parseSchemaDocument } from '../src/compiler/schemaParser.js';
-import { desugar, lifted, type DesugarFailureReporter } from '../src/compiler/desugar.js';
-import { ofBinding as internalName } from '../src/compiler/derivedName.js';
+import { desugar, type DesugarFailureReporter } from '../src/compiler/desugar.js';
 import type { Declaration, SchemaDocument } from '../src/ast/schema/document.js';
 import type { Instance } from '../src/ast/schema/fields.js';
-import type { TypeExpr } from '../src/ast/schema/typeref.js';
-import type { CoreValue, RecordField } from '../src/ast/value.js';
+import type { FieldTypeExpr } from '../src/ast/schema/typeref.js';
+import type { CoreValue, DataValue, RecordField } from '../src/ast/value.js';
+
+/**
+ * [TSON-SCHEMA] §5.3's sugar, written in place (§4.2): at a declaration's body a form is the construction it denotes,
+ * an instance; at a field's type it is that construction held where it is written, and nested inside another
+ * construction it is the `{ of: !C { … } }` the type slot holds. Nothing is lifted to an entry and nothing is named.
+ */
 
 /** Parses `!schema { ${declarations} }` as a complete schema document body. */
 function parse(declarations: string): SchemaDocument {
   return runSync(parseSchemaDocument(fromString(`!schema { ${declarations} }`)));
 }
 
-function desugarDoc(
-  declarations: string,
-  imported: ReadonlySet<string> = new Set(),
-  reporter?: DesugarFailureReporter,
-): SchemaDocument {
-  return desugar(parse(declarations), imported, reporter === undefined ? {} : { reporter });
+function desugarDoc(declarations: string, reporter?: DesugarFailureReporter): SchemaDocument {
+  return desugar(parse(declarations), reporter === undefined ? {} : { reporter });
 }
 
 function declarationOf(document: SchemaDocument, name: string): Declaration {
@@ -36,28 +37,13 @@ function declarationOf(document: SchemaDocument, name: string): Declaration {
 
 function instanceOf(document: SchemaDocument, name: string): Instance {
   const typeDef = declarationOf(document, name).typeDef;
-  // A record template is the `!meta.record_template { ... }` payload the desugarer labelled (§5.10).
-  if (typeDef.kind === 'recordTemplateDef') {
-    return { kind: 'instance', typeParams: typeDef.typeParams, value: typeDef.payload };
-  }
   if (typeDef.kind !== 'instance')
     throw new Error(`'${name}' is not an instance, got ${typeDef.kind}`);
   return typeDef;
 }
 
-/** The sole injected declaration whose derived name starts with `${prefix}_`. */
-function onlyInjected(document: SchemaDocument, prefix: string): Declaration {
-  const matching = [...document.body.declarations.values()].filter((d) =>
-    d.name.startsWith(`${prefix}_`),
-  );
-  expect(matching, [...document.body.declarations.keys()].join(', ')).toHaveLength(1);
-  const only = matching[0];
-  if (only === undefined) throw new Error('unreachable: length checked above');
-  return only;
-}
-
 /** The type-ref of `declaration`'s first record field -- the use site every fixture here reads back. */
-function firstFieldTypeRef(document: SchemaDocument, declaration: string): TypeExpr {
+function firstFieldTypeRef(document: SchemaDocument, declaration: string): FieldTypeExpr {
   const typeDef = declarationOf(document, declaration).typeDef;
   if (typeDef.kind !== 'structuralTypeDef' || typeDef.body.kind !== 'recordDef') {
     throw new Error(`'${declaration}' is not a fresh record declaration`);
@@ -69,11 +55,13 @@ function firstFieldTypeRef(document: SchemaDocument, declaration: string): TypeE
   return field.type.typeRef;
 }
 
-/** The bare name a field's type-ref resolves to -- every fixture here that hoists lands on a `simpleRef`. */
-function firstFieldType(document: SchemaDocument, declaration: string): string {
+/** The construction `declaration`'s first field holds in place. */
+function firstFieldConstruction(document: SchemaDocument, declaration: string): DataValue {
   const ref = firstFieldTypeRef(document, declaration);
-  if (ref.kind !== 'nameRef') throw new Error(`'${declaration}' field type is not a simpleRef`);
-  return ref.name;
+  if (ref.kind !== 'inlineConstruction') {
+    throw new Error(`'${declaration}' field type is no construction in place, got ${ref.kind}`);
+  }
+  return ref.value;
 }
 
 /** `value` as a record's field list, or throws -- every wire value this desugarer builds is record/array/token. */
@@ -96,6 +84,13 @@ function fieldNames(value: CoreValue): string[] {
 /** One named field's core value out of a record core value, or `undefined` when the field is absent. */
 function namedField(value: CoreValue, name: string): CoreValue | undefined {
   return recordFields(value).find((field) => field.name === name)?.value.coreValue;
+}
+
+/** One named field's data value out of a record core value, or throws. */
+function namedValue(value: CoreValue, name: string): DataValue {
+  const found = recordFields(value).find((field) => field.name === name)?.value;
+  if (found === undefined) throw new Error(`no field '${name}'`);
+  return found;
 }
 
 /** The value of the field map entry at `index` (`record.fields` is a map keyed by name, §5.2), or throws. */
@@ -138,17 +133,22 @@ function tokenText(value: CoreValue): string {
   return value.text;
 }
 
+/** The construction a type slot holds in place, `{ of: !C { … } }` (§4.2), or throws. */
+function inPlace(value: CoreValue): DataValue {
+  return namedValue(value, 'of');
+}
+
 // ── Structural sharing (§5.3, §8.2) ─────────────────────────────────────
 
 describe('structural sharing', () => {
   it('returns the exact same document when nothing needs expanding', () => {
     const document = parse('plain => { a: text  b: integer? }');
-    expect(desugar(document, new Set())).toBe(document);
+    expect(desugar(document)).toBe(document);
   });
 
   it('leaves a sugar-free declaration as the same object, and rebuilds only the one that changed', () => {
     const document = parse('plain => { a: text }\nsugared => { tags: [text] }');
-    const desugared = desugar(document, new Set());
+    const desugared = desugar(document);
     expect(declarationOf(desugared, 'plain')).toBe(declarationOf(document, 'plain'));
     expect(declarationOf(desugared, 'sugared')).not.toBe(declarationOf(document, 'sugared'));
   });
@@ -170,7 +170,7 @@ describe('structural sharing', () => {
       [sugared, sugaredPosition],
     ]);
 
-    const desugared = desugar(document, new Set(), { positions });
+    const desugared = desugar(document, { positions });
 
     const after = declarationOf(desugared, 'sugared');
     expect(after).not.toBe(sugared);
@@ -185,13 +185,12 @@ describe('structural sharing', () => {
 // ── The desugar table (§5.3) ─────────────────────────────────────────────
 
 describe('the array sugar ([T] and the sized forms, §5.3)', () => {
-  it('lifts an inline field-position array to an injected declaration and a bare reference', () => {
+  it('holds a field-position array in place as the construction it denotes, adding no declaration', () => {
     const document = desugarDoc('holder => { xs: [text] }');
-    const injected = onlyInjected(document, 'array');
-    expect(firstFieldType(document, 'holder')).toBe(injected.name);
-    const instance = injected.typeDef as Instance;
-    expect(instance.value.typeRef).toBe('meta.array');
-    expect(tokenText(requiredField(instance, 'element_type'))).toBe('text');
+    const construction = firstFieldConstruction(document, 'holder');
+    expect(construction.typeRef).toBe('meta.array');
+    expect(tokenText(namedValue(construction.coreValue, 'element_type').coreValue)).toBe('text');
+    expect(document.body.declarations.size).toBe(1);
   });
 
   it('is the construction itself at declaration position, injecting nothing alongside it', () => {
@@ -230,11 +229,6 @@ describe('the array sugar ([T] and the sized forms, §5.3)', () => {
     expect(optionalField(instanceOf(desugarDoc('a => [text]'), 'a'), 'voidable')).toBeUndefined();
   });
 
-  it('rejects an incoherent size range (min > max), §5.3', () => {
-    expect(() => desugarDoc('bad => [text; 5..3]')).toThrow(TsonSchemaValidationError);
-    expect(() => desugarDoc('bad => [text; 5..3]')).toThrow(/min <= max/);
-  });
-
   it('rejects a vacuous zero floor rather than desugaring it, since identity is structural (§5.3, §8.2)', () => {
     expect(() => desugarDoc('tags => [text; 0..]')).toThrow(TsonSchemaValidationError);
     expect(() => desugarDoc('tags => [text; 0..]')).toThrow(/\[text; 0\.\.\]/);
@@ -248,14 +242,13 @@ describe('the array sugar ([T] and the sized forms, §5.3)', () => {
 });
 
 describe('the map sugar ({K => V}, §5.3)', () => {
-  it('lifts an inline field-position map to an injected declaration and a bare reference', () => {
+  it('holds a field-position map in place as the construction it denotes', () => {
     const document = desugarDoc('holder => { entries: {text => integer} }');
-    const injected = onlyInjected(document, 'map');
-    expect(firstFieldType(document, 'holder')).toBe(injected.name);
-    const instance = injected.typeDef as Instance;
-    expect(instance.value.typeRef).toBe('meta.map');
-    expect(tokenText(requiredField(instance, 'key_type'))).toBe('text');
-    expect(tokenText(requiredField(instance, 'value_type'))).toBe('integer');
+    const construction = firstFieldConstruction(document, 'holder');
+    expect(construction.typeRef).toBe('meta.map');
+    expect(tokenText(namedValue(construction.coreValue, 'key_type').coreValue)).toBe('text');
+    expect(tokenText(namedValue(construction.coreValue, 'value_type').coreValue)).toBe('integer');
+    expect(document.body.declarations.size).toBe(1);
   });
 
   it('is the construction itself at declaration position, injecting nothing alongside it', () => {
@@ -270,10 +263,6 @@ describe('the map sugar ({K => V}, §5.3)', () => {
     expect(tokenText(requiredField(instance, 'max_items'))).toBe('5');
     expect(optionalField(instance, 'voidable')).toBeUndefined();
   });
-
-  it('rejects an incoherent size range the same way an array does', () => {
-    expect(() => desugarDoc('bad => {text => integer; 5..3}')).toThrow(/min <= max/);
-  });
 });
 
 describe('the tuple sugar ([T, U], §5.3)', () => {
@@ -284,10 +273,10 @@ describe('the tuple sugar ([T, U], §5.3)', () => {
     expect(requiredField(instance, 'elements').kind).toBe('array');
   });
 
-  it('is hoisted at a field position, exactly as inline [T] is', () => {
+  it('is held in place at a field position, exactly as [T] is', () => {
     const document = desugarDoc('holder => { p: [integer, text] }');
-    const injected = onlyInjected(document, 'tuple');
-    expect(firstFieldType(document, 'holder')).toBe(injected.name);
+    expect(firstFieldConstruction(document, 'holder').typeRef).toBe('meta.tuple');
+    expect(document.body.declarations.size).toBe(1);
   });
 
   it('marks only a voidable position as voidable, leaving the other to the default (§5.3)', () => {
@@ -311,114 +300,89 @@ describe('the choice sugar ((A | B), §5.4)', () => {
   });
 });
 
-// ── Nesting: bottom-up, innermost first (§5.3, §12.1) ────────────────────
+// ── Nesting: a form inside a construction is the type slot's `{ of: … }` (§4.2) ────────────────
 
-describe('nested declaration-level forms', () => {
-  it('hoists an inner array first and refers to it from the outer map', () => {
+describe('nested forms', () => {
+  it('an inner array stands in place at the outer map’s value slot', () => {
     const document = desugarDoc('holder => { m: {text => [integer]} }');
-    const inner = onlyInjected(document, 'array');
-    const outer = onlyInjected(document, 'map');
-    expect(tokenText(requiredField(outer.typeDef as Instance, 'value_type'))).toBe(inner.name);
+    const outer = firstFieldConstruction(document, 'holder');
+    expect(outer.typeRef).toBe('meta.map');
+    const inner = inPlace(namedValue(outer.coreValue, 'value_type').coreValue);
+    expect(inner.typeRef).toBe('meta.array');
+    expect(tokenText(namedValue(inner.coreValue, 'element_type').coreValue)).toBe('integer');
   });
 
-  it('recurses innermost-first through three levels of array nesting', () => {
+  it('nests through three levels of arrays, each level in place at the one around it', () => {
     const document = desugarDoc('deep => [[[integer]]]');
-    // Exactly two injected arrays (the two inner levels); the outermost is the declaration itself.
-    const arrays = [...document.body.declarations.values()].filter((d) =>
-      d.name.startsWith('array_'),
-    );
-    expect(arrays).toHaveLength(2);
-    expect(instanceOf(document, 'deep').value.typeRef).toBe('meta.array');
+    expect(document.body.declarations.size).toBe(1);
+    const outer = instanceOf(document, 'deep');
+    expect(outer.value.typeRef).toBe('meta.array');
+    const middle = inPlace(requiredField(outer, 'element_type'));
+    const innermost = inPlace(namedValue(middle.coreValue, 'element_type').coreValue);
+    expect(innermost.typeRef).toBe('meta.array');
+    expect(tokenText(namedValue(innermost.coreValue, 'element_type').coreValue)).toBe('integer');
   });
 
-  it('a tuple position holding a nested sized array refers to the injected inner array', () => {
+  it('a tuple position holding a sized array holds the array in place', () => {
     const document = desugarDoc('grid => [[integer; 2], text]');
-    const inner = onlyInjected(document, 'array');
-    expect(tokenText(requiredField(inner.typeDef as Instance, 'min_items'))).toBe('2');
+    const first = elementAt(requiredField(instanceOf(document, 'grid'), 'elements'), 0);
+    const inner = inPlace(namedValue(first, 'element_type').coreValue);
+    expect(tokenText(namedValue(inner.coreValue, 'min_items').coreValue)).toBe('2');
   });
 });
 
-// ── Identity is the resolved binding record, not the spelling (§8.2) ────
+// ── Identity is the construction, not the spelling (§8.2) ────────────────────────────────────
 
-describe('identity and deduplication (§8.2)', () => {
-  it('two structurally identical forms share one injected declaration', () => {
-    const document = desugarDoc('first => { xs: [text] }\nsecond => { ys: [text] }');
-    const injected = onlyInjected(document, 'array');
-    expect(firstFieldType(document, 'first')).toBe(injected.name);
-    expect(firstFieldType(document, 'second')).toBe(injected.name);
-  });
-
-  it('two spellings of one binding record land on the same entry ([T; 3] and [T; 3..3])', () => {
-    const document = desugarDoc('sized => [text; 3]\nranged => [text; 3..3]');
-    const arrays = [...document.body.declarations.keys()].filter((n) => n.startsWith('array_'));
-    expect(arrays).toEqual([]); // both are declaration-position, so nothing is injected
-    expect(instanceOf(document, 'sized').value).toEqual(instanceOf(document, 'ranged').value);
-  });
-
-  it('derives the same internalName for the same head and fields, deterministically', () => {
-    const fields: RecordField[] = [
-      {
-        name: 'element_type',
-        value: { annotations: [], coreValue: { kind: 'token', text: 'text', form: 'unquoted' } },
-      },
-    ];
-    expect(internalName('array', fields)).toBe(internalName('array', fields));
-  });
-
-  it('lifted() reports exactly the names desugaring added, in a set difference', () => {
-    const original = parse('holder => { xs: [text] }');
-    const desugared = desugar(original, new Set());
-    const names = lifted(original, desugared);
-    expect(names.size).toBe(1);
-    expect([...names]).toEqual([onlyInjected(desugared, 'array').name]);
-  });
-
-  it('does not redeclare a form an import already provides -- it is referenced instead', () => {
-    const name = onlyInjected(desugarDoc('holder => { xs: [text] }'), 'array').name;
-    const reusing = desugarDoc('holder => { xs: [text] }', new Set([name]));
-    expect(firstFieldType(reusing, 'holder')).toBe(name);
-    expect([...reusing.body.declarations.keys()].some((n) => n.startsWith('array_'))).toBe(false);
+describe('identity (§8.2)', () => {
+  it('two spellings of one size build one construction ([T; 3] and [T; 3..3])', () => {
+    const exact = instanceOf(desugarDoc('a => [text; 3]'), 'a');
+    const range = instanceOf(desugarDoc('a => [text; 3..3]'), 'a');
+    expect(exact.value).toEqual(range.value);
   });
 });
 
-// ── §5.2's own rewrite: a bare record body inside a template ─────────────
+// ── A record written in place (§5.2, §5.11) ───────────────────────────────────────────────────
 
-describe("a template's bare record body (§5.2)", () => {
-  it('becomes !record { fields: { ... } } only inside a template, not a plain declaration', () => {
+describe('a record written in place (§4.2, §5.2)', () => {
+  it('is a !meta.record construction at a field’s type; a declaration’s own record body stays braces', () => {
     const plain = declarationOf(desugarDoc('point => { x: integer  y: integer }'), 'point');
     expect(plain.typeDef.kind).toBe('structuralTypeDef');
-
-    const template = instanceOf(desugarDoc('box => <T> { v: T }'), 'box');
-    expect(template.value.typeRef).toBe('meta.record_template');
-    expect(template.typeParams).toEqual(['T']);
+    const construction = firstFieldConstruction(desugarDoc('w => { r: { a: int32 } }'), 'w');
+    expect(construction.typeRef).toBe('meta.record');
   });
 
   it("writes optional/voidable/role/value only where the author's marks say something the default does not", () => {
-    const instance = instanceOf(desugarDoc('box => <T> { v: T  count?: integer ~ 0 }'), 'box');
-    const fields = requiredField(instance, 'fields');
-    expect(fieldNames(fieldAt(fields, 0))).toEqual(['type_param']);
+    const record = firstFieldConstruction(
+      desugarDoc('w => { r: { v: text  count?: integer ~ 0 } }'),
+      'w',
+    );
+    const fields = namedValue(record.coreValue, 'fields').coreValue;
+    expect(fieldNames(fieldAt(fields, 0))).toEqual(['type']);
     expect(fieldNames(fieldAt(fields, 1))).toEqual(['type', 'optional', 'role', 'value']);
   });
 
   it('rejects the same field declared twice (§5.11)', () => {
-    expect(() => desugarDoc('box => <T> { v: T  v: text }')).toThrow(TsonSchemaValidationError);
+    expect(() => desugarDoc('w => { r: { v: text  v: int32 } }')).toThrow(
+      TsonSchemaValidationError,
+    );
   });
 
   it("rejects a group member repeating a name already in the record's field namespace (§5.11)", () => {
-    expect(() => desugarDoc('box => <T> { v: T  (v: text | w: integer) }')).toThrow(
+    expect(() => desugarDoc('w => { r: { v: text  (v: text | x: integer) } }')).toThrow(
       TsonSchemaValidationError,
     );
   });
 
   it('folds a field group into ordinary optional fields plus a group entry (§5.11)', () => {
-    const instance = instanceOf(desugarDoc('box => <T> { (a: T | b: text) }'), 'box');
-    expect(fieldEntries(requiredField(instance, 'fields'))).toHaveLength(2);
-    expect(arrayElements(requiredField(instance, 'groups'))).toHaveLength(1);
+    const record = firstFieldConstruction(desugarDoc('w => { r: { (a: text | b: int32) } }'), 'w');
+    expect(fieldEntries(namedValue(record.coreValue, 'fields').coreValue)).toHaveLength(2);
+    expect(arrayElements(namedValue(record.coreValue, 'groups').coreValue)).toHaveLength(1);
   });
 
-  /** The `index`th group of `box => <T> { ... }`'s held `groups`, as the wire record it is written as. */
+  /** The `index`th group of the record written in place at `w`'s first field. */
   function groupOf(source: string, index = 0): CoreValue {
-    return elementAt(requiredField(instanceOf(desugarDoc(source), 'box'), 'groups'), index);
+    const record = firstFieldConstruction(desugarDoc(`w => { r: ${source} }`), 'w');
+    return elementAt(namedValue(record.coreValue, 'groups').coreValue, index);
   }
 
   function present(value: CoreValue | undefined): CoreValue {
@@ -433,19 +397,19 @@ describe("a template's bare record body (§5.2)", () => {
   }
 
   it('writes a group as its options, the members marked optional within them, and its own mark (§5.11)', () => {
-    const plain = groupOf('box => <T> { (a: T  b?: text | c: text) }');
+    const plain = groupOf('{ (a: text  b?: text | c: text) }');
     expect(fieldNames(plain)).toEqual(['members', 'optional_members']);
     const options = namedField(plain, 'members');
     expect(options === undefined ? [] : arrayElements(options)).toHaveLength(2);
     expect(names(namedField(plain, 'optional_members'))).toEqual(['b']);
 
-    const optional = groupOf('box => <T> { (a: T | b: text)? }');
+    const optional = groupOf('{ (a: text | b: text)? }');
     expect(fieldNames(optional)).toEqual(['members', 'optional']);
     expect(tokenText(present(namedField(optional, 'optional')))).toBe('true');
   });
 
   it('lowers "+" to one option holding every member, each marked optional, on a group that is not optional (§5.11)', () => {
-    const group = groupOf('box => <T> { (a: T | b: text)+ }');
+    const group = groupOf('{ (a: text | b: text)+ }');
     const options = namedField(group, 'members');
     expect(options === undefined ? [] : arrayElements(options)).toHaveLength(1);
     expect(names(elementAt(present(options), 0))).toEqual(['a', 'b']);
@@ -454,101 +418,87 @@ describe("a template's bare record body (§5.2)", () => {
   });
 });
 
-// ── §5.2's field-state table, exercised through a template body ─────────
+// ── A dependent type is written in place (§5.2) ───────────────────────────────────────────────
+
+describe('a dependent type (§4.2, §5.2)', () => {
+  it("'kind!' at a field's type is the construction !meta.dependent { on: kind } in place", () => {
+    const document = desugarDoc('w => { v: kind!  kind: meta.type_ref }');
+    const construction = firstFieldConstruction(document, 'w');
+    expect(construction.typeRef).toBe('meta.dependent');
+    expect(tokenText(namedValue(construction.coreValue, 'on').coreValue)).toBe('kind');
+  });
+});
+
+// ── §5.2's field-state table, exercised through a parametric record's body ─────────
 
 describe('field-marks validation (§5.2)', () => {
-  it("the void sentinel '_' is no longer a modifier value: '~ _' and '= _' are parse errors, not resolver errors", () => {
-    expect(() => desugarDoc('box => <T> { v: T ~ _ }')).toThrow(TsonParseError);
-    expect(() => desugarDoc('box => <T> { v: T = _ }')).toThrow(TsonParseError);
+  it("the void sentinel '_' is no modifier value: '~ _' and '= _' are parse errors, not resolver errors", () => {
+    expect(() => desugarDoc('w => { r: { v?: text ~ _ } }')).toThrow(TsonParseError);
+    expect(() => desugarDoc('w => { r: { v: text = _ } }')).toThrow(TsonParseError);
   });
 
   it('rejects a default on an unmarked name (name: type ~ value)', () => {
-    expect(() => desugarDoc('box => <T> { v: T ~ 1 }')).toThrow(TsonSchemaValidationError);
+    expect(() => desugarDoc('w => { r: { v: text ~ 1 } }')).toThrow(TsonSchemaValidationError);
   });
 
   it('rejects a pin on a voidable type (name?: type? = value)', () => {
-    expect(() => desugarDoc('box => <T> { v?: T? = "x" }')).toThrow(TsonSchemaValidationError);
+    expect(() => desugarDoc('w => { r: { v?: text? = "x" } }')).toThrow(TsonSchemaValidationError);
   });
 
-  it("`v?: void?` is the spelling an earlier revision wrote as '= _': optional, voidable, no value member", () => {
-    const instance = instanceOf(desugarDoc('box => <T> { v?: void? }'), 'box');
-    const fields = requiredField(instance, 'fields');
+  it('`v?: void?` writes optional and voidable and no value member', () => {
+    const record = firstFieldConstruction(desugarDoc('w => { r: { v?: void? } }'), 'w');
+    const fields = namedValue(record.coreValue, 'fields').coreValue;
     expect(fieldNames(fieldAt(fields, 0))).toEqual(['type', 'optional', 'voidable']);
   });
 
   it("the selector '=?' on an unmarked, non-voidable name writes no facet beyond its type (it stays FREE, unpinned)", () => {
-    const instance = instanceOf(desugarDoc('box => <T> { v: T  kind: text =? }'), 'box');
-    const fields = requiredField(instance, 'fields');
+    const record = firstFieldConstruction(
+      desugarDoc('w => { r: { v: text  kind: text =? } }'),
+      'w',
+    );
+    const fields = namedValue(record.coreValue, 'fields').coreValue;
     expect(fieldNames(fieldAt(fields, 1))).toEqual(['type']);
   });
 });
 
-// ── Parameter-bearing forms: open synthetics (§5.10) ─────────────────────
+// ── Parametric records (§5.10) ───────────────────────────────────────────────────────────────
 
-describe('open (parameter-bearing) synthetics', () => {
-  it('lifts a form naming a template parameter to an open synthetic, referenced by application', () => {
+describe('parametric records (§5.10)', () => {
+  it('a form naming a parameter stays in place in the parametric record, the parameter as written', () => {
     const document = desugarDoc('holder => <T> { xs: [T] }');
-    const injected = onlyInjected(document, 'array');
-    const instance = instanceOf(document, 'holder');
-    const xsField = fieldAt(requiredField(instance, 'fields'), 0);
-    const typeValue = namedField(xsField, 'type');
-    if (typeValue === undefined) throw new Error("'xs' field has no type");
-    // The open synthetic is named by an application, a reference value of the data grammar (§7.4).
-    if (typeValue.kind !== 'reference' || typeValue.reference.kind !== 'application') {
-      throw new Error("'xs' type is not an application");
-    }
-    expect(typeValue.reference.name).toBe(injected.name);
-    expect(typeValue.reference.arguments).toHaveLength(1);
-  });
-
-  it('renames a parameter positionally (p0, p1, ...), so alpha-equivalent forms land on one entry', () => {
-    const first = onlyInjected(desugarDoc('a => <T> { xs: [T] }'), 'array').name;
-    const second = onlyInjected(desugarDoc('b => <U> { xs: [U] }'), 'array').name;
-    expect(first).toBe(second);
-  });
-
-  it('a concrete form inside a template still lifts closed, exactly as outside one', () => {
-    const document = desugarDoc('holder => <T> { a: T  b: [text] }');
-    const injected = onlyInjected(document, 'array');
-    expect(injected.name.startsWith('array_text_')).toBe(true);
-  });
-
-  it('a declaration-level open sugar body is the instance template itself, not hoisted', () => {
-    const document = desugarDoc('vector => <T, N> [T; N]');
-    const instance = instanceOf(document, 'vector');
-    expect(instance.typeParams).toEqual(['T', 'N']);
-    expect(instance.value.typeRef).toBe('meta.array');
+    const construction = firstFieldConstruction(document, 'holder');
+    expect(tokenText(namedValue(construction.coreValue, 'element_type').coreValue)).toBe('T');
     expect(document.body.declarations.size).toBe(1);
   });
 
-  it('a partial application (an alias with leftover parameters) desugars to !reference { target }', () => {
-    const document = desugarDoc('uuid_pair => <B> pair<text, B>');
-    const instance = instanceOf(document, 'uuid_pair');
-    expect(instance.value.typeRef).toBe('meta.alias');
-    expect(instance.typeParams).toEqual(['B']);
+  it('a parametric record’s body is a record body: a parameter list before an array is refused', () => {
+    expect(() => desugarDoc('vector => <T> [T; 3]')).toThrow(
+      /a parametric record's body is a record body/,
+    );
   });
-});
 
-// ── Generic application checking (§5.10, §3.3.1) ─────────────────────────
-
-describe('template application checks', () => {
-  it('rejects applying arguments to a local declaration with no type parameters', () => {
-    expect(() => desugarDoc('bare => { a: text }\nuse => { f: bare<text> }')).toThrow(
+  it('a partial application -- a parameter list before a reference -- is refused: there are no parametric aliases', () => {
+    expect(() => desugarDoc('pair => <A B> { a: A  b: B }\nuuid_pair => <B> pair<text B>')).toThrow(
       TsonSchemaValidationError,
     );
   });
 
+  it('rejects applying arguments to a local declaration with no type parameters', () => {
+    expect(() => desugarDoc('bare => { a: text }\nuse => { f: bare<text> }')).toThrow(
+      /declares no type parameters/,
+    );
+  });
+
   it("leaves an unresolved (unimported, undeclared) head alone -- that is a later phase's verdict", () => {
-    const document = desugarDoc('use => { f: unknownHead<text> }');
-    const ref = firstFieldTypeRef(document, 'use');
-    expect(ref.kind).toBe('applicationRef');
+    const ref = firstFieldTypeRef(desugarDoc('use => { f: unknownHead<text> }'), 'use');
     expect(ref.kind === 'applicationRef' && ref.name).toBe('unknownHead');
   });
 
-  it('passes a well-formed application to a local template through untouched', () => {
-    const document = desugarDoc('box => <T> { v: T }\nuse => { f: box<text> }');
-    const ref = firstFieldTypeRef(document, 'use');
-    expect(ref.kind).toBe('applicationRef');
+  it('passes a well-formed application of a local parametric record through untouched', () => {
+    const ref = firstFieldTypeRef(
+      desugarDoc('box => <T> { v: T }\nuse => { f: box<text> }'),
+      'use',
+    );
     expect(ref.kind === 'applicationRef' && ref.name).toBe('box');
   });
 });
@@ -557,7 +507,7 @@ describe('template application checks', () => {
 
 describe('reporter-mode failure handling', () => {
   it('fails fast (throws) with no reporter', () => {
-    expect(() => desugarDoc('bad => [text; 5..3]')).toThrow(TsonSchemaValidationError);
+    expect(() => desugarDoc('bad => [text; 0..]')).toThrow(TsonSchemaValidationError);
   });
 
   it('reports an invalid declaration and absorbs it into a zero-field record, letting the rest of the document expand', () => {
@@ -565,7 +515,7 @@ describe('reporter-mode failure handling', () => {
       declaration: Declaration;
       error: TsonSchemaValidationError | TsonNotImplementedError;
     }[] = [];
-    const document = desugarDoc('bad => [text; 5..3]\ngood => { xs: [text] }', new Set(), {
+    const document = desugarDoc('bad => [text; 0..]\ngood => { xs: [text] }', {
       reportFailedDeclaration: (declaration, error) => {
         reported.push({ declaration, error });
       },
@@ -584,13 +534,12 @@ describe('reporter-mode failure handling', () => {
     });
 
     // The declaration that had nothing wrong with it still expanded normally.
-    const injected = onlyInjected(document, 'array');
-    expect(firstFieldType(document, 'good')).toBe(injected.name);
+    expect(firstFieldConstruction(document, 'good').typeRef).toBe('meta.array');
   });
 
   it("keeps a failed declaration's own type parameters in the absorbing stand-in", () => {
     const reported: Declaration[] = [];
-    const document = desugarDoc('bad => <T> [text; 5..3]', new Set(), {
+    const document = desugarDoc('bad => <T> { v: [T; 0..] }', {
       reportFailedDeclaration: (declaration) => {
         reported.push(declaration);
       },

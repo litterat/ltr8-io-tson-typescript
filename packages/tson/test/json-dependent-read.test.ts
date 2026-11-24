@@ -14,13 +14,13 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 const COMPILED = compileJsonSchema(
   resolveUserSchema(`
 !!id:"https://example.test/json-dependent.tn"
-!!import:"https://tson.io/2026/39/m/meta.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/meta.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   point     => { x: int32  y: int32 }
   box       => <T> { item: T }
   cell      => { kind: meta.type_ref  v?: kind! }
-  int_cell  => cell ^ { kind?: = int32 }
+  int_cell  => cell & { kind?: = int32 }
   defaulted => { kind?: meta.type_ref ~ int32  v?: kind! }
   rows      => { cells: [cell]  tail: text }
   grouped   => { ( kind: meta.type_ref | name: text )  v?: kind! }
@@ -59,12 +59,13 @@ describe('§5.2 a dependent member is read against the type its sibling names', 
   });
 
   it('a sibling naming no type a value can be read against is refused at the sibling', () => {
-    // The sibling's own reference read refuses a template or a sibling reference, so the member is
-    // skipped unjudged: one refusal, at the sibling.
+    // The sibling's own reference read refuses a parametric record -- no member of `meta.type_ref`, no reference
+    // naming one bare (§4.2, §5.10) -- or a dependent type's mark, so the member is skipped unjudged: one refusal,
+    // at the sibling.
     for (const body of ['{"kind": "box", "v": {"item": 5}}', '{"kind": "kind!", "v": 5}']) {
       expect(found('cell', body).map(([, path]) => path)).toEqual(['/kind']);
     }
-    expect(found('cell', '{"kind": "box"}')).toEqual([]);
+    expect(found('cell', '{"kind": "box"}').map(([, path]) => path)).toEqual(['/kind']);
   });
 
   it('the member is consumed whole, so the members after it still read', () => {

@@ -1,5 +1,4 @@
 import type { TokenForm } from '../lexer/token.js';
-import type { CoreReference } from './reference.js';
 
 /**
  * `document = [ id-directive ] ws *( import-directive ws ) data-value ws` (§2.2, §7.4).
@@ -34,19 +33,20 @@ export interface DataValue {
 }
 
 /**
- * `core-value = record / map / array / empty-brace / void / reference / token` (§2.3, §7.4).
+ * `core-value = record / map / array / empty-brace / void / token` (§2.3, §7.4).
+ * A value that names something is a token, a qualified name: no argument list and no sibling mark is
+ * data syntax (§4.1).
  *
  * Structural only: no base type resolution (§4) happens at this layer, and none of the built-in
  * type vocabulary (§5) is interpreted — a {@link TokenValue} preserves a token's exact text and
  * form, deferring interpretation to a later layer (§1.2 principle 1: "Value interpretation is
  * deferred to base type resolution").
  *
- * The `kind` discriminant values (`record`, `map`, `array`, `empty-brace`, `absent`, `token`, `reference`) are
+ * The `kind` discriminant values (`record`, `map`, `array`, `empty-brace`, `absent`, `token`) are
  * the exact strings the conformance test suite's parser-layer vectors use for a core-value's own
  * `kind:` field.
  */
-export type CoreValue =
-  RecordValue | MapValue | ArrayValue | EmptyBrace | VoidValue | TokenValue | ReferenceValue;
+export type CoreValue = RecordValue | MapValue | ArrayValue | EmptyBrace | VoidValue | TokenValue;
 
 /**
  * `record = "{" ws field *( separator field ) ws "}"` (§2.5, §7.4).
@@ -143,16 +143,4 @@ export interface TokenValue {
 export interface Annotation {
   readonly name: string;
   readonly value?: DataValue;
-}
-
-/**
- * A `reference` core-value (§7.4) that is no bare name, as the stream assembled it: a qualified name
- * with its argument list, `pair<uuid B>`, or a sibling reference, `kind!`. A qualified name without
- * arguments is a {@link TokenValue}. Uninterpreted like a token: what the head and its arguments name
- * is a reader's or the resolver's to judge, and `reference` holds each argument as the grammar
- * classified it -- a qualified name a reference, any other token a value with its token form.
- */
-export interface ReferenceValue {
-  readonly kind: 'reference';
-  readonly reference: CoreReference;
 }

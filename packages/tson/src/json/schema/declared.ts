@@ -24,7 +24,7 @@ import { describeEvent } from './atoms.js';
 import type { CompileContext } from './compile.js';
 import { skipNextValue } from './eventSkip.js';
 import { nameHygieneRefuses } from './nameHygiene.js';
-import { routeTo, type Route } from './route.js';
+import { isKeyedType, routeTo, type Route } from './route.js';
 import { lead as leadOf, TYPE } from './tagMembers.js';
 import { refusesScope } from './tags.js';
 import type { JsonTypeReader } from './types.js';
@@ -44,7 +44,7 @@ export function buildDeclaredReader(
   for (const entry of ctx.linkedSchema.entries.keys()) {
     closure.set(
       entry,
-      routeTo(() => ctx.resolve(entry)),
+      routeTo(() => ctx.resolve(entry), isKeyedType(entry, ctx.linkedSchema)),
     );
   }
 

@@ -3,7 +3,8 @@
  * inspecting the value:
  *
  * - **Object form** — `K` resolves, after its alias chain, to an atom-family instance,
- *   `identifier`, or an enum (never `value` or `void`, neither of which reads token content). The
+ *   `identifier`, an enum, or a reference (never `value` or `void`, neither of which reads token content; a
+ *   reference is an atom, and each key is judged by what its name reaches, as at a field). The
  *   map is a JSON object; each member name is a key token, faced to `K`'s own parsing contract
  *   exactly as §5.1 hands value strings, and identity is over the decoded key's value space —
  *   `"1"`/`"1.0"` under a `number` key are one key.
@@ -18,6 +19,7 @@ import { diagnosticCodeForAtomError, type SchemaLocation } from '../../core/diag
 import { TsonAtomParseError, TsonAtomValidationError } from '../../core/errors.js';
 import type { Task } from '../../io/bytes.js';
 import { terminal, terminalDefinition } from '../../link/aliasChain.js';
+import { landingDefinition, landingIn } from '../../link/externTarget.js';
 import type { MapBody } from '../../schema/meta/bodies.js';
 import type { Atom } from '../../schema/meta/typedef.js';
 import type { JsonReadContext } from '../readContext.js';
@@ -42,20 +44,30 @@ function slotNode(slot: Slot | undefined): JsonValue | undefined {
   return slot === VOID ? jsonNull() : slot;
 }
 
-/** `K`'s own scalar parser, when `K`'s alias chain ends at a type a single scalar token denotes — `undefined` for every other `K`, which takes the pairs form. */
+/**
+ * `K`'s own scalar parser, when `K`'s alias chain ends at a type a single scalar token denotes — `undefined` for every
+ * other `K`, which takes the pairs form. A key type that is an extern is its target's, its parser and its enum's form
+ * the foreign schema's ([TSON-JSON] §6.4, [TSON-SCHEMA] §5.13). A key token is no value crossing a boundary, so a
+ * refusal of one is reported in the scope holding the map, as the reference reports it.
+ */
 function scalarKeyParser(ctx: CompileContext, keyTypeName: string): FieldValueParser | undefined {
-  const entries = ctx.linkedSchema.entries;
-  const lookup = (name: string) => entries.get(name);
-  const definition = terminalDefinition(keyTypeName, lookup);
+  const linked = ctx.linkedSchema;
+  const lookup = (name: string) => linked.entries.get(name);
+  const landing = landingIn(linked, keyTypeName);
+  const definition =
+    landing === undefined ? terminalDefinition(keyTypeName, lookup) : landingDefinition(landing);
   if (definition === undefined) return undefined;
-  const terminalName = terminal(keyTypeName, lookup);
+  const terminalName = landing === undefined ? terminal(keyTypeName, lookup) : landing.name;
+  const formIn = landing === undefined ? linked : landing.in;
   const body = definition;
   if (!('kind' in body)) return undefined;
   if (body.kind === 'alias') return undefined;
   if (body.kind === 'void_type') return undefined; // no content grammar
   if (!isAtomKind(body.kind)) return undefined; // record/array/map/tuple/choice/declared
   try {
-    return fieldValueParser(terminalName, body as Atom, enumFormOf(ctx.linkedSchema, terminalName));
+    return fieldValueParser(terminalName, body as Atom, enumFormOf(formIn, terminalName), {
+      readsReferences: true,
+    });
   } catch {
     return undefined;
   }
@@ -65,6 +77,7 @@ const ATOM_KINDS: ReadonlySet<string> = new Set([
   'value_type',
   'void_type',
   'enum',
+  'ref',
   'integer_type',
   'text_type',
   'identifier_type',
@@ -103,7 +116,7 @@ export function buildMapReader(
   const optionalValues = body.voidable;
   const minItems = body.minItems;
   const maxItems = body.maxItems;
-  const valueReader = ctx.resolve(body.valueType.name);
+  const valueReader = ctx.resolve(body.valueType);
   const keyParser = scalarKeyParser(ctx, body.keyType.name);
 
   return keyParser !== undefined

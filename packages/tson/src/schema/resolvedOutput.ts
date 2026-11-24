@@ -11,8 +11,11 @@
  * no recorded head is written under its base constructor.
  *
  * **Key annotations are written as the document would carry them** (§6): each author-written one, then
- * the derived `@meta.synthetic` and `@meta.application`, whose value is the application as a reference.
- * A value-position annotation (§3.1) stands in front of the value it annotates.
+ * the derived `@meta.completion` (`{ of: [...] }`, §8.1) and `@meta.application` (`{ head: …  arguments: […]
+ * }`, §8.2). A value-position annotation (§3.1) stands in front of the value it annotates.
+ *
+ * **A resolved form holds complete entries only** (§8.1): an incomplete entry, and an alias whose chain ends at
+ * one, is held in the namespace and written in no resolved form.
  */
 import { runSync, fromString } from '../io/bytes.js';
 import { parseDocument } from '../compiler/dataParser.js';
@@ -23,12 +26,19 @@ import type { AtomEncoder } from '../bind/encode.js';
 import type { CoreValue, DataValue } from '../ast/value.js';
 import type { Value } from '../tree/nodes.js';
 import { isIdentifierText } from '../unicode/identifier-profile.js';
-import type { Annotation, Annotations, EntryFacts, Top, TypeRef } from './meta/typedef.js';
+import { isQualifiedName } from '../atom/referenceGrammar.js';
+import type {
+  Annotation,
+  Annotations,
+  ApplyBody,
+  Completion,
+  EntryFacts,
+  Top,
+} from './meta/typedef.js';
 import { isNestedMap, isPath, memberName, parentPath } from './meta/schemaPaths.js';
-import { isTemplateBody, isValueEntry } from './meta/typedef.js';
-import { headed, topBinding } from './bindings.js';
+import { isValueEntry } from './meta/typedef.js';
+import { applyBodyBinding, headed, topBinding } from './bindings.js';
 import { metaDataValue } from './namespaceReader.js';
-import { referenceToWire } from './referenceAtoms.js';
 import { TsonInternalError } from '../core/errors.js';
 
 /** What a resolved-output write reads of a schema: its entries by path and the facts beside each. */
@@ -54,8 +64,8 @@ export function resolvedOutput(
 ): DataValue {
   const own = options.own ?? ((): boolean => true);
   const members = new Map<string, string[]>();
-  for (const path of schema.entries.keys()) {
-    if (!own(path)) continue;
+  for (const [path, value] of schema.entries) {
+    if (!own(path) || isIncompleteHop(schema, value)) continue;
     const parent = parentPath(path);
     const siblings = members.get(parent);
     if (siblings === undefined) members.set(parent, [path]);
@@ -77,7 +87,20 @@ export function resolvedOutput(
   return { annotations: [], typeRef: 'schema', coreValue: writeEntries('') };
 }
 
-/** An entry's key: its name, with the annotations written at it and the derived ones (§6, §8.2). */
+/** Whether `value` is an incomplete entry, or an alias whose chain ends at one: written in no resolved form. */
+function isIncompleteHop(schema: ResolvedSchemaView, value: Top): boolean {
+  const seen = new Set<Top>();
+  let current: Top | undefined = value;
+  while (current !== undefined && !seen.has(current)) {
+    if (current.kind === 'incomplete') return true;
+    if (current.kind !== 'alias') return false;
+    seen.add(current);
+    current = schema.entries.get(current.target.name);
+  }
+  return false;
+}
+
+/** An entry's key: its name, with the annotations written at it and the derived ones (§6, §8.1, §8.2). */
 function keyOf(schema: ResolvedSchemaView, path: string, name: string): DataValue {
   const annotations: Annotation[] = [...(schema.keyAnnotations.get(path) ?? [])];
   return {
@@ -96,7 +119,7 @@ function valueOf(schema: ResolvedSchemaView, path: string, value: Top): DataValu
   const written: DataValue = isValueEntry(value)
     ? { ...metaDataValue(value.value), typeRef: value.type }
     : toDataValue(topBinding, headed(value, facts?.head), resolvedAtomEncoder);
-  if (isTemplateBody(value) || facts?.annotations === undefined || facts.annotations.length === 0) {
+  if (facts?.annotations === undefined || facts.annotations.length === 0) {
     return written;
   }
   return { ...written, annotations: [...facts.annotations.map(writtenAnnotation)] };
@@ -109,11 +132,7 @@ function valueOf(schema: ResolvedSchemaView, path: string, value: Top): DataValu
  * other atom takes the writer's default.
  */
 const resolvedAtomEncoder: AtomEncoder = (binding, value) => {
-  if (
-    typeof value === 'string' &&
-    binding.wireType !== 'type_ref' &&
-    binding.wireType !== 'reference'
-  ) {
+  if (typeof value === 'string' && binding.wireType !== 'type_ref') {
     return {
       kind: 'token',
       text: value,
@@ -150,8 +169,40 @@ function annotationData(value: unknown): DataValue | undefined {
   if (typeof value === 'object' && value !== null && 'coreValue' in value) {
     return value as DataValue;
   }
-  if (typeof value === 'object' && value !== null && 'arguments' in value && 'name' in value) {
-    return { annotations: [], coreValue: referenceToWire(value as TypeRef) };
+  // `@meta.application`'s value, a `meta.apply` (§8.2).
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === 'apply'
+  ) {
+    const written = toDataValue(applyBodyBinding, value as ApplyBody, resolvedAtomEncoder);
+    return { annotations: [], coreValue: written.coreValue };
+  }
+  // `@meta.completion`'s value, `{ of: [text; 1..] }` (§8.1).
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    !('kind' in value) &&
+    Array.isArray((value as { of?: unknown }).of)
+  ) {
+    return {
+      annotations: [],
+      coreValue: {
+        kind: 'record',
+        fields: [
+          {
+            name: 'of',
+            value: {
+              annotations: [],
+              coreValue: {
+                kind: 'array',
+                elements: (value as Completion).of.map((name) => nameToken(name)),
+              },
+            },
+          },
+        ],
+      },
+    };
   }
   if (typeof value === 'object' && value !== null && 'kind' in value) {
     const node = value as Value;
@@ -168,6 +219,18 @@ function annotationData(value: unknown): DataValue | undefined {
     return tokenOf(String(value));
   }
   return undefined;
+}
+
+/** A name as one token, bare where every segment is an identifier (`meta.set_type`), quoted otherwise. */
+function nameToken(name: string): DataValue {
+  return {
+    annotations: [],
+    coreValue: {
+      kind: 'token',
+      text: name,
+      form: isQualifiedName(name) ? 'unquoted' : 'single-line',
+    },
+  };
 }
 
 function tokenOf(text: string): DataValue {

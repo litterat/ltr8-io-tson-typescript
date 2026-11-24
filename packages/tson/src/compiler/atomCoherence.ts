@@ -43,7 +43,7 @@ export function checkRange<T>(
     );
   } else if (order === 0 && !(lower.inclusive && upper.inclusive)) {
     out.push(
-      `${lower.facet} and ${upper.facet} meet at ${String(lower.value)}, which one of them excludes`,
+      `${lower.facet} and ${upper.facet} meet at ${renderBoundValue(lower.value)}, which one of them excludes`,
     );
   }
 }

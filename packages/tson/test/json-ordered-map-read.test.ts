@@ -16,7 +16,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-ordered-1.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   ranked    => !meta.map { key_type: text  value_type: int32  ordered: true }
   loose     => { text => int32 }

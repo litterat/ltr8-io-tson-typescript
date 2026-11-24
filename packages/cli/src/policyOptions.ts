@@ -12,7 +12,7 @@
  * person running the CLI is told which configuration refused their document and has no way to
  * change it, being the deployment the report is describing.
  *
- * **`@ltr8/tson`'s own `IdentifierPolicy`/`ScriptPolicy` types are still not part of any published
+ * **`@ltr8/tson`'s own `IdentifierPolicy`/`TokenPolicy` types are still not part of any published
  * subpath** (`unicode/index.ts`'s own top note). This module never imports them by name -- it
  * derives their shape from the `Config.identifierPolicy`/`Config.tokenPolicy` fields those types
  * back, so whatever `Config` accepts is exactly what is built here, with no second, drifting copy
@@ -20,7 +20,7 @@
  * `RestrictionLevel`'s own doc), not library internals, so restating them here is restating the
  * spec, not the library.
  *
- * **Script-combination admission.** `@ltr8/tson`'s `IdentifierPolicy`/`ScriptPolicy`
+ * **Script-combination admission.** `@ltr8/tson`'s `IdentifierPolicy`/`TokenPolicy`
  * (`unicode/policy.ts`) now carry a `permittedScripts` field -- the port of the reference
  * implementation's `TsonUnicodePolicy.permitting` -- so `--identifier-scripts`/`--token-scripts`
  * are honoured rather than refused. `scriptNamed`/`scriptName` (`@ltr8/tson`'s own top-level
@@ -41,7 +41,7 @@ import {
 import { UsageError } from './exit.js';
 
 export type IdentifierPolicy = NonNullable<Config['identifierPolicy']>;
-export type ScriptPolicy = NonNullable<Config['tokenPolicy']>;
+export type TokenPolicy = NonNullable<Config['tokenPolicy']>;
 
 /**
  * UTS #39 §5.2's six restriction levels, loosest last -- see `@ltr8/tson`'s own `RestrictionLevel`
@@ -186,7 +186,7 @@ function assembleLevel(
 /** [TSON-DATA] §8.2's policy and §9.1/[TSON-SCHEMA] §11.5's two depth bounds for one run, always concrete -- what a run configures by giving no flags at all is `identifierPolicy`/`tokenPolicy` at their own §8.2 defaults, not an absent value. */
 export interface PolicyOptions {
   readonly identifierPolicy: IdentifierPolicy;
-  readonly tokenPolicy: ScriptPolicy;
+  readonly tokenPolicy: TokenPolicy;
   /** [TSON-DATA] §9.1's nesting-depth bound, `--max-depth`; the default when no flag states one. */
   readonly maxNestingDepth: number;
   /** [TSON-SCHEMA] §11.5's wait-depth bound, `--max-wait-depth`; the default when no flag states one. */

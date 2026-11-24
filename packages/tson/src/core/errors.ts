@@ -391,9 +391,9 @@ export class TsonNameHygieneRefusedError extends TsonRefusedError {
 /**
  * The name of a resource limit this port enforces -- see {@link TsonLimitRefusedError}.
  * [TSON-DATA] §9.1's `'nesting-depth'` (a document limit, applying to a schema document as a
- * document too, §11.5) and [TSON-SCHEMA] §11.5's own six schema-side counters --
- * `'import-closure'`, `'schema-entries'`, `'alias-chain'`, `'supertype-chain'`,
- * `'materialisation-depth'` and `'wait-depth'`, each named in §11.5's table alongside its default.
+ * document too, §11.5) and [TSON-SCHEMA] §11.5's own five schema-side counters --
+ * `'import-closure'`, `'schema-entries'`, `'alias-chain'`, `'supertype-chain'`
+ * and `'wait-depth'`, each named in §11.5's table alongside its default.
  * The other ten §9.1 document-side limits are stated and reported by `LimitsPolicy` but not yet
  * counted, so no refusal names them.
  */
@@ -403,7 +403,6 @@ export type ResourceLimitName =
   | 'schema-entries'
   | 'alias-chain'
   | 'supertype-chain'
-  | 'materialisation-depth'
   | 'wait-depth';
 
 /**

@@ -4,7 +4,7 @@
  * all, rather than stopping at the first.
  */
 export const SCHEMA = `!!id:"https://example.com/people.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 @doc:"The demo schema: an employee record."
 !schema {
   @doc:"A person on the payroll."

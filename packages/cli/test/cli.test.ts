@@ -198,7 +198,7 @@ describe('init-example + schema-governed validate, end to end', () => {
 });
 
 describe('validate: a data document is read under its own !!import ([TSON-DATA] §2.2)', () => {
-  const CORE = '!!import:"https://tson.io/2026/39/m/core.tn"';
+  const CORE = '!!import:"https://tson.io/2026/40/m/core.tn"';
   const ABSENT = '!!import:"https://example.test/not-provided.tn"\n!claim { id: 1 }\n';
 
   it('a header naming the bundled library validates, the root type taken from its root tag', async () => {
@@ -274,7 +274,7 @@ describe('--max-depth and --max-wait-depth', () => {
       schema,
       [
         '!!id:"https://example.test/chain.tn"',
-        '!!import:"https://tson.io/2026/39/m/core.tn"',
+        '!!import:"https://tson.io/2026/40/m/core.tn"',
         '!schema {',
         '  w0 => w1 & { a: text }',
         '  w1 => w2 & { b: text }',
@@ -345,9 +345,119 @@ describe('compile', () => {
     expect(io.stdout()).toContain('rejected');
   });
 
+  describe('a schema whose externs name schemas the library does not bundle ([TSON-SCHEMA] §7.8)', () => {
+    const CORE = '!!import:"https://tson.io/2026/40/m/core.tn"';
+    async function externSchemas(): Promise<{ one: string; shipping: string }> {
+      const one = join(dir, 'order-1.tn');
+      const shipping = join(dir, 'shipping.tn');
+      await writeFile(
+        one,
+        `!!id:"https://example.test/cli-order-1.tn"\n${CORE}\n!schema { order => { id: text  payment: card }  card => { number: text } }\n`,
+        'utf8',
+      );
+      await writeFile(
+        shipping,
+        `!!id:"https://example.test/cli-shipping.tn"\n${CORE}\n!schema {\n  order_v1 => !meta.extern { schema: "https://example.test/cli-order-1.tn"  type: order }\n  envelope => { id: text  body: order_v1 }\n}\n`,
+        'utf8',
+      );
+      return { one, shipping };
+    }
+
+    it('compile loads it when the file declaring the extern target is given too, exit 0', async () => {
+      const { one, shipping } = await externSchemas();
+      const io = captureOutput();
+      expect(await main(['compile', shipping, one])).toBe(EXIT.OK);
+      expect(io.stdout()).toContain('compiles');
+    });
+
+    it('compile rejects it when no file declares the extern target, exit 1, fetching nothing', async () => {
+      const { shipping } = await externSchemas();
+      const io = captureOutput();
+      expect(await main(['compile', shipping])).toBe(EXIT.INVALID);
+      expect(io.stdout()).toContain('rejected');
+      expect(io.stdout()).toContain('cli-order-1.tn');
+    });
+
+    it('validate --schema serves each further --schema by its !!id, and reads a foreign value under its own schema', async () => {
+      const { one, shipping } = await externSchemas();
+      const good = join(dir, 'good.tn');
+      const bad = join(dir, 'bad.tn');
+      await writeFile(
+        good,
+        '{ id: e  body: !order_v1 { id: A  payment: !card { number: "1" } } }',
+        'utf8',
+      );
+      await writeFile(bad, '{ id: e  body: !order_v1 { id: A  payment: { count: "1" } } }', 'utf8');
+      const binding = ['validate', '--schema', shipping, '--schema', one, '--root', 'envelope'];
+      const ok = captureOutput();
+      expect(await main([...binding, good])).toBe(EXIT.OK);
+      expect(ok.stdout()).toContain('valid');
+      vi.restoreAllMocks();
+      const rejected = captureOutput();
+      expect(await main([...binding, bad])).toBe(EXIT.INVALID);
+      expect(rejected.stdout()).toContain('/body/payment');
+    });
+
+    it('validate --schema without the further --schema is an unobtainable schema, exit 69', async () => {
+      const { shipping } = await externSchemas();
+      const good = join(dir, 'good.tn');
+      await writeFile(good, '{ id: e  body: !order_v1 { id: A } }', 'utf8');
+      captureOutput();
+      expect(await main(['validate', '--schema', shipping, '--root', 'envelope', good])).toBe(
+        EXIT.SCHEMA_UNAVAILABLE,
+      );
+    });
+  });
+
   it('no files: usage error, exit 2', async () => {
     const code = await main(['compile']);
     expect(code).toBe(EXIT.USAGE);
+  });
+});
+
+describe('validate --schema: whose failure a broken schema is (exit codes)', () => {
+  const HEAD =
+    '!!import:"https://tson.io/2026/40/m/meta.tn"\n!!import:"https://tson.io/2026/40/m/core.tn"\n';
+
+  async function schemaAndData(body: string): Promise<{ schema: string; data: string }> {
+    const schema = join(dir, 'schema.tn');
+    const data = join(dir, 'data.tn');
+    await writeFile(
+      schema,
+      `!!id:"https://example.test/cli-gap.tn"\n${HEAD}!schema {\n${body}\n}\n`,
+      'utf8',
+    );
+    await writeFile(data, '{ name: Ada }', 'utf8');
+    return { schema, data };
+  }
+
+  it('a gap in the schema is exit 70 and reported as NOT_IMPLEMENTED, not as the schema being wrong', async () => {
+    const { schema, data } = await schemaAndData(
+      'c => meta.product & { extra: text }\nx => !c { extra: "hello" }\nperson => { name: text }',
+    );
+    const io = captureOutput();
+    const code = await main(['validate', '--schema', schema, '--root', 'person', data]);
+    expect(code).toBe(EXIT.FAULT);
+    expect(io.stdout()).toContain('NOT_IMPLEMENTED');
+    expect(io.stderr()).not.toContain('internal error');
+  });
+
+  it('a schema document past the depth limit is declined, not a fault: REJECTED, exit 1', async () => {
+    const levels = 400;
+    const { schema, data } = await schemaAndData(
+      `person => ${'{ a: '.repeat(levels)}text${' }'.repeat(levels)}`,
+    );
+    const io = captureOutput();
+    const code = await main(['validate', '--schema', schema, '--root', 'person', data]);
+    expect(code).toBe(EXIT.INVALID);
+    expect(io.stdout()).toContain('LIMIT_REFUSED');
+    expect(io.stdout()).not.toContain('NOT_IMPLEMENTED');
+  });
+
+  it('a schema that is itself invalid is a usage error, exit 2', async () => {
+    const { schema, data } = await schemaAndData('person => { name: no_such_type }');
+    captureOutput();
+    expect(await main(['validate', '--schema', schema, '--root', 'person', data])).toBe(EXIT.USAGE);
   });
 });
 
@@ -520,7 +630,7 @@ describe('policy command', () => {
       limits: Record<string, number>;
     };
     // The whole of `policy.limits` (§9.1, [TSON-SCHEMA] §11.5), every member at its default.
-    expect(Object.keys(parsed.limits)).toHaveLength(17);
+    expect(Object.keys(parsed.limits)).toHaveLength(16);
     expect(parsed.limits.max_depth).toBe(64);
     expect(parsed.limits.max_wait_depth).toBe(64);
     expect(parsed.limits.max_alias_chain).toBe(64);
@@ -962,7 +1072,7 @@ describe('validate: .json inputs ([TSON-JSON])', () => {
 describe('strip', () => {
   const SCHEMA = [
     '!!id:"https://example.test/thing-1.tn"',
-    '!!import:"https://tson.io/2026/39/m/core.tn"',
+    '!!import:"https://tson.io/2026/40/m/core.tn"',
     '!schema {',
     '  @doc:"A thing."',
     '  thing => int32',
@@ -976,7 +1086,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\nthing => int32\n}\n');
+    expect(io.stdout()).toBe('!!import:"40/core"\n!schema {\nthing => int32\n}\n');
     expect(readFileSync(file, 'utf8')).toBe(SCHEMA);
   });
 
@@ -986,7 +1096,7 @@ describe('strip', () => {
     const io = captureOutput();
     const code = await main(['strip', '--keep-docs', file]);
     expect(code).toBe(EXIT.OK);
-    expect(io.stdout()).toBe('!!import:"39/core"\n!schema {\n@doc:"A thing." thing => int32\n}\n');
+    expect(io.stdout()).toBe('!!import:"40/core"\n!schema {\n@doc:"A thing." thing => int32\n}\n');
   });
 
   it('an unknown option, a missing file argument and a second file are usage errors, exit 2', async () => {
@@ -1004,7 +1114,7 @@ describe('strip', () => {
     const file = join(dir, 'broken.tn');
     await writeFile(
       file,
-      '!!import:"https://tson.io/2026/39/m/core.tn"\n!schema { thing => }\n',
+      '!!import:"https://tson.io/2026/40/m/core.tn"\n!schema { thing => }\n',
       'utf8',
     );
     const io = captureOutput();

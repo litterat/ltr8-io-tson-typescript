@@ -4,8 +4,7 @@
  * stand-in {@link MetaTokenForm} (`Token.Form`, upper-snake: `'UNQUOTED' | 'SINGLE_LINE_QUOTED' |
  * 'MULTI_LINE_QUOTED'`, mirroring `ast.TokenForm` one-for-one per `typedef.ts`'s own doc).
  *
- * Shared by `heldBody.ts`, `templateSubstitution.ts` and `definitionResolver.ts` so the two
- * spellings never drift relative to each other independently.
+ * Every conversion between the two goes through here, so the two spellings cannot drift apart.
  */
 import type { TokenForm as LexerTokenForm } from '../lexer/token.js';
 import type { TokenForm as MetaTokenForm } from '../schema/meta/typedef.js';

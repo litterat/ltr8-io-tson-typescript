@@ -8,12 +8,8 @@ import { fieldMapOf } from './model-fixtures.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────
 
-function ref(name: string, args: readonly TypeRef[] = []): TypeRef {
-  return {
-    name,
-    arguments: args.map((r) => ({ kind: 'ref' as const, ref: r })),
-    annotations: [],
-  };
+function ref(name: string): TypeRef {
+  return { name, annotations: [] };
 }
 
 /** A plain, non-reference PRODUCT entry -- the terminal every alias chain below walks to. */
@@ -55,25 +51,13 @@ describe('the reference-chain walk (§8.3)', () => {
     expect(terminal('text', lookup(namespace))).toBe('text');
   });
 
-  it('stops at a materialised instantiation rather than walking through it -- an application, not a further hop, once minted', () => {
-    // string_triple => vector<text, 3>, over an already-minted instantiation entry.
+  it('stops at a declared application: the entry that declares it is a record, never a hop (§8.3)', () => {
+    // text_box => box<text> is the substituted record under its own name; an alias of it ends there.
     const namespace = new Map<string, Top>([
-      ['array_text_3', recordEntry()],
-      ['string_triple', aliasOf(ref('array_text_3'))],
+      ['text_box', recordEntry()],
+      ['boxed', aliasOf(ref('text_box'))],
     ]);
-    expect(terminal('string_triple', lookup(namespace))).toBe('array_text_3');
-  });
-
-  it('does not walk through an argument-bearing reference target -- an application, not a hop to another entry', () => {
-    // partial => <B> box<B>: still open, so its target carries an argument.
-    const namespace = new Map<string, Top>([
-      ['box', recordEntry()],
-      ['partial', aliasOf(ref('box', [ref('B')]))],
-    ]);
-    // The walk stops *at* `partial` itself: its own target has an argument, so it is the
-    // terminal, not `box`.
-    expect(terminal('partial', lookup(namespace))).toBe('partial');
-    expect(terminalDefinition('partial', lookup(namespace))).toBe(namespace.get('partial'));
+    expect(terminal('boxed', lookup(namespace))).toBe('text_box');
   });
 
   it('stops a reference cycle at the name that closes it rather than looping forever, and terminalDefinition answers with undefined', () => {

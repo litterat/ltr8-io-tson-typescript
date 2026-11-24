@@ -24,7 +24,6 @@ import type {
   MapValue,
   RecordField,
   RecordValue,
-  ReferenceValue,
   TokenValue,
 } from '../ast/value.js';
 import type { TokenForm } from '../lexer/token.js';
@@ -38,10 +37,7 @@ import type { AtomBinding, Binding, BindingRef } from './binding.js';
  * wire formatting (quoting, escaping, base-type-specific text) at every atom leaf without this
  * module ever importing `atom/` itself.
  */
-export type AtomEncoder = (
-  binding: AtomBinding<unknown>,
-  value: unknown,
-) => TokenValue | ReferenceValue;
+export type AtomEncoder = (binding: AtomBinding<unknown>, value: unknown) => TokenValue;
 
 /**
  * The default {@link AtomEncoder}, used when a caller supplies none: `String(value)`, unquoted.
@@ -102,7 +98,7 @@ export function toDataValue<T>(
       throw new TsonWriteError('value matches no member of this variant binding');
     }
     const withFraming = toDataValue(member.binding, value, encodeAtom);
-    return { ...withFraming, typeRef: member.wireName };
+    return resolved.untagged === true ? withFraming : { ...withFraming, typeRef: member.wireName };
   }
   if (resolved.kind === 'bridge') {
     // Recurse through toDataValue, not toCoreValue. A bridge is transparent: it converts the host

@@ -38,7 +38,7 @@ import { readTree, validate as validateText } from '../src/facade/tree.js';
 import { compileJsonSchema, type JsonCompiledSchema } from '../src/json/schema/compile.js';
 import { readJsonTree, validateJson } from '../src/json/facade.js';
 import { jsonValueToText } from '../src/json/write.js';
-import { scriptPolicy } from '../src/unicode/policy.js';
+import { tokenPolicyAt } from '../src/unicode/policy.js';
 import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
@@ -47,7 +47,7 @@ const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 const SCHEMA_SOURCE = `
 !!id:"https://example.test/parity-1.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   person => {
     name:   text
@@ -93,15 +93,6 @@ const SCHEMA_SOURCE = `
   pet_of    => pet
   gallery   => { f: figure }
   garage    => { r: robot }
-  outcome    => abstract <T> { code: T }
-  won        => <T> outcome<T> & { prize: text }
-  outcome_of => outcome<text>
-  won_of     => won<text>
-  ledger     => { o: outcome<text> }
-  box        => <T> { v: T }
-  int_box    => box<int32>
-  text_box   => box<text>
-  crate      => { b: box }
   local_box  => { v: meta.declared }
   port_label  => !text ^ { members: ["80" "443"] }
   port_slot   => ( port_label | int32 )
@@ -134,7 +125,7 @@ const SCHEMA_SOURCE = `
   ided        => { id: meta.ref<net.uuid_type> }
   typed       => { t: meta.type_ref }
   cell        => { kind: meta.type_ref  v?: kind! }
-  int_cell    => cell ^ { kind?: = int32 }
+  int_cell    => cell & { kind?: = int32 }
   defaulted   => { kind?: meta.type_ref ~ int32  v?: kind! }
   grouped     => { ( kind: meta.type_ref | name: text )  v?: kind! }
   tmpl        => <T> { item: T }
@@ -144,6 +135,7 @@ const SCHEMA_SOURCE = `
   c1          => !customer { name: Ada }
   order_ref   => meta.ref<order>
   order_pick  => { which: order_ref  also?: meta.ref<order> ~ o1 }
+  order_index => { m: { order_ref => int32 } }
   a_host       => !net.host_type {}
   host_or_port => ( a_host | int32 )
   addressed    => { at: host_or_port }
@@ -162,12 +154,41 @@ const LINKED = resolveUserSchema(SCHEMA_SOURCE);
 const JSON_SCHEMA: JsonCompiledSchema = compileJsonSchema(LINKED);
 const TEXT_SCHEMA: CompiledSchema = compile(LINKED);
 
+/**
+ * A family entered through a parametric record's written parent ([TSON-SCHEMA] §5.8, §5.10): `won_of` composes
+ * `won<text>`, whose parent `outcome<text>` is declared as `outcome_of`, so `won_of` IS-A `outcome_of`. Compiled on
+ * first use, so a schema that fails to load fails each test that reads it.
+ */
+const FAMILY_SOURCE = `
+!!id:"https://example.test/json-parity-family.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
+!schema {
+  outcome    => abstract <T> { code: T }
+  won        => <T> outcome<T> & { prize: text }
+  outcome_of => outcome<text>
+  won_of     => won<text>
+  ledger     => { o: outcome_of }
+}
+`;
+
+let family: { readonly text: CompiledSchema; readonly json: JsonCompiledSchema } | undefined;
+
+function familySchemas(): { readonly text: CompiledSchema; readonly json: JsonCompiledSchema } {
+  if (family === undefined) {
+    const linked = resolveUserSchema(FAMILY_SOURCE);
+    family = { text: compile(linked), json: compileJsonSchema(linked) };
+  }
+  return family;
+}
+
 function tson(rootType: string, body: string): readonly Diagnostic[] {
-  return validateText(bytesOf(body), { schema: TEXT_SCHEMA, root: rootType }).diagnostics;
+  const schema = rootType === 'ledger' ? familySchemas().text : TEXT_SCHEMA;
+  return validateText(bytesOf(body), { schema, root: rootType }).diagnostics;
 }
 
 function json(rootType: string, body: string): readonly Diagnostic[] {
-  return validateJson(body, { schema: JSON_SCHEMA, root: rootType }).diagnostics;
+  const schema = rootType === 'ledger' ? familySchemas().json : JSON_SCHEMA;
+  return validateJson(body, { schema, root: rootType }).diagnostics;
 }
 
 /** A diagnostic reduced to what a consumer routes on: which rule fired, and where in the data. */
@@ -405,7 +426,7 @@ describe('subtype families', () => {
     );
   });
 
-  it('an alias of a template family member selects it in both', () => {
+  it('a member of a family entered through a parametric record’s parent selects it in both', () => {
     bothAccept(
       'ledger',
       '{ o: !won_of { code: "c"  prize: "p" } }',
@@ -413,7 +434,7 @@ describe('subtype families', () => {
     );
   });
 
-  it('an alias of a template family base selects nothing in both', () => {
+  it('the declared application that is the family’s abstract base selects nothing in both', () => {
     sameRule(
       'ledger',
       '{ o: !outcome_of { code: "c" } }',
@@ -421,36 +442,10 @@ describe('subtype families', () => {
     );
   });
 
-  it('the untagged case over a template family in both, comparing expected too', () => {
+  it('the untagged case over that family in both, comparing expected too', () => {
     sameRule('ledger', '{ o: { code: "c"  prize: "p" } }', '{"o": {"code": "c", "prize": "p"}}');
   });
 });
-
-// ── A bare template at a type position ──────────────────────────────────────────────────────
-//    `crate => { b: box }` names the template itself, which is the family base its
-//    instantiations close from (§5.10). The base is ABSTRACT by derivation, so the tag is the
-//    selector in both encodings, and every member is minted, so an alias is the only name either
-//    document has for one.
-
-describe('a bare template at a type position', () => {
-  it('a member of a bare template base reads in both, by alias', () => {
-    bothAccept('crate', '{ b: !int_box { v: 1 } }', '{"b": {"$type": "int_box", "v": 1}}');
-  });
-
-  it('the other member reads in both, which makes the dispatch a dispatch', () => {
-    bothAccept('crate', '{ b: !text_box { v: "x" } }', '{"b": {"$type": "text_box", "v": "x"}}');
-  });
-
-  it('untagged selects nothing: both encodings require the tag', () => {
-    sameRule('crate', '{ b: { v: 1 } }', '{"b": {"v": 1}}');
-  });
-
-  it('a tag naming the base itself selects nothing either', () => {
-    sameRule('crate', '{ b: !box { v: 1 } }', '{"b": {"$type": "box", "v": 1}}');
-  });
-});
-
-// ── Base cases ───────────────────────────────────────────────────────────────────────────────
 
 describe('base cases', () => {
   it('a conforming document is accepted by both', () => {
@@ -696,7 +691,7 @@ describe('§6.4 maps', () => {
 // `aTokenRefusalLeavesNothingInEveryModeAndBothEncodings` still has no *cross-encoding* analogue,
 // though the gap it used to be blocked on is now half-closed: `ReadJsonOptions.tokenPolicy`
 // exists and is wired through (`json/schema/tokenHygiene.ts`, exercised in full by
-// `json-token-policy.test.ts`'s own port of `JsonScriptPolicyTest`), but the Java case compares
+// `json-token-policy.test.ts`'s own port of `JsonTokenPolicyTest`), but the Java case compares
 // **four** modes -- TSON tree, TSON bind, JSON tree, JSON bind -- and none of the four map onto
 // what this port can build a genuine four-way comparison from: TSON bind and JSON bind have no
 // analogue at all (above), the *schemaless* TSON tree reader honours `tokenPolicy`
@@ -714,7 +709,7 @@ describe('AllOrNothingReadTest: a token refusal leaves nothing (JSON only -- see
     const result = validateJson(json, {
       schema: JSON_SCHEMA,
       root: 'route',
-      tokenPolicy: scriptPolicy('ASCII_ONLY'),
+      tokenPolicy: tokenPolicyAt('ASCII_ONLY'),
     });
     expect(result.value).toBeUndefined();
     expect(result.diagnostics.map((d) => d.code)).toEqual(['RESTRICTED_SCRIPT']);
@@ -903,17 +898,17 @@ describe('§5.5 a text family’s normalization', () => {
   });
 });
 
-// \u2500\u2500 A record template under a sealed base ([TSON-SCHEMA] \u00a75.10, \u00a78.1) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u2500\u2500 A parametric record under a sealed base ([TSON-SCHEMA] \u00a75.10, \u00a78.1) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-describe('\u00a76.1.5 a record template under a sealed base', () => {
+describe('\u00a76.1.5 a parametric record under a sealed base', () => {
   /**
-   * A record template IS-A a sealed base is no member of it, though it pins the selector: it has
-   * no values, and its applications are the members. So `pending`'s `"wait"` selects nothing, and
-   * the refusal offers only what a document could select -- never a route to the template, whose
-   * own reader would refuse for want of a subtype, naming a type the position never offered. This
-   * port's `expected` names the members that pin, where the reference's names their pins.
+   * A parametric record composing a sealed base is no member of it, though it pins the selector: it
+   * is no type, and the declarations naming its applications are the members (§5.10). So
+   * `pending`'s `"wait"` selects nothing, and the refusal offers only what a document could select
+   * -- never a route to the parametric record, which no position names. This port's `expected`
+   * names the members that pin, where the reference's names their pins.
    */
-  it('a record template under a sealed base is no member of it, in both', () => {
+  it('a parametric record under a sealed base is no member of it, in both', () => {
     sameRule(
       'ruling',
       '{ v: { v_kind: "wait"  detail: 1 } }',
@@ -965,20 +960,15 @@ describe('§5.6 a reference position over a constructor', () => {
   });
 });
 
-describe('§5.6 a reference position reads an application, a value by name and a sibling reference', () => {
+describe('§5.6 a reference position reads a name: never an application, a value by name, never a sibling reference', () => {
   /**
-   * An application may stand at a kind, judged through the entry the closure closed it to
-   * ([TSON-SCHEMA] §4.2, §7.4): `unique => set<text>` is a type. TSON writes the reference
-   * unquoted, as data grammar; JSON, having no unquoted form, writes the same text as a string.
+   * A reference is a name ([TSON-SCHEMA] §4.2): an argument list is schema grammar, so no data value spells one
+   * ([TSON-DATA] §7.2.5). A quoted token at a reference is the reference its text spells, so TSON's quoted form
+   * and JSON's string meet at the same refusal, on the same code at the same pointer.
    */
-  it('an application at a kind is judged through its entry by both', () => {
-    bothAccept('typed', '{ t: set< text > }', '{"t": "set<text>"}');
-    sameVerdict('ided', '{ id: set<text> }', '{"id": "set<text>"}');
-  });
-
-  /** An argument is compared past its alias chain ([TSON-SCHEMA] §8.2): `set<label>` is `set<text>`. */
-  it('an aliased argument at a kind is judged through its entry by both', () => {
-    bothAccept('typed', '{ t: set<label> }', '{"t": "set<label>"}');
+  it('an argument list at a kind is refused by both, as no name', () => {
+    sameVerdict('typed', '{ t: "set<text>" }', '{"t": "set<text>"}');
+    expect(tson('typed', '{ t: "set<text>" }').map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 
   /**
@@ -999,21 +989,28 @@ describe('§5.6 a reference position reads an application, a value by name and a
     sameVerdict('order_pick', '{ which: o1  also: c1 }', '{"which": "o1", "also": "c1"}');
   });
 
-  it('an application nothing in the closure closed names no type the schema closes, and is refused by both', () => {
-    sameVerdict('typed', '{ t: set<int32> }', '{"t": "set<int32>"}');
-    expect(tson('typed', '{ t: set<int32> }').map((d) => d.code)).toEqual([
-      'ATOM_CONSTRAINT_VIOLATION',
-    ]);
+  /**
+   * A reference naming values is an atom, so a map keyed by one takes the object form ([TSON-JSON] §6.4) and each
+   * member name is judged as the same string at a field is: a key reaching a value of the type is admitted, and one
+   * reaching nothing, a value of another type or a type is refused by both, on the same code at the same pointer.
+   */
+  it('a map keyed by a value reference is judged by what each key reaches in both', () => {
+    bothAccept('order_index', '{ m: { o1 => 1 } }', '{"m": {"o1": 1}}');
+    for (const refused of ['nope', 'c1', 'order']) {
+      sameVerdict('order_index', `{ m: { ${refused} => 1 } }`, `{"m": {"${refused}": 1}}`);
+      expect(verdictsOf(tson('order_index', `{ m: { ${refused} => 1 } }`)), refused).toEqual([
+        { code: 'ATOM_CONSTRAINT_VIOLATION', path: `/m/${refused}` },
+      ]);
+    }
   });
 
   /**
-   * A sibling reference is a reference value, read by the same production in both encodings. It
-   * stands only at a record field's type, so a field typed by a type reference refuses it, on the
-   * same code at the same pointer in both.
+   * A dependent type's mark is schema grammar standing at a record field's type alone ([TSON-SCHEMA] §5.2), so
+   * no data value spells it, and both encodings refuse it as no name.
    */
-  it('a sibling reference at a kind is refused by both', () => {
-    sameVerdict('typed', '{ t: kind! }', '{"t": "kind!"}');
-    expect(tson('typed', '{ t: kind! }').map((d) => d.code)).toEqual(['ATOM_CONSTRAINT_VIOLATION']);
+  it('a dependent type’s mark at a kind is refused by both', () => {
+    sameVerdict('typed', '{ t: "kind!" }', '{"t": "kind!"}');
+    expect(tson('typed', '{ t: "kind!" }').map((d) => d.code)).toEqual(['ATOM_FORM_INVALID']);
   });
 });
 
@@ -1033,8 +1030,9 @@ describe('§5.6 a dependent field is read against its sibling', () => {
     expect(verdictsOf(tson('cell', '{ v: 5  kind: int32 }'))).toEqual([
       { code: 'VALIDATION_ERROR', path: '/v' },
     ]);
+    // A parametric record is no member of `meta.type_ref`: no reference names one bare (§4.2, §5.10).
     expect(verdictsOf(tson('cell', '{ kind: tmpl  v: { item: 5 } }'))).toEqual([
-      { code: 'VALIDATION_ERROR', path: '/kind' },
+      { code: 'ATOM_CONSTRAINT_VIOLATION', path: '/kind' },
     ]);
   });
 

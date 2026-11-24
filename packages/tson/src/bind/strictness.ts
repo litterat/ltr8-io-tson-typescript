@@ -22,7 +22,7 @@
  * pairing -- see its own doc.
  */
 import { namedFields, type NamedField, type RecordField } from '../schema/meta/bodies.js';
-import { isTemplateBody, type Top } from '../schema/meta/typedef.js';
+import type { Top } from '../schema/meta/typedef.js';
 import { TsonBindMismatchError } from '../core/errors.js';
 import type { Binding, RecordBinding } from './binding.js';
 
@@ -106,8 +106,7 @@ function isFixedFieldName(fields: readonly NamedField[], wireName: string): bool
  * would ever catch a binding authored against the wrong shape.
  */
 export function checkBinding(typeName: string, definition: Top, binding: Binding<unknown>): void {
-  // `TemplateBody` (§5.10) carries no `kind` tag at all, so it is ruled out before narrowing.
-  if (isTemplateBody(definition) || definition.kind !== 'record') return;
+  if (definition.kind !== 'record') return;
   const recordBody = definition;
 
   let resolved = binding;

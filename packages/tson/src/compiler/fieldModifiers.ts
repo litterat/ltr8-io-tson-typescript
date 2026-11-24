@@ -2,12 +2,11 @@
  * Part 2 §5.2's field-marks table -- the single place that turns a field's two marks
  * (`optional`/`voidable`) and its modifier (`~`/`=`/`=?`) into the three facts
  * (`optional`/`voidable`/`role`) and the value a `schema.meta` `RecordField` carries. The table
- * is closed and consults nothing but the marks the author wrote (plus, for a template body's own
- * open modifiers, the enclosing declaration's parameter list), which is why it can be answered
+ * is closed and consults nothing but the marks the author wrote, which is why it can be answered
  * before a field's type is even known.
  *
- * **One table, not two.** `desugar.ts` (building a template's held body from unresolved AST) and
- * `definitionResolver.ts` (resolving a closed record's own fields) both consult this function --
+ * **One table, not two.** `desugar.ts` (writing a record in place from unresolved AST) and
+ * `definitionResolver.ts` (resolving a declared record's own fields) both consult this function --
  * the Java reference has one, `FieldModifiers.of`
  * (`tson-compiler/.../resolver/FieldModifiers.java`), and a second, hand-kept copy is exactly how
  * the two drift.

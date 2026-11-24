@@ -41,7 +41,7 @@ const CYCLIC_SCHEMA = linkedSchema(
         fields: fieldMapOf([
           {
             name: 'value',
-            type: { name: 'text', arguments: [], annotations: [] },
+            type: { name: 'text', annotations: [] },
             optional: false,
             voidable: false,
             role: 'FREE',
@@ -49,7 +49,7 @@ const CYCLIC_SCHEMA = linkedSchema(
           },
           {
             name: 'next',
-            type: { name: 'node', arguments: [], annotations: [] },
+            type: { name: 'node', annotations: [] },
             optional: true,
             voidable: true,
             role: 'FREE',
@@ -126,7 +126,7 @@ describe('validate -- collects diagnostics rather than throwing', () => {
 
 const USER_SCHEMA = `
 !!id:"test://person.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   person => {
     name: text

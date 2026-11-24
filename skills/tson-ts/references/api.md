@@ -45,7 +45,7 @@ interface SchemalessReadOptions extends NestingLimitOptions {
   readonly schema?: undefined;
   readonly preserveUnknownTypeRefs?: boolean;
   readonly identifierPolicy?: IdentifierPolicy; // §8.2 over names
-  readonly tokenPolicy?: ScriptPolicy; // §8.2 over values; scans nothing by default
+  readonly tokenPolicy?: TokenPolicy; // §8.2 over values; scans nothing by default
 }
 
 interface ValidationResult {
@@ -183,7 +183,7 @@ function createTson(config?: Config): Tson;
 interface Config extends NestingLimitOptions {
   readonly schemaSource?: SchemaSource;
   readonly identifierPolicy?: IdentifierPolicy;   // §8.2 over names
-  readonly tokenPolicy?: ScriptPolicy;       // §8.2 over values; scans nothing by default
+  readonly tokenPolicy?: TokenPolicy;       // §8.2 over values; scans nothing by default
 }
 
 interface Tson {
@@ -191,6 +191,7 @@ interface Tson {
   readonly schemas: ReadonlyMap<string, LinkedSchema>;   // keyed by canonical identity
   register(schema: LinkedSchema): void;
   resolveSchema(source: string | Uint8Array): LinkedSchema;  // synchronous; never fetches
+  loadSchema(source: string | Uint8Array): Promise<LinkedSchema>; // fetches imports + externs' schemas, then resolves and registers
   compile(schema: LinkedSchema): CompiledSchema;
   fetch(reference: string): Promise<Uint8Array>;             // raw bytes only
   preload(references: readonly string[]): Promise<void>;     // fetch+resolve+link+register, in order
@@ -200,15 +201,16 @@ interface Tson {
 
 interface ProcessorPolicy {
   readonly identifierPolicy: IdentifierPolicy;
-  readonly tokenPolicy: ScriptPolicy;
+  readonly tokenPolicy: TokenPolicy;
   readonly limits: LimitsPolicy;                             // §9.1
   readonly unicodeDataVersion: string;
 }
 
-// §8.2. ScriptPolicy is the token policy: a level and the combinations admitted over it.
-interface ScriptPolicy { readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[] }
-interface IdentifierPolicy extends ScriptPolicy { readonly perSegment: boolean; readonly skeletonDistinctness: boolean }
-// DEFAULT_IDENTIFIER_POLICY, NO_IDENTIFIER_POLICY, DEFAULT_TOKEN_POLICY; scriptPolicy(level),
+// §8.2. TokenPolicy is the token policy: a level and the combinations admitted over it.
+interface TokenPolicy { readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[] }
+interface IdentifierPolicy {
+  readonly restrictionLevel: RestrictionLevel; readonly permittedScripts: readonly ScriptCombination[]; readonly perSegment: boolean; readonly skeletonDistinctness: boolean }
+// DEFAULT_IDENTIFIER_POLICY, NO_IDENTIFIER_POLICY, DEFAULT_TOKEN_POLICY; tokenPolicyAt(level),
 // perSegment(p), permitting(p, ...scripts), withRestrictionLevel(p, level), withSkeletonDistinctness(p, on);
 // withIdentifierPolicy(config, p), withTokenPolicy(config, p). A name refusal is not a verdict: isNameRefusal(code).
 
@@ -220,7 +222,8 @@ function mapSchemaSource(
 ): SchemaSource;
 ```
 
-`preload` is idempotent per reference (an already-registered one is never re-fetched), verifies any
+`loadSchema` puts the document in flight under its own `!!id` before fetching, so a reference
+reaching it is a cycle (never a fetch); `preload` is idempotent per reference (an already-registered one is never re-fetched), verifies any
 declared `?sha256=` pin, and rejects a document whose own `!!id` is not the identity requested.
 
 ### The compile pipeline
@@ -303,7 +306,9 @@ are **not** the writers to take a content hash over.
 
 The §8 resolver output as a value model. An entry **is its value** (§8.1): `Top` is the closed union
 of a type (`Type`: every atom, product and sum body, each carrying a `TypeChain` of `parents`,
-`supertypes` and `subtypes`), a `Reference`, a held `TemplateBody` and a `Namespace` value. A record's
+`supertypes` and `subtypes`; a record with `parameters` is a parametric record), an `Alias`, an
+`Extern`, an `IncompleteEntry` and a `ValueEntry`, which holds a `Namespace` value among others. A type
+slot is a `TypeExpr`: a `TypeRef` or a `TypeInline`, a type written in place. A record's
 `fields` is a `Namespace` keyed by field name, and a meta layer's own namespace entries are held as
 generic `MetaValue`s. `EntryFacts` carries what an entry has beyond its value (`schema/meta/typedef.ts`,
 `bodies.ts`, `algebra.ts`, the atom families, `atoms-network.ts` and `position.ts`). It **names no compiler type**,

@@ -12,14 +12,12 @@ import { expect } from 'vitest';
 import type { LinkedSchema } from '../../packages/tson/src/link/link.js';
 import {
   choiceDisjoint,
-  isTemplateBody,
   subtypesOf,
   type Top,
 } from '../../packages/tson/src/schema/meta/typedef.js';
 
 import { loadSchema, newClass2Tson } from './class2Tson.js';
 import { assertSchemaOrLinkLoadFailed } from './schema.js';
-import { normalizeSyntheticName } from './synthetic.js';
 import type { LinkSidecar, LinkValid } from './sidecar.js';
 import type { Class2Layer, Vector } from './vectors.js';
 
@@ -51,12 +49,9 @@ function assertLinkedNamespaceMatches(
   const entries = linked.entries;
 
   if (expected.binds !== undefined) {
-    // Names normalised on both sides: a materialised entry's trailing content hash is not
-    // normative (§8.2, RUNNER.md rule 6), and a vector that stated one would be testing a hash
-    // function.
-    const bound = new Set([...entries.keys()].map((name) => normalizeSyntheticName(name)));
+    const bound = new Set(entries.keys());
     for (const name of expected.binds) {
-      if (!bound.has(normalizeSyntheticName(name))) {
+      if (!bound.has(name)) {
         throw new Error(
           `${vector.name}: the linked namespace does not bind '${name}'; it binds ${[...bound].join(', ')}`,
         );
@@ -80,23 +75,17 @@ function assertLinkedNamespaceMatches(
   if (expected.subtypes !== undefined) {
     for (const claim of expected.subtypes) {
       const definition = definitionOf(vector, entries, claim.name);
-      const actual = new Set(subtypesOf(definition).map((name) => normalizeSyntheticName(name)));
-      const wanted = new Set(claim.subtypes.map((name) => normalizeSyntheticName(name)));
-      expect(actual).toEqual(wanted);
+      expect(new Set(subtypesOf(definition))).toEqual(new Set(claim.subtypes));
     }
   }
 
   if (expected.members !== undefined) {
     for (const claim of expected.members) {
       const definition = definitionOf(vector, entries, claim.name);
-      if (isTemplateBody(definition) || definition.kind !== 'reference_type') {
+      if (definition.kind !== 'ref') {
         throw new Error(`${vector.name}: '${claim.name}' is not a reference (§4.2)`);
       }
-      const actual = new Set(
-        (definition.index?.members ?? []).map((name) => normalizeSyntheticName(name)),
-      );
-      const wanted = new Set(claim.members.map((name) => normalizeSyntheticName(name)));
-      expect(actual).toEqual(wanted);
+      expect(new Set(definition.index?.members ?? [])).toEqual(new Set(claim.members));
     }
   }
 }

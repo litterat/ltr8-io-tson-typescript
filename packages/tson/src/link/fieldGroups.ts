@@ -26,7 +26,6 @@ import type { DiagnosticsReceiver } from '../core/diagnostic.js';
 import { TsonSchemaValidationError } from '../core/errors.js';
 import type { FieldGroup, RecordBody } from '../schema/meta/bodies.js';
 import type { Top } from '../schema/meta/typedef.js';
-import { isTemplateBody } from '../schema/meta/typedef.js';
 import { schemaPositionOf, type FactsTable } from './facts.js';
 
 /** Dependencies {@link checkFieldGroups} needs beyond the merged namespace. */
@@ -109,7 +108,7 @@ export function checkFieldGroups(
 ): void {
   for (const name of localNames) {
     const body = merged.get(name);
-    if (body === undefined || isTemplateBody(body) || body.kind !== 'record') continue;
+    if (body?.kind !== 'record') continue;
     const record: RecordBody = body;
     if (record.groups.length === 0) continue;
     const fields = new Map(

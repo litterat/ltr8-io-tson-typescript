@@ -15,7 +15,7 @@ import { createTson, mapSchemaSource, type SchemaSource } from '../src/config.js
 import {
   DEFAULT_IDENTIFIER_POLICY,
   DEFAULT_TOKEN_POLICY,
-  scriptPolicy,
+  tokenPolicyAt,
   withRestrictionLevel,
 } from '../src/unicode/policy.js';
 import { UTS39_VERSION } from '../src/unicode/uts39.js';
@@ -122,7 +122,7 @@ describe('createTson: registry primitives', () => {
     const kernel = linkSchema(bootstrapKernel(KERNEL_BYTES));
     expect(kernel.id).toBe(KERNEL_ID);
     tson.register(kernel);
-    expect(tson.schemas.get('tson.io/2026/39/m/meta.tn')).toBe(kernel);
+    expect(tson.schemas.get('tson.io/2026/40/m/meta.tn')).toBe(kernel);
   });
 
   it('resolveSchema refuses a schema whose !!import is not registered', () => {
@@ -135,7 +135,7 @@ describe('createTson: registry primitives', () => {
     tson.register(linkSchema(bootstrapKernel(KERNEL_BYTES)));
     const numeric = tson.resolveSchema(NUMERIC_BYTES);
     expect(numeric.id).toBe(NUMERIC_ID);
-    expect(tson.schemas.get('tson.io/2026/39/m/numeric.tn')).toBe(numeric);
+    expect(tson.schemas.get('tson.io/2026/40/m/numeric.tn')).toBe(numeric);
     tson.resolveSchema(TEMPORAL_BYTES);
     tson.resolveSchema(NET_BYTES);
 
@@ -197,8 +197,8 @@ describe('createTson: preload against a configured schemaSource', () => {
 
     await tson.preload([NUMERIC_ID, TEMPORAL_ID, NET_ID, CORE_ID]);
 
-    expect(tson.schemas.get('tson.io/2026/39/m/numeric.tn')?.id).toBe(NUMERIC_ID);
-    expect(tson.schemas.get('tson.io/2026/39/m/core.tn')?.id).toBe(CORE_ID);
+    expect(tson.schemas.get('tson.io/2026/40/m/numeric.tn')?.id).toBe(NUMERIC_ID);
+    expect(tson.schemas.get('tson.io/2026/40/m/core.tn')?.id).toBe(CORE_ID);
 
     // Idempotent: a second preload of the same references touches the source again but adds
     // nothing new and does not throw (already registered, so resolution is skipped entirely).
@@ -420,7 +420,7 @@ describe('Tson.processorPolicy -- §8.2 stated once for the instance', () => {
 
   it('carries the policies the instance was configured with, not the defaults', () => {
     const identifierPolicy = withRestrictionLevel(DEFAULT_IDENTIFIER_POLICY, 'ASCII_ONLY');
-    const token = scriptPolicy('SINGLE_SCRIPT');
+    const token = tokenPolicyAt('SINGLE_SCRIPT');
     const tson = createTson({ identifierPolicy, tokenPolicy: token });
     expect(tson.processorPolicy.identifierPolicy).toEqual(identifierPolicy);
     expect(tson.processorPolicy.tokenPolicy).toEqual(token);

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { SchemaLocation } from '../src/core/diagnostic.js';
 import type { ChoiceBody } from '../src/schema/meta/bodies.js';
-import type { Top } from '../src/schema/meta/typedef.js';
 import { choiceTreeReader } from '../src/compiler/choiceReader.js';
 import { compile, validate } from '../src/compiler/compile.js';
 import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
 import type { TypeReader } from '../src/reader/contracts.js';
 import type { Value } from '../src/tree/nodes.js';
+import type { Top, TypeExpr } from '../src/schema/meta/typedef.js';
+import { nameOf } from '../src/schema/meta/typedef.js';
 import {
   bodyContextOver,
   collectingContextOver,
@@ -38,12 +39,13 @@ function variantReader(typeRef: string, kind: 'int' | 'text'): TypeReader<Value>
 const BODY: ChoiceBody = {
   kind: 'choice',
   variants: [
-    { name: 'phone', arguments: [], annotations: [] },
-    { name: 'email', arguments: [], annotations: [] },
+    { name: 'phone', annotations: [] },
+    { name: 'email', annotations: [] },
   ],
 };
 
-function resolveType(name: string): TypeReader<Value> {
+function resolveType(type: string | TypeExpr): TypeReader<Value> {
+  const name = typeof type === 'string' ? type : (nameOf(type) ?? '');
   return name === 'phone' ? variantReader('phone', 'int') : variantReader('email', 'text');
 }
 
@@ -157,7 +159,7 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
         'phone_of',
         entry({
           kind: 'alias',
-          target: { name: 'phone', arguments: [], annotations: [] },
+          target: { name: 'phone', annotations: [] },
         }),
       ],
     ]);
@@ -208,7 +210,7 @@ describe('choiceTreeReader -- SUM-kind !type-ref dispatch (§3.2, §5.4)', () =>
 
 const DISJOINT_SCHEMA = `
 !!id:"test://choice-disjoint.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   designator => !text ^ { pattern: "[A-Z]{3}-[0-9]{3}" }
   channel => !integer ^ { min: 1  max: 64 }
@@ -338,7 +340,7 @@ describe('choiceTreeReader -- untagged recovery at a disjoint choice (§5.4)', (
  */
 const SEALED_CHOICE_SCHEMA = `
 !!id:"test://choice-sealed.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   pet => abstract {
     pet_type: text =?
@@ -383,13 +385,22 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
     expect(result.diagnostics.map((d) => d.code)).toEqual(['VALIDATION_ERROR']);
   });
 
-  it('a subtype’s own name is still not admissible at the choice’s tag -- this fix only reaches the variant’s own name', () => {
-    const result = validate(
-      sealedChoiceCompiled,
-      'c1',
-      disjointBytes('!dog { pet_type: dog  name: Rex  breed: corgi }'),
-    );
-    expect(result.diagnostics.map((d) => d.code)).toEqual(['TYPE_MISMATCH']);
+  it('§5.4, §7.2: a member’s own name selects the one variant it IS-A, and validates as the member', () => {
+    expect(
+      validate(
+        sealedChoiceCompiled,
+        'c1',
+        disjointBytes('!dog { pet_type: dog  name: Rex  breed: corgi }'),
+      ).diagnostics,
+    ).toEqual([]);
+    // Read as a `dog`: a field `dog` does not declare is refused there.
+    expect(
+      validate(
+        sealedChoiceCompiled,
+        'c1',
+        disjointBytes('!dog { pet_type: dog  name: Rex  indoor: true }'),
+      ).diagnostics.length,
+    ).toBeGreaterThan(0);
   });
 
   it('the same sealed base at an ordinary (non-choice) position still refuses its own name -- this fix is choice-routed only', () => {
@@ -414,7 +425,7 @@ describe("choiceTreeReader -- a sealed family's own name as a choice variant (§
  */
 const ALIAS_VARIANT_SCHEMA = `
 !!id:"test://choice-alias-variant.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   note    => { body: text }
   n_of    => note

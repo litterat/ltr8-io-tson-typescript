@@ -37,8 +37,7 @@ import type {
   Annotation as WrittenAnnotation,
 } from '../ast/value.js';
 import type { DiagnosticCode } from '../core/diagnostic.js';
-import type { DefinitionValueReader } from '../compiler/resolverTypes.js';
-import { referenceFromAst, referenceToWire } from './referenceAtoms.js';
+import type { DefinitionValueReader, MemberJoiners } from '../compiler/resolverTypes.js';
 import {
   TsonAtomParseError,
   TsonAtomValidationError,
@@ -48,6 +47,7 @@ import {
 } from '../core/errors.js';
 import { atomParserFor, isScalarBody } from '../atom/forType.js';
 import { createQualifiedNameParser } from '../atom/reference.js';
+import { parseReference } from '../atom/referenceGrammar.js';
 import { terminal, type EntryLookup } from '../link/aliasChain.js';
 import { referenceIn, writtenWithoutItsSibling } from '../link/dependentFields.js';
 import { lexerFormOfMeta, metaFormOfLexer } from '../compiler/tokenForms.js';
@@ -62,6 +62,7 @@ import {
   type MapBody,
   type RecordBody,
   type TupleBody,
+  typeExprText,
 } from './meta/bodies.js';
 import type {
   Annotation,
@@ -72,13 +73,13 @@ import type {
   NameSlot,
   Token,
   Top,
-  TypeRef,
+  TypeExpr,
 } from './meta/typedef.js';
 import {
+  dependentOn,
   isConstructor,
-  isTemplateBody,
+  isParametric,
   namespaceOf,
-  referenceText,
   subtypesOf,
   supertypesOf,
 } from './meta/typedef.js';
@@ -108,9 +109,9 @@ export function readValueEntry(
   value: DataValue,
   meta: EntryLookup,
   identifierPolicy: IdentifierPolicy = DEFAULT_IDENTIFIER_POLICY,
-  close?: (application: TypeRef) => string,
+  joiners?: MemberJoiners,
 ): MetaValue {
-  const read = new ValueBodyReader(meta, identifierPolicy, close);
+  const read = new ValueBodyReader(meta, identifierPolicy, joiners);
   // The payload's own tag names its type, which the position states already.
   const untagged: DataValue = value.typeRef === type ? withoutTag(value) : value;
   return read.value(untagged, type, []);
@@ -126,8 +127,9 @@ function withoutTag(value: DataValue): DataValue {
 export function createDefinitionValueReader(
   meta: EntryLookup,
   identifierPolicy?: IdentifierPolicy,
+  joiners?: MemberJoiners,
 ): DefinitionValueReader {
-  return (type, value, close) => readValueEntry(type, value, meta, identifierPolicy, close);
+  return (type, value) => readValueEntry(type, value, meta, identifierPolicy, joiners);
 }
 
 /**
@@ -161,6 +163,14 @@ function namespaceMapValue(value: Namespace<MetaValue>): CoreValue {
 
 /** `value` as the data value it was read from (§8.1): a name as the token it was, a record tagged where its tag names a member. */
 export function metaDataValue(value: MetaValue): DataValue {
+  const written = unannotatedDataValue(value);
+  const annotations = 'annotations' in value ? (value.annotations ?? []) : [];
+  return annotations.length === 0
+    ? written
+    : { ...written, annotations: annotations.map(writtenAnnotationOf) };
+}
+
+function unannotatedDataValue(value: MetaValue): DataValue {
   switch (value.form) {
     case 'token':
       return {
@@ -171,8 +181,6 @@ export function metaDataValue(value: MetaValue): DataValue {
           form: lexerFormOfMeta(value.token.form),
         },
       };
-    case 'reference':
-      return { annotations: [], coreValue: referenceToWire(value.reference) };
     case 'schema_map':
       throw new TsonInternalError(
         'a nested schema map is written by the resolved-output writer, with its members, never as a value body',
@@ -231,33 +239,18 @@ class ValueBodyReader {
   constructor(
     private readonly meta: EntryLookup,
     private readonly policy: IdentifierPolicy,
-    private readonly close?: (application: TypeRef) => string,
+    private readonly joiners?: MemberJoiners,
   ) {}
 
-  /**
-   * The entry `ref` names: its own name, or where it is an application the resolution has not closed yet (a
-   * type written `meta.ref<meta.record>` at a field the value is read against), the entry it closes to (§5.10).
-   */
-  private named(ref: TypeRef): string {
-    if (ref.arguments.length === 0) return ref.name;
-    if (this.close === undefined) {
-      throw new TsonReadError({
-        code: 'TYPE_MISMATCH',
-        message: `'${referenceText(ref)}' is an application no resolution closed here (§5.10)`,
-      });
-    }
-    return this.close(ref);
+  /** The name a type slot holds, or the source spelling of a type written in place there (§4.2). */
+  private named(ref: TypeExpr): string {
+    return ref.kind === 'inline' ? typeExprText(ref) : ref.name;
   }
 
-  /**
-   * The identifier family `type` resolves to, past its alias chain, or `undefined` where it
-   * is no identifier family -- what makes a token at a position typed by it a name (§8.2).
-   */
-  private identifierFamily(type: string): IdentifierType | undefined {
-    const body = this.meta(terminal(type, this.meta));
-    return body !== undefined && !isTemplateBody(body) && body.kind === 'identifier_type'
-      ? body
-      : undefined;
+  private identifierFamily(type: TypeExpr | string): IdentifierType | undefined {
+    if (typeof type !== 'string' && type.kind === 'inline') return undefined;
+    const body = this.meta(terminal(typeof type === 'string' ? type : type.name, this.meta));
+    return body?.kind === 'identifier_type' ? body : undefined;
   }
 
   /**
@@ -302,8 +295,15 @@ class ValueBodyReader {
     }
   }
 
-  /** `type`'s entry at the end of its chain (§8.3), under the name it is declared by. */
-  private resolved(type: string): { readonly name: string; readonly body: Top } {
+  /**
+   * `type`'s entry at the end of its chain (§8.3), under the name it is declared by; a type written in place is
+   * its own body, named by its spelling (§4.2).
+   */
+  private resolved(type: string | TypeExpr): { readonly name: string; readonly body: Top } {
+    if (typeof type !== 'string') {
+      if (type.kind === 'inline') return { name: typeExprText(type), body: type.of };
+      return this.resolved(type.name);
+    }
     const name = terminal(type, this.meta);
     const body = this.meta(name);
     if (body === undefined) {
@@ -374,16 +374,63 @@ class ValueBodyReader {
     return core.text;
   }
 
-  value(value: DataValue, type: string, path: readonly string[]): MetaValue {
-    const { name, body } = this.resolved(type);
-    if (isTemplateBody(body)) {
+  value(written: DataValue, slot: string | TypeExpr, path: readonly string[]): MetaValue {
+    const position = this.resolved(slot);
+    // A name carries no annotation (its type is its referent's), and `_` holds nothing to annotate: both refuse
+    // one where they read. Every other value keeps its own, read in this schema's namespace (§6).
+    if (
+      position.body.kind === 'ref' ||
+      written.coreValue.kind === 'void' ||
+      written.annotations.length === 0
+    ) {
+      return this.unannotated(written, position, path);
+    }
+    const annotations = this.annotations(written.annotations, path);
+    const read = this.unannotated({ ...written, annotations: [] }, position, path);
+    return read.form === 'void' || read.form === 'held' || read.form === 'schema_map'
+      ? read
+      : { ...read, annotations };
+  }
+
+  /**
+   * The annotations written in front of a value (§6), each name resolved and each value judged against the type it
+   * names, in the namespace of the schema writing the value -- whichever schema declared the value's type. The
+   * values are kept as written, as a key's are.
+   */
+  private annotations(written: readonly WrittenAnnotation[], path: readonly string[]): Annotations {
+    return written.map((annotation) => {
+      const end = terminal(annotation.name, this.meta);
+      if (this.meta(end) === undefined) {
+        throw new TsonReadError({
+          code: 'UNKNOWN_TYPE_REF',
+          message: `${at(path)}the annotation '@${annotation.name}' names no type of this schema's namespace (§6)`,
+        });
+      }
+      if (annotation.value !== undefined) {
+        this.value(annotation.value, annotation.name, [...path, `@${annotation.name}`]);
+      }
+      return annotationOf(annotation);
+    });
+  }
+
+  private unannotated(
+    written: DataValue,
+    position: { readonly name: string; readonly body: Top },
+    path: readonly string[],
+  ): MetaValue {
+    const { name, body, value } = this.subsumed(written, position);
+    const type = name;
+    if (body.kind === 'incomplete' || isParametric(body)) {
       throw new TsonReadError({
         code: 'TYPE_MISMATCH',
-        message: `${at(path)}'${type}' is an open entry, which describes no value until applied (§5.10)`,
+        message:
+          body.kind === 'incomplete'
+            ? `${at(path)}'${type}' is an incomplete entry, which is no type (§5.5)`
+            : `${at(path)}'${type}' is a parametric record, which describes no value until applied (§5.10)`,
       });
     }
     switch (body.kind) {
-      case 'reference_type':
+      case 'ref':
         return this.name(value, path, {
           role: this.namesTypes(body.of.name) ? 'TYPE_NAME' : 'VALUE_NAME',
           type: name,
@@ -411,10 +458,19 @@ class ValueBodyReader {
           code: 'TYPE_MISMATCH',
           message: `${at(path)}'${type}' is a value and not a type, so nothing is read under it (§4.1)`,
         });
-      case 'record_template':
+      case 'extern':
+        throw new TsonNotImplementedError(
+          `${at(path)}'${type}' is an extern (§5.13) inside a value entry's own value, which this library ` +
+            'does not read yet',
+        );
+      case 'apply':
+        throw new TsonNotImplementedError(
+          `${at(path)}'${type}' is an application of a parametric record no resolution closed here (§5.10)`,
+        );
+      case 'dependent':
         throw new TsonReadError({
           code: 'TYPE_MISMATCH',
-          message: `${at(path)}'${name}' is a template family base; a value is a value of one of its members, named by its tag (§5.10)`,
+          message: `${at(path)}'${type}' is a dependent type, read only at a record field's type (§5.2)`,
         });
       case 'declared_type':
         throw new TsonNotImplementedError(
@@ -438,6 +494,30 @@ class ValueBodyReader {
     }
   }
 
+  /**
+   * The type `value` is read under: the position's, or the one its tag names where that type IS-A the position's
+   * and is built as it is (§7.2) -- a refinement of a namespace, array or map type, or of an atom, stands where its
+   * source is wanted and is read as itself. A record and a choice judge their own tags; any other tag is left on
+   * the value, for the read to refuse.
+   */
+  private subsumed(
+    value: DataValue,
+    position: { readonly name: string; readonly body: Top },
+  ): { readonly name: string; readonly body: Top; readonly value: DataValue } {
+    const tag = value.typeRef;
+    const kind = position.body.kind;
+    if (tag === undefined || kind === 'record' || kind === 'choice' || kind === 'ref') {
+      return { ...position, value };
+    }
+    const name = terminal(tag, this.meta);
+    const body = this.meta(name);
+    const isA =
+      body !== undefined &&
+      (name === position.name ||
+        (body.kind === kind && supertypesOf(body).includes(position.name)));
+    return isA ? { name, body, value: withoutTag(value) } : { ...position, value };
+  }
+
   /** Whether `of` names a constructor, so a reference over it holds a type's name rather than a value's (§4.2). */
   private namesTypes(of: string): boolean {
     const name = terminal(of, this.meta);
@@ -447,14 +527,21 @@ class ValueBodyReader {
 
   /** `token` judged a value of the atom `name`'s body (§5). */
   private atom(name: string, body: Top, token: Token, path: readonly string[]): void {
-    if (isTemplateBody(body) || !isScalarBody(body)) {
+    if (!isScalarBody(body)) {
       throw new TsonReadError({
         code: 'TYPE_MISMATCH',
         message: `${at(path)}'${name}' is no atom, so no token is a value of it`,
       });
     }
+    // A reference naming types holds a type's name, every segment an identifier; one naming values holds a
+    // qualified name whose segments past the first are names of the families they enter, judged by the walk
+    // that resolves it when the schema links (§5.12).
     const parser =
-      body.kind === 'reference_type' ? createQualifiedNameParser(name) : atomParserFor(name, body);
+      body.kind !== 'ref'
+        ? atomParserFor(name, body)
+        : this.namesTypes(body.of.name)
+          ? createQualifiedNameParser(name)
+          : VALUE_NAME;
     if (parser === undefined) return;
     try {
       parser.read({ text: token.text, form: lexerFormOfMeta(token.form) });
@@ -498,31 +585,11 @@ class ValueBodyReader {
       });
     }
     const core = value.coreValue;
-    if (core.kind === 'token' && core.form === 'unquoted') {
-      const token: Token = { text: core.text, form: 'UNQUOTED' };
-      this.atom(
-        slot.type,
-        {
-          kind: 'reference_type',
-          of: { name: slot.of, arguments: [], annotations: [] },
-          allowSibling: false,
-        },
-        token,
-        path,
-      );
-      return { form: 'token', token, slot };
-    }
+    // A quoted token at a reference is the reference its text spells, as an unquoted one is (§5.12).
     if (core.kind === 'token') {
-      throw new TsonReadError({
-        code: 'TYPE_MISMATCH',
-        message: `${at(path)}expected ${wanted}, found the quoted token "${core.text}", which is text rather than a name`,
-      });
-    }
-    // An application or a sibling reference at a name slot: the data grammar's own reference value
-    // (§7.4), kept as written. Whether it is admitted is the slot's reference type's `allow_sibling`,
-    // and what it names is the linker's to judge.
-    if (core.kind === 'reference') {
-      return { form: 'reference', reference: referenceFromAst(core.reference), slot };
+      const token: Token = { text: core.text, form: metaFormOfLexer(core.form) };
+      this.atom(slot.type, { kind: 'ref', of: { name: slot.of, annotations: [] } }, token, path);
+      return { form: 'token', token, slot };
     }
     if (core.kind === 'record' || core.kind === 'map' || core.kind === 'empty-brace') {
       throw new TsonReadError({
@@ -549,7 +616,6 @@ class ValueBodyReader {
     if (value.typeRef !== undefined) {
       const tagged = this.resolved(value.typeRef);
       if (
-        isTemplateBody(tagged.body) ||
         tagged.body.kind !== 'record' ||
         (tagged.name !== declared && !supertypesOf(tagged.body).includes(declared))
       ) {
@@ -560,16 +626,15 @@ class ValueBodyReader {
       }
       name = tagged.name;
       body = tagged.body;
+    } else if (body.extension === 'ABSTRACT' && body.discriminators !== undefined) {
+      const member = this.placedByPins(value, name, body, path);
+      name = member.name;
+      body = member.body;
     }
     if (body.extension === 'ABSTRACT') {
       const members = subtypesOf(body).filter((subtype) => {
         const member = this.meta(subtype);
-        return (
-          member !== undefined &&
-          !isTemplateBody(member) &&
-          member.kind === 'record' &&
-          member.extension !== 'ABSTRACT'
-        );
+        return member?.kind === 'record' && member.extension !== 'ABSTRACT';
       });
       throw new TsonReadError({
         code: 'TYPE_MISMATCH',
@@ -619,18 +684,18 @@ class ValueBodyReader {
       // reading schema's closure alone holds: a schema document holds it as written (§5.2), and the link
       // judges it.
       let read: MetaValue;
-      if (declaration.type.kind === 'sibling') {
-        const sibling = declaration.type.field;
+      const sibling = dependentOn(declaration.type);
+      if (sibling !== undefined) {
         const siblingDeclared = body.fields.entries.get(sibling);
         if (siblingDeclared === undefined) {
           throw new TsonReadError({
             code: 'UNRECOGNIZED_FIELD',
-            message: `${at(at_)}'${name}.${field.name}' is typed by the sibling '${sibling}!', and '${name}' declares no field '${sibling}'`,
+            message: `${at(at_)}'${name}.${field.name}' is typed by the sibling '${sibling}', and '${name}' declares no field '${sibling}'`,
           });
         }
         read = heldAsWritten(written, field.name, sibling, siblingDeclared);
       } else {
-        read = this.value(written, this.named(declaration.type), at_);
+        read = this.value(written, declaration.type, at_);
       }
       if (
         declaration.role === 'FIXED' &&
@@ -670,6 +735,68 @@ class ValueBodyReader {
   }
 
   /**
+   * The member of the family `base` an untagged value is placed at by its pins (§5.2): the one record IS-A `base`,
+   * with instances of its own, whose pin on every selector is the value's written one. Its candidates are the
+   * members the closure records and the declarations of the schema being resolved that may join the family, each
+   * made ready as the read reaches it -- a value placed by its pins waits on each declaration that may be its member
+   * (§3.4.1).
+   */
+  private placedByPins(
+    value: DataValue,
+    base: string,
+    body: RecordBody,
+    path: readonly string[],
+  ): { readonly name: string; readonly body: RecordBody } {
+    const core = value.coreValue;
+    const selectors = body.discriminators ?? [];
+    const pins = new Map<string, string>();
+    for (const field of core.kind === 'record' ? core.fields : []) {
+      const token = field.value.coreValue;
+      if (selectors.includes(field.name) && token.kind === 'token')
+        pins.set(field.name, token.text);
+    }
+    const missing = selectors.find((selector) => !pins.has(selector));
+    if (missing !== undefined) {
+      throw new TsonReadError({
+        code: 'FIELD_REQUIRED',
+        message:
+          `${at(path)}'${base}' places a value at its member by the pin on '${missing}', and the value writes ` +
+          'no token there (§5.2)',
+      });
+    }
+    const candidates = new Set([...subtypesOf(body), ...(this.joiners?.(base, pins) ?? [])]);
+    const members: string[] = [];
+    const placed: { name: string; body: RecordBody }[] = [];
+    for (const candidate of candidates) {
+      const name = terminal(candidate, this.meta);
+      const member = this.meta(name);
+      if (member?.kind !== 'record' || member.extension === 'ABSTRACT') continue;
+      if (name !== base && !supertypesOf(member).includes(base)) continue;
+      members.push(name);
+      const pinned = selectors.every((selector) => {
+        const field = member.fields.entries.get(selector);
+        return field?.role === 'FIXED' && field.value?.text === pins.get(selector);
+      });
+      if (pinned && !placed.some((found) => found.name === name))
+        placed.push({ name, body: member });
+    }
+    const [only] = placed;
+    if (placed.length === 1 && only !== undefined) return only;
+    const stated = selectors
+      .map((selector) => `${selector}: ${pins.get(selector) ?? ''}`)
+      .join(', ');
+    throw new TsonReadError({
+      code: 'TYPE_MISMATCH',
+      message:
+        placed.length === 0
+          ? `${at(path)}no member of '${base}' pins ${stated}, the value this record states -- ` +
+            `expected one of (${[...new Set(members)].join(', ')}) (§5.2)`
+          : `${at(path)}${placed.map((found) => `'${found.name}'`).join(' and ')} each pin ${stated}, so ` +
+            `the value places at no one member of '${base}' (§5.2)`,
+    });
+  }
+
+  /**
    * The held dependent value `held` with what its sibling holds in this instance: the sibling's pin wherever
    * it is written, the value this record writes, or its default. A sibling a field group's member leaves
    * absent types nothing, and the value written without it is refused (§5.2, §5.11).
@@ -704,7 +831,9 @@ class ValueBodyReader {
     path: readonly string[],
   ): MetaValue {
     const core = value.coreValue;
-    if (core.kind !== 'array') throw mismatch(path, `a list of '${body.elementType.name}'`, core);
+    if (core.kind !== 'array') {
+      throw mismatch(path, `a list of '${this.named(body.elementType)}'`, core);
+    }
     const count = BigInt(core.elements.length);
     if (
       (body.minItems !== undefined && count < body.minItems) ||
@@ -718,12 +847,10 @@ class ValueBodyReader {
     const elements = core.elements.map((element, index) =>
       element.coreValue.kind === 'void' && body.voidable
         ? ({ form: 'void' } as const)
-        : this.value(element, this.named(body.elementType), [...path, String(index)]),
+        : this.value(element, body.elementType, [...path, String(index)]),
     );
     // A unique array of names is a scope of them (§8.2), as an identifier-keyed map's keys are.
-    const family = body.uniqueItems
-      ? this.identifierFamily(this.named(body.elementType))
-      : undefined;
+    const family = body.uniqueItems ? this.identifierFamily(body.elementType) : undefined;
     if (family !== undefined) {
       this.judgeNames(
         elements.flatMap((element) => (element.form === 'token' ? [element.token.text] : [])),
@@ -737,12 +864,16 @@ class ValueBodyReader {
   private map(value: DataValue, name: string, body: MapBody, path: readonly string[]): MetaValue {
     const core = value.coreValue;
     if (core.kind !== 'map' && core.kind !== 'empty-brace') {
-      throw mismatch(path, `a map of '${body.keyType.name}' to '${body.valueType.name}'`, core);
+      throw mismatch(
+        path,
+        `a map of '${body.keyType.name}' to '${this.named(body.valueType)}'`,
+        core,
+      );
     }
     const entries: (readonly [MetaValue, MetaValue])[] = [];
     const seen = new Set<string>();
     for (const entry of core.kind === 'map' ? core.entries : []) {
-      const key = this.value(entry.key, this.named(body.keyType), path);
+      const key = this.value(entry.key, body.keyType, path);
       const text = key.form === 'token' ? key.token.text : undefined;
       if (text !== undefined) {
         if (seen.has(text)) {
@@ -757,13 +888,10 @@ class ValueBodyReader {
       const read =
         written.coreValue.kind === 'void' && body.voidable
           ? ({ form: 'void' } as const)
-          : this.value(written, this.named(body.valueType), [
-              ...path,
-              text ?? String(entries.length),
-            ]);
+          : this.value(written, body.valueType, [...path, text ?? String(entries.length)]);
       entries.push([key, read]);
     }
-    const keyFamily = this.identifierFamily(this.named(body.keyType));
+    const keyFamily = this.identifierFamily(body.keyType);
     if (keyFamily !== undefined) this.judgeNames([...seen], keyFamily, path);
     return { form: 'map', entries };
   }
@@ -783,7 +911,7 @@ class ValueBodyReader {
       if (declared === undefined) throw mismatch(path, `a '${name}' tuple`, core);
       return element.coreValue.kind === 'void' && declared.voidable
         ? ({ form: 'void' } as const)
-        : this.value(element, this.named(declared.elementType), [...path, String(index)]);
+        : this.value(element, declared.elementType, [...path, String(index)]);
     });
     return { form: 'list', elements };
   }
@@ -798,9 +926,10 @@ class ValueBodyReader {
     if (value.typeRef !== undefined) {
       const tag = this.resolved(value.typeRef);
       for (const variant of body.variants) {
-        const resolved = this.resolved(this.named(variant));
+        if (variant.kind === 'inline') continue; // a type written in place is named by no tag (§4.2)
+        const resolved = this.resolved(variant);
         if (tag.name === resolved.name || supertypesOf(tag.body).includes(resolved.name)) {
-          return this.value(value, this.named(variant), path);
+          return this.value(value, variant, path);
         }
       }
       throw new TsonReadError({
@@ -810,7 +939,7 @@ class ValueBodyReader {
     }
     for (const variant of body.variants) {
       try {
-        return this.value(value, this.named(variant), path);
+        return this.value(value, variant, path);
       } catch (error) {
         if (!(error instanceof TsonReadError)) throw error;
       }
@@ -839,8 +968,6 @@ function heldView(value: DataValue): MetaValue {
   switch (core.kind) {
     case 'token':
       return tokenOf(core);
-    case 'reference':
-      return { form: 'reference', reference: referenceFromAst(core.reference) };
     case 'void':
       return { form: 'void' };
     case 'array':
@@ -865,11 +992,9 @@ function heldView(value: DataValue): MetaValue {
   }
 }
 
-/** The text a name-or-reference value spells, `undefined` for any other form. */
+/** The text a name value spells, `undefined` for any other form. */
 function metaText(value: MetaValue): string | undefined {
-  if (value.form === 'token') return value.token.text;
-  if (value.form === 'reference') return referenceText(value.reference);
-  return undefined;
+  return value.form === 'token' ? value.token.text : undefined;
 }
 
 /** A token at a slot whose atom takes any token, kept as written. */
@@ -929,8 +1054,6 @@ function describe(core: CoreValue): string {
       return "the void sentinel '_'";
     case 'token':
       return `the token '${core.text}'`;
-    case 'reference':
-      return core.reference.kind === 'sibling' ? 'a sibling reference' : 'a reference';
   }
 }
 
@@ -939,3 +1062,8 @@ function at(path: readonly string[]): string {
   if (path.length === 0) return '';
   return `at /${path.map((step) => step.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}: `;
 }
+
+/** A value's qualified name, read by its grammar alone: its text in NFC, split at `.`, the first segment a name (§5.12). */
+const VALUE_NAME = {
+  read: (token: { readonly text: string }): string => parseReference(token.text),
+};

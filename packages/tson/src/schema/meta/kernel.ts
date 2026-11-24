@@ -84,14 +84,12 @@ export function metaMember(name: string): string {
 export const SCHEMA = metaName('schema');
 /** The kernel's `field_map`, the ordered map type a record's fields are a value of (§5.2). */
 export const FIELD_MAP = metaName('field_map');
-/** The kernel's `record_template_field_map`, the ordered map type a record template's fields are a value of (§5.10). */
-export const RECORD_TEMPLATE_FIELD_MAP = metaName('record_template_field_map');
-/** The kernel's `field_name`, an identifier: a record's name type where nothing states one (§5.2). */
-export const FIELD_NAME = metaName('field_name');
+/** The kernel's `identifier`: a record's name type where nothing states one (§5.2). */
+export const DEFAULT_NAME_TYPE = metaName('identifier');
 /** The kernel's `application` annotation, derived and never author-written (§8.2). */
 export const APPLICATION_ANNOTATION = metaName('application');
-/** The kernel's `synthetic` annotation: the key of a form no author named (§8.2). */
-export const SYNTHETIC_ANNOTATION = metaName('synthetic');
+/** The kernel's `completion` annotation, derived and never author-written: what a declared completion closed (§8.1). */
+export const COMPLETION_ANNOTATION = metaName('completion');
 /** The kernel's `disjoint` annotation, the author's assertion that a choice's variants are disjoint (§5.4). */
 export const DISJOINT_ANNOTATION = metaName('disjoint');
 /** The tag of a schema document's root and of a schema map nested as an entry: an alias of {@link SCHEMA} (§2.1). */

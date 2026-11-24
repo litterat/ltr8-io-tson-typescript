@@ -48,7 +48,7 @@ export type DiagnosticCode =
    * unadmitted name, resolved elsewhere or not.
    */
   | 'TYPE_MISMATCH'
-  /** A tuple or template application has the wrong number of elements or arguments. */
+  /** A tuple or an application has the wrong number of elements or arguments. */
   | 'WRONG_ARITY'
   /**
    * The written name denotes nothing -- a type-ref or an annotation naming no type the governing

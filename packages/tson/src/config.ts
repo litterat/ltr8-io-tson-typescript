@@ -36,10 +36,10 @@
  * const tson = createTson({ schemaSource: httpSchemaSource({ allowHosts: ['tson.io'] }) });
  * tson.register(linkSchema(bootstrapKernel(kernelBytes)));
  * await tson.preload([
- *   'https://tson.io/2026/39/m/numeric.tn',
- *   'https://tson.io/2026/39/m/temporal.tn',
- *   'https://tson.io/2026/39/m/net.tn',
- *   'https://tson.io/2026/39/m/core.tn',
+ *   'https://tson.io/2026/40/m/numeric.tn',
+ *   'https://tson.io/2026/40/m/temporal.tn',
+ *   'https://tson.io/2026/40/m/net.tn',
+ *   'https://tson.io/2026/40/m/core.tn',
  * ]);
  * ```
  *
@@ -51,7 +51,10 @@
  * is in Java. {@link Tson.preload}/{@link Tson.resolveSchema} therefore split the same way the
  * reference implementation's own docs recommend using it: fetch (and resolve, link, register)
  * every dependency *first*, in order, so that by the time a schema referencing them is resolved,
- * `resolveImport` finds each one already registered and never needs to suspend.
+ * `resolveImport` finds each one already registered and never needs to suspend. {@link Tson.loadSchema} is that
+ * sequence for a schema held as text: what it names -- its `!!import`s and each extern's foreign schema
+ * ([TSON-SCHEMA] §3.4.1, §5.13) -- is obtained first, the document in flight under its own `!!id` so a reference
+ * back to it is a cycle rather than a fetch, and then it resolves synchronously.
  */
 import {
   TsonContentHashMismatchError,
@@ -71,17 +74,32 @@ import type {
   NestingLimitOptions,
 } from './core/limits.js';
 import { processorPolicy } from './unicode/policy.js';
-import type { IdentifierPolicy, ProcessorPolicy, ScriptPolicy } from './unicode/policy.js';
+import type { IdentifierPolicy, ProcessorPolicy, TokenPolicy } from './unicode/policy.js';
 import { canonicalizeIdentity } from './link/identity.js';
 import { declaredSha256, isAddressable, sha256HexSync, UNADDRESSABLE } from './link/contentHash.js';
 import { linkSchema, type LinkedSchema } from './link/link.js';
 import { closureIdentity, importIdentities, linkImportClosure } from './link/importClosure.js';
+import { EXTERN_HEAD } from './link/externs.js';
+import {
+  externDependencies,
+  identityOf,
+  isKernelOfAnyRevision,
+  reachedThroughExtern,
+  referenceCycle,
+  throughExtern,
+  type ReferenceEdge,
+  type SchemaDependency,
+} from './link/referenceClosure.js';
+import type { SchemaDocument } from './ast/schema/document.js';
 import {
   resolveSchema as resolveSchemaCore,
+  type Checkpoint,
   type ImportResolver,
   type ImportedSchema,
 } from './compiler/schemaResolver.js';
-import type { DefinitionGetter } from './compiler/resolverTypes.js';
+import type { Normalization } from './schema/meta/atoms-text.js';
+import type { FieldNameType } from './link/fieldNames.js';
+import type { DefinitionGetter, MemberJoiners } from './compiler/resolverTypes.js';
 import { parseSchemaDocument } from './compiler/schemaParser.js';
 import { createDataStream } from './stream/dataStream.js';
 import { compile as compileCore, type CompiledSchema } from './compiler/compile.js';
@@ -256,7 +274,7 @@ export interface Config extends LimitOptions {
    * rule ever applies here: a value has no identifier profile to violate, and no scope to be
    * distinct within, so the other two mechanisms have nothing to say about one.
    */
-  readonly tokenPolicy?: ScriptPolicy;
+  readonly tokenPolicy?: TokenPolicy;
 }
 
 /**
@@ -281,7 +299,7 @@ export function withLimits<C extends Config>(config: C, limits: LimitOverrides):
 }
 
 /** `config` with its token policy (§8.2 "Values") replaced; see {@link withIdentifierPolicy}. */
-export function withTokenPolicy<C extends Config>(config: C, tokenPolicy: ScriptPolicy): C {
+export function withTokenPolicy<C extends Config>(config: C, tokenPolicy: TokenPolicy): C {
   return { ...config, tokenPolicy };
 }
 
@@ -301,7 +319,7 @@ function limitOf(config: Config): NestingLimitOptions {
 /** {@link Config.identifierPolicy} and {@link Config.tokenPolicy}, as the fragment {@link createTson}'s `readTree`/`validate` wrappers merge ahead of a caller's own per-call options -- `limitOf`'s own shape, two fields over. */
 function policyOptionsOf(config: Config): {
   readonly identifierPolicy?: IdentifierPolicy;
-  readonly tokenPolicy?: ScriptPolicy;
+  readonly tokenPolicy?: TokenPolicy;
 } {
   return {
     ...(config.identifierPolicy === undefined ? {} : { identifierPolicy: config.identifierPolicy }),
@@ -420,6 +438,8 @@ function importedFrom(
       createAnnotationValueReader(compiledMetaFor(schema, identifierPolicy))(type, value),
     enumForms: schema.enumForms,
     nameTypes: schema.nameTypes,
+    ...(schema.restatements === undefined ? {} : { restatements: schema.restatements }),
+    ...(schema.externs === undefined ? {} : { externs: schema.externs }),
   };
 }
 
@@ -464,21 +484,51 @@ function compiledMetaFor(
  */
 function importClosureSize(
   schemas: ReadonlyMap<string, LinkedSchema>,
-  imports: readonly string[],
+  references: readonly string[],
 ): number {
   const seen = new Set<string>();
-  const pending: string[] = [...imports];
+  const pending: string[] = [...references];
   while (pending.length > 0) {
     const next = pending.pop();
     if (next === undefined) continue;
-    const canonical = canonicalizeIdentity(next);
-    if (seen.has(canonical)) continue;
+    const canonical = identityOf(next);
+    if (canonical === undefined || seen.has(canonical)) continue;
     seen.add(canonical);
     const schema = schemas.get(canonical);
     if (schema === undefined) continue; // unregistered -- requireRegistered reports this, not this walk
     pending.push(...schema.imports);
+    // A schema reached through an extern counts as one reached through an import (§11.5, §5.13).
+    for (const target of schema.externs?.values() ?? []) pending.push(target.foreign.id);
   }
   return seen.size;
+}
+
+/**
+ * Whether the closure of `imports`, every one registered, holds the kernel's `meta.extern`: only then is a head
+ * written `!meta.extern` an extern, whose schema loads with the imports (§5.13). An import-free schema's own
+ * `meta.extern` is an ordinary entry.
+ */
+function holdsKernelExtern(
+  schemas: ReadonlyMap<string, LinkedSchema>,
+  imports: readonly string[],
+): boolean {
+  return imports.some((reference) => {
+    const canonical = identityOf(reference);
+    const imported = canonical === undefined ? undefined : schemas.get(canonical);
+    return imported?.entries.get(EXTERN_HEAD)?.kind === 'record';
+  });
+}
+
+/** `bytes` parsed as a schema document, or `undefined` where it does not parse (resolving it reports why). */
+function parsedOrUndefined(
+  bytes: Uint8Array,
+  limit: NestingLimitOptions,
+): SchemaDocument | undefined {
+  try {
+    return runSync(parseSchemaDocument(fromBytes(bytes), limit));
+  } catch {
+    return undefined;
+  }
 }
 
 /** The `!!import`s `bytes`' header names, or none where it does not parse (resolving the document reports why). */
@@ -489,6 +539,38 @@ function headerImports(bytes: Uint8Array): readonly string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * A checkpoint of a resolution as the schema its readers are compiled over (§3.4.1): the imports and the entries
+ * ready so far, each import's enum forms and name types carried over. A local entry has none recorded yet, so a
+ * value at a local enum or record of a stated name type is read in the default form; the schema's own link judges
+ * it in full.
+ */
+function checkpointSchema(
+  checkpoint: Checkpoint,
+  schemas: ReadonlyMap<string, LinkedSchema>,
+  imports: readonly string[],
+): LinkedSchema {
+  const enumForms = new Map<string, Normalization>();
+  const nameTypes = new Map<string, FieldNameType>();
+  for (const uri of imports) {
+    const imported = schemas.get(canonicalizeIdentity(uri));
+    if (imported === undefined) continue;
+    for (const [name, form] of imported.enumForms) enumForms.set(name, form);
+    for (const [name, nameType] of imported.nameTypes) nameTypes.set(name, nameType);
+  }
+  return {
+    id: checkpoint.id,
+    imports: checkpoint.imports,
+    entries: checkpoint.entries,
+    facts: checkpoint.facts,
+    keyAnnotations: new Map(),
+    bootstrap: false,
+    origins: checkpoint.origins,
+    enumForms,
+    nameTypes,
+  };
 }
 
 /** Resolves and links `bytes` against `schemas` -- the synchronous core both {@link Tson.resolveSchema} and {@link Tson.preload} share. */
@@ -505,7 +587,28 @@ function resolveAgainstRegistry(
   if (id === undefined) {
     throw new TsonSchemaValidationError('!!id is required to resolve this schema (§2.2.1)');
   }
-  const closureSize = importClosureSize(schemas, document.imports);
+  const externs = externDependencies(document, holdsKernelExtern(schemas, document.imports));
+  // The document is in flight under its own identity: an import or extern naming it closes a cycle (§2.2.3, §5.13).
+  const self = identityOf(id);
+  for (const dependency of [
+    ...document.imports.map((reference) => ({ reference, edge: undefined })),
+    ...externs,
+  ]) {
+    if (self !== undefined && identityOf(dependency.reference) === self) {
+      throw referenceCycle(new Map([[self, undefined]]), self, dependency.edge);
+    }
+  }
+  // An extern's pin is verified per identity, as an import's is (§10.2), wherever its schema was obtained.
+  for (const dependency of externs) {
+    const canonical = identityOf(dependency.reference);
+    if (canonical !== undefined && schemas.has(canonical)) {
+      verifyPin(contentHashes, dependency.reference, canonical);
+    }
+  }
+  const closureSize = importClosureSize(schemas, [
+    ...document.imports,
+    ...externs.map((dependency) => dependency.reference),
+  ]);
   if (closureSize > limits.maxImportClosure) {
     throw importClosureLimitRefusal(limits.maxImportClosure, id);
   }
@@ -514,22 +617,34 @@ function resolveAgainstRegistry(
   const resolved = resolveSchemaCore(document, {
     // The readers consult the namespace being built: a constructor's own declaration supplies its
     // fields' defaults, and a value entry's type its record's shape (§4.1, §5.5).
-    readers: (lookup: DefinitionGetter) => ({
+    readers: (lookup: DefinitionGetter, joiners?: MemberJoiners) => ({
       meta: createDefinitionMetaReader(lookup),
-      value: createDefinitionValueReader(lookup, identifierPolicy),
+      value: createDefinitionValueReader(lookup, identifierPolicy, joiners),
     }),
+    checkpointAnnotations: (checkpoint) =>
+      createAnnotationValueReader(
+        compileCore(checkpointSchema(checkpoint, schemas, document.imports), {
+          judgesReferenceMembers: false,
+          ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
+        }),
+      ),
     encodeSourceBody: (body) => toCoreValue(topBinding, body, defaultAtomEncoder),
     resolveImport,
     maxWaitDepth: limits.maxWaitDepth,
+    maxNestingDepth: limits.maxNestingDepth,
+    // An extern's schema was loaded with the imports (§3.4.1, §5.13): the registry holds it by identity.
+    externSchema: (identity) => schemas.get(identity),
   });
-  // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map, synthetic and
-  // instantiation entries included -- `resolved.entries` is local-only (`Schema.entries`'s own
+  // [TSON-SCHEMA] §11.5's "entries" limit: declarations in this schema's own map -- a type written in place is
+  // no entry and counts toward none -- and `resolved.entries` is local-only (`Schema.entries`'s own
   // doc), which is exactly what §11.5 names ("declarations in *one* schema map").
   if (resolved.entries.size > limits.maxSchemaEntries) {
     throw schemaEntriesLimitRefusal(limits.maxSchemaEntries, id);
   }
   return linkSchema(resolved, {
     resolveImport,
+    // An extern's schema was loaded with the imports (§3.4.1, §5.13): the registry holds it by identity.
+    externSchema: (identity) => schemas.get(identity),
     ...(identifierPolicy === undefined ? {} : { identifierPolicy }),
     heldValues: (linked, localNames, report) => {
       if (anyHeldValue(linked, localNames)) {
@@ -589,6 +704,14 @@ export interface Tson {
    * why this never fetches, even with a {@link Config.schemaSource} configured.
    */
   resolveSchema(source: string | Uint8Array): LinkedSchema;
+  /**
+   * Obtains everything `source` (schema text, or its UTF-8 bytes) names -- its `!!import`s and the foreign schema
+   * of each extern it declares (§3.4.1, §5.13), each with what it in turn names, through
+   * {@link Config.schemaSource} -- then resolves, links and registers it as {@link resolveSchema} does. The document
+   * is in flight under its own `!!id` meanwhile, so a reference reaching that identity, from the document or from a
+   * schema it names, is refused as a reference cycle (§2.2.3) rather than fetched as another document.
+   */
+  loadSchema(source: string | Uint8Array): Promise<LinkedSchema>;
   /**
    * Builds a {@link CompiledSchema} for `schema` -- `compiler/compile.ts`'s own `compile`, so the
    * whole resolve-link-compile sequence is reachable off one instance. Bound to this instance's
@@ -674,6 +797,8 @@ export function createTson(config: Config = {}): Tson {
 
   function compileMethod(schema: LinkedSchema): CompiledSchema {
     return compileCore(schema, {
+      // An entry a value read through an extern reaches is read in the schema declaring it (§7.9).
+      foreignSchema: (identity) => schemas.get(identity),
       ...(config.identifierPolicy === undefined
         ? {}
         : { identifierPolicy: config.identifierPolicy }),
@@ -776,33 +901,95 @@ export function createTson(config: Config = {}): Tson {
     return bytes;
   }
 
-  /** The identities being fetched now, so a document reached again through its own imports is not fetched twice. */
+  /** The identities being fetched now, by any call, so a document reached twice is not fetched twice. */
   const preloading = new Set<string>();
 
   async function preload(references: readonly string[]): Promise<void> {
-    for (const reference of references) {
-      const canonical = canonicalizeIdentity(reference);
-      if (schemas.has(canonical) || preloading.has(canonical)) {
-        continue; // idempotent -- already registered, from an earlier call or an earlier entry
-      }
-      preloading.add(canonical);
+    await preloadAll(
+      references.map((reference) => ({ reference, edge: undefined })),
+      new Map<string, ReferenceEdge>(),
+    );
+  }
+
+  /**
+   * Obtains each of `dependencies` in order, `chain` the identities this load has in flight, outermost first, each
+   * with the edge it was reached by (§3.4.1). One reached again while in flight closes a cycle over imports and
+   * externs together (§2.2.3, §5.13), and is refused rather than fetched; one reached through an extern that fails
+   * refuses its declarer, the extern named.
+   */
+  async function preloadAll(
+    dependencies: readonly SchemaDependency[],
+    chain: Map<string, ReferenceEdge>,
+  ): Promise<void> {
+    for (const dependency of dependencies) {
       try {
-        await preloadOne(reference, canonical);
-      } finally {
-        preloading.delete(canonical);
+        await preloadDependency(dependency, chain);
+      } catch (error: unknown) {
+        if (dependency.edge === undefined || dependency.written === undefined) throw error;
+        throw throughExtern(error, dependency.edge, dependency.written);
       }
     }
   }
 
-  async function preloadOne(reference: string, canonical: string): Promise<void> {
+  async function preloadDependency(
+    dependency: SchemaDependency,
+    chain: Map<string, ReferenceEdge>,
+  ): Promise<void> {
+    const { reference, edge } = dependency;
+    const canonical = edge === undefined ? canonicalizeIdentity(reference) : identityOf(reference);
+    // An extern's schema that names no identity is refused against the extern when its declarer links.
+    if (canonical === undefined) return;
+    if (chain.has(canonical)) throw referenceCycle(chain, canonical, edge);
+    if (schemas.has(canonical) || preloading.has(canonical)) {
+      return; // idempotent -- already registered, from an earlier call or an earlier entry
+    }
+    if (isKernelOfAnyRevision(canonical) && reachedThroughExtern(chain, edge)) {
+      // This instance pre-loads one kernel, and a closure reached through an extern holds the declarer's (§5.13).
+      const own = [...schemas.keys()].find(isKernelOfAnyRevision) ?? '(none registered)';
+      throw new TsonSchemaValidationError(
+        `its closure holds the kernel '${canonical}', and the schema naming it holds the kernel '${own}' -- an ` +
+          "extern's schema holds the importer's kernel, one kernel by identity ([TSON-SCHEMA] §5.13)",
+      );
+    }
+    chain.set(canonical, edge);
+    preloading.add(canonical);
+    try {
+      await preloadOne(reference, canonical, chain);
+    } finally {
+      chain.delete(canonical);
+      preloading.delete(canonical);
+    }
+  }
+
+  /** `bytes`' dependencies obtained in order, `chain` the identities in flight: its imports, then its externs (§3.4.1). */
+  async function preloadDependencies(
+    bytes: Uint8Array,
+    chain: Map<string, ReferenceEdge>,
+  ): Promise<void> {
+    // A header that does not parse names nothing here, and resolving it reports why.
+    const imports = headerImports(bytes);
+    await preloadAll(
+      imports.map((reference) => ({ reference, edge: undefined })),
+      chain,
+    );
+    const document = parsedOrUndefined(bytes, limit);
+    if (document === undefined) return;
+    await preloadAll(externDependencies(document, holdsKernelExtern(schemas, imports)), chain);
+  }
+
+  async function preloadOne(
+    reference: string,
+    canonical: string,
+    chain: Map<string, ReferenceEdge>,
+  ): Promise<void> {
     const bytes = await fetchReference(reference);
     // Verifies `reference`'s own declared pin (if any) against these fetched bytes, and records
     // this identity's own content hash either way ([TSON-SCHEMA] §10.2) -- before the bytes are
     // parsed/resolved, so tampered content is refused without spending that work on it.
     recordContentHash(contentHashes, bytes, reference, canonical);
-    // Its own imports first, so each is in place when this one resolves: a schema is obtained with what it
-    // names. A header that does not parse names nothing here, and resolving it reports why.
-    await preload(headerImports(bytes));
+    // Its own imports and externs first, so each is in place when this one resolves: a schema is obtained with
+    // what it names.
+    await preloadDependencies(bytes, chain);
     const linked = resolveAgainstRegistry(
       schemas,
       contentHashes,
@@ -821,11 +1008,24 @@ export function createTson(config: Config = {}): Tson {
     schemas.set(canonical, linked);
   }
 
+  async function loadSchema(source: string | Uint8Array): Promise<LinkedSchema> {
+    const bytes = typeof source === 'string' ? encodeUtf8(source) : source;
+    // The document is in flight under its own `!!id`: a reference reaching it, from it or from a schema it names,
+    // is a cycle, never a fetch of another document (§2.2.3, §5.13).
+    const chain = new Map<string, ReferenceEdge>();
+    const id = parsedOrUndefined(bytes, limit)?.id;
+    const own = id === undefined ? undefined : identityOf(id);
+    if (own !== undefined) chain.set(own, undefined);
+    await preloadDependencies(bytes, chain);
+    return resolveSchemaMethod(bytes);
+  }
+
   return {
     config,
     schemas,
     register,
     resolveSchema: resolveSchemaMethod,
+    loadSchema,
     compile: compileMethod,
     fetch: fetchReference,
     preload,

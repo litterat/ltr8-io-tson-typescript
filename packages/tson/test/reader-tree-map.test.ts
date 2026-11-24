@@ -5,6 +5,8 @@ import { atomTreeReader, atomTypeReader } from '../src/reader/tree/atom.js';
 import { mapTreeReader } from '../src/reader/tree/map.js';
 import type { TypeReader } from '../src/reader/contracts.js';
 import type { Value } from '../src/tree/nodes.js';
+import type { TypeExpr } from '../src/schema/meta/typedef.js';
+import { nameOf } from '../src/schema/meta/typedef.js';
 import {
   bodyContextOver,
   collectingContextOver,
@@ -25,7 +27,8 @@ const INT_READER: TypeReader<Value> = atomTreeReader(
   'int32',
 );
 
-function resolve(typeName: string): TypeReader<Value> {
+function resolve(type: string | TypeExpr): TypeReader<Value> {
+  const typeName = typeof type === 'string' ? type : (nameOf(type) ?? '');
   if (typeName === 'text') return TEXT_READER;
   if (typeName === 'int32') return INT_READER;
   throw new Error(`unknown test type '${typeName}'`);
@@ -34,8 +37,8 @@ function resolve(typeName: string): TypeReader<Value> {
 function reader(minItems?: bigint, maxItems?: bigint): TypeReader<Value> {
   const body: MapBody = {
     kind: 'map',
-    keyType: { name: 'text', arguments: [], annotations: [] },
-    valueType: { name: 'int32', arguments: [], annotations: [] },
+    keyType: { name: 'text', annotations: [] },
+    valueType: { name: 'int32', annotations: [] },
     voidable: false,
     ordered: false,
     ...(minItems !== undefined ? { minItems } : {}),

@@ -94,12 +94,13 @@ describe('§3.3 directives', () => {
     expect(roundTrip(text)).toBe(text);
   });
 
-  it('a reference round-trips unquoted, an application in canonical form and a sibling reference as written (§7.4)', () => {
-    expect(roundTrip('{ t: map<text list<int32>> }')).toBe('{ t: map<text list<int32>> }');
-    expect(roundTrip('{ t: map< text, list<int32> > }')).toBe('{ t: map<text list<int32>> }');
-    expect(roundTrip('{ v: kind! }')).toBe('{ v: kind! }');
-    const text = '{ t: pair<"a b" 201> }';
-    expect(parse(roundTrip(text)).root).toEqual(parse(text).root);
+  it('a reference in a value round-trips as the unquoted token its qualified name is (§4.1, §7.4)', () => {
+    expect(roundTrip('{ t: geo.address }')).toBe('{ t: geo.address }');
+  });
+
+  it('an application or a sibling mark is no data value, so the grammar never reaches the writer with one (§4.1)', () => {
+    expect(() => parse('{ t: map<text list<int32>> }')).toThrow();
+    expect(() => parse('{ v: kind! }')).toThrow();
   });
 
   it('a directive written at a value position would not read back: the writer has no way to put one there (§2.2, §3.3)', () => {

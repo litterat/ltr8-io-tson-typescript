@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { standardLibrary } from '../src/stdlib/index.js';
 import { supertypesIn } from './model-fixtures.js';
 
-const META = 'https://tson.io/2026/39/m/meta.tn';
+const META = 'https://tson.io/2026/40/m/meta.tn';
 const LAYER = 'https://example.test/subtracting-layer.tn';
 
 describe('a subtracted constructor is not a constructor (§5.9 rule 8)', () => {

@@ -6,8 +6,8 @@
  * check -- "after following both alias chains to their terminal entries".
  *
  * A reference is a hop, not a different type, so an alias to a record is an admissible operand.
- * What the walk does not do is launder a finished body: "an alias resolving to [a binding record
- * or a template instantiation] is *finished*" and admits neither operator.
+ * What the walk does not do is launder a finished body: a record, a tuple, a choice and a namespace
+ * value take no `^` (§4.3, §5.7), and an alias resolving to one admits no refinement either.
  *
  * The walk decides only what an operand *is*. What the resolved entry records is the name the
  * author wrote, since §8.3 states a chain as written and collapses it nowhere -- which is what the
@@ -19,15 +19,15 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 import { supertypesIn } from './model-fixtures.js';
 
 const HEAD = `!!id:"test://chain.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 `;
 
 describe('§4.3/§5.5/§5.7: an operand is judged after following its alias chain (§8.3)', () => {
-  it('a refinement source may be an alias to a record', () => {
+  it('a composition restating a field may name an alias to a record', () => {
     const linked = resolveUserSchema(`${HEAD}!schema {
   base => { a?: text  b: text }
   base_alias => base
-  derived => base_alias ^ { a?: text ~ "x" }
+  derived => base_alias & { a?: text ~ "x" }
 }`);
     expect(supertypesIn(linked.entries.get('derived'))).toContain('base_alias');
   });
@@ -65,13 +65,13 @@ describe('§4.3/§5.5/§5.7: an operand is judged after following its alias chai
     expect(diagnostics).toEqual([]);
   });
 
-  it('an alias to a binding record is still finished and refuses ^', () => {
+  it('an alias to a binding record is still finished, and composes nothing (§5.8)', () => {
     expect(() =>
       resolveUserSchema(`${HEAD}!schema {
   made => !numeric.integer_type {}
   made_alias => made
-  bad => made_alias ^ { c: text }
+  bad => made_alias & { c: text }
 }`),
-    ).toThrow(/finished|no vocabulary to tighten/);
+    ).toThrow(/binding record, not a vocabulary/);
   });
 });

@@ -4,17 +4,17 @@ import { checkEveryEntryIsInhabited } from '../src/link/typeInhabitance.js';
 import { collector } from '../src/core/diagnostic.js';
 import { TsonSchemaValidationError } from '../src/core/errors.js';
 import type { NamedField, RecordField } from '../src/schema/meta/bodies.js';
-import type { MetaValue, Top, TypeRef } from '../src/schema/meta/typedef.js';
+import type { MetaValue, Top, TypeExpr, TypeRef } from '../src/schema/meta/typedef.js';
 import { namespaceOf } from '../src/schema/meta/typedef.js';
-import { entry, fieldMapOf, namespaceEntry } from './model-fixtures.js';
+import { entry, fieldMapOf, namespaceEntry, parametricRecord, record } from './model-fixtures.js';
 
 function ref(name: string): TypeRef {
-  return { name, arguments: [], annotations: [] };
+  return { name, annotations: [] };
 }
 
 function field(
   name: string,
-  type: TypeRef,
+  type: TypeExpr,
   marks: { optional?: boolean; voidable?: boolean; role?: RecordField['role'] } = {},
 ): NamedField {
   return {
@@ -598,12 +598,35 @@ describe('checkEveryEntryIsInhabited: the recursive shapes that stay legal', () 
     }).not.toThrow();
   });
 
-  it('treats a held (open template) body as inhabited unconditionally', () => {
-    const held: Top = {
-      parameters: [{ name: 'T', type: { name: 'type_ref', arguments: [], annotations: [] } }],
-      template: '!record { fields: {} }',
-    };
-    const merged = new Map<string, Top>([['tree', def(held)]]);
+  it('walks a parametric record as a record, its parameters assumed inhabited (§5.10.1)', () => {
+    // `tree => <T> { v: T  next: tree<T> }` -- a required self-application, refused at the declaration.
+    const tree = parametricRecord(
+      ['T'],
+      record([
+        field('v', { name: 'T', annotations: [], param: true }),
+        field('next', {
+          kind: 'inline',
+          head: 'meta.apply',
+          of: {
+            kind: 'apply',
+            head: ref('tree'),
+            arguments: [{ name: 'T', annotations: [], param: true }],
+          },
+        }),
+      ]),
+    );
+    const merged = new Map<string, Top>([['tree', def(tree)]]);
+    expect(() => {
+      check(merged);
+    }).toThrow(/'tree' can never be satisfied by any document: tree needs tree/);
+  });
+
+  it('a parameter-typed required field demands nothing the declaration can refuse (§5.10.1)', () => {
+    const box = parametricRecord(
+      ['T'],
+      record([field('v', { name: 'T', annotations: [], param: true })]),
+    );
+    const merged = new Map<string, Top>([['box', def(box)]]);
     expect(() => {
       check(merged);
     }).not.toThrow();

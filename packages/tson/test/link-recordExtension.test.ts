@@ -16,7 +16,7 @@ import { subtypesIn } from './model-fixtures.js';
 function link(source: string): LinkedSchema {
   return resolveUserSchema(`
 !!id:"test://record-extension.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   ${source}
 }

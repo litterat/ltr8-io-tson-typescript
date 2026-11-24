@@ -2,7 +2,8 @@
  * Rules of [TSON-DATA] §5 that [TSON-JSON] §5 reaches through the shared atom parsers, probed in
  * the JSON encoding and, where a text rule exists, asserted to give the same verdict in text:
  * `uri` and `iri` refuse a relative reference and `uri` anything beyond US-ASCII (§5.6), a leap
- * second is refused (§5.4), a set may be empty and `tuple1<T>` is a one-element array (§6.2, §6.3),
+ * second is refused (§5.4), a set may be empty and a declared one-position tuple is a one-element
+ * array (§6.2, §6.3),
  * and a text enum's member is a string whatever it spells (§5.2).
  */
 import { describe, expect, it } from 'vitest';
@@ -17,7 +18,7 @@ import { resolveUserSchema } from './compiler-schema-fixtures.js';
 
 const LINKED = resolveUserSchema(`
 !!id:"https://example.test/json-atom-rules-1.tn"
-!!import:"https://tson.io/2026/39/m/core.tn"
+!!import:"https://tson.io/2026/40/m/core.tn"
 !schema {
   link      => { u: uri }
   link_ref  => { u: uri_reference }
@@ -26,8 +27,10 @@ const LINKED = resolveUserSchema(`
   clock     => { t: time }
   stamp     => { t: datetime }
   tags      => { t: set<text> }
-  single    => { t: meta.tuple1<text> }
-  maybe     => { t: meta.voidable_tuple1<text> }
+  one       => !meta.tuple { elements: [ { element_type: text } ] }
+  maybe_one => !meta.tuple { elements: [ { element_type: text  voidable: true } ] }
+  single    => { t: one }
+  maybe     => { t: maybe_one }
   answer    => !text ^ { members: ["true" "false"] }
   verdict   => !enum [true false unsure]
   survey    => { reply?: answer ~ "true"  agreed?: boolean ~ true  pick?: verdict }
@@ -92,14 +95,14 @@ describe('§6.2, §6.3 containers', () => {
     expect(same('tags', '{ t: [] }', '{"t": []}')).toEqual([]);
   });
 
-  it('tuple1<T> is a one-element array and refuses [], two elements and void', () => {
+  it('§6.3 a declared one-position tuple is a one-element array and refuses [], two elements and void', () => {
     expect(same('single', '{ t: [ "a" ] }', '{"t": ["a"]}')).toEqual([]);
     expect(same('single', '{ t: [] }', '{"t": []}')).not.toEqual([]);
     expect(same('single', '{ t: [ "a" "b" ] }', '{"t": ["a", "b"]}')).not.toEqual([]);
     expect(same('single', '{ t: [ _ ] }', '{"t": [null]}')).not.toEqual([]);
   });
 
-  it('voidable_tuple1<T> admits [_] as the void sentinel’s spelling, null', () => {
+  it('§6.3, §7 a one-position tuple whose element is voidable admits [_] as the void sentinel’s spelling, null', () => {
     expect(same('maybe', '{ t: [ _ ] }', '{"t": [null]}')).toEqual([]);
   });
 });
