@@ -185,9 +185,9 @@ in conversation rather than silently picking.
   constructor", and `spec/fixtures/*-resolved.tn` writes `!numeric.integer_type { … }` and
   `!meta.record { … }` as heads. A constructor composed over another restates its parent's fields
   and may add none, so the head cannot always be recovered from the body: the
-  resolver records it in the entry's facts (`link/facts.ts`, `head`), and the writer
-  (`schema/bindings.ts`, `topBinding`) writes the body under that name, never a guess from the
-  body's shape. A body with no recorded head is written under its base constructor. A completion
+  resolver records it in the entry's facts (`EntryFacts.head`, `schema/meta/typedef.ts`), and the
+  writer (`schema/bindings.ts`, `topBinding`) writes the body under that name, never a guess from
+  the body's shape. A body with no recorded head is written under its base constructor. A completion
   of an incomplete entry is written under its base constructor (`!meta.array { … }`,
   `!meta.enum_type { … }`) with the derived `@meta.completion:{ of: [...] }` on its key, and an
   incomplete entry itself is written in no resolved form. A field the head pins is left out at its
@@ -223,7 +223,7 @@ npm run check:unicode           # the tables against the host's own UCD, when th
 npm test                        # unit
 npm run test:conformance        # the shared vectors
 npm run build                   # tsup, ESM + CJS + dts
-npm run check:package           # publint + are-the-types-wrong over both packages
+npm run check:package           # publint over both packages, are-the-types-wrong over @ltr8/tson
 npm run smoke:cli               # packs, installs into a throwaway project, checks the exit codes
 npm run demo:web                # the browser bundle still builds
 ```

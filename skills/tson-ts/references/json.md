@@ -40,5 +40,5 @@ vocabulary-only reading the way TSON text's base type resolution does; do not re
 Not implemented: reading a document's own in-band binding (a root led by `$import` is declined as a
 non-verdict `NOT_IMPLEMENTED` at `/$import`; supply `schema` and `root` out of band), the §3.5 `TSON-Schema` HTTP header
 fields, and a schema-directed JSON encoder — `[STATUS.md](../../STATUS.md)`'s Part 3 section has
-the full list. There is also no JSON counterpart of `readBind`/object binding: this subpath reads
+the full list. There is also no JSON counterpart of `bindReader`/object binding: this subpath reads
 into a `JsonValue` tree only.

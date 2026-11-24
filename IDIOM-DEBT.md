@@ -461,7 +461,7 @@ The structured value is not lost. `parseHostname`, `parseHost` and `parseMediaTy
 `MediaTypeValue` with its parameter map), and the identity rules of §2.2.1 consume it from there.
 What is held is only the narrower `AtomType` an application reads through.
 
-**Trigger.** A consumer reading through `readTree` or `readBind` needs a member of the value rather
+**Trigger.** A consumer reading through `readTree` or `bindReader` needs a member of the value rather
 than its text (a name's labels, a media type's parameters, an address's octets). The `AtomType`'s `T`
 then becomes the exported value type, with `write` taking it, and a caller that wants the text
 composes a `bridge()`.

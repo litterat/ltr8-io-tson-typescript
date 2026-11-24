@@ -73,7 +73,7 @@ corpus pin that is **1458 discovered subjects**: a stage that discovers fewer ha
 
 ```bash
 ./scripts/fetch-references.sh    # idempotent; the SessionStart hook does this in cloud sessions
-npm install
+npm ci                           # ci, never install -- see CLAUDE.md's "Build and test"
 ```
 
 Then one `Workflow` call per wave:
@@ -89,13 +89,21 @@ Do not run two waves concurrently. Do not start a wave whose predecessor's gate 
 Every wave ends the same way. All of it, in this order, from the repository root:
 
 ```bash
-npm run typecheck          # tsc --build, plus the two test projects
+npm run typecheck          # tsc --build, plus the three test projects
 npm run lint               # including the import/no-restricted-paths zones
 npm run format:check
+npm run check:lockfile     # every declared peer resolves within the lockfile
+npm run check:unicode      # the tables against the host's own UCD, when the versions match
 npm test                   # unit
-npm run test:conformance    # the shared vectors
+npm run test:conformance   # the shared vectors
 npm run build              # tsup, ESM + CJS + dts, both packages
+npm run check:package      # publint over both packages, are-the-types-wrong over @ltr8/tson
+npm run smoke:cli          # packs, installs into a throwaway project, checks the exit codes
+npm run demo:web           # the browser bundle still builds
 ```
+
+This is the CI job, in order, and `CLAUDE.md`'s "Build and test" is where the list is kept: if the
+two ever differ, that one governs.
 
 Then two things a script cannot do:
 
@@ -144,12 +152,6 @@ A resolved ambiguity that was never written down is an unresolved ambiguity agai
 later, and the reading this port chose is exactly the kind of thing the Java implementation's
 authors need to see.
 
-Two divergences from the reference implementation are already known and deliberate:
-
-- Identifier characters use real `XID_Start`/`XID_Continue` tables where the Java approximates
-  them with `Character.isUnicodeIdentifier*`. This port is stricter, but not on `$` — the Java
-  rejects that too. It is stricter on the identifier-ignorable characters (U+200C, U+200D, U+00AD,
-  U+2060, U+FEFF, and the non-whitespace ISO controls), which `isUnicodeIdentifierPart` admits.
-- Every built-in atom is parsed from scratch, since JS has no host `UUID`, `InetAddress`,
-  `LocalDate` or `BigDecimal`. `.references/ltr8-io-tson-java/CONFORMANCE.md` records where the
-  Java is deliberately stricter than the JDK, and those checks are the required behaviour.
+`CLAUDE.md`'s "Spec feedback" section holds the readings this port has settled — identifier
+tables, atoms parsed from scratch, the resolved-output head, name hygiene as policy — and is the
+one place they are stated. A brief points an agent there rather than restating them.

@@ -1,6 +1,6 @@
 ---
 name: tson-porter
-description: Ports one work package of the TSON reference implementation from Java to idiomatic TypeScript, against the frozen contract layer and the shared conformance suite. Use for any Wave 1-7 work package in PORT-PLAN.md.
+description: Ports one work package of the TSON reference implementation from Java to idiomatic TypeScript, against the frozen contract layer and the shared conformance suite. Use for a work package of a spec-revision run (a stage of REVISION-<n>-PLAN.md) or of the original port (PORT-PLAN.md).
 model: sonnet
 ---
 
@@ -12,12 +12,14 @@ Read, in this order:
 
 1. `CLAUDE.md` — the hard constraints and conventions. They are not negotiable and they are not
    suggestions.
-2. The plan your work package comes from. For revision work that is `REVISION-40-PLAN.md`, whose
-   stages name what moves and why; for the original port it is `PORT-PLAN.md`'s Part B wave tables.
-   Your brief says which, and names the Java sources you port, the TypeScript you produce, and what
-   you may assume exists.
-3. The spec sections your package implements:
-   `.references/ltr8-io-tson-java/spec/tson-part1-data.md` and `tson-part2-schema.md`.
+2. The plan your work package comes from. For revision work that is the `REVISION-<n>-PLAN.md`
+   of the revision being taken (the highest-numbered one is the latest), whose stages name what
+   moves and why; for the original port it is `PORT-PLAN.md`'s Part B wave tables. Your brief says
+   which, and names the Java sources you port, the TypeScript you produce, and what you may assume
+   exists.
+3. The spec sections your package implements, in the vendored `spec/`: `tson-part1-data.md`,
+   `tson-part2-schema.md` and `tson-part3-json.md`, with `tson-rev<n>-changelog.md` stating what
+   the revision changed, item by item.
 4. The Java sources named for your package, including their Javadoc. The Javadoc carries invariants
    and deliberate divergences that the code alone does not show.
 5. The contract-layer types you import. They are frozen. If one is genuinely wrong, say so and stop —
@@ -28,6 +30,11 @@ Read, in this order:
 **Idiomatic TypeScript, not transliterated Java.** Discriminated unions over class hierarchies, plain
 functions over singleton objects, closures over `MethodHandle`. Same behaviour, same conformance,
 different shape. A class-for-class translation is a failed port.
+
+**But keep the reference's structure where `IDIOM-DEBT.md` holds it.** Module boundaries, function
+decomposition and names track the Java while it is still moving, so an upstream change can be taken
+by reading a diff. Read that file before re-idiomising existing code, and report a new Java-shaped
+hold worth registering there rather than resolving it yourself.
 
 **Behaviour comes from the spec and the vectors, not from the Java's convenience.** Where the Java
 leans on a JDK type this port has no equivalent for, read

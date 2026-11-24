@@ -5,8 +5,8 @@
 Built against TSON Part 1 (lexer + data format) of the **2026 Revision 40** series, a working draft:
 https://tson.io/raw/2026/40/tson-part1-data.md, Part 2 (schema grammar + type system), also a
 working draft: https://tson.io/raw/2026/40/tson-part2-schema.md, and Part 3 (the JSON encoding,
-`./json`): https://tson.io/raw/2026/40/tson-part3-json.md. Revision 40 is proposed, not adjudicated;
-the reference is pinned on its proposal branch, so a few small changes may still follow.
+`./json`): https://tson.io/raw/2026/40/tson-part3-json.md. The reference and the corpus are each
+pinned at the Revision 40 merge commit on their `main`.
 
 A TypeScript port of the reference Java implementation. Conformance is measured against the shared
 corpus at https://github.com/litterat/ltr8-io-tson-test-suite, pinned to a commit — 1458 subjects
@@ -581,12 +581,12 @@ s.tn --root person -` would read `data.tn`'s TSON text as JSON there. This port 
     — member/element counts, string and number lengths, and decoded-binary sizes are the same gap
     the text encoding already has (`Config`'s own `maxNestingDepth` is the one limit either stack
     checks); default-injection amplification (§10.1's own note) is not tracked either.
-  - **There is no JSON counterpart of `readBind`/object binding, unlike the reference.** `json/`
+  - **There is no JSON counterpart of `bindReader`/object binding, unlike the reference.** `json/`
     reads a JSON document into a `JsonValue` tree only (`json/index.ts`'s own top note explains
     why, at length, citing [TSON-JSON] §3.4's "no schemaless reading" and the reference's own
     `JsonValue`-only design note for the _tree_ read); the reference's own `Json` additionally
     exposes an `objectReader()`, and this port has no `objectReader`-shaped function binding a
-    JSON document straight into a host object the way `@ltr8/tson/bind`'s `readBind` does for TSON
+    JSON document straight into a host object the way `reader/bind.ts`'s `bindReader` does for TSON
     text. `src/bind/**` is importable from `src/json/**` (`eslint.config.js`'s own zone comment),
     so nothing structural blocks adding one; it is simply unbuilt.
   - **§7.7 rule 2's contextual carve-out for a joining control does not reach JSON member names.**
@@ -834,4 +834,5 @@ record for 'base', found an array`) names the terminal regardless of how many al
 - [x] UTS #39 tables — `Identifier_Status`, the confusables skeleton map, script data and the
       joining-control properties, generated into `src/unicode/` by `scripts/gen-uts39-tables.mjs`
 - [x] I-Regexp general categories — all 36 of RFC 9485's, generated into the `regex/` leaf
-- [x] Orchestration — `ORCHESTRATION.md` and the eight wave scripts under `.claude/workflows/`
+- [x] Orchestration — `ORCHESTRATION.md`, the eight wave scripts and the Revision 35 and 36 stage
+      scripts under `.claude/workflows/`

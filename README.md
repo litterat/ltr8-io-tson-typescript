@@ -338,7 +338,7 @@ Parts 1 and 2, plus the shared conformance suite, are implemented in full — se
 output (§8.1) is written but not read back as a schema. Part 3, the JSON encoding, covers a schema-directed tree
 read and its CLI/package surface — narrower than the reference implementation's own scope, which
 also has an `objectReader` binding a JSON document straight into a host object; this port has no
-JSON counterpart of `@ltr8/tson/bind`'s `readBind` at all. Also not implemented: an in-band
+JSON counterpart of its own `bindReader` (`reader/bind.ts`) at all. Also not implemented: an in-band
 binding (`$import` at the root), the §3.5 HTTP header fields, or a schema-directed encoder — see
 [STATUS.md](STATUS.md)'s own Part 3 section for the full, recorded list of gaps.
 
